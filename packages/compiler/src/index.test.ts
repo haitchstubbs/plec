@@ -306,6 +306,22 @@ describe("compile", () => {
     ]))
   })
 
+  it("lowers imported UI atoms inside an expanded row template", () => {
+    const result = compile(`import { TodoListView } from './TodoListView'; function App() { return <TodoListView /> }`, {
+      rootComponent: 'App',
+      moduleId: 'src/App.tsx',
+      modules: [
+        { id: 'src/App.tsx', source: `import { TodoListView } from './TodoListView'; function App() { return <TodoListView /> }` },
+        { id: 'src/TodoListView.tsx', source: `import { Checkbox } from '@wasm-runtime/ui/atoms/checkbox'; import { Input } from '@wasm-runtime/ui/atoms/input'; import { Badge } from '@wasm-runtime/ui/atoms/badge'; export function TodoListView() { const todos = [{ id: '1', title: 'Todo 1', done: false }]; return <ul>{todos.map(todo => <li><Checkbox checked={todo.done} /><Input value={todo.title} /><Badge variant={todo.done ? 'secondary' : 'outline'}>{todo.done ? 'Completed' : 'Open'}</Badge></li>)}</ul> }` },
+        { id: '@wasm-runtime/ui/atoms/checkbox', source: `export function Checkbox() { return null }` },
+        { id: '@wasm-runtime/ui/atoms/input', source: `export function Input() { return null }` },
+        { id: '@wasm-runtime/ui/atoms/badge', source: `export function Badge() { return null }` },
+      ],
+    })
+    expect(result.diagnostics).toEqual([])
+    expect(result.ir.elements.map((element) => element.tag)).toEqual(expect.arrayContaining(['input', 'span']))
+  })
+
   it("lowers the internal Toggle fixture into native parts and semantic metadata", async () => {
     const source = await readFile(path.resolve(__dirname, "../fixtures/toggle.tsx"), "utf8");
     const result = compile(source, { rootComponent: "ControlledTodoToggle" });
