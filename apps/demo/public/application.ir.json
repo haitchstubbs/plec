@@ -1,0 +1,819 @@
+{
+  "version": "0.4",
+  "revision": "25f0f2a98e3ec57aeb09921d00b8373672eff2ee044db6f9f04b67467ecda222",
+  "rootElementId": "e1",
+  "elements": [
+    {
+      "id": "e1",
+      "tag": "div",
+      "parentId": null,
+      "attributes": [
+        {
+          "name": "data-compiled-route-root",
+          "staticValue": "true"
+        }
+      ],
+      "children": [
+        "e2"
+      ]
+    },
+    {
+      "id": "e2",
+      "tag": "main",
+      "parentId": "e1",
+      "attributes": [
+        {
+          "name": "className",
+          "staticValue": "page-wrap px-4 py-10"
+        }
+      ],
+      "children": [
+        "e3"
+      ]
+    },
+    {
+      "id": "e3",
+      "tag": "div",
+      "parentId": "e2",
+      "attributes": [
+        {
+          "name": "data-slot",
+          "staticValue": "card"
+        },
+        {
+          "name": "data-size",
+          "staticValue": "default"
+        },
+        {
+          "name": "className",
+          "staticValue": "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-2xl bg-card py-(--card-spacing) text-sm text-card-foreground ring-1 ring-foreground/10 [--card-spacing:--spacing(6)] has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(4)] *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl"
+        }
+      ],
+      "children": [
+        "e4",
+        "e7"
+      ]
+    },
+    {
+      "id": "e4",
+      "tag": "div",
+      "parentId": "e3",
+      "attributes": [
+        {
+          "name": "data-slot",
+          "staticValue": "card-header"
+        },
+        {
+          "name": "className",
+          "staticValue": "group/card-header @container/card-header grid auto-rows-min items-start gap-2 rounded-t-xl px-(--card-spacing) has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-(--card-spacing)"
+        }
+      ],
+      "children": [
+        "e5",
+        "e6"
+      ]
+    },
+    {
+      "id": "e5",
+      "tag": "p",
+      "parentId": "e4",
+      "attributes": [
+        {
+          "name": "className",
+          "staticValue": "island-kicker"
+        }
+      ],
+      "children": [
+        "t1"
+      ]
+    },
+    {
+      "id": "e6",
+      "tag": "div",
+      "parentId": "e4",
+      "attributes": [
+        {
+          "name": "data-slot",
+          "staticValue": "card-title"
+        },
+        {
+          "name": "className",
+          "staticValue": "font-heading text-base font-medium"
+        }
+      ],
+      "children": [
+        "t2"
+      ]
+    },
+    {
+      "id": "e7",
+      "tag": "div",
+      "parentId": "e3",
+      "attributes": [
+        {
+          "name": "data-slot",
+          "staticValue": "card-content"
+        },
+        {
+          "name": "className",
+          "staticValue": "px-(--card-spacing)"
+        }
+      ],
+      "children": [
+        "e8"
+      ]
+    },
+    {
+      "id": "e8",
+      "tag": "ul",
+      "parentId": "e7",
+      "attributes": [
+        {
+          "name": "id",
+          "staticValue": "todos-root"
+        },
+        {
+          "name": "className",
+          "staticValue": "space-y-3"
+        }
+      ],
+      "children": [
+        "l1"
+      ]
+    },
+    {
+      "id": "e9",
+      "tag": "li",
+      "parentId": "l1",
+      "attributes": [
+        {
+          "name": "data-todo-id",
+          "bindingId": "b2"
+        },
+        {
+          "name": "data-done",
+          "bindingId": "b3"
+        }
+      ],
+      "children": [
+        "e10"
+      ]
+    },
+    {
+      "id": "e10",
+      "tag": "div",
+      "parentId": "e9",
+      "attributes": [
+        {
+          "name": "data-slot",
+          "staticValue": "card"
+        },
+        {
+          "name": "data-size",
+          "bindingId": "b4"
+        },
+        {
+          "name": "className",
+          "bindingId": "b5"
+        }
+      ],
+      "children": [
+        "e11"
+      ]
+    },
+    {
+      "id": "e11",
+      "tag": "div",
+      "parentId": "e10",
+      "attributes": [
+        {
+          "name": "data-slot",
+          "staticValue": "card-content"
+        },
+        {
+          "name": "className",
+          "bindingId": "b6"
+        }
+      ],
+      "children": [
+        "e12",
+        "e13",
+        "e14"
+      ]
+    },
+    {
+      "id": "e12",
+      "tag": "input",
+      "parentId": "e11",
+      "attributes": [
+        {
+          "name": "checked",
+          "bindingId": "b7"
+        },
+        {
+          "name": "aria-label",
+          "bindingId": "b8"
+        },
+        {
+          "name": "className",
+          "bindingId": "b9"
+        },
+        {
+          "name": "type",
+          "staticValue": "checkbox"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "e13",
+      "tag": "input",
+      "parentId": "e11",
+      "attributes": [
+        {
+          "name": "value",
+          "bindingId": "b10"
+        },
+        {
+          "name": "className",
+          "bindingId": "b11"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "e14",
+      "tag": "span",
+      "parentId": "e11",
+      "attributes": [
+        {
+          "name": "data-variant",
+          "bindingId": "b12"
+        },
+        {
+          "name": "className",
+          "bindingId": "b13"
+        }
+      ],
+      "children": [
+        "t3"
+      ]
+    }
+  ],
+  "texts": [
+    {
+      "id": "t1",
+      "parentId": "e5",
+      "staticValue": "Todo workload"
+    },
+    {
+      "id": "t2",
+      "parentId": "e6",
+      "staticValue": "Renderer parity Todo list"
+    },
+    {
+      "id": "t3",
+      "parentId": "e14",
+      "staticValue": ""
+    }
+  ],
+  "inputs": [
+    {
+      "id": "i1",
+      "name": "todos",
+      "shape": {
+        "kind": "collection",
+        "keyExpression": "MemberExpression",
+        "orderSensitive": true,
+        "observedRowPaths": [
+          [
+            "done"
+          ],
+          [
+            "id"
+          ],
+          [
+            "title"
+          ]
+        ]
+      }
+    }
+  ],
+  "queries": [],
+  "dependencyEdges": [
+    {
+      "fromId": "i1",
+      "toId": "l1",
+      "kind": "input-to-loop"
+    }
+  ],
+  "loops": [
+    {
+      "id": "l1",
+      "parentId": "e8",
+      "source": "Identifier",
+      "itemName": "todo",
+      "rows": [],
+      "inputId": "i1",
+      "keyExpression": "MemberExpression",
+      "rowTemplateRootElementId": "e9"
+    }
+  ],
+  "bindings": [
+    {
+      "id": "b2",
+      "kind": "attribute",
+      "targetId": "e9",
+      "attributeName": "data-todo-id",
+      "expression": "MemberExpression",
+      "expressionId": "x1"
+    },
+    {
+      "id": "b3",
+      "kind": "attribute",
+      "targetId": "e9",
+      "attributeName": "data-done",
+      "expression": "MemberExpression",
+      "expressionId": "x2"
+    },
+    {
+      "id": "b4",
+      "kind": "attribute",
+      "targetId": "e10",
+      "attributeName": "data-size",
+      "expression": "dosC",
+      "expressionId": "x3"
+    },
+    {
+      "id": "b5",
+      "kind": "attribute",
+      "targetId": "e10",
+      "attributeName": "className",
+      "expression": "const { data: todos } = useLiveQuery(todosCollection)\n  function updateTodo() {}\n  return <div data-compiled-route-root><TodoListView todos={todos as any} onUpdate={updateTodo} /></div>\n}",
+      "expressionId": "x4"
+    },
+    {
+      "id": "b6",
+      "kind": "attribute",
+      "targetId": "e11",
+      "attributeName": "className",
+      "expression": "CallExpression",
+      "expressionId": "x5"
+    },
+    {
+      "id": "b7",
+      "kind": "attribute",
+      "targetId": "e12",
+      "attributeName": "checked",
+      "expression": "MemberExpression",
+      "expressionId": "x2"
+    },
+    {
+      "id": "b8",
+      "kind": "attribute",
+      "targetId": "e12",
+      "attributeName": "aria-label",
+      "expression": "TemplateLiteral",
+      "expressionId": "x6"
+    },
+    {
+      "id": "b9",
+      "kind": "attribute",
+      "targetId": "e12",
+      "attributeName": "className",
+      "expression": "CallExpression",
+      "expressionId": "x7"
+    },
+    {
+      "id": "b10",
+      "kind": "attribute",
+      "targetId": "e13",
+      "attributeName": "value",
+      "expression": "MemberExpression",
+      "expressionId": "x8"
+    },
+    {
+      "id": "b11",
+      "kind": "attribute",
+      "targetId": "e13",
+      "attributeName": "className",
+      "expression": "CallExpression",
+      "expressionId": "x9"
+    },
+    {
+      "id": "b12",
+      "kind": "attribute",
+      "targetId": "e14",
+      "attributeName": "data-variant",
+      "expression": "ConditionalExpression",
+      "expressionId": "x10"
+    },
+    {
+      "id": "b13",
+      "kind": "attribute",
+      "targetId": "e14",
+      "attributeName": "className",
+      "expression": "CallExpression",
+      "expressionId": "x11"
+    },
+    {
+      "id": "b14",
+      "kind": "text",
+      "targetId": "t3",
+      "expression": "ConditionalExpression",
+      "expressionId": "x12"
+    }
+  ],
+  "expressions": [
+    {
+      "id": "x1",
+      "expression": {
+        "kind": "member",
+        "object": {
+          "kind": "identifier",
+          "name": "todo"
+        },
+        "property": "id"
+      }
+    },
+    {
+      "id": "x2",
+      "expression": {
+        "kind": "member",
+        "object": {
+          "kind": "identifier",
+          "name": "todo"
+        },
+        "property": "done"
+      }
+    },
+    {
+      "id": "x3",
+      "expression": {
+        "kind": "literal",
+        "value": "sm"
+      }
+    },
+    {
+      "id": "x4",
+      "expression": {
+        "kind": "intrinsic",
+        "name": "cn",
+        "args": [
+          {
+            "kind": "literal",
+            "value": "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-2xl bg-card py-(--card-spacing) text-sm text-card-foreground ring-1 ring-foreground/10 [--card-spacing:--spacing(6)] has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(4)] *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl"
+          },
+          {
+            "kind": "identifier",
+            "name": "undefined"
+          }
+        ]
+      }
+    },
+    {
+      "id": "x5",
+      "expression": {
+        "kind": "intrinsic",
+        "name": "cn",
+        "args": [
+          {
+            "kind": "literal",
+            "value": "px-(--card-spacing)"
+          },
+          {
+            "kind": "literal",
+            "value": "flex items-center gap-3"
+          }
+        ]
+      }
+    },
+    {
+      "id": "x6",
+      "expression": {
+        "kind": "template",
+        "parts": [
+          "Toggle ",
+          {
+            "kind": "member",
+            "object": {
+              "kind": "identifier",
+              "name": "todo"
+            },
+            "property": "title"
+          },
+          ""
+        ]
+      }
+    },
+    {
+      "id": "x7",
+      "expression": {
+        "kind": "intrinsic",
+        "name": "cn",
+        "args": [
+          {
+            "kind": "literal",
+            "value": "size-4 shrink-0 accent-primary rounded-[6px] border border-input"
+          }
+        ]
+      }
+    },
+    {
+      "id": "x8",
+      "expression": {
+        "kind": "member",
+        "object": {
+          "kind": "identifier",
+          "name": "todo"
+        },
+        "property": "title"
+      }
+    },
+    {
+      "id": "x9",
+      "expression": {
+        "kind": "intrinsic",
+        "name": "cn",
+        "args": [
+          {
+            "kind": "literal",
+            "value": "h-9 w-full min-w-0 rounded-4xl border border-input bg-input/30 px-3 py-1 text-base outline-none md:text-sm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "x10",
+      "expression": {
+        "kind": "conditional",
+        "test": {
+          "kind": "member",
+          "object": {
+            "kind": "identifier",
+            "name": "todo"
+          },
+          "property": "done"
+        },
+        "consequent": {
+          "kind": "literal",
+          "value": "secondary"
+        },
+        "alternate": {
+          "kind": "literal",
+          "value": "outline"
+        }
+      }
+    },
+    {
+      "id": "x11",
+      "expression": {
+        "kind": "intrinsic",
+        "name": "cn",
+        "args": [
+          {
+            "kind": "literal",
+            "value": "inline-flex h-5 w-fit shrink-0 items-center justify-center rounded-4xl border border-border bg-input/30 px-2 py-0.5 text-xs font-medium whitespace-nowrap data-[variant=secondary]:border-transparent data-[variant=secondary]:bg-secondary data-[variant=secondary]:text-secondary-foreground"
+          }
+        ]
+      }
+    },
+    {
+      "id": "x12",
+      "expression": {
+        "kind": "conditional",
+        "test": {
+          "kind": "member",
+          "object": {
+            "kind": "identifier",
+            "name": "todo"
+          },
+          "property": "done"
+        },
+        "consequent": {
+          "kind": "literal",
+          "value": "Completed"
+        },
+        "alternate": {
+          "kind": "literal",
+          "value": "Open"
+        }
+      }
+    }
+  ],
+  "events": [
+    {
+      "id": "ev1",
+      "type": "click",
+      "targetId": "e12",
+      "actionId": "a1",
+      "args": [
+        "MemberExpression",
+        "ObjectExpression"
+      ],
+      "field": "done",
+      "callbackName": "updateTodo"
+    },
+    {
+      "id": "ev2",
+      "type": "change",
+      "targetId": "e13",
+      "actionId": "a2",
+      "args": [
+        "MemberExpression",
+        "ObjectExpression"
+      ],
+      "field": "title",
+      "callbackName": "updateTodo"
+    }
+  ],
+  "localStates": [],
+  "hostValues": [],
+  "lifecycleEffects": [],
+  "stateTransitions": [],
+  "toggles": [],
+  "islands": [],
+  "components": [
+    {
+      "name": "TodoListView",
+      "moduleId": "src/components/TodoListView.tsx",
+      "elementIds": [
+        "e2",
+        "e3",
+        "e4",
+        "e5",
+        "e6",
+        "e7",
+        "e8",
+        "e9",
+        "e10",
+        "e11",
+        "e12",
+        "e13",
+        "e14"
+      ],
+      "bindingIds": [
+        "b2",
+        "b3",
+        "b4",
+        "b5",
+        "b6",
+        "b7",
+        "b8",
+        "b9",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14"
+      ],
+      "eventIds": [
+        "ev1",
+        "ev2"
+      ]
+    },
+    {
+      "name": "Card",
+      "moduleId": "@wasm-runtime/ui/atoms/card",
+      "elementIds": [
+        "e3",
+        "e4",
+        "e5",
+        "e6",
+        "e7",
+        "e8",
+        "e9",
+        "e10",
+        "e11",
+        "e12",
+        "e13",
+        "e14"
+      ],
+      "bindingIds": [
+        "b2",
+        "b3",
+        "b4",
+        "b5",
+        "b6",
+        "b7",
+        "b8",
+        "b9",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14"
+      ],
+      "eventIds": [
+        "ev1",
+        "ev2"
+      ]
+    },
+    {
+      "name": "CardHeader",
+      "moduleId": "@wasm-runtime/ui/atoms/card",
+      "elementIds": [
+        "e4",
+        "e5",
+        "e6"
+      ],
+      "bindingIds": [],
+      "eventIds": []
+    },
+    {
+      "name": "CardTitle",
+      "moduleId": "@wasm-runtime/ui/atoms/card",
+      "elementIds": [
+        "e6"
+      ],
+      "bindingIds": [],
+      "eventIds": []
+    },
+    {
+      "name": "CardContent",
+      "moduleId": "@wasm-runtime/ui/atoms/card",
+      "elementIds": [
+        "e7",
+        "e8",
+        "e9",
+        "e10",
+        "e11",
+        "e12",
+        "e13",
+        "e14"
+      ],
+      "bindingIds": [
+        "b2",
+        "b3",
+        "b4",
+        "b5",
+        "b6",
+        "b7",
+        "b8",
+        "b9",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14"
+      ],
+      "eventIds": [
+        "ev1",
+        "ev2"
+      ]
+    },
+    {
+      "name": "Card",
+      "moduleId": "@wasm-runtime/ui/atoms/card",
+      "elementIds": [
+        "e10",
+        "e11",
+        "e12",
+        "e13",
+        "e14"
+      ],
+      "bindingIds": [
+        "b4",
+        "b5",
+        "b6",
+        "b7",
+        "b8",
+        "b9",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14"
+      ],
+      "eventIds": [
+        "ev1",
+        "ev2"
+      ]
+    },
+    {
+      "name": "CardContent",
+      "moduleId": "@wasm-runtime/ui/atoms/card",
+      "elementIds": [
+        "e11",
+        "e12",
+        "e13",
+        "e14"
+      ],
+      "bindingIds": [
+        "b6",
+        "b7",
+        "b8",
+        "b9",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14"
+      ],
+      "eventIds": [
+        "ev1",
+        "ev2"
+      ]
+    }
+  ]
+}
