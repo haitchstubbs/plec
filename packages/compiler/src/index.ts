@@ -638,6 +638,12 @@ function lowerMapExpression(expression: any, parentId: string | null, state: Com
 
   return loopId;
 }
+function findReturnedExpression(body: any): any | null {
+  for (const statement of getStatements(body)) {
+    if (statement.type === "ReturnStatement" || statement.type === "ReturnStmt") return unwrapExpression(statement.argument ?? statement.arg);
+  }
+  return null;
+}
 
 function getMapRowKeyExpression(callback: any, state: CompilerState): string | undefined {
   const row = unwrapExpression(callback.body);
@@ -1887,9 +1893,8 @@ function collectCallerProps(node: any, state: CompilerState): Record<string, any
   const props: Record<string, any> = {};
   for (const attribute of node.opening?.attributes ?? []) {
     if (attribute.type === "SpreadElement") {
-      const spread = unwrapExpression(attribute.arguments ?? attribute.argument);
-      const resolved = spread?.type === "Identifier" ? state.expressionScope[getNodeName(spread)!] : spread;
-      if (resolved?.type === "ObjectExpression") for (const property of resolved.properties ?? []) {
+      const resolved = resolveSpreadObject(attribute.arguments ?? attribute.argument, state);
+      if (resolved) for (const property of resolved.properties ?? []) {
         const key = getNodeName(property.key); if (key) props[key] = property.value ?? property.expr;
       } else reportUnsupported(state, "UNSUPPORTED_SPREAD_PROPS", "Component spread props must be statically known.");
       continue;
@@ -1903,9 +1908,8 @@ function expandIntrinsicAttributes(attributes: any[], state: CompilerState): any
   const output: any[] = [];
   for (const attribute of attributes) {
     if (attribute.type !== "SpreadElement") { output.push(attribute); continue; }
-    const argument = unwrapExpression(attribute.arguments ?? attribute.argument);
-    const resolved = argument?.type === "Identifier" ? state.expressionScope[getNodeName(argument)!] : argument;
-    if (resolved?.type !== "ObjectExpression") { reportUnsupported(state, "UNSUPPORTED_SPREAD_PROPS", "Intrinsic spread props must be statically known."); continue; }
+    const resolved = resolveSpreadObject(attribute.arguments ?? attribute.argument, state);
+    if (!resolved) { reportUnsupported(state, "UNSUPPORTED_SPREAD_PROPS", "Intrinsic spread props must be statically known."); continue; }
     for (const property of resolved.properties ?? []) {
       const name = getNodeName(property.key); if (!name) continue;
       if (name === "children") continue;
@@ -1929,9 +1933,8 @@ function getSpreadChildren(attributes: any[], state: CompilerState): any[] {
   const children: any[] = [];
   for (const attribute of attributes) {
     if (attribute.type !== "SpreadElement") continue;
-    const argument = unwrapExpression(attribute.arguments ?? attribute.argument);
-    const resolved = argument?.type === "Identifier" ? state.expressionScope[getNodeName(argument)!] : argument;
-    if (resolved?.type !== "ObjectExpression") continue;
+    const resolved = resolveSpreadObject(attribute.arguments ?? attribute.argument, state);
+    if (!resolved) continue;
     for (const property of resolved.properties ?? []) {
       if (getNodeName(property.key) !== "children") continue;
       const value = property.value ?? property.expr;
@@ -1939,6 +1942,43 @@ function getSpreadChildren(attributes: any[], state: CompilerState): any[] {
     }
   }
   return children;
+}
+
+/** Expand plain object spreads and source-level prop merges without relying on
+ * the identity of the library that supplied those objects. */
+function resolveSpreadObject(input: any, state: CompilerState, resolving = new Set<string>()): any | null {
+  let node = unwrapExpression(input);
+  if (node?.type === "Identifier") {
+    const name = getNodeName(node);
+    if (!name || resolving.has(name)) return null;
+    resolving.add(name);
+    node = state.expressionScope[name] ?? node;
+  }
+  if (node?.type === "CallExpression" && isObjectMergeCall(node)) {
+    const properties: any[] = [];
+    for (const argument of node.arguments ?? []) {
+      const object = resolveSpreadObject(argument.expression ?? argument, state, new Set(resolving));
+      if (!object) return null;
+      properties.push(...(object.properties ?? []));
+    }
+    return { type: "ObjectExpression", properties };
+  }
+  if (node?.type !== "ObjectExpression") return null;
+  const properties: any[] = [];
+  for (const property of node.properties ?? []) {
+    if (property.type === "SpreadElement" || property.type === "SpreadProperty") {
+      const object = resolveSpreadObject(property.arguments ?? property.argument, state, new Set(resolving));
+      if (!object) return null;
+      properties.push(...(object.properties ?? []));
+    } else {
+      properties.push(property);
+    }
+  }
+  return { ...node, properties };
+}
+function isObjectMergeCall(node: any): boolean {
+  const callee = getNodeName(node.callee) ?? getNodeName(node.callee?.property);
+  return callee === "mergeProps" || (node.callee?.type === "MemberExpression" && getNodeName(node.callee.object) === "Object" && getNodeName(node.callee.property) === "assign");
 }
 
 function internExpression(expression: any, state: CompilerState): string {
@@ -1961,14 +2001,21 @@ function lowerExpression(input: any, state: CompilerState, resolving = new Set<s
     return { kind: "identifier", name: identifier ?? "unknown" };
   }
   if (node.type === "MemberExpression") return { kind: "member", object: lowerExpression(node.object, state, resolving), property: getNodeName(node.property) ?? "" };
+  if (node.type === "OptionalChainingExpression" || node.type === "OptionalMemberExpression") return { kind: "member", object: lowerExpression(node.base ?? node.object, state, resolving), property: getNodeName(node.property) ?? "" };
   if (node.type === "CallExpression" && node.callee?.type === "MemberExpression" && getNodeName(node.callee.property) === "getFullYear" && node.callee.object?.type === "NewExpression" && getNodeName(node.callee.object.callee) === "Date") return { kind: "host", name: "currentYear" };
   if (node.type === "BinaryExpression") return { kind: "binary", op: node.operator, left: lowerExpression(node.left, state, resolving), right: lowerExpression(node.right, state, resolving) };
   if (node.type === "LogicalExpression") return { kind: "logical", op: node.operator, left: lowerExpression(node.left, state, resolving), right: lowerExpression(node.right, state, resolving) };
   if (node.type === "ConditionalExpression") return { kind: "conditional", test: lowerExpression(node.test, state, resolving), consequent: lowerExpression(node.consequent, state, resolving), alternate: lowerExpression(node.alternate, state, resolving) };
+  if (node.type === "UnaryExpression") return { kind: "unary", op: node.operator, argument: lowerExpression(node.argument, state, resolving) };
   if (node.type === "TemplateLiteral") { const parts: any[] = []; for (let i=0;i<(node.quasis?.length ?? 0);i++) { parts.push(node.quasis[i]?.raw ?? node.quasis[i]?.value?.cooked ?? ""); if (node.expressions?.[i]) parts.push(lowerExpression(node.expressions[i], state, resolving)); } return { kind: "template", parts }; }
   if (node.type === "ArrayExpression") return { kind: "array", items: (node.elements ?? []).filter(Boolean).map((item: any) => lowerExpression(item.expression ?? item, state, resolving)) };
   if (node.type === "ObjectExpression") return { kind: "object", entries: (node.properties ?? []).map((property: any) => ({ key: getNodeName(property.key) ?? "", value: lowerExpression(property.value ?? property.expr, state, resolving) })) };
   if (node.type === "CallExpression" && ["cn", "clsx", "classnames"].includes(getNodeName(node.callee) ?? "")) return { kind: "intrinsic", name: getNodeName(node.callee), args: (node.arguments ?? []).map((arg: any) => lowerExpression(arg.expression ?? arg, state, resolving)) };
+  if (node.type === "CallExpression" && ["useMemo", "useCallback"].includes(getNodeName(node.callee) ?? getNodeName(node.callee?.property) ?? "")) {
+    const callback = unwrapExpression(node.arguments?.[0]?.expression ?? node.arguments?.[0]);
+    const returned = callback?.body?.type === "BlockStatement" ? findReturnedExpression(callback.body) : callback?.body;
+    if (returned) return lowerExpression(returned, state, resolving);
+  }
   reportUnsupported(state, "UNSUPPORTED_EXPRESSION", `Unsupported expression: ${node.type}.`);
   return { kind: "literal", value: "" };
 }
