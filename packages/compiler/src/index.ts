@@ -94,6 +94,7 @@ interface ApplicationIr {
   refs: Array<{ id: string; targetId: string; refId: string; kind: "callback" | "object" }>;
   hostElementRefs: Array<{ id: string; targetId: string; attachments: string[] }>;
   hostElementReads: Array<{ id: string; refId: string; capability: unknown }>;
+  actions: Array<{ id: string; parameters: string[]; captures: string[]; operations: unknown[]; resultExpressionId?: string }>;
   contexts: Array<{ id: string; contextId: string; parentId: string | null; valueExpressionId?: string; values: Array<{ name: string; expressionId?: string; staticValue?: string }>; children: string[] }>;
   contextDefinitions: Array<{ id: string; defaultExpressionId: string }>;
   conditionals: Array<{ id: string; parentId: string; expressionId: string; children: string[] }>;
@@ -210,6 +211,7 @@ export function compile(source: string, options: CompileOptions = {}): CompileRe
       refs: [],
       hostElementRefs: [],
       hostElementReads: [],
+      actions: [],
       contexts: [],
       contextDefinitions: [],
       conditionals: [],
@@ -953,6 +955,7 @@ function lowerComponentElement(node: any, parentId: string | null, state: Compil
   state.expressionScope = localScope;
   state.activeModuleId = component.moduleId;
   state.componentStack.push(name);
+  lowerLifecycleCalls(component.body, state);
   const metadata: ComponentMetadata = { name, moduleId: component.moduleId, elementIds: [], bindingIds: [], eventIds: [] };
   state.ir.components.push(metadata);
   const before = { e: state.ir.elements.length, b: state.ir.bindings.length, ev: state.ir.events.length };
@@ -1116,6 +1119,19 @@ function lowerThemeToggleSemantics(body: any, state: CompilerState, before: { e:
 }
 
 function containsCall(node: any, name: string): boolean { return Boolean(findCall(node, name)); }
+function lowerLifecycleCalls(body: any, state: CompilerState): void {
+  for (const call of findCalls(body)) {
+    const name = getNodeName(call.callee) ?? getNodeName(call.callee?.property);
+    if (name !== "useEffect" && name !== "useLayoutEffect") continue;
+    const callback = unwrapExpression(call.arguments?.[0]?.expression ?? call.arguments?.[0]);
+    const dependencies = unwrapExpression(call.arguments?.[1]?.expression ?? call.arguments?.[1]);
+    if (!callback || (callback.type !== "ArrowFunctionExpression" && callback.type !== "FunctionExpression")) { reportUnsupported(state, "UNSUPPORTED_LIFECYCLE_CALLBACK", `${name} requires an inline callback.`); continue; }
+    const statements = callback.body?.type === "BlockStatement" ? getStatements(callback.body) : [];
+    if (statements.length) { reportUnsupported(state, "UNSUPPORTED_LIFECYCLE_BODY", `${name} body must reduce to declarative host/resource operations.`); continue; }
+    const deps = dependencies?.type === "ArrayExpression" ? (dependencies.elements ?? []).filter(Boolean).map((item: any) => internExpression(item.expression ?? item, state)) : [];
+    state.ir.lifecycleEffects.push({ id: `fx${state.ir.lifecycleEffects.length + 1}`, phase: name === "useLayoutEffect" ? "layout" : "effect", trigger: "mount", dependencies: deps, operations: [] });
+  }
+}
 function findCalls(node: any, calls: any[] = []): any[] { if (!node || typeof node !== "object") return calls; if (node.type === "CallExpression") calls.push(node); for (const value of Object.values(node)) { if (Array.isArray(value)) value.forEach((child) => findCalls(child, calls)); else findCalls(value, calls); } return calls; }
 function findCall(node: any, name: string): any | undefined {
   if (!node || typeof node !== "object") return undefined;
