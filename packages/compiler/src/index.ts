@@ -89,7 +89,7 @@ interface ApplicationIr {
   loops: LoopNode[];
   bindings: BindingNode[];
   expressions: ExpressionNode[];
-  propPrograms: Array<{ id: string; targetId: string; writes: Array<{ name: string; staticValue?: string; expressionId?: string; kind: "attribute" | "property" | "event" | "ref" }> }>;
+  propPrograms: Array<{ id: string; targetId: string; writes: Array<{ name: string; staticValue?: string; expressionId?: string; kind: "attribute" | "property" | "event" | "ref" | "spread" }> }>;
   events: EventNode[];
   refs: Array<{ id: string; targetId: string; refId: string; kind: "callback" | "object" }>;
   contexts: Array<{ id: string; parentId: string | null; values: Array<{ name: string; expressionId?: string; staticValue?: string }> }>;
@@ -379,10 +379,16 @@ function lowerJsxElement(node: any, parentId: string | null, state: CompilerStat
     children: [] as string[]
   };
 
-  const propWrites: Array<{ name: string; staticValue?: string; expressionId?: string; kind: "attribute" | "property" | "event" | "ref" }> = [];
+  const propWrites: Array<{ name: string; staticValue?: string; expressionId?: string; kind: "attribute" | "property" | "event" | "ref" | "spread" }> = [];
   for (const attributeNode of expandIntrinsicAttributes(node.opening?.attributes ?? [], state)) {
     if (attributeNode.type === "SpreadElement") {
-      reportUnsupported(state, "UNSUPPORTED_SPREAD_PROPS", "Spread props are not supported in Milestone 2.");
+      const expression = attributeNode.arguments ?? attributeNode.argument;
+      const record = lowerExpression(expression, state);
+      if (record.kind !== "object") {
+        reportUnsupported(state, "UNSUPPORTED_SPREAD_PROPS", "A runtime JSX spread must evaluate to a serializable record.");
+        continue;
+      }
+      propWrites.push({ name: "", expressionId: internExpression(expression, state), kind: "spread" });
       continue;
     }
 
@@ -1490,6 +1496,11 @@ function collectModuleFacts(body: any, state: CompilerState): void {
 
       const value = evaluateExpression(init, state, state.scope);
       const name = getPatternName(declaration?.id);
+      // Dynamic locals are still ordinary expression inputs to the rendered
+      // tree. Preserve their syntax as well as eagerly evaluating literals.
+      if (name) {
+        state.expressionScope[name] = init;
+      }
       if (name && value !== undefined) {
         state.scope[name] = value;
       }
@@ -1895,7 +1906,7 @@ function collectCallerProps(node: any, state: CompilerState): Record<string, any
     if (attribute.type === "SpreadElement") {
       const resolved = resolveSpreadObject(attribute.arguments ?? attribute.argument, state);
       if (resolved) for (const property of resolved.properties ?? []) {
-        const key = getNodeName(property.key); if (key) props[key] = property.value ?? property.expr;
+        const key = objectPropertyName(property); if (key) props[key] = objectPropertyValue(property);
       } else reportUnsupported(state, "UNSUPPORTED_SPREAD_PROPS", "Component spread props must be statically known.");
       continue;
     }
@@ -1909,19 +1920,23 @@ function expandIntrinsicAttributes(attributes: any[], state: CompilerState): any
   for (const attribute of attributes) {
     if (attribute.type !== "SpreadElement") { output.push(attribute); continue; }
     const resolved = resolveSpreadObject(attribute.arguments ?? attribute.argument, state);
-    if (!resolved) { reportUnsupported(state, "UNSUPPORTED_SPREAD_PROPS", "Intrinsic spread props must be statically known."); continue; }
+    if (!resolved) { output.push(attribute); continue; }
     for (const property of resolved.properties ?? []) {
-      const name = getNodeName(property.key); if (!name) continue;
+      const name = objectPropertyName(property); if (!name) continue;
       if (name === "children") continue;
-      output.push({ type: "JSXAttribute", name: { type: "Identifier", value: name }, value: { type: "JSXExpressionContainer", expression: property.value ?? property.expr } });
+      output.push({ type: "JSXAttribute", name: { type: "Identifier", value: name }, value: { type: "JSXExpressionContainer", expression: objectPropertyValue(property) } });
     }
   }
   return output;
 }
-function getForwardedChildren(expression: any, state: CompilerState): any[] | null {
+function getForwardedChildren(expression: any, state: CompilerState, resolving = new Set<string>()): any[] | null {
   const name = getNodeName(expression);
+  if (name && resolving.has(name)) return null;
   const value = name ? state.expressionScope[name] : undefined;
-  return value?.type === "JSXChildren" ? value.children : null;
+  if (value?.type === "JSXChildren") return value.children;
+  // Children can pass through an object spread as an identifier. Resolve that
+  // value using the same lexical scope as every other forwarded prop.
+  return value ? getForwardedChildren(value, state, name ? new Set([...resolving, name]) : resolving) : null;
 }
 
 /**
@@ -1936,9 +1951,10 @@ function getSpreadChildren(attributes: any[], state: CompilerState): any[] {
     const resolved = resolveSpreadObject(attribute.arguments ?? attribute.argument, state);
     if (!resolved) continue;
     for (const property of resolved.properties ?? []) {
-      if (getNodeName(property.key) !== "children") continue;
-      const value = property.value ?? property.expr;
+      if (objectPropertyName(property) !== "children") continue;
+      const value = objectPropertyValue(property);
       if (value?.type === "JSXChildren") children.push(...(value.children ?? []));
+      else children.push(...(getForwardedChildren(value, state) ?? []));
     }
   }
   return children;
@@ -2003,21 +2019,46 @@ function lowerExpression(input: any, state: CompilerState, resolving = new Set<s
   if (node.type === "MemberExpression") return { kind: "member", object: lowerExpression(node.object, state, resolving), property: getNodeName(node.property) ?? "" };
   if (node.type === "OptionalChainingExpression" || node.type === "OptionalMemberExpression") return { kind: "member", object: lowerExpression(node.base ?? node.object, state, resolving), property: getNodeName(node.property) ?? "" };
   if (node.type === "CallExpression" && node.callee?.type === "MemberExpression" && getNodeName(node.callee.property) === "getFullYear" && node.callee.object?.type === "NewExpression" && getNodeName(node.callee.object.callee) === "Date") return { kind: "host", name: "currentYear" };
+  if (node.type === "BinaryExpression" && ["&&", "||", "??"].includes(node.operator)) return { kind: "logical", op: node.operator, left: lowerExpression(node.left, state, resolving), right: lowerExpression(node.right, state, resolving) };
   if (node.type === "BinaryExpression") return { kind: "binary", op: node.operator, left: lowerExpression(node.left, state, resolving), right: lowerExpression(node.right, state, resolving) };
   if (node.type === "LogicalExpression") return { kind: "logical", op: node.operator, left: lowerExpression(node.left, state, resolving), right: lowerExpression(node.right, state, resolving) };
   if (node.type === "ConditionalExpression") return { kind: "conditional", test: lowerExpression(node.test, state, resolving), consequent: lowerExpression(node.consequent, state, resolving), alternate: lowerExpression(node.alternate, state, resolving) };
   if (node.type === "UnaryExpression") return { kind: "unary", op: node.operator, argument: lowerExpression(node.argument, state, resolving) };
   if (node.type === "TemplateLiteral") { const parts: any[] = []; for (let i=0;i<(node.quasis?.length ?? 0);i++) { parts.push(node.quasis[i]?.raw ?? node.quasis[i]?.value?.cooked ?? ""); if (node.expressions?.[i]) parts.push(lowerExpression(node.expressions[i], state, resolving)); } return { kind: "template", parts }; }
   if (node.type === "ArrayExpression") return { kind: "array", items: (node.elements ?? []).filter(Boolean).map((item: any) => lowerExpression(item.expression ?? item, state, resolving)) };
-  if (node.type === "ObjectExpression") return { kind: "object", entries: (node.properties ?? []).map((property: any) => ({ key: getNodeName(property.key) ?? "", value: lowerExpression(property.value ?? property.expr, state, resolving) })) };
+  if (node.type === "ObjectExpression") {
+    const expanded = resolveSpreadObject(node, state);
+    const properties = expanded?.properties ?? node.properties ?? [];
+    return {
+      kind: "object",
+      properties: properties
+        .filter((property: any) => property.type !== "MethodProperty" && property.type !== "GetterProperty" && property.type !== "SetterProperty")
+        .map((property: any) => (property.type === "SpreadElement" || property.type === "SpreadProperty")
+          ? ({ kind: "spread", value: lowerExpression(property.arguments ?? property.argument, state, new Set(resolving)) })
+          : ({ kind: "entry", key: objectPropertyName(property) ?? "", value: lowerExpression(objectPropertyValue(property), state, new Set(resolving)) }))
+    };
+  }
   if (node.type === "CallExpression" && ["cn", "clsx", "classnames"].includes(getNodeName(node.callee) ?? "")) return { kind: "intrinsic", name: getNodeName(node.callee), args: (node.arguments ?? []).map((arg: any) => lowerExpression(arg.expression ?? arg, state, resolving)) };
   if (node.type === "CallExpression" && ["useMemo", "useCallback"].includes(getNodeName(node.callee) ?? getNodeName(node.callee?.property) ?? "")) {
     const callback = unwrapExpression(node.arguments?.[0]?.expression ?? node.arguments?.[0]);
     const returned = callback?.body?.type === "BlockStatement" ? findReturnedExpression(callback.body) : callback?.body;
     if (returned) return lowerExpression(returned, state, resolving);
   }
-  reportUnsupported(state, "UNSUPPORTED_EXPRESSION", `Unsupported expression: ${node.type}.`);
+  reportUnsupported(state, "UNSUPPORTED_EXPRESSION", `Unsupported expression: ${node.type}${describeExpression(node) ? ` (${describeExpression(node)})` : ""}.`);
   return { kind: "literal", value: "" };
+}
+
+function describeExpression(node: any): string | undefined {
+  if (node?.type !== "CallExpression" && node?.type !== "NewExpression") return undefined;
+  return getNodeName(node.callee) ?? getNodeName(node.callee?.property);
+}
+
+function objectPropertyName(property: any): string | undefined {
+  return getNodeName(property?.key) ?? (property?.type === "Identifier" || property?.type === "IdentifierExpression" ? getNodeName(property) : undefined);
+}
+
+function objectPropertyValue(property: any): any {
+  return property?.value ?? property?.expr ?? (property?.type === "Identifier" || property?.type === "IdentifierExpression" ? property : undefined);
 }
 
 function getStatements(node: any): any[] {

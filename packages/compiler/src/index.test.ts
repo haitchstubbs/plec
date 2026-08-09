@@ -113,6 +113,39 @@ describe("compile", () => {
     expect(result.ir.texts).toEqual(expect.arrayContaining([expect.objectContaining({ staticValue: "Ready" })]));
   });
 
+  it("expands nested object spreads and ordinary object merges before lowering props", () => {
+    const result = compile(`
+      function Surface({ children, ...rest }) {
+        const base = { role: 'status', className: cn('surface', rest.className) }
+        const forwarded = { ...base, ...Object.assign({}, rest), children }
+        return <span {...forwarded} />
+      }
+      function App({ label }) { return <Surface className="caller" aria-label={label}>Ready</Surface> }
+    `, { rootComponent: "App" });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.ir.elements[0]).toMatchObject({ tag: "span", attributes: expect.arrayContaining([
+      expect.objectContaining({ name: "role", staticValue: "status" }),
+      expect.objectContaining({ name: "className", staticValue: "surface" }),
+      expect.objectContaining({ name: "className", staticValue: "caller" }),
+      expect.objectContaining({ name: "aria-label", bindingId: expect.any(String) }),
+    ]) });
+  });
+
+  it("lowers optional members, unary operators, and memoized expression values", () => {
+    const result = compile(`
+      function App({ todo }) {
+        const label = useMemo(() => todo?.title ?? 'Untitled', [todo])
+        return <output data-open={!todo.done} data-rank={-todo.rank}>{label}</output>
+      }
+    `, { rootComponent: "App" });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.ir.expressions.map((entry) => entry.expression)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "unary", op: "!" }),
+      expect.objectContaining({ kind: "unary", op: "-" }),
+      expect.objectContaining({ kind: "logical", op: "??" }),
+    ]));
+  });
+
   it("describes scalar and object inputs by the paths the view reads", () => {
     const result = compile(`function Profile({ selectedId, user }) { return <div data-selected={selectedId}>{user.name}</div> }`);
     expect(result.ir.inputs).toEqual([
