@@ -1,6 +1,8 @@
+import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { compile, type CompileOptions } from "../../compiler/src/index.ts";
 import type { Plugin } from "vite";
@@ -282,17 +284,37 @@ async function readLocalModuleGraph(entry: string, rootDir: string, repoRootDir:
   seen.add(absolute);
   const source = await readFile(absolute, "utf8");
   const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)].map((match) => match[1]!);
+  const currentId = canonicalId ?? path.relative(rootDir, absolute).replace(/\\/g, "/");
   const nested = await Promise.all(imports.map(async (specifier) => {
-    const workspaceModule = await resolveWorkspaceModule(specifier, repoRootDir);
-    if (workspaceModule) return readLocalModuleGraph(workspaceModule, rootDir, repoRootDir, seen, specifier);
+    const workspaceModule = await resolveWorkspaceModule(specifier, repoRootDir) ?? resolveDependencyModule(specifier, absolute);
+    if (workspaceModule) return readLocalModuleGraph(workspaceModule, rootDir, repoRootDir, seen, logicalModuleId(currentId, specifier));
     if (!specifier.startsWith(".")) return [];
     const base = path.resolve(path.dirname(absolute), specifier);
     for (const candidate of [base, `${base}.tsx`, `${base}.ts`, path.join(base, "index.tsx"), path.join(base, "index.ts")]) {
-      try { return await readLocalModuleGraph(candidate, rootDir, repoRootDir, seen); } catch (error: any) { if (error?.code !== "ENOENT") throw error; }
+      try { return await readLocalModuleGraph(candidate, rootDir, repoRootDir, seen, logicalModuleId(currentId, specifier)); } catch (error: any) { if (error?.code !== "ENOENT") throw error; }
     }
     return [];
   }));
-  return [{ id: canonicalId ?? path.relative(rootDir, absolute).replace(/\\/g, "/"), source, filePath: absolute }, ...nested.flat()];
+  return [{ id: currentId, source, filePath: absolute }, ...nested.flat()];
+}
+
+function logicalModuleId(from: string, specifier: string): string {
+  if (!specifier.startsWith(".")) return specifier;
+  const base = from.split("/");
+  if (/\.(?:[cm]?[jt]sx?)$/.test(from)) base.pop();
+  for (const part of specifier.split("/")) { if (!part || part === ".") continue; if (part === "..") base.pop(); else base.push(part); }
+  const resolved = base.join("/");
+  return /\.(?:[cm]?[jt]sx?)$/.test(resolved) ? resolved : `${resolved}.tsx`;
+}
+
+/** Resolve package entry points through Node instead of maintaining package-name adapters. */
+function resolveDependencyModule(specifier: string, fromFile: string): string | null {
+  if (specifier.startsWith(".") || specifier.startsWith("node:")) return null;
+  try {
+    const resolved = createRequire(fromFile).resolve(specifier);
+    const esm = resolved.replace(/\.js$/, ".mjs");
+    return existsSync(esm) ? esm : resolved;
+  } catch { return null; }
 }
 
 /** Resolve local workspace package export patterns without treating packages as external. */

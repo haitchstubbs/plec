@@ -8,14 +8,14 @@ export interface CompilerDiagnostic {
 
 interface BindingNode {
   id: string;
-  kind: "text" | "attribute";
+  kind: "text" | "attribute" | "property";
   targetId: string;
   attributeName?: string;
   expression: string;
   expressionId?: string;
 }
 interface ExpressionNode { id: string; expression: unknown }
-interface EventNode { id: string; type: "change" | "click"; targetId: string; actionId: string; args: string[]; field?: string; navigate?: { href: string; replace?: boolean } }
+interface EventNode { id: string; type: string; targetId: string; actionId: string; args: string[]; field?: string; callbackName?: string; navigate?: { href: string; replace?: boolean }; stopPropagation?: boolean; preventDefault?: boolean }
 interface IslandNode { islandInstanceId: string; componentId: string; placeholderNodeId: string; moduleId: string; exportName: string; props: Record<string, unknown> }
 interface ComponentMetadata { name: string; moduleId: string; elementIds: string[]; bindingIds: string[]; eventIds: string[] }
 
@@ -78,7 +78,7 @@ interface TextNode {
 }
 
 interface ApplicationIr {
-  version: "0.4";
+  version: "0.5";
   revision?: string;
   rootElementId: string;
   elements: ElementNode[];
@@ -89,12 +89,15 @@ interface ApplicationIr {
   loops: LoopNode[];
   bindings: BindingNode[];
   expressions: ExpressionNode[];
+  propPrograms: Array<{ id: string; targetId: string; writes: Array<{ name: string; staticValue?: string; expressionId?: string; kind: "attribute" | "property" | "event" | "ref" }> }>;
   events: EventNode[];
+  refs: Array<{ id: string; targetId: string; refId: string; kind: "callback" | "object" }>;
+  contexts: Array<{ id: string; parentId: string | null; values: Array<{ name: string; expressionId?: string; staticValue?: string }> }>;
+  conditionals: Array<{ id: string; parentId: string; expressionId: string; children: string[] }>;
   localStates: Array<{ id: string; name: string; initialValue: string; values: string[] }>;
   hostValues: Array<{ id: string; kind: "media-query"; query: string }>;
   lifecycleEffects: Array<any>;
   stateTransitions: Array<any>;
-  toggles: Array<any>;
   islands: IslandNode[];
   components: ComponentMetadata[];
 }
@@ -137,6 +140,7 @@ interface CompilerState {
   expressionScope: Record<string, any>;
   components: Map<string, { name: string; body: any; params: any[]; moduleId: string }>;
   importSymbols: Map<string, { moduleId: string; exportName: string }>;
+  exports: Map<string, Map<string, { moduleId: string; exportName: string }>>;
   moduleExpressions: Map<string, Record<string, any>>;
   routerLinkBindings: Set<string>;
   islandComponents: Set<string>;
@@ -174,13 +178,14 @@ export function compile(source: string, options: CompileOptions = {}): CompileRe
     expressionScope: {},
     components: new Map(),
     importSymbols: new Map(),
+    exports: new Map(),
     moduleExpressions: new Map(),
     routerLinkBindings: new Set(),
     islandComponents: new Set(options.islandComponents ?? []),
     componentStack: [],
     activeModuleId: options.moduleId ?? "<entry>",
     ir: {
-      version: "0.4",
+      version: "0.5",
       revision: options.applicationRevision,
       rootElementId: "",
       elements: [],
@@ -191,12 +196,15 @@ export function compile(source: string, options: CompileOptions = {}): CompileRe
       loops: [],
       bindings: [],
       expressions: [],
+      propPrograms: [],
       events: [],
+      refs: [],
+      contexts: [],
+      conditionals: [],
       localStates: [],
       hostValues: [],
       lifecycleEffects: [],
       stateTransitions: [],
-      toggles: [],
       islands: [],
       components: []
     }
@@ -209,6 +217,7 @@ export function compile(source: string, options: CompileOptions = {}): CompileRe
     collectModuleExpressions(ast, state, module.id);
     collectComponents(ast, state, module.id);
     collectImports(ast, state, module.id);
+    collectExports(ast, state, module.id);
   }
 
   const rootJsx = findRootJsx(moduleAst, state, options.rootComponent);
@@ -365,6 +374,7 @@ function lowerJsxElement(node: any, parentId: string | null, state: CompilerStat
     children: [] as string[]
   };
 
+  const propWrites: Array<{ name: string; staticValue?: string; expressionId?: string; kind: "attribute" | "property" | "event" | "ref" }> = [];
   for (const attributeNode of expandIntrinsicAttributes(node.opening?.attributes ?? [], state)) {
     if (attributeNode.type === "SpreadElement") {
       reportUnsupported(state, "UNSUPPORTED_SPREAD_PROPS", "Spread props are not supported in Milestone 2.");
@@ -386,18 +396,25 @@ function lowerJsxElement(node: any, parentId: string | null, state: CompilerStat
       continue;
     }
 
-    if (name && /^on(Change|Click)$/.test(name) && attributeNode.value?.type === "JSXExpressionContainer") {
+    if (name === "ref" && attributeNode.value?.type === "JSXExpressionContainer") {
+      const refId = getNodeName(unwrapExpression(attributeNode.value.expression)) ?? `ref${state.ir.refs.length + 1}`;
+      state.ir.refs.push({ id: `r${state.ir.refs.length + 1}`, targetId: elementId, refId, kind: "callback" });
+      propWrites.push({ name, kind: "ref" });
+      continue;
+    }
+    if (name && /^on[A-Z]/.test(name) && attributeNode.value?.type === "JSXExpressionContainer") {
       lowerEvent(name, attributeNode.value.expression, elementId, state);
+      propWrites.push({ name, kind: "event" });
       continue;
     }
 
     if (!attributeNode.value) {
-      element.attributes.push({ name, staticValue: "true" });
+      element.attributes.push({ name, staticValue: "true" }); propWrites.push({ name, staticValue: "true", kind: "attribute" });
       continue;
     }
 
     if (attributeNode.value.type === "StringLiteral") {
-      element.attributes.push({ name, staticValue: attributeNode.value.value });
+      element.attributes.push({ name, staticValue: attributeNode.value.value }); propWrites.push({ name, staticValue: attributeNode.value.value, kind: "attribute" });
       continue;
     }
 
@@ -405,7 +422,7 @@ function lowerJsxElement(node: any, parentId: string | null, state: CompilerStat
       const expression = attributeNode.value.expression;
       const literalValue = evaluateExpression(expression, state, {});
       if (literalValue !== undefined && !state.preserveBindings) {
-        element.attributes.push({ name, staticValue: literalToString(literalValue) });
+        const staticValue = literalToString(literalValue); element.attributes.push({ name, staticValue }); propWrites.push({ name, staticValue, kind: isDomProperty(name) ? "property" : "attribute" });
       } else {
         const bindingId = nextBindingId(state);
         state.ir.bindings.push({
@@ -417,6 +434,7 @@ function lowerJsxElement(node: any, parentId: string | null, state: CompilerStat
           expressionId: internExpression(expression, state)
         });
         element.attributes.push({ name, bindingId });
+        propWrites.push({ name, expressionId: state.ir.bindings[state.ir.bindings.length - 1]!.expressionId, kind: isDomProperty(name) ? "property" : "attribute" });
       }
       continue;
     }
@@ -425,6 +443,7 @@ function lowerJsxElement(node: any, parentId: string | null, state: CompilerStat
   }
 
   state.ir.elements.push(element);
+  if (propWrites.length) state.ir.propPrograms.push({ id: `p${state.ir.propPrograms.length + 1}`, targetId: elementId, writes: propWrites });
 
   for (const child of [...getSpreadChildren(node.opening?.attributes ?? [], state), ...(node.children ?? [])]) {
     const lowered = lowerJsxNode(child, elementId, state);
@@ -799,17 +818,15 @@ function lowerComponentElement(node: any, parentId: string | null, state: Compil
   // A source-graph component has a different module ID from its importer;
   // treat those familiar atom exports as DOM adapters. A same-module function
   // named Checkbox remains an ordinary component (used by the Toggle tests).
-  const localComponent = getLocalComponent(name, state);
-  if (name === "Checkbox" && localComponent?.moduleId !== state.activeModuleId) return lowerExternalComponent(node, parentId, state, "checkbox-input");
-  if (name === "Input" && localComponent?.moduleId !== state.activeModuleId) return lowerExternalComponent(node, parentId, state, "input");
-  if (name === "Badge" && localComponent?.moduleId !== state.activeModuleId) return lowerExternalComponent(node, parentId, state, "badge");
-  const adapter = getExternalSymbol(name, state);
-  if (adapter === "checkbox-input" || adapter === "input" || adapter === "span") return lowerExternalComponent(node, parentId, state, adapter === "span" ? "badge" : adapter);
-  const external = getExternalSymbol(name, state);
-  if (external) return lowerExternalComponent(node, parentId, state, external);
   const component = getLocalComponent(name, state);
+  const external = getExternalSymbol(name, state);
+  if (!component && external) {
+    reportUnsupported(state, "UNRESOLVED_SOURCE_SYMBOL", `Source graph does not contain ${external}; include its implementation module to compile it.`);
+    return SKIP;
+  }
   if (!component) {
-    reportUnsupported(state, "UNSUPPORTED_COMPONENT", `Component ${name} is not a locally resolvable function component.`);
+    const imported = state.importSymbols.get(`${state.activeModuleId}::${name.split(".")[0]}`);
+    reportUnsupported(state, "UNSUPPORTED_COMPONENT", `Component ${name} is not a locally resolvable function component. Import: ${imported ? `${imported.moduleId}#${imported.exportName}` : "none"}.`);
     return SKIP;
   }
   if (state.islandComponents.has(name)) {
@@ -827,7 +844,6 @@ function lowerComponentElement(node: any, parentId: string | null, state: Compil
   }
   const props = collectCallerProps(node, state);
   props.children = { type: "JSXChildren", children: node.children ?? [] };
-  if (props.ref) reportUnsupported(state, "UNSUPPORTED_FORWARDED_REF", "Forwarded ref props are not supported by the compiled runtime.");
   const previous = state.expressionScope;
   const previousModuleId = state.activeModuleId;
   const localScope: Record<string, any> = { ...previous, ...(state.moduleExpressions.get(component.moduleId) ?? {}) };
@@ -872,9 +888,6 @@ function lowerComponentElement(node: any, parentId: string | null, state: Compil
   const result = literalScope && Object.keys(literalScope).length
     ? lowerJsxNodeWithScope(findReturnedJsx(component.body), parentId, state, literalScope)
     : lowerJsxNode(findReturnedJsx(component.body), parentId, state);
-  if (name === "ThemeToggle") {
-    lowerThemeToggleSemantics(component.body, state, before);
-  }
   metadata.elementIds = state.ir.elements.slice(before.e).map((element) => element.id);
   metadata.bindingIds = state.ir.bindings.slice(before.b).map((binding) => binding.id);
   metadata.eventIds = state.ir.events.slice(before.ev).map((event) => event.id);
@@ -924,27 +937,32 @@ function lowerRouterLink(node: any, parentId: string | null, state: CompilerStat
 
 function lowerEvent(name: string, expression: any, targetId: string, state: CompilerState): void {
   const handler = unwrapExpression(expression);
-  // ThemeToggle's named handler is deliberately lowered to a semantic state
-  // transition. It is not a callback into React or JavaScript.
-  if (state.componentStack.includes("ThemeToggle") && name === "onClick" && getNodeName(handler) === "toggleMode") {
-    state.eventCounter += 1;
-    state.ir.events.push({ id: `ev${state.eventCounter}`, type: "click", targetId, actionId: `a${state.eventCounter}`, args: [] });
-    return;
-  }
   const body = unwrapExpression(handler?.body);
   const call = body?.type === "CallExpression" ? body : null;
   const actionExpression = call?.callee;
   let actionId = getNodeName(actionExpression);
   if (actionId && state.expressionScope[actionId]) actionId = getNodeName(state.expressionScope[actionId]) ?? actionId;
-  if (!call || !actionId) { reportUnsupported(state, "UNSUPPORTED_EVENT", "Only direct callback action calls are supported."); return; }
+  if (!call || !actionId) {
+    const callbackName = getNodeName(handler);
+    if (!callbackName) { reportUnsupported(state, "UNSUPPORTED_EVENT", "Event handler must be a callback identifier or a declarative call."); return; }
+    state.eventCounter += 1;
+    state.ir.events.push({ id: `ev${state.eventCounter}`, type: reactEventName(name), targetId, actionId: `a${state.eventCounter}`, args: [], callbackName });
+    return;
+  }
   const change = call.arguments?.[1]?.expression ?? call.arguments?.[1];
   let field: string | undefined;
   if (change?.type === "ObjectExpression") field = getNodeName(change.properties?.[0]?.key);
   state.eventCounter += 1;
-  state.ir.events.push({ id: `ev${state.eventCounter}`, type: name === "onClick" ? "click" : "change", targetId, actionId: `a${state.eventCounter}`, args: [serializeExpression(call.arguments?.[0]?.expression ?? call.arguments?.[0], state), serializeExpression(change, state)], field });
+  state.ir.events.push({ id: `ev${state.eventCounter}`, type: reactEventName(name), targetId, actionId: `a${state.eventCounter}`, args: [serializeExpression(call.arguments?.[0]?.expression ?? call.arguments?.[0], state), serializeExpression(change, state)], field });
   // The semantic action id is deliberately stable but independent from callback names.
   (state.ir.events[state.ir.events.length - 1] as any).callbackName = actionId;
 }
+
+function reactEventName(name: string): string {
+  const normalized = name.slice(2).toLowerCase();
+  return ({ mouseenter: "mouseenter", mouseleave: "mouseleave", mousedown: "mousedown", mouseup: "mouseup", doubleclick: "dblclick", focus: "focus", blur: "blur" } as Record<string, string>)[normalized] ?? normalized;
+}
+function isDomProperty(name: string): boolean { return ["checked", "defaultChecked", "indeterminate", "value", "selected", "disabled", "readOnly"].includes(name); }
 
 /**
  * This is intentionally a semantic recognizer, not a hook implementation.
@@ -1498,9 +1516,37 @@ function collectComponents(moduleAst: any, state: CompilerState, moduleId: strin
     }
     if (statement.type === "VariableDeclaration" || statement.type === "VarDecl") for (const declaration of statement.declarations ?? statement.decls ?? []) {
       const name = getPatternName(declaration.id); const init = declaration.init;
-      if (name && isComponentName(name) && (init?.type === "ArrowFunctionExpression" || init?.type === "FunctionExpression")) state.components.set(componentKey(moduleId, name), { name, body: getFunctionBody(init), params: init.params ?? [], moduleId });
+      const implementation = unwrapComponentFactory(init);
+      if (name && isComponentName(name) && implementation) state.components.set(componentKey(moduleId, name), { name, body: getFunctionBody(implementation), params: implementation.params ?? [], moduleId });
     }
   }
+}
+
+function unwrapComponentFactory(init: any): any | null {
+  if (init?.type === "ArrowFunctionExpression" || init?.type === "FunctionExpression") return init;
+  const callee = getNodeName(init?.callee) ?? getNodeName(init?.callee?.property);
+  if (callee === "forwardRef" && init.arguments?.[0]) return unwrapExpression(init.arguments[0].expression ?? init.arguments[0]);
+  return null;
+}
+
+function collectExports(moduleAst: any, state: CompilerState, moduleId: string): void {
+  const entries = state.exports.get(moduleId) ?? new Map<string, { moduleId: string; exportName: string }>();
+  for (const statement of getStatements(moduleAst)) {
+    if (statement.type === "ExportDeclaration") {
+      const declaration = statement.declaration;
+      const name = getNodeName(declaration?.identifier ?? declaration?.id) ?? getPatternName(declaration?.declarations?.[0]?.id);
+      if (name) entries.set(name, { moduleId, exportName: name });
+    }
+    if (statement.type !== "ExportNamedDeclaration" && statement.type !== "ExportNamedSpecifier" && statement.type !== "ExportAllDeclaration") continue;
+    const source = statement.source?.value;
+    for (const specifier of statement.specifiers ?? []) {
+      const exported = getNodeName(specifier.exported) ?? getNodeName(specifier.name) ?? getNodeName(specifier.orig) ?? getNodeName(specifier.local);
+      const local = getNodeName(specifier.orig) ?? getNodeName(specifier.local) ?? exported;
+      if (!exported || !local) continue;
+      entries.set(exported, source ? { moduleId: resolveModuleId(moduleId, source), exportName: local } : { moduleId, exportName: local });
+    }
+  }
+  state.exports.set(moduleId, entries);
 }
 
 function collectModuleExpressions(moduleAst: any, state: CompilerState, moduleId: string): void {
@@ -1538,50 +1584,41 @@ function collectImports(moduleAst: any, state: CompilerState, moduleId: string):
 function componentKey(moduleId: string, name: string): string { return `${moduleId}::${name}`; }
 function resolveModuleId(from: string, source: string): string {
   if (!source.startsWith(".")) return source;
-  const base = from.split("/").slice(0, -1);
+  const base = from.split("/");
+  if (/\.(?:tsx?|jsx?|mjs|cjs)$/.test(from)) base.pop();
   for (const part of source.split("/")) {
     if (part === "." || !part) continue;
     if (part === "..") base.pop(); else base.push(part);
   }
-  const candidate = base.join("/").replace(/\.(?:tsx?|jsx?)$/, "");
-  return candidate.endsWith(".tsx") || candidate.endsWith(".ts") ? candidate : `${candidate}.tsx`;
+  const candidate = base.join("/");
+  return /\.(?:tsx?|jsx?|mjs|cjs)$/.test(candidate) ? candidate : `${candidate}.tsx`;
 }
 function getLocalComponent(name: string, state: CompilerState) {
-  const imported = state.importSymbols.get(`${state.activeModuleId}::${name}`);
+  const [root, ...members] = name.split(".");
+  const imported = state.importSymbols.get(`${state.activeModuleId}::${root}`);
   if (imported) {
-    const direct = state.components.get(componentKey(imported.moduleId, imported.exportName)) ?? state.components.get(componentKey(imported.moduleId, name));
+    const resolved = resolveExport(imported.moduleId, [...[imported.exportName], ...members].join("."), state);
+    const direct = state.components.get(componentKey(resolved.moduleId, resolved.exportName))
+      ?? state.components.get(componentKey(imported.moduleId, imported.exportName))
+      ?? [...state.components.values()].find((component) => component.moduleId === resolved.moduleId && component.name === resolved.exportName);
     if (direct) return direct;
-    if (imported.exportName === "default") return [...state.components.values()].find((component) => component.moduleId === imported.moduleId);
+    if (resolved.exportName === "default") return [...state.components.values()].find((component) => component.moduleId === resolved.moduleId);
   }
-  return state.components.get(componentKey(state.activeModuleId, name));
+  return state.components.get(componentKey(state.activeModuleId, root ?? name))
+    ?? [...state.components.values()].find((component) => component.name === (root ?? name));
+}
+function resolveExport(moduleId: string, name: string, state: CompilerState): { moduleId: string; exportName: string } {
+  const [head, ...tail] = name.split("."); const found = state.exports.get(moduleId)?.get(head ?? name);
+  if (!found) return { moduleId, exportName: name };
+  if (!tail.length) return found;
+  return resolveExport(found.moduleId, `${found.exportName === head ? "" : `${found.exportName}.`}${tail.join(".")}`, state);
 }
 function getExternalSymbol(name: string, state: CompilerState): string | null {
   const [root, ...members] = name.split(".");
   const imported = state.importSymbols.get(`${state.activeModuleId}::${root}`);
   if (!imported || !imported.moduleId.startsWith("@")) return null;
   const symbol = [imported.exportName, ...members].join(".");
-  // These adapters deliberately take precedence over their implementation
-  // modules: the compiler should target their stable DOM contract, not expand
-  // Base UI internals when the source module is available in the graph.
-  if (imported.moduleId === "@wasm-runtime/ui/atoms/checkbox" && symbol === "Checkbox") return "checkbox-input";
-  if (imported.moduleId === "@wasm-runtime/ui/atoms/input" && symbol === "Input") return "input";
-  if (imported.moduleId === "@wasm-runtime/ui/atoms/badge" && symbol === "Badge") return "span";
   if (state.components.has(componentKey(imported.moduleId, imported.exportName))) return null;
-  if (imported.moduleId === "@base-ui/react/button" && symbol === "Button") return "button";
-  if (imported.moduleId === "@base-ui/react/input" && symbol === "Input") return "input";
-  // The first public adapter intentionally recognizes only Checkbox's stable
-  // compound surface. Its package internals are never compiled.
-  if (imported.moduleId === "@base-ui/react/checkbox") {
-    if (symbol === "Checkbox.Root") return "internal-toggle-root";
-    if (symbol === "Checkbox.Indicator") return "internal-toggle-indicator";
-  }
-  if (imported.moduleId === "@hugeicons/react" && symbol === "HugeiconsIcon") return "hugeicons-icon";
-  // This module exists only in compiler fixtures. It establishes the adapter
-  // contract without exposing a new authoring package.
-  if (imported.moduleId === "@wasm-runtime/internal-toggle") {
-    if (symbol === "Toggle.Root") return "internal-toggle-root";
-    if (symbol === "Toggle.Indicator") return "internal-toggle-indicator";
-  }
   return `${imported.moduleId}::${symbol}`;
 }
 function lowerToggleRoot(node: any, parentId: string | null, state: CompilerState): LowerResult {
@@ -1597,7 +1634,7 @@ function lowerToggleRoot(node: any, parentId: string | null, state: CompilerStat
     if (literal !== undefined) root.attributes.push({ name: key, staticValue: literalToString(literal) });
     else { const bindingId = nextBindingId(state); state.ir.bindings.push({ id: bindingId, kind: "attribute", targetId: rootId, attributeName: key, expression: serializeExpression(value, state), expressionId: internExpression(value, state) }); root.attributes.push({ name: key, bindingId }); }
   }
-  const input: ElementNode = { id: inputId, tag: "input", parentId: rootId, attributes: [{ name: "type", staticValue: "checkbox" }, { name: "data-runtime-toggle", staticValue: `t${state.ir.toggles.length + 1}` }], children: [] };
+  const input: ElementNode = { id: inputId, tag: "input", parentId: rootId, attributes: [{ name: "type", staticValue: "checkbox" }], children: [] };
   const valueSource = (key: string) => {
     const value = props[key]; if (!value) return undefined;
     const literal = evaluateExpression(value, state, {});
@@ -1618,7 +1655,7 @@ function lowerToggleRoot(node: any, parentId: string | null, state: CompilerStat
   const actionId = props.onCheckedChange ? `a${state.eventCounter}` : undefined;
   state.ir.events.push({ id: eventId, type: "change", targetId: inputId, actionId: actionId ?? `a${state.eventCounter}`, args: [] });
   const stateSlotId = `s${state.ir.localStates.length + 1}`;
-  state.ir.localStates.push({ id: stateSlotId, name: `toggle-${state.ir.toggles.length + 1}`, initialValue: defaultChecked?.staticValue === "true" ? "true" : "false", values: ["false", "true", "mixed"] });
+  state.ir.localStates.push({ id: stateSlotId, name: `state-${state.ir.localStates.length + 1}`, initialValue: defaultChecked?.staticValue === "true" ? "true" : "false", values: ["false", "true", "mixed"] });
   state.ir.elements.push(root, input);
   let indicatorId: string | undefined;
   for (const child of node.children ?? []) {
@@ -1631,7 +1668,7 @@ function lowerToggleRoot(node: any, parentId: string | null, state: CompilerStat
     state.ir.elements.push(indicator); root.children.push(indicatorId);
     for (const grandchild of child.children ?? []) { const lowered=lowerJsxNode(grandchild,indicatorId,state); if(lowered!==SKIP) indicator.children.push(lowered); }
   }
-  state.ir.toggles.push({ id: `t${state.ir.toggles.length + 1}`, rootElementId: rootId, inputElementId: inputId, indicatorElementId: indicatorId, stateSlotId, actionId, checked, defaultChecked, indeterminate, disabled: valueSource("disabled"), readOnly: valueSource("readOnly"), required: valueSource("required"), name: valueSource("name"), value: valueSource("value"), form: valueSource("form"), eventId });
+  void indicatorId; void stateSlotId; void actionId; void checked; void defaultChecked; void indeterminate;
   return rootId;
 }
 function lowerExternalComponent(node: any, parentId: string | null, state: CompilerState, external: string): LowerResult {
