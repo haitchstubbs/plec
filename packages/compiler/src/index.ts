@@ -1127,7 +1127,11 @@ function lowerLifecycleCalls(body: any, state: CompilerState): void {
     const dependencies = unwrapExpression(call.arguments?.[1]?.expression ?? call.arguments?.[1]);
     if (!callback || (callback.type !== "ArrowFunctionExpression" && callback.type !== "FunctionExpression")) { reportUnsupported(state, "UNSUPPORTED_LIFECYCLE_CALLBACK", `${name} requires an inline callback.`); continue; }
     const statements = callback.body?.type === "BlockStatement" ? getStatements(callback.body) : [];
-    if (statements.length) { reportUnsupported(state, "UNSUPPORTED_LIFECYCLE_BODY", `${name} body must reduce to declarative host/resource operations.`); continue; }
+    // A cleanup-only no-op is semantically observable for ordering but needs
+    // no host capability. Keep it as a lifecycle descriptor instead of
+    // rejecting the surrounding component.
+    const cleanupOnly = statements.length === 1 && (statements[0]?.type === "ReturnStatement" || statements[0]?.type === "ReturnStmt") && (() => { const returned = unwrapExpression(statements[0]?.argument ?? statements[0]?.arg); return (returned?.type === "ArrowFunctionExpression" || returned?.type === "FunctionExpression") && getStatements(returned.body).length === 0; })();
+    if (statements.length && !cleanupOnly) { reportUnsupported(state, "UNSUPPORTED_LIFECYCLE_BODY", `${name} body must reduce to declarative host/resource operations.`); continue; }
     const deps = dependencies?.type === "ArrayExpression" ? (dependencies.elements ?? []).filter(Boolean).map((item: any) => internExpression(item.expression ?? item, state)) : [];
     state.ir.lifecycleEffects.push({ id: `fx${state.ir.lifecycleEffects.length + 1}`, phase: name === "useLayoutEffect" ? "layout" : "effect", trigger: "mount", dependencies: deps, operations: [] });
   }
