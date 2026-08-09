@@ -1,6 +1,6 @@
 {
   "version": "0.5",
-  "revision": "b853eaf857b3388fbab2b91554fa58993e6fc4e826e9878e49ba8d27d8bd527b",
+  "revision": "2486d687d72152d309d0f949b7f523eed317f65d21de7b0edfbb4a99153f9eca",
   "rootElementId": "e1",
   "elements": [
     {
@@ -196,17 +196,13 @@
         }
       ],
       "children": [
-        "t3",
-        "t4",
-        "e12",
-        "e13",
-        "e14"
+        "c1"
       ]
     },
     {
       "id": "e12",
       "tag": "input",
-      "parentId": "e11",
+      "parentId": "c1",
       "attributes": [
         {
           "name": "suppressHydrationWarning",
@@ -214,39 +210,6 @@
         }
       ],
       "children": []
-    },
-    {
-      "id": "e13",
-      "tag": "input",
-      "parentId": "e11",
-      "attributes": [
-        {
-          "name": "type",
-          "bindingId": "b10"
-        },
-        {
-          "name": "data-slot",
-          "bindingId": "b11"
-        },
-        {
-          "name": "className",
-          "bindingId": "b12"
-        },
-        {
-          "name": "value",
-          "bindingId": "b13"
-        }
-      ],
-      "children": []
-    },
-    {
-      "id": "e14",
-      "tag": "span",
-      "parentId": "e11",
-      "attributes": [],
-      "children": [
-        "t5"
-      ]
     }
   ],
   "texts": [
@@ -262,17 +225,12 @@
     },
     {
       "id": "t3",
-      "parentId": "e11",
+      "parentId": "c1",
       "staticValue": ""
     },
     {
       "id": "t4",
-      "parentId": "e11",
-      "staticValue": ""
-    },
-    {
-      "id": "t5",
-      "parentId": "e14",
+      "parentId": "c1",
       "staticValue": ""
     }
   ],
@@ -325,7 +283,7 @@
       "targetId": "e9",
       "attributeName": "data-todo-id",
       "expression": "MemberExpression",
-      "expressionId": "x1"
+      "expressionId": "x6"
     },
     {
       "id": "b3",
@@ -333,7 +291,7 @@
       "targetId": "e9",
       "attributeName": "data-done",
       "expression": "MemberExpression",
-      "expressionId": "x2"
+      "expressionId": "x7"
     },
     {
       "id": "b4",
@@ -341,7 +299,7 @@
       "targetId": "e10",
       "attributeName": "data-size",
       "expression": "dosC",
-      "expressionId": "x3"
+      "expressionId": "x8"
     },
     {
       "id": "b5",
@@ -349,7 +307,7 @@
       "targetId": "e10",
       "attributeName": "className",
       "expression": "const { data: todos } = useLiveQuery(todosCollection)\n  function updateTodo() {}\n  return <div data-compiled-route-root><TodoListView todos={todos as any} onUpdate={updateTodo} /></div>\n}",
-      "expressionId": "x4"
+      "expressionId": "x9"
     },
     {
       "id": "b6",
@@ -357,21 +315,21 @@
       "targetId": "e11",
       "attributeName": "className",
       "expression": "CallExpression",
-      "expressionId": "x5"
+      "expressionId": "x10"
     },
     {
       "id": "b7",
       "kind": "text",
       "targetId": "t3",
       "expression": "Identifier",
-      "expressionId": "x7"
+      "expressionId": "x12"
     },
     {
       "id": "b8",
       "kind": "text",
       "targetId": "t4",
       "expression": "BinaryExpression",
-      "expressionId": "x8"
+      "expressionId": "x13"
     },
     {
       "id": "b9",
@@ -379,51 +337,198 @@
       "targetId": "e12",
       "attributeName": "suppressHydrationWarning",
       "expression": "BooleanLiteral",
-      "expressionId": "x9"
-    },
-    {
-      "id": "b10",
-      "kind": "attribute",
-      "targetId": "e13",
-      "attributeName": "type",
-      "expression": "osCo",
-      "expressionId": "x10"
-    },
-    {
-      "id": "b11",
-      "kind": "attribute",
-      "targetId": "e13",
-      "attributeName": "data-slot",
-      "expression": "cons",
-      "expressionId": "x11"
-    },
-    {
-      "id": "b12",
-      "kind": "attribute",
-      "targetId": "e13",
-      "attributeName": "className",
-      "expression": "= useLiveQuery(todosCollection)\n  function updateTodo() {}\n  return <div data-compiled-route-root><TodoListView todos={todos as any} onUpdate={updateTodo} /></div>\n}",
-      "expressionId": "x12"
-    },
-    {
-      "id": "b13",
-      "kind": "attribute",
-      "targetId": "e13",
-      "attributeName": "value",
-      "expression": "MemberExpression",
-      "expressionId": "x13"
-    },
-    {
-      "id": "b14",
-      "kind": "text",
-      "targetId": "t5",
-      "expression": "ConditionalExpression",
-      "expressionId": "x14"
+      "expressionId": "x15"
     }
   ],
   "expressions": [
     {
       "id": "x1",
+      "expression": {
+        "kind": "identifier",
+        "name": "undefined"
+      }
+    },
+    {
+      "id": "x2",
+      "expression": {
+        "kind": "identifier",
+        "name": "DEFAULT_FIELD_ROOT_CONTEXT"
+      }
+    },
+    {
+      "id": "x3",
+      "expression": {
+        "kind": "object",
+        "properties": [
+          {
+            "kind": "entry",
+            "key": "disabled",
+            "value": {
+              "kind": "literal",
+              "value": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "x4",
+      "expression": {
+        "kind": "object",
+        "properties": [
+          {
+            "kind": "entry",
+            "key": "elementRef",
+            "value": {
+              "kind": "object",
+              "properties": [
+                {
+                  "kind": "entry",
+                  "key": "current",
+                  "value": {
+                    "kind": "literal",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "formRef",
+            "value": {
+              "kind": "object",
+              "properties": [
+                {
+                  "kind": "entry",
+                  "key": "current",
+                  "value": {
+                    "kind": "object",
+                    "properties": [
+                      {
+                        "kind": "entry",
+                        "key": "fields",
+                        "value": {
+                          "kind": "literal",
+                          "value": ""
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "errors",
+            "value": {
+              "kind": "object",
+              "properties": []
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "clearErrors",
+            "value": {
+              "kind": "identifier",
+              "name": "NOOP"
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "validationMode",
+            "value": {
+              "kind": "literal",
+              "value": "onSubmit"
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "submitAttemptedRef",
+            "value": {
+              "kind": "object",
+              "properties": [
+                {
+                  "kind": "entry",
+                  "key": "current",
+                  "value": {
+                    "kind": "literal",
+                    "value": false
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "x5",
+      "expression": {
+        "kind": "object",
+        "properties": [
+          {
+            "kind": "entry",
+            "key": "controlId",
+            "value": {
+              "kind": "identifier",
+              "name": "undefined"
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "registerControlId",
+            "value": {
+              "kind": "identifier",
+              "name": "NOOP"
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "labelId",
+            "value": {
+              "kind": "identifier",
+              "name": "undefined"
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "setLabelId",
+            "value": {
+              "kind": "identifier",
+              "name": "NOOP"
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "messageIds",
+            "value": {
+              "kind": "array",
+              "items": []
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "setMessageIds",
+            "value": {
+              "kind": "identifier",
+              "name": "NOOP"
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "getDescriptionProps",
+            "value": {
+              "kind": "literal",
+              "value": ""
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "x6",
       "expression": {
         "kind": "member",
         "object": {
@@ -434,7 +539,7 @@
       }
     },
     {
-      "id": "x2",
+      "id": "x7",
       "expression": {
         "kind": "member",
         "object": {
@@ -445,14 +550,14 @@
       }
     },
     {
-      "id": "x3",
+      "id": "x8",
       "expression": {
         "kind": "literal",
         "value": "sm"
       }
     },
     {
-      "id": "x4",
+      "id": "x9",
       "expression": {
         "kind": "intrinsic",
         "name": "cn",
@@ -469,7 +574,7 @@
       }
     },
     {
-      "id": "x5",
+      "id": "x10",
       "expression": {
         "kind": "intrinsic",
         "name": "cn",
@@ -486,7 +591,7 @@
       }
     },
     {
-      "id": "x6",
+      "id": "x11",
       "expression": {
         "kind": "object",
         "properties": [
@@ -515,8 +620,8 @@
                       "object": {
                         "kind": "member",
                         "object": {
-                          "kind": "literal",
-                          "value": ""
+                          "kind": "context",
+                          "contextId": "ctx6"
                         },
                         "property": "allValues"
                       },
@@ -546,8 +651,16 @@
                 }
               },
               "consequent": {
-                "kind": "literal",
-                "value": ""
+                "kind": "unary",
+                "op": "!",
+                "argument": {
+                  "kind": "unary",
+                  "op": "!",
+                  "argument": {
+                    "kind": "identifier",
+                    "name": "groupChecked"
+                  }
+                }
               },
               "alternate": {
                 "kind": "identifier",
@@ -597,8 +710,8 @@
                       "object": {
                         "kind": "member",
                         "object": {
-                          "kind": "literal",
-                          "value": ""
+                          "kind": "context",
+                          "contextId": "ctx6"
                         },
                         "property": "allValues"
                       },
@@ -649,14 +762,14 @@
       }
     },
     {
-      "id": "x7",
+      "id": "x12",
       "expression": {
         "kind": "literal",
         "value": ""
       }
     },
     {
-      "id": "x8",
+      "id": "x13",
       "expression": {
         "kind": "logical",
         "op": "&&",
@@ -684,8 +797,8 @@
                   "kind": "unary",
                   "op": "!",
                   "argument": {
-                    "kind": "literal",
-                    "value": ""
+                    "kind": "context",
+                    "contextId": "ctx6"
                   }
                 }
               },
@@ -731,74 +844,259 @@
       }
     },
     {
-      "id": "x9",
+      "id": "x14",
       "expression": {
-        "kind": "literal",
-        "value": true
-      }
-    },
-    {
-      "id": "x10",
-      "expression": {
-        "kind": "identifier",
-        "name": "undefined"
-      }
-    },
-    {
-      "id": "x11",
-      "expression": {
-        "kind": "literal",
-        "value": "input"
-      }
-    },
-    {
-      "id": "x12",
-      "expression": {
-        "kind": "intrinsic",
-        "name": "cn",
-        "args": [
+        "kind": "object",
+        "properties": [
           {
-            "kind": "literal",
-            "value": "h-9 w-full min-w-0 rounded-4xl border border-input bg-input/30 px-3 py-1 text-base transition-colors outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-[3px] aria-invalid:ring-destructive/20 md:text-sm dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
+            "kind": "spread",
+            "value": {
+              "kind": "object",
+              "properties": [
+                {
+                  "kind": "entry",
+                  "key": "checked",
+                  "value": {
+                    "kind": "literal",
+                    "value": ""
+                  }
+                },
+                {
+                  "kind": "entry",
+                  "key": "disabled",
+                  "value": {
+                    "kind": "literal",
+                    "value": ""
+                  }
+                },
+                {
+                  "kind": "entry",
+                  "key": "form",
+                  "value": {
+                    "kind": "literal",
+                    "value": ""
+                  }
+                },
+                {
+                  "kind": "entry",
+                  "key": "name",
+                  "value": {
+                    "kind": "conditional",
+                    "test": {
+                      "kind": "identifier",
+                      "name": "parent"
+                    },
+                    "consequent": {
+                      "kind": "identifier",
+                      "name": "undefined"
+                    },
+                    "alternate": {
+                      "kind": "logical",
+                      "op": "??",
+                      "left": {
+                        "kind": "identifier",
+                        "name": "fieldName"
+                      },
+                      "right": {
+                        "kind": "identifier",
+                        "name": "nameProp"
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "entry",
+                  "key": "id",
+                  "value": {
+                    "kind": "conditional",
+                    "test": {
+                      "kind": "identifier",
+                      "name": "nativeButton"
+                    },
+                    "consequent": {
+                      "kind": "identifier",
+                      "name": "undefined"
+                    },
+                    "alternate": {
+                      "kind": "logical",
+                      "op": "??",
+                      "left": {
+                        "kind": "logical",
+                        "op": "||",
+                        "left": {
+                          "kind": "identifier",
+                          "name": "idProp"
+                        },
+                        "right": {
+                          "kind": "identifier",
+                          "name": "controlId"
+                        }
+                      },
+                      "right": {
+                        "kind": "identifier",
+                        "name": "undefined"
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "entry",
+                  "key": "required",
+                  "value": {
+                    "kind": "literal",
+                    "value": ""
+                  }
+                },
+                {
+                  "kind": "entry",
+                  "key": "ref",
+                  "value": {
+                    "kind": "literal",
+                    "value": ""
+                  }
+                },
+                {
+                  "kind": "entry",
+                  "key": "style",
+                  "value": {
+                    "kind": "conditional",
+                    "test": {
+                      "kind": "logical",
+                      "op": "??",
+                      "left": {
+                        "kind": "identifier",
+                        "name": "fieldName"
+                      },
+                      "right": {
+                        "kind": "identifier",
+                        "name": "nameProp"
+                      }
+                    },
+                    "consequent": {
+                      "kind": "identifier",
+                      "name": "visuallyHiddenInput"
+                    },
+                    "alternate": {
+                      "kind": "identifier",
+                      "name": "visuallyHidden"
+                    }
+                  }
+                },
+                {
+                  "kind": "entry",
+                  "key": "tabIndex",
+                  "value": {
+                    "kind": "unary",
+                    "op": "-",
+                    "argument": {
+                      "kind": "literal",
+                      "value": 1
+                    }
+                  }
+                },
+                {
+                  "kind": "entry",
+                  "key": "type",
+                  "value": {
+                    "kind": "literal",
+                    "value": "checkbox"
+                  }
+                },
+                {
+                  "kind": "entry",
+                  "key": "aria-hidden",
+                  "value": {
+                    "kind": "literal",
+                    "value": true
+                  }
+                }
+              ]
+            }
           },
           {
-            "kind": "identifier",
-            "name": "undefined"
+            "kind": "spread",
+            "value": {
+              "kind": "conditional",
+              "test": {
+                "kind": "binary",
+                "op": "!==",
+                "left": {
+                  "kind": "identifier",
+                  "name": "valueProp"
+                },
+                "right": {
+                  "kind": "identifier",
+                  "name": "undefined"
+                }
+              },
+              "consequent": {
+                "kind": "object",
+                "properties": [
+                  {
+                    "kind": "entry",
+                    "key": "value",
+                    "value": {
+                      "kind": "logical",
+                      "op": "||",
+                      "left": {
+                        "kind": "conditional",
+                        "test": {
+                          "kind": "context",
+                          "contextId": "ctx6"
+                        },
+                        "consequent": {
+                          "kind": "logical",
+                          "op": "&&",
+                          "left": {
+                            "kind": "identifier",
+                            "name": "checked"
+                          },
+                          "right": {
+                            "kind": "identifier",
+                            "name": "valueProp"
+                          }
+                        },
+                        "alternate": {
+                          "kind": "identifier",
+                          "name": "valueProp"
+                        }
+                      },
+                      "right": {
+                        "kind": "literal",
+                        "value": ""
+                      }
+                    }
+                  }
+                ]
+              },
+              "alternate": {
+                "kind": "identifier",
+                "name": "EMPTY_OBJECT"
+              }
+            }
+          },
+          {
+            "kind": "spread",
+            "value": {
+              "kind": "identifier",
+              "name": "getDescriptionProps"
+            }
+          },
+          {
+            "kind": "spread",
+            "value": {
+              "kind": "literal",
+              "value": ""
+            }
           }
         ]
       }
     },
     {
-      "id": "x13",
+      "id": "x15",
       "expression": {
-        "kind": "member",
-        "object": {
-          "kind": "identifier",
-          "name": "todo"
-        },
-        "property": "title"
-      }
-    },
-    {
-      "id": "x14",
-      "expression": {
-        "kind": "conditional",
-        "test": {
-          "kind": "member",
-          "object": {
-            "kind": "identifier",
-            "name": "todo"
-          },
-          "property": "done"
-        },
-        "consequent": {
-          "kind": "literal",
-          "value": "Completed"
-        },
-        "alternate": {
-          "kind": "literal",
-          "value": "Open"
-        }
+        "kind": "literal",
+        "value": true
       }
     }
   ],
@@ -932,12 +1230,12 @@
         },
         {
           "name": "data-size",
-          "expressionId": "x3",
+          "expressionId": "x8",
           "kind": "attribute"
         },
         {
           "name": "className",
-          "expressionId": "x4",
+          "expressionId": "x9",
           "kind": "attribute"
         }
       ]
@@ -953,7 +1251,7 @@
         },
         {
           "name": "className",
-          "expressionId": "x5",
+          "expressionId": "x10",
           "kind": "attribute"
         }
       ]
@@ -964,83 +1262,65 @@
       "writes": [
         {
           "name": "",
-          "expressionId": "x7",
+          "expressionId": "x14",
           "kind": "spread"
         },
         {
           "name": "suppressHydrationWarning",
-          "expressionId": "x9",
+          "expressionId": "x15",
           "kind": "attribute"
         }
       ]
-    },
-    {
-      "id": "p12",
-      "targetId": "e13",
-      "writes": [
-        {
-          "name": "ref",
-          "kind": "ref"
-        },
-        {
-          "name": "type",
-          "expressionId": "x10",
-          "kind": "attribute"
-        },
-        {
-          "name": "data-slot",
-          "expressionId": "x11",
-          "kind": "attribute"
-        },
-        {
-          "name": "className",
-          "expressionId": "x12",
-          "kind": "attribute"
-        },
-        {
-          "name": "value",
-          "expressionId": "x13",
-          "kind": "property"
-        },
-        {
-          "name": "onChange",
-          "kind": "event"
-        }
-      ]
     }
   ],
-  "events": [
-    {
-      "id": "ev1",
-      "type": "change",
-      "targetId": "e13",
-      "actionId": "a1",
-      "args": [
-        "MemberExpression",
-        "ObjectExpression"
-      ],
-      "field": "title",
-      "callbackName": "updateTodo"
-    }
-  ],
-  "refs": [
-    {
-      "id": "r1",
-      "targetId": "e13",
-      "refId": "forwardedRef",
-      "kind": "callback"
-    }
-  ],
+  "events": [],
+  "refs": [],
   "contexts": [
     {
       "id": "c1",
+      "contextId": "ctx7",
       "parentId": "e11",
-      "values": [
-        {
-          "name": "value",
-          "expressionId": "x6"
-        }
+      "valueExpressionId": "x11",
+      "values": [],
+      "children": [
+        "t3",
+        "t4",
+        "e12"
       ]
+    }
+  ],
+  "contextDefinitions": [
+    {
+      "id": "ctx1",
+      "defaultExpressionId": "x1"
+    },
+    {
+      "id": "ctx2",
+      "defaultExpressionId": "x2"
+    },
+    {
+      "id": "ctx3",
+      "defaultExpressionId": "x3"
+    },
+    {
+      "id": "ctx4",
+      "defaultExpressionId": "x4"
+    },
+    {
+      "id": "ctx5",
+      "defaultExpressionId": "x5"
+    },
+    {
+      "id": "ctx6",
+      "defaultExpressionId": "x1"
+    },
+    {
+      "id": "ctx7",
+      "defaultExpressionId": "x1"
+    },
+    {
+      "id": "ctx8",
+      "defaultExpressionId": "x1"
     }
   ],
   "conditionals": [],
@@ -1064,9 +1344,7 @@
         "e9",
         "e10",
         "e11",
-        "e12",
-        "e13",
-        "e14"
+        "e12"
       ],
       "bindingIds": [
         "b2",
@@ -1076,16 +1354,9 @@
         "b6",
         "b7",
         "b8",
-        "b9",
-        "b10",
-        "b11",
-        "b12",
-        "b13",
-        "b14"
+        "b9"
       ],
-      "eventIds": [
-        "ev1"
-      ]
+      "eventIds": []
     },
     {
       "name": "Card",
@@ -1100,9 +1371,7 @@
         "e9",
         "e10",
         "e11",
-        "e12",
-        "e13",
-        "e14"
+        "e12"
       ],
       "bindingIds": [
         "b2",
@@ -1112,16 +1381,9 @@
         "b6",
         "b7",
         "b8",
-        "b9",
-        "b10",
-        "b11",
-        "b12",
-        "b13",
-        "b14"
+        "b9"
       ],
-      "eventIds": [
-        "ev1"
-      ]
+      "eventIds": []
     },
     {
       "name": "CardHeader",
@@ -1152,9 +1414,7 @@
         "e9",
         "e10",
         "e11",
-        "e12",
-        "e13",
-        "e14"
+        "e12"
       ],
       "bindingIds": [
         "b2",
@@ -1164,16 +1424,9 @@
         "b6",
         "b7",
         "b8",
-        "b9",
-        "b10",
-        "b11",
-        "b12",
-        "b13",
-        "b14"
+        "b9"
       ],
-      "eventIds": [
-        "ev1"
-      ]
+      "eventIds": []
     },
     {
       "name": "Card",
@@ -1181,9 +1434,7 @@
       "elementIds": [
         "e10",
         "e11",
-        "e12",
-        "e13",
-        "e14"
+        "e12"
       ],
       "bindingIds": [
         "b4",
@@ -1191,40 +1442,24 @@
         "b6",
         "b7",
         "b8",
-        "b9",
-        "b10",
-        "b11",
-        "b12",
-        "b13",
-        "b14"
+        "b9"
       ],
-      "eventIds": [
-        "ev1"
-      ]
+      "eventIds": []
     },
     {
       "name": "CardContent",
       "moduleId": "@wasm-runtime/ui/atoms/card",
       "elementIds": [
         "e11",
-        "e12",
-        "e13",
-        "e14"
+        "e12"
       ],
       "bindingIds": [
         "b6",
         "b7",
         "b8",
-        "b9",
-        "b10",
-        "b11",
-        "b12",
-        "b13",
-        "b14"
+        "b9"
       ],
-      "eventIds": [
-        "ev1"
-      ]
+      "eventIds": []
     },
     {
       "name": "Checkbox",
@@ -1255,60 +1490,29 @@
     {
       "name": "Input",
       "moduleId": "@wasm-runtime/ui/atoms/input",
-      "elementIds": [
-        "e13"
-      ],
-      "bindingIds": [
-        "b10",
-        "b11",
-        "b12",
-        "b13"
-      ],
-      "eventIds": [
-        "ev1"
-      ]
+      "elementIds": [],
+      "bindingIds": [],
+      "eventIds": []
     },
     {
       "name": "InputPrimitive",
       "moduleId": "@base-ui/react/input/Input.mjs",
-      "elementIds": [
-        "e13"
-      ],
-      "bindingIds": [
-        "b10",
-        "b11",
-        "b12",
-        "b13"
-      ],
-      "eventIds": [
-        "ev1"
-      ]
+      "elementIds": [],
+      "bindingIds": [],
+      "eventIds": []
     },
     {
       "name": "Field.Control",
       "moduleId": "@base-ui/react/field/control/FieldControl.mjs",
-      "elementIds": [
-        "e13"
-      ],
-      "bindingIds": [
-        "b10",
-        "b11",
-        "b12",
-        "b13"
-      ],
-      "eventIds": [
-        "ev1"
-      ]
+      "elementIds": [],
+      "bindingIds": [],
+      "eventIds": []
     },
     {
       "name": "Badge",
       "moduleId": "@wasm-runtime/ui/atoms/badge",
-      "elementIds": [
-        "e14"
-      ],
-      "bindingIds": [
-        "b14"
-      ],
+      "elementIds": [],
+      "bindingIds": [],
       "eventIds": []
     }
   ]
