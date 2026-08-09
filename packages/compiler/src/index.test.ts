@@ -146,6 +146,21 @@ describe("compile", () => {
     ]));
   });
 
+  it("inlines reachable expression-only custom hooks without symbol adapters", () => {
+    const result = compile(`
+      function useLabel(todo) { const suffix = todo.done ? 'done' : 'open'; return todo.title + ' (' + suffix + ')' }
+      function App({ todo }) { return <output>{useLabel(todo)}</output> }
+    `, { rootComponent: "App" });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.ir.expressions[0]?.expression).toMatchObject({ kind: "binary", op: "+" });
+  });
+
+  it("keeps a dynamic record spread as an ordered runtime prop write", () => {
+    const result = compile(`function App({ todo }) { return <input {...todo} /> }`, { rootComponent: "App" });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.ir.propPrograms[0]?.writes).toEqual([expect.objectContaining({ kind: "spread", expressionId: expect.any(String) })]);
+  });
+
   it("describes scalar and object inputs by the paths the view reads", () => {
     const result = compile(`function Profile({ selectedId, user }) { return <div data-selected={selectedId}>{user.name}</div> }`);
     expect(result.ir.inputs).toEqual([
