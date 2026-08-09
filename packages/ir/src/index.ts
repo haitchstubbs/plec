@@ -16,8 +16,13 @@ export const ExpressionSchema: z.ZodType<any> = z.lazy(() => z.discriminatedUnio
 ]));
 
 export const ExpressionNodeSchema = z.object({ id: z.string(), expression: ExpressionSchema });
-export const BindingSchema = z.object({ id: z.string(), kind: z.enum(["text", "attribute"]), targetId: z.string(), attributeName: z.string().optional(), expressionId: z.string().optional(), expression: z.string().optional() });
-export const EventSchema = z.object({ id: z.string(), type: z.enum(["change", "click"]), targetId: z.string(), actionId: z.string(), args: z.array(z.string()).default([]), field: z.string().optional(), navigate: z.object({ href: z.string(), replace: z.boolean().optional() }).optional() });
+export const BindingSchema = z.object({ id: z.string(), kind: z.enum(["text", "attribute", "property"]), targetId: z.string(), attributeName: z.string().optional(), expressionId: z.string().optional(), expression: z.string().optional() });
+export const PropWriteSchema = z.object({ name: z.string(), staticValue: z.string().optional(), expressionId: z.string().optional(), kind: z.enum(["attribute", "property", "event", "ref"]).default("attribute") });
+export const PropProgramSchema = z.object({ id: z.string(), targetId: z.string(), writes: z.array(PropWriteSchema) });
+export const EventSchema = z.object({ id: z.string(), type: z.string().regex(/^[a-z][a-z0-9-]*$/), targetId: z.string(), actionId: z.string(), args: z.array(z.string()).default([]), field: z.string().optional(), callbackName: z.string().optional(), navigate: z.object({ href: z.string(), replace: z.boolean().optional() }).optional(), stopPropagation: z.boolean().optional(), preventDefault: z.boolean().optional() });
+export const RefBindingSchema = z.object({ id: z.string(), targetId: z.string(), refId: z.string(), kind: z.enum(["callback", "object"]) });
+export const ContextScopeSchema = z.object({ id: z.string(), parentId: z.string().nullable(), values: z.array(z.object({ name: z.string(), expressionId: z.string().optional(), staticValue: z.string().optional() })) });
+export const ConditionalSchema = z.object({ id: z.string(), parentId: z.string(), expressionId: z.string(), children: z.array(z.string()) });
 export const IslandSchema = z.object({ islandInstanceId: z.string(), componentId: z.string(), placeholderNodeId: z.string(), moduleId: z.string(), exportName: z.string(), props: z.record(z.string(), z.unknown()).default({}) });
 /**
  * Values enter the compiled graph through inputs.  Their producer is outside
@@ -38,31 +43,9 @@ export const QuerySchema = z.object({ id: z.string(), source: z.string(), result
 export const DependencyEdgeSchema = z.object({ fromId: z.string(), toId: z.string(), kind: z.enum(["input-to-loop", "query-to-loop", "row-field-to-binding", "input-to-binding", "local-state-to-binding", "host-value-to-binding"]) });
 export const LocalStateSlotSchema = z.object({ id: z.string(), name: z.string(), initialValue: z.string(), values: z.array(z.string()) });
 export const HostValueSchema = z.object({ id: z.string(), kind: z.literal("media-query"), query: z.string() });
-export const HostOperationSchema = z.object({ kind: z.enum(["storage-read", "storage-write", "document-theme-apply"]), storageKey: z.string().optional(), stateSlotId: z.string().optional(), hostValueId: z.string().optional() });
-export const LifecycleEffectSchema = z.object({ id: z.string(), trigger: z.enum(["mount", "state-change"]), stateSlotId: z.string().optional(), whenStateEquals: z.string().optional(), operations: z.array(HostOperationSchema).default([]), subscription: z.object({ hostValueId: z.string(), event: z.literal("change"), activeWhenStateEquals: z.string(), dispose: z.literal("remove-listener") }).optional() });
-export const StateTransitionSchema = z.object({ id: z.string(), eventId: z.string(), stateSlotId: z.string(), kind: z.literal("theme-cycle"), operations: z.array(HostOperationSchema).default([]) });
-/** A library-neutral checkbox/switch-like control. Adapters map public APIs here. */
-export const ToggleValueSchema = z.object({ expressionId: z.string().optional(), staticValue: z.string().optional() }).refine((value) => Boolean(value.expressionId) !== Boolean(value.staticValue), "toggle value requires exactly one source");
-export const ToggleSchema = z.object({
-  id: z.string(),
-  rootElementId: z.string(),
-  inputElementId: z.string(),
-  indicatorElementId: z.string().optional(),
-  stateSlotId: z.string(),
-  actionId: z.string().optional(),
-  checked: ToggleValueSchema.optional(),
-  defaultChecked: ToggleValueSchema.optional(),
-  indeterminate: ToggleValueSchema.optional(),
-  disabled: ToggleValueSchema.optional(),
-  readOnly: ToggleValueSchema.optional(),
-  required: ToggleValueSchema.optional(),
-  name: ToggleValueSchema.optional(),
-  value: ToggleValueSchema.optional(),
-  form: ToggleValueSchema.optional(),
-  eventId: z.string()
-}).superRefine((toggle, ctx) => {
-  if (!toggle.checked && !toggle.defaultChecked) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "toggle requires checked or defaultChecked" });
-});
+export const LifecycleOperationSchema = z.object({ kind: z.enum(["set-property", "set-attribute", "register", "unregister"]), targetId: z.string().optional(), name: z.string().optional(), expressionId: z.string().optional(), staticValue: z.string().optional(), registryId: z.string().optional() });
+export const LifecycleEffectSchema = z.object({ id: z.string(), trigger: z.enum(["mount", "unmount", "state-change"]), stateSlotId: z.string().optional(), operations: z.array(LifecycleOperationSchema).default([]) });
+export const StateTransitionSchema = z.object({ id: z.string(), eventId: z.string(), stateSlotId: z.string(), kind: z.enum(["set", "toggle"]), expressionId: z.string().optional() });
 export const LoopRowSchema = z.object({ id: z.string(), rootElementId: z.string(), keyValue: z.string().optional() });
 export const LoopSchema = z.object({ id: z.string(), parentId: z.string(), source: z.string(), itemName: z.string(), indexName: z.string().optional(), rows: z.array(LoopRowSchema).default([]), inputId: z.string().optional(), queryId: z.string().optional(), rowTemplateRootElementId: z.string().optional(), keyExpression: z.string().optional() });
 export const RuntimeDeltaSchema = z.discriminatedUnion("type", [z.object({ type: z.literal("update"), inputId: z.string(), rowKey: z.string(), changes: z.record(z.string(), z.unknown()) }), z.object({ type: z.literal("insert"), inputId: z.string(), rowKey: z.string(), row: z.record(z.string(), z.unknown()), beforeRowKey: z.string().nullable().optional() }), z.object({ type: z.literal("remove"), inputId: z.string(), rowKey: z.string() }), z.object({ type: z.literal("move"), inputId: z.string(), rowKey: z.string(), beforeRowKey: z.string().nullable().optional() })]);
@@ -70,7 +53,7 @@ export const AttributeSchema = z.object({ name: z.string(), staticValue: z.strin
 export const ElementSchema = z.object({ id: z.string(), tag: z.string(), parentId: z.string().nullable(), keyValue: z.string().optional(), attributes: z.array(AttributeSchema).default([]), children: z.array(z.string()).default([]) });
 export const TextNodeSchema = z.object({ id: z.string(), parentId: z.string(), staticValue: z.string().optional() });
 export const ComponentMetadataSchema = z.object({ name: z.string(), moduleId: z.string(), elementIds: z.array(z.string()).default([]), bindingIds: z.array(z.string()).default([]), eventIds: z.array(z.string()).default([]) });
-export const ApplicationSchema = z.object({ version: z.literal("0.4"), revision: z.string().optional(), rootElementId: z.string(), elements: z.array(ElementSchema), texts: z.array(TextNodeSchema), inputs: z.array(CompiledInputSchema).default([]), queries: z.array(QuerySchema).default([]), dependencyEdges: z.array(DependencyEdgeSchema).default([]), loops: z.array(LoopSchema).default([]), bindings: z.array(BindingSchema), expressions: z.array(ExpressionNodeSchema).default([]), events: z.array(EventSchema).default([]), localStates: z.array(LocalStateSlotSchema).default([]), hostValues: z.array(HostValueSchema).default([]), lifecycleEffects: z.array(LifecycleEffectSchema).default([]), stateTransitions: z.array(StateTransitionSchema).default([]), toggles: z.array(ToggleSchema).default([]), islands: z.array(IslandSchema).default([]), components: z.array(ComponentMetadataSchema).default([]) });
+export const ApplicationSchema = z.object({ version: z.literal("0.5"), revision: z.string().optional(), rootElementId: z.string(), elements: z.array(ElementSchema), texts: z.array(TextNodeSchema), inputs: z.array(CompiledInputSchema).default([]), queries: z.array(QuerySchema).default([]), dependencyEdges: z.array(DependencyEdgeSchema).default([]), loops: z.array(LoopSchema).default([]), bindings: z.array(BindingSchema), expressions: z.array(ExpressionNodeSchema).default([]), propPrograms: z.array(PropProgramSchema).default([]), events: z.array(EventSchema).default([]), refs: z.array(RefBindingSchema).default([]), contexts: z.array(ContextScopeSchema).default([]), conditionals: z.array(ConditionalSchema).default([]), localStates: z.array(LocalStateSlotSchema).default([]), hostValues: z.array(HostValueSchema).default([]), lifecycleEffects: z.array(LifecycleEffectSchema).default([]), stateTransitions: z.array(StateTransitionSchema).default([]), islands: z.array(IslandSchema).default([]), components: z.array(ComponentMetadataSchema).default([]) });
 export type Expression = z.infer<typeof ExpressionSchema>; export type Binding = z.infer<typeof BindingSchema>; export type EventNode = z.infer<typeof EventSchema>; export type ApplicationIr = z.infer<typeof ApplicationSchema>; export type RuntimeDelta = z.infer<typeof RuntimeDeltaSchema>;
 export function validateApplicationIr(ir: unknown): ApplicationIr { return ApplicationSchema.parse(ir); }
 

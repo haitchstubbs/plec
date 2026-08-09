@@ -56,11 +56,16 @@ export interface CompiledMountOptions {
   onQueryUpdate?: (update: CompiledQueryUpdate) => void;
   /** Semantic event handlers. Keys may be IR action IDs or source callback metadata. */
   actions?: Record<string, (id: string, changes: Record<string, unknown>) => void>;
+  /** Generic host callbacks keyed by IR action id or source callback name. */
+  callbacks?: Record<string, (context: CompiledEventContext) => void>;
+  /** Callback and object-reference sinks keyed by compiler ref id. */
+  refs?: Record<string, ((node: Element | null) => void) | { current: Element | null }>;
   onMount?: (metrics: MountMetrics) => void;
   hostValues?: { currentYear?: number | string; location?: { pathname: string } };
   islands?: Record<string, (placeholder: Element, props: Record<string, unknown>) => void | (() => void)>;
   onNavigate?: (navigation: { href: string; replace?: boolean }) => void;
 }
+export interface CompiledEventContext { type: string; target: Element; currentTarget: Element; rowKey?: string; value?: string; checked?: boolean; button?: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; nativeEvent: Event }
 
 export interface CompiledUpdateMetrics { domOperations: number; nodesTouched: number; bindingsTouched: number; wasmDomUs: number }
 export interface RuntimeMountMetrics { decodeUs: number; staticMountUs: number; rowProgramExecuteUs: number; rowStateRegistrationUs: number; fragmentAppendUs: number; programCompileUs: number; programRevision?: string; instructionCount: number; compiledExpressionCount: number; fieldSlotCount: number; bindingProgramCount: number; averageRowProgramExecuteUs: number; rowCount: number; createdElements: number; createdTexts: number; bindings: number; domOperations: number }
@@ -104,7 +109,7 @@ export async function mountCompiledApplication(options: CompiledMountOptions): P
   const disposeIslands = mountIslands(options.root, ir, options.islands ?? {});
   const applyHostValues = (values: NonNullable<CompiledMountOptions['hostValues']>) => applyStaticHostBindings(options.root, ir, values);
   applyHostValues(options.hostValues ?? { location: { pathname: window.location.pathname } });
-  const removeActions = bindActions(options.root, ir, options.actions ?? {}, options.onNavigate);
+  const removeActions = bindActions(options.root, ir, options.actions ?? {}, options.callbacks ?? {}, options.refs ?? {}, options.onNavigate);
   const inputSchemas = new Map<string, any>((ir.inputs ?? []).map((input: any): [string, any] => [input.id, input]));
   const inputs: Record<string, CompiledInputProducer<any>> = {
     ...Object.fromEntries(Object.entries(options.queries ?? {}).map(([id, collection]) => {
@@ -187,7 +192,7 @@ function mergeMountMetrics(staticMetrics: RuntimeMountMetrics, initial: RuntimeM
   return { ...total, ...browser };
 }
 
-function bindActions(root: Element, ir: any, actions: Record<string, (id: string, changes: Record<string, unknown>) => void>, onNavigate?: CompiledMountOptions['onNavigate']) {
+function bindActions(root: Element, ir: any, actions: Record<string, (id: string, changes: Record<string, unknown>) => void>, callbacks: NonNullable<CompiledMountOptions['callbacks']>, refs: NonNullable<CompiledMountOptions['refs']>, onNavigate?: CompiledMountOptions['onNavigate']) {
   const wasmOwnedEventIds = new Set((ir.stateTransitions ?? []).map((transition: any) => transition.eventId));
   const actionMetadata = new Map<string, any>((ir.events ?? []).filter((event: any) => !wasmOwnedEventIds.has(event.id)).map((event: any) => [event.actionId, event]));
   if (actionMetadata.size === 0) return () => {};
@@ -200,6 +205,8 @@ function bindActions(root: Element, ir: any, actions: Record<string, (id: string
     // the one the compiler declared for this target; otherwise a checkbox
     // click triggers its action once for `click` and again for `change`.
     if (metadata?.type !== event.type) return;
+    if (metadata.preventDefault) event.preventDefault();
+    if (metadata.stopPropagation) event.stopPropagation();
     if (metadata?.navigate) {
       const mouse = event as MouseEvent;
       if (mouse.button !== 0 || mouse.metaKey || mouse.ctrlKey || mouse.shiftKey || mouse.altKey) return;
@@ -207,16 +214,26 @@ function bindActions(root: Element, ir: any, actions: Record<string, (id: string
       onNavigate?.(metadata.navigate);
       return;
     }
-    const callback = actions[actionId] ?? actions[metadata?.callbackName];
+    const genericCallback = callbacks[actionId] ?? callbacks[metadata?.callbackName];
     const row = target.closest<HTMLElement>("[data-runtime-row-key]")?.dataset.runtimeRowKey;
     const field = target.dataset.runtimeField;
-    if (!callback || !row || !field) return;
     const input = target as HTMLInputElement;
+    genericCallback?.({ type: event.type, target, currentTarget: target, rowKey: row, value: input.value, checked: input.checked, button: (event as MouseEvent).button, metaKey: (event as MouseEvent).metaKey, ctrlKey: (event as MouseEvent).ctrlKey, shiftKey: (event as MouseEvent).shiftKey, altKey: (event as MouseEvent).altKey, nativeEvent: event });
+    const callback = actions[actionId] ?? actions[metadata?.callbackName];
+    if (!callback || !row || !field) return;
     callback(row, { [field]: input.type === "checkbox" ? input.checked : input.value });
   };
-  root.addEventListener("change", handler);
-  root.addEventListener("click", handler);
-  return () => { root.removeEventListener("change", handler); root.removeEventListener("click", handler); };
+  const eventTypes: string[] = [...new Set<string>((ir.events ?? []).map((event: any) => String(event.type)))];
+  for (const type of eventTypes) root.addEventListener(type, handler);
+  for (const binding of ir.refs ?? []) {
+    const node = root.querySelector(`[data-runtime-node="${binding.targetId}"]`);
+    const ref = refs[binding.refId];
+    if (node instanceof Element) typeof ref === "function" ? ref(node) : ref && (ref.current = node);
+  }
+  return () => {
+    for (const type of eventTypes) root.removeEventListener(type, handler);
+    for (const binding of ir.refs ?? []) { const ref = refs[binding.refId]; if (typeof ref === "function") ref(null); else if (ref) ref.current = null; }
+  };
 }
 
 function liveCollectionProducer(inputId: string, collection: LiveCollection<any>): DeltaInput<any[]> {

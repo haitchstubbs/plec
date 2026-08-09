@@ -1,6 +1,6 @@
 {
-  "version": "0.4",
-  "revision": "9524a6b2ddf8e68acebf086d05b92d24a8cb77c6dcc7e8bf05230cf87d6bf28b",
+  "version": "0.5",
+  "revision": "f4ac480f74fbd3ce395c79159544517d27cef2094116948642fbc526ca769388",
   "rootElementId": "e1",
   "elements": [
     {
@@ -627,12 +627,140 @@
   ],
   "bindings": [],
   "expressions": [],
+  "propPrograms": [
+    {
+      "id": "p1",
+      "targetId": "e1",
+      "writes": [
+        {
+          "name": "data-compiled-signal-garden",
+          "staticValue": "true",
+          "kind": "attribute"
+        }
+      ]
+    },
+    {
+      "id": "p2",
+      "targetId": "e2",
+      "writes": [
+        {
+          "name": "className",
+          "staticValue": "page-wrap px-4 py-10",
+          "kind": "attribute"
+        }
+      ]
+    },
+    {
+      "id": "p3",
+      "targetId": "e3",
+      "writes": [
+        {
+          "name": "data-slot",
+          "staticValue": "card",
+          "kind": "attribute"
+        },
+        {
+          "name": "data-size",
+          "staticValue": "default",
+          "kind": "attribute"
+        },
+        {
+          "name": "className",
+          "staticValue": "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-2xl bg-card py-(--card-spacing) text-sm text-card-foreground ring-1 ring-foreground/10 [--card-spacing:--spacing(6)] has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(4)] *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+          "kind": "attribute"
+        }
+      ]
+    },
+    {
+      "id": "p4",
+      "targetId": "e4",
+      "writes": [
+        {
+          "name": "data-slot",
+          "staticValue": "card-header",
+          "kind": "attribute"
+        },
+        {
+          "name": "className",
+          "staticValue": "group/card-header @container/card-header grid auto-rows-min items-start gap-2 rounded-t-xl px-(--card-spacing) has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-(--card-spacing)",
+          "kind": "attribute"
+        }
+      ]
+    },
+    {
+      "id": "p5",
+      "targetId": "e5",
+      "writes": [
+        {
+          "name": "className",
+          "staticValue": "island-kicker",
+          "kind": "attribute"
+        }
+      ]
+    },
+    {
+      "id": "p6",
+      "targetId": "e6",
+      "writes": [
+        {
+          "name": "data-slot",
+          "staticValue": "card-title",
+          "kind": "attribute"
+        },
+        {
+          "name": "className",
+          "staticValue": "font-heading text-base font-medium",
+          "kind": "attribute"
+        }
+      ]
+    },
+    {
+      "id": "p7",
+      "targetId": "e7",
+      "writes": [
+        {
+          "name": "data-slot",
+          "staticValue": "card-content",
+          "kind": "attribute"
+        },
+        {
+          "name": "className",
+          "staticValue": "px-(--card-spacing)",
+          "kind": "attribute"
+        }
+      ]
+    },
+    {
+      "id": "p8",
+      "targetId": "e8",
+      "writes": [
+        {
+          "name": "className",
+          "staticValue": "text-muted-foreground",
+          "kind": "attribute"
+        }
+      ]
+    },
+    {
+      "id": "p9",
+      "targetId": "e9",
+      "writes": [
+        {
+          "name": "className",
+          "staticValue": "mt-6 grid gap-4 md:grid-cols-3",
+          "kind": "attribute"
+        }
+      ]
+    }
+  ],
   "events": [],
+  "refs": [],
+  "contexts": [],
+  "conditionals": [],
   "localStates": [],
   "hostValues": [],
   "lifecycleEffects": [],
   "stateTransitions": [],
-  "toggles": [],
   "islands": [],
   "components": [
     {

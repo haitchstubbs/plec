@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { renderStaticApplication, validateApplicationIr } from "./index.ts";
 
 const base = {
-  version: "0.4",
+  version: "0.5",
   rootElementId: "e1",
   elements: [
     { id: "e1", tag: "label", parentId: null, children: ["e2"] },
@@ -16,20 +16,17 @@ const base = {
   events: [{ id: "ev1", type: "change", targetId: "e2", actionId: "a1" }],
 };
 
-describe("Toggle IR", () => {
-  it("accepts a deterministic uncontrolled toggle", () => {
-    expect(validateApplicationIr({ ...base, toggles: [{ id: "t1", rootElementId: "e1", inputElementId: "e2", stateSlotId: "s1", defaultChecked: { staticValue: "false" }, eventId: "ev1" }] }).toggles).toHaveLength(1);
-  });
-
-  it("rejects a toggle without a state source", () => {
-    expect(() => validateApplicationIr({ ...base, toggles: [{ id: "t1", rootElementId: "e1", inputElementId: "e2", stateSlotId: "s1", eventId: "ev1" }] })).toThrow(/toggle requires checked or defaultChecked/);
+describe("generic structural IR", () => {
+  it("accepts prop programs, refs, contexts, and generic events", () => {
+    const ir = validateApplicationIr({ ...base, propPrograms: [{ id: "p1", targetId: "e1", writes: [{ name: "data-testid", staticValue: "root" }] }], refs: [{ id: "r1", targetId: "e1", refId: "root", kind: "callback" }], contexts: [{ id: "c1", parentId: null, values: [{ name: "checked", staticValue: "false" }] }], events: [{ id: "ev1", type: "mousedown", targetId: "e1", actionId: "a1" }] });
+    expect(ir.propPrograms).toHaveLength(1);
   });
 });
 
 describe("static application renderer", () => {
   it("renders static nodes and host bindings while omitting query rows", () => {
     const ir = validateApplicationIr({
-      version: "0.4", revision: "revision-1", rootElementId: "e1",
+      version: "0.5", revision: "revision-1", rootElementId: "e1",
       elements: [
         { id: "e1", tag: "main", parentId: null, attributes: [], children: ["t1", "l1", "l2"] },
         { id: "e2", tag: "p", parentId: "e1", attributes: [], children: ["t2"] },
@@ -45,7 +42,7 @@ describe("static application renderer", () => {
   });
 
   it("evaluates pathname bindings deterministically", () => {
-    const ir = validateApplicationIr({ version: "0.4", rootElementId: "e1", elements: [{ id: "e1", tag: "a", parentId: null, attributes: [{ name: "className", staticValue: "link" }], children: [] }], texts: [], bindings: [{ id: "b1", kind: "attribute", targetId: "e1", attributeName: "className", expressionId: "x1" }], expressions: [{ id: "x1", expression: { kind: "conditional", test: { kind: "binary", op: "===", left: { kind: "member", object: { kind: "member", object: { kind: "identifier", name: "host" }, property: "location" }, property: "pathname" }, right: { kind: "literal", value: "/active" } }, consequent: { kind: "literal", value: "active" }, alternate: { kind: "literal", value: "link" } } }], events: [] });
+    const ir = validateApplicationIr({ version: "0.5", rootElementId: "e1", elements: [{ id: "e1", tag: "a", parentId: null, attributes: [{ name: "className", staticValue: "link" }], children: [] }], texts: [], bindings: [{ id: "b1", kind: "attribute", targetId: "e1", attributeName: "className", expressionId: "x1" }], expressions: [{ id: "x1", expression: { kind: "conditional", test: { kind: "binary", op: "===", left: { kind: "member", object: { kind: "member", object: { kind: "identifier", name: "host" }, property: "location" }, property: "pathname" }, right: { kind: "literal", value: "/active" } }, consequent: { kind: "literal", value: "active" }, alternate: { kind: "literal", value: "link" } } }], events: [] });
     expect(renderStaticApplication(ir, { location: { pathname: "/active" } })).toContain('class="active"');
   });
 });
