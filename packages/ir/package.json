@@ -1,0 +1,24 @@
+{
+  "name": "@wasm-runtime/ir",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "yarn exec vitest run --passWithNoTests",
+    "lint": "echo lint not configured for @wasm-runtime/ir",
+    "typecheck": "yarn exec tsc -p tsconfig.json --noEmit",
+    "clean": "powershell -NoProfile -Command \"if (Test-Path dist) { Remove-Item -Recurse -Force dist }\""
+  },
+  "dependencies": {
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}
