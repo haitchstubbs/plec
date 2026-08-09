@@ -5,7 +5,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::{Document, Element, Node};
 
 #[derive(Clone, Deserialize)] #[serde(rename_all="camelCase")]
-struct Application { root_element_id:String, #[serde(default)] revision:Option<String>, elements:Vec<ElementNode>, texts:Vec<TextNode>, #[serde(default)] bindings:Vec<Binding>, #[serde(default)] expressions:Vec<Expression>, #[serde(default)] prop_programs:Vec<PropProgram>, #[serde(default)] events:Vec<EventBinding>, #[serde(default)] loops:Vec<Loop>, #[serde(default)] contexts:Vec<ContextScope>, #[serde(default)] context_definitions:Vec<ContextDefinition> }
+struct Application { root_element_id:String, #[serde(default)] revision:Option<String>, elements:Vec<ElementNode>, texts:Vec<TextNode>, #[serde(default)] bindings:Vec<Binding>, #[serde(default)] expressions:Vec<Expression>, #[serde(default)] prop_programs:Vec<PropProgram>, #[serde(default)] events:Vec<EventBinding>, #[serde(default)] loops:Vec<Loop>, #[serde(default)] contexts:Vec<ContextScope>, #[serde(default)] context_definitions:Vec<ContextDefinition>, #[serde(default)] host_element_refs:Vec<HostElementRef> }
 #[derive(Clone, Deserialize)] #[serde(rename_all="camelCase")]
 struct ElementNode { id:String, tag:String, #[serde(default)] attributes:Vec<Attribute>, #[serde(default)] children:Vec<String> }
 #[derive(Clone, Deserialize)] #[serde(rename_all="camelCase")]
@@ -27,6 +27,8 @@ struct Loop { #[serde(rename="id")] _id:String, parent_id:String, input_id:Optio
 struct ContextScope { id:String, context_id:String, value_expression_id:Option<String>, #[serde(default)] children:Vec<String> }
 #[derive(Clone, Deserialize)] #[serde(rename_all="camelCase")]
 struct ContextDefinition { id:String, default_expression_id:String }
+#[derive(Clone, Deserialize)] #[serde(rename_all="camelCase")]
+struct HostElementRef { id:String, target_id:String, #[serde(default)] attachments:Vec<String> }
 #[derive(Deserialize)] #[serde(tag="type", rename_all="camelCase")]
 enum Delta { Update { input_id:String, row_key:String, changes:HashMap<String,Value> }, Insert { input_id:String, row_key:String, row:HashMap<String,Value>, before_row_key:Option<String> }, Remove { input_id:String, row_key:String }, Move { input_id:String, row_key:String, before_row_key:Option<String> } }
 #[derive(Default, Serialize, Deserialize)] #[serde(rename_all="camelCase")]
@@ -36,19 +38,19 @@ struct MountMetrics { decode_us:f64, static_mount_us:f64, row_program_execute_us
 struct Row { root:Node, values:HashMap<String,Value>, nodes:HashMap<String,Node> }
 
 #[wasm_bindgen]
-pub struct Runtime { application:RefCell<Option<Application>>, mounted:RefCell<HashMap<String,Node>>, rows:RefCell<HashMap<String,HashMap<String,Row>>> }
+pub struct Runtime { application:RefCell<Option<Application>>, mounted:RefCell<HashMap<String,Node>>, host_refs:RefCell<HashMap<String,Node>>, rows:RefCell<HashMap<String,HashMap<String,Row>>> }
 #[wasm_bindgen]
 impl Runtime {
- #[wasm_bindgen(constructor)] pub fn new()->Runtime { Runtime { application:RefCell::new(None), mounted:RefCell::new(HashMap::new()), rows:RefCell::new(HashMap::new()) } }
+ #[wasm_bindgen(constructor)] pub fn new()->Runtime { Runtime { application:RefCell::new(None), mounted:RefCell::new(HashMap::new()), host_refs:RefCell::new(HashMap::new()), rows:RefCell::new(HashMap::new()) } }
  pub fn load_application(&self, ir:JsValue)->Result<(),JsValue>{ self.application.replace(Some(serde_wasm_bindgen::from_value(ir).map_err(error)?)); Ok(()) }
  pub fn mount(&self, root:Element)->Result<JsValue,JsValue>{
   let app=self.app()?; let doc=document()?; let elements=index_elements(&app); let texts=index_texts(&app); let mut nodes=HashMap::new();
   let contexts=index_contexts(&app); let environment=context_defaults(&app); let root_node=instantiate(&doc,&app.root_element_id,&elements,&texts,&contexts,&app.bindings,&app.prop_programs,&app.expressions,&app.events,&HashMap::new(),&environment,&mut nodes)?;
-  root.set_inner_html(""); root.append_child(&root_node)?; self.mounted.replace(nodes); self.rows.replace(HashMap::new());
+  root.set_inner_html(""); root.append_child(&root_node)?; let mut handles=HashMap::new(); for reference in &app.host_element_refs { if let Some(node)=nodes.get(&reference.target_id) { for attachment in &reference.attachments { handles.insert(attachment.clone(),node.clone()); } handles.insert(reference.id.clone(),node.clone()); } } self.mounted.replace(nodes); self.host_refs.replace(handles); self.rows.replace(HashMap::new());
   finish(MountMetrics{program_revision:app.revision.clone(),created_elements:app.elements.len() as u32,created_texts:app.texts.len() as u32,bindings:app.bindings.len() as u32,dom_operations:1,..Default::default()})
  }
  pub fn adopt(&self, _root:Element)->Result<JsValue,JsValue>{ serde_wasm_bindgen::to_value(&Option::<MountMetrics>::None).map_err(error) }
- pub fn dispose(&self)->Result<(),JsValue>{ self.rows.borrow_mut().clear(); self.mounted.borrow_mut().clear(); self.application.borrow_mut().take(); Ok(()) }
+ pub fn dispose(&self)->Result<(),JsValue>{ self.rows.borrow_mut().clear(); self.host_refs.borrow_mut().clear(); self.mounted.borrow_mut().clear(); self.application.borrow_mut().take(); Ok(()) }
  pub fn initialize_input(&self,input_id:String,rows:JsValue)->Result<JsValue,JsValue>{
   let values:Vec<HashMap<String,Value>>=serde_wasm_bindgen::from_value(rows).map_err(error)?; let app=self.app()?; let loop_node=find_loop(&app,&input_id)?; let parent=self.mounted.borrow().get(&loop_node.parent_id).cloned().ok_or_else(||JsValue::from_str("loop parent missing"))?; let parent:Element=parent.dyn_into().map_err(|_|JsValue::from_str("loop parent"))?; let root_id=loop_node.row_template_root_element_id.ok_or_else(||JsValue::from_str("row template missing"))?; let doc=document()?; let elements=index_elements(&app); let texts=index_texts(&app); let fragment=doc.create_document_fragment(); let mut collected=HashMap::new();
   let contexts=index_contexts(&app); let environment=context_defaults(&app); for value in values { let key=value_string(value.get("id")); let mut nodes=HashMap::new(); let row_root=instantiate(&doc,&root_id,&elements,&texts,&contexts,&app.bindings,&app.prop_programs,&app.expressions,&app.events,&value,&environment,&mut nodes)?; if let Ok(element)=row_root.clone().dyn_into::<Element>() { element.set_attribute("data-runtime-row-key",&key)?; } fragment.append_child(&row_root)?; collected.insert(key,Row{root:row_root,values:value,nodes}); }
