@@ -756,6 +756,7 @@
   "events": [],
   "refs": [],
   "contexts": [],
+  "contextDefinitions": [],
   "conditionals": [],
   "localStates": [],
   "hostValues": [],

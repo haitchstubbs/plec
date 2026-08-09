@@ -113,6 +113,13 @@ describe("compile", () => {
     expect(result.ir.texts).toEqual(expect.arrayContaining([expect.objectContaining({ staticValue: "Ready" })]));
   });
 
+  it("normalizes statically tagged createElement calls", () => {
+    const result = compile(`function App() { return React.createElement('button', { type: 'button' }, 'Save') }`, { rootComponent: "App" });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.ir.elements[0]).toMatchObject({ tag: "button", attributes: [{ name: "type", staticValue: "button" }] });
+    expect(result.ir.texts[0]).toMatchObject({ staticValue: "Save" });
+  });
+
   it("expands nested object spreads and ordinary object merges before lowering props", () => {
     const result = compile(`
       function Surface({ children, ...rest }) {
@@ -155,10 +162,43 @@ describe("compile", () => {
     expect(result.ir.expressions[0]?.expression).toMatchObject({ kind: "binary", op: "+" });
   });
 
+  it("lowers lexical createContext providers and custom-hook reads without component identities", () => {
+    const result = compile(`
+      const Theme = createContext({ tone: 'default' });
+      function useTheme() { return useContext(Theme) }
+      function Label() { const theme = useTheme(); return <span>{theme.tone}</span> }
+      function App() { return <Theme.Provider value={{ tone: 'provided' }}><div><Label /></div></Theme.Provider> }
+    `, { rootComponent: "App" });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.ir.rootElementId).toBe("c1");
+    expect(result.ir.contexts[0]).toMatchObject({ contextId: "ctx1", children: ["e1"] });
+    expect(JSON.stringify(result.ir.expressions)).toContain('"context"');
+  });
+
+  it("lowers an ordinary element-returning helper through its source body", () => {
+    const result = compile(`
+      function renderLabel(name) { return <strong data-name={name}>Hello {name}</strong> }
+      function App() { return <div>{renderLabel('Ada')}</div> }
+    `, { rootComponent: "App" });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.ir.elements.map((element) => element.tag)).toEqual(["div", "strong"]);
+    expect(result.ir.texts).toEqual(expect.arrayContaining([expect.objectContaining({ staticValue: "Hello" }), expect.objectContaining({ staticValue: "Ada" })]));
+  });
+
   it("keeps a dynamic record spread as an ordered runtime prop write", () => {
     const result = compile(`function App({ todo }) { return <input {...todo} /> }`, { rootComponent: "App" });
     expect(result.diagnostics).toEqual([]);
     expect(result.ir.propPrograms[0]?.writes).toEqual([expect.objectContaining({ kind: "spread", expressionId: expect.any(String) })]);
+  });
+
+  it("lowers generic ordered prop composition without recognizing its importer", () => {
+    const result = compile(`function App({ base, override }) { return <div {...mergeProps(base, override)} /> }`, { rootComponent: "App" });
+    expect(result.diagnostics).toEqual([]);
+    const expression = result.ir.expressions.find((entry) => (entry.expression as any).kind === "object");
+    expect((expression?.expression as any).properties).toEqual([
+      { kind: "spread", value: { kind: "identifier", name: "base" } },
+      { kind: "spread", value: { kind: "identifier", name: "override" } },
+    ]);
   });
 
   it("describes scalar and object inputs by the paths the view reads", () => {

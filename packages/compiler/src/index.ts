@@ -92,7 +92,8 @@ interface ApplicationIr {
   propPrograms: Array<{ id: string; targetId: string; writes: Array<{ name: string; staticValue?: string; expressionId?: string; kind: "attribute" | "property" | "event" | "ref" | "spread" }> }>;
   events: EventNode[];
   refs: Array<{ id: string; targetId: string; refId: string; kind: "callback" | "object" }>;
-  contexts: Array<{ id: string; parentId: string | null; values: Array<{ name: string; expressionId?: string; staticValue?: string }> }>;
+  contexts: Array<{ id: string; contextId: string; parentId: string | null; valueExpressionId?: string; values: Array<{ name: string; expressionId?: string; staticValue?: string }>; children: string[] }>;
+  contextDefinitions: Array<{ id: string; defaultExpressionId: string }>;
   conditionals: Array<{ id: string; parentId: string; expressionId: string; children: string[] }>;
   localStates: Array<{ id: string; name: string; initialValue: string; values: string[] }>;
   hostValues: Array<{ id: string; kind: "media-query"; query: string }>;
@@ -143,6 +144,7 @@ interface CompilerState {
   importSymbols: Map<string, { moduleId: string; exportName: string }>;
   exports: Map<string, Map<string, { moduleId: string; exportName: string }>>;
   moduleExpressions: Map<string, Record<string, any>>;
+  contextSymbols: Map<string, { id: string; defaultExpressionId: string }>;
   routerLinkBindings: Set<string>;
   islandComponents: Set<string>;
   componentStack: string[];
@@ -183,6 +185,7 @@ export function compile(source: string, options: CompileOptions = {}): CompileRe
     importSymbols: new Map(),
     exports: new Map(),
     moduleExpressions: new Map(),
+    contextSymbols: new Map(),
     routerLinkBindings: new Set(),
     islandComponents: new Set(options.islandComponents ?? []),
     componentStack: [],
@@ -204,6 +207,7 @@ export function compile(source: string, options: CompileOptions = {}): CompileRe
       events: [],
       refs: [],
       contexts: [],
+      contextDefinitions: [],
       conditionals: [],
       localStates: [],
       hostValues: [],
@@ -219,6 +223,7 @@ export function compile(source: string, options: CompileOptions = {}): CompileRe
     const ast: any = module.id === (options.moduleId ?? "<entry>") ? moduleAst : parseSync(module.source, { syntax: "typescript", tsx: true, target: "es2022" });
     collectModuleScope(ast, state);
     collectModuleExpressions(ast, state, module.id);
+    collectContexts(ast, state, module.id);
     collectComponents(ast, state, module.id);
     collectImports(ast, state, module.id);
     collectExports(ast, state, module.id);
@@ -245,7 +250,7 @@ export function compile(source: string, options: CompileOptions = {}): CompileRe
   if (options.rootComponent) state.componentStack.push(options.rootComponent);
   const rootId = lowerJsxNode(rootJsx, null, state);
   if (options.rootComponent) state.componentStack.pop();
-  if (rootId === SKIP || !rootId.startsWith("e")) {
+  if (rootId === SKIP || (!rootId.startsWith("e") && !rootId.startsWith("c"))) {
     reportUnsupported(state, "INVALID_ROOT", "The root JSX node could not be lowered to an intrinsic element.");
     throwIfStrict(state);
     state.ir.rootElementId = "e1";
@@ -316,7 +321,7 @@ function findReturnedJsx(body: any): any | null {
     return null;
   }
 
-  const topLevel = normalizeRenderedReturn(unwrapExpression(body), body);
+  const topLevel = unwrapExpression(body);
   if (topLevel?.type === "JSXElement" || topLevel?.type === "JSXFragment" || jsxFactoryElement(topLevel)) {
     return topLevel;
   }
@@ -327,7 +332,7 @@ function findReturnedJsx(body: any): any | null {
 
   for (const statement of body.stmts ?? body.body ?? []) {
     if (statement.type === "ReturnStatement" || statement.type === "ReturnStmt") {
-      const argument = normalizeRenderedReturn(unwrapExpression(statement.argument ?? statement.arg), body);
+      const argument = unwrapExpression(statement.argument ?? statement.arg);
       if (argument?.type === "JSXElement" || argument?.type === "JSXFragment" || jsxFactoryElement(argument)) {
         return argument;
       }
@@ -503,6 +508,9 @@ function lowerJsxExpression(node: any, parentId: string | null, state: CompilerS
     return SKIP;
   }
 
+  const rendered = lowerReturnedElementExpression(expression, parentId, state);
+  if (rendered !== SKIP) return rendered;
+
   if (expression.type === "JSXElement") {
     return lowerJsxElement(expression, parentId, state);
   }
@@ -643,6 +651,39 @@ function lowerMapExpression(expression: any, parentId: string | null, state: Com
   state.preserveBindings = previousPreserveBindings;
 
   return loopId;
+}
+
+/** Compile an ordinary reachable function which produces a JSX value. This is
+ * deliberately based on its source body; no render helper is recognized by
+ * name. Dynamic branch selection remains a structural concern and is rejected
+ * until represented by a render-slot node rather than silently becoming text. */
+function lowerReturnedElementExpression(expression: any, parentId: string | null, state: CompilerState, literalScope: Record<string, unknown> = {}): LowerResult {
+  let value = unwrapExpression(expression);
+  if (value?.type === "Identifier") value = unwrapExpression(state.expressionScope[getNodeName(value)!] ?? value);
+  if (value?.type === "JSXElement") return Object.keys(literalScope).length ? lowerJsxElementWithScope(value, parentId, state, literalScope) : lowerJsxElement(value, parentId, state);
+  if (value?.type !== "CallExpression") return SKIP;
+  const name = getNodeName(value.callee);
+  const definition = name ? getLocalFunction(name, state) : undefined;
+  if (!definition) return SKIP;
+  const returned = findReturnedJsx(definition.body);
+  if (!returned) return SKIP;
+  const previousScope = state.expressionScope;
+  const previousModule = state.activeModuleId;
+  const scope = { ...previousScope, ...(state.moduleExpressions.get(definition.moduleId) ?? {}) };
+  for (let index = 0; index < (definition.params ?? []).length; index += 1) {
+    const parameter = definition.params[index]?.pat ?? definition.params[index]?.pattern ?? definition.params[index];
+    const argument = value.arguments?.[index]?.expression ?? value.arguments?.[index];
+    const parameterName = getPatternName(parameter);
+    if (!parameterName || !argument) { reportUnsupported(state, "UNSUPPORTED_RENDER_FUNCTION_PARAMETER", `Element-returning function ${name} requires simple supplied parameters.`); return SKIP; }
+    scope[parameterName] = argument;
+  }
+  for (const statement of getStatements(definition.body)) if (statement.type === "VariableDeclaration" || statement.type === "VarDecl") for (const declaration of statement.declarations ?? statement.decls ?? []) { const local = getPatternName(declaration.id); if (local && declaration.init) scope[local] = declaration.init; }
+  state.expressionScope = scope;
+  state.activeModuleId = definition.moduleId;
+  const result = Object.keys(literalScope).length ? lowerJsxNodeWithScope(returned, parentId, state, literalScope) : lowerJsxNode(returned, parentId, state);
+  state.expressionScope = previousScope;
+  state.activeModuleId = previousModule;
+  return result;
 }
 function findReturnedExpression(body: any): any | null {
   for (const statement of getStatements(body)) {
@@ -799,6 +840,9 @@ function lowerJsxExpressionWithScope(node: any, parentId: string | null, state: 
     return SKIP;
   }
 
+  const rendered = lowerReturnedElementExpression(expression, parentId, state, scope);
+  if (rendered !== SKIP) return rendered;
+
   const literalValue = evaluateExpression(expression, state, mergeScopes(state.scope, scope));
   if (literalValue !== undefined && !state.preserveBindings) {
     const textId = nextTextId(state);
@@ -905,7 +949,18 @@ function lowerComponentElement(node: any, parentId: string | null, state: Compil
   const before = { e: state.ir.elements.length, b: state.ir.bindings.length, ev: state.ir.events.length };
   const returned = findReturnedJsx(component.body);
   if (!returned) {
-    reportUnsupported(state, "UNSUPPORTED_COMPONENT_BODY", `Component ${name} in ${component.moduleId} does not return supported JSX. The compiler only accepts JSX source bodies in this experiment.`);
+    const value = findReturnedExpression(component.body);
+    if (value) {
+      const result = lowerReturnedElementExpression(value, parentId, state, literalScope);
+      if (result !== SKIP) {
+        metadata.elementIds = state.ir.elements.slice(before.e).map((element) => element.id);
+        metadata.bindingIds = state.ir.bindings.slice(before.b).map((binding) => binding.id);
+        metadata.eventIds = state.ir.events.slice(before.ev).map((event) => event.id);
+        state.componentStack.pop(); state.expressionScope = previous; state.activeModuleId = previousModuleId;
+        return result;
+      }
+    }
+    reportUnsupported(state, "UNSUPPORTED_COMPONENT_BODY", `Component ${name} in ${component.moduleId} does not return a declaratively representable element tree.`);
   }
   const result = literalScope && Object.keys(literalScope).length
     ? lowerJsxNodeWithScope(returned, parentId, state, literalScope)
@@ -919,38 +974,29 @@ function lowerComponentElement(node: any, parentId: string | null, state: Compil
   return result;
 }
 
-/** Context providers are transparent structural nodes. Their values remain in
- * IR for later context reads while their children remain direct DOM children. */
 function lowerContextProvider(node: any, parentId: string | null, state: CompilerState): LowerResult {
-  if (!parentId) {
-    reportUnsupported(state, "ROOT_CONTEXT_PROVIDER", "A context provider cannot be the application root in this experiment.");
+  const providerName = getJsxName(node.opening?.name)!.replace(/\.Provider$/, "");
+  const context = resolveContext(providerName, state);
+  if (!context) {
+    reportUnsupported(state, "UNRESOLVED_CONTEXT_PROVIDER", `Provider ${providerName} has no reachable createContext declaration.`);
     return SKIP;
   }
   const value = collectCallerProps(node, state).value;
-  const values: Array<{ name: string; expressionId?: string; staticValue?: string }> = [];
-  const resolved = value?.type === "Identifier" ? state.expressionScope[getNodeName(value)!] ?? value : value;
-  if (resolved?.type === "ObjectExpression") {
-    for (const property of resolved.properties ?? []) {
-      const name = getNodeName(property.key);
-      const entry = property.value ?? property.expr;
-      if (!name || !entry) continue;
-      const literal = evaluateExpression(entry, state, {});
-      values.push(literal === undefined ? { name, expressionId: internExpression(entry, state) } : { name, staticValue: literalToString(literal) });
-    }
-  } else if (resolved) {
-    values.push({ name: "value", expressionId: internExpression(resolved, state) });
-  }
-  state.ir.contexts.push({ id: `c${state.ir.contexts.length + 1}`, parentId, values });
-  const parent = getElementById(state, parentId);
-  if (!parent) {
-    reportUnsupported(state, "CONTEXT_PARENT_MISSING", `Context provider parent ${parentId} is not an element.`);
+  if (!value) {
+    reportUnsupported(state, "CONTEXT_PROVIDER_VALUE", `Provider ${providerName} requires a value prop.`);
     return SKIP;
   }
+  const id = `c${state.ir.contexts.length + 1}`;
+  const scope = { id, contextId: context.id, parentId, valueExpressionId: internExpression(value, state), values: [], children: [] as string[] };
+  state.ir.contexts.push(scope);
   for (const child of node.children ?? []) {
-    const lowered = lowerJsxNode(child, parentId, state);
-    if (lowered !== SKIP) parent.children.push(lowered);
+    // The provider is a virtual parent in the graph. Retaining it as the
+    // lexical parent lets direct text/expressions and nested providers retain
+    // their scope without inventing a DOM wrapper.
+    const lowered = lowerJsxNode(child, id, state);
+    if (lowered !== SKIP) scope.children.push(lowered);
   }
-  return SKIP;
+  return id;
 }
 
 function lowerRouterLink(node: any, parentId: string | null, state: CompilerState): LowerResult {
@@ -1597,48 +1643,6 @@ function unwrapComponentFactory(init: any): any | null {
   return null;
 }
 
-/** Normalize the return value of package render helpers into the same JSX AST
- * path as authored components.  The helpers declare their actual DOM tag as a
- * string argument, so this remains source driven rather than package driven. */
-function normalizeRenderedReturn(value: any, body: any): any {
-  const direct = renderHelperElement(value, body);
-  if (direct) return direct;
-  if (value?.type !== "Identifier") return value;
-  const name = getNodeName(value);
-  for (const statement of getStatements(body)) {
-    if (statement.type !== "VariableDeclaration" && statement.type !== "VarDecl") continue;
-    for (const declaration of statement.declarations ?? statement.decls ?? []) {
-      if (getPatternName(declaration.id) === name) return renderHelperElement(declaration.init, body) ?? value;
-    }
-  }
-  return value;
-}
-function renderHelperElement(value: any, _body: any): any | null {
-  value = unwrapExpression(value);
-  if (value?.type !== "CallExpression") return null;
-  const callee = getNodeName(value.callee);
-  if (callee === "useRenderElement") {
-    const tag = jsxFactoryName(value.arguments?.[0]?.expression ?? value.arguments?.[0]);
-    const props = unwrapExpression(value.arguments?.[1]?.expression ?? value.arguments?.[1]);
-    if (!tag || !props) return null;
-    return { type: "JSXElement", opening: { type: "JSXOpeningElement", name: tag, attributes: [{ type: "SpreadElement", arguments: props }] }, closing: null, children: [] };
-  }
-  if (callee === "useRender") {
-    const options = unwrapExpression(value.arguments?.[0]?.expression ?? value.arguments?.[0]);
-    if (options?.type !== "ObjectExpression") return null;
-    const tagValue = options.properties?.find((property: any) => getNodeName(property.key) === "defaultTagName")?.value;
-    const propsValue = options.properties?.find((property: any) => getNodeName(property.key) === "props")?.value;
-    const tag = jsxFactoryName(tagValue);
-    if (!tag) return null;
-    // `useRender` accepts a merged props expression. Keep the authored
-    // component props when the merge itself cannot be statically expanded.
-    const props = unwrapExpression(propsValue);
-    const fallback = { type: "Identifier", value: "props" };
-    return { type: "JSXElement", opening: { type: "JSXOpeningElement", name: tag, attributes: [{ type: "SpreadElement", arguments: props?.type === "CallExpression" ? fallback : (props ?? fallback) }] }, closing: null, children: [] };
-  }
-  return null;
-}
-
 function collectExports(moduleAst: any, state: CompilerState, moduleId: string): void {
   const entries = state.exports.get(moduleId) ?? new Map<string, { moduleId: string; exportName: string }>();
   for (const statement of getStatements(moduleAst)) {
@@ -1678,6 +1682,35 @@ function collectModuleExpressions(moduleAst: any, state: CompilerState, moduleId
     }
   }
   state.moduleExpressions.set(moduleId, expressions);
+}
+
+function collectContexts(moduleAst: any, state: CompilerState, moduleId: string): void {
+  for (const original of getStatements(moduleAst)) {
+    const statement = original.declaration ?? original.decl ?? original;
+    if (statement.type !== "VariableDeclaration" && statement.type !== "VarDecl") continue;
+    for (const declaration of statement.declarations ?? statement.decls ?? []) {
+      const name = getPatternName(declaration.id);
+      const init = unwrapExpression(declaration.init);
+      if (!name || init?.type !== "CallExpression" || (getNodeName(init.callee) !== "createContext" && getNodeName(init.callee?.property) !== "createContext")) continue;
+      const argument = init.arguments?.[0]?.expression ?? init.arguments?.[0];
+      if (!argument) { reportUnsupported(state, "CONTEXT_DEFAULT_REQUIRED", `createContext(${name}) requires a default value.`); continue; }
+      const key = componentKey(moduleId, name);
+      if (!state.contextSymbols.has(key)) {
+        const definition = { id: `ctx${state.contextSymbols.size + 1}`, defaultExpressionId: internExpression(argument, state) };
+        state.contextSymbols.set(key, definition);
+        state.ir.contextDefinitions.push(definition);
+      }
+    }
+  }
+}
+
+function resolveContext(name: string, state: CompilerState): { id: string; defaultExpressionId: string } | undefined {
+  const local = state.contextSymbols.get(componentKey(state.activeModuleId, name));
+  if (local) return local;
+  const imported = state.importSymbols.get(`${state.activeModuleId}::${name}`);
+  if (!imported) return undefined;
+  const resolved = resolveExport(imported.moduleId, imported.exportName, state);
+  return state.contextSymbols.get(componentKey(resolved.moduleId, resolved.exportName));
 }
 
 function collectImports(moduleAst: any, state: CompilerState, moduleId: string): void {
@@ -1847,14 +1880,14 @@ function lowerExternalComponent(node: any, parentId: string | null, state: Compi
  */
 function jsxFactoryElement(node: any): any | null {
   if (node?.type !== "CallExpression") return null;
-  const callee = getNodeName(node.callee);
-  if (!callee || !["jsx", "jsxs", "jsxDEV", "_jsx", "_jsxs", "_jsxDEV"].includes(callee)) return null;
+  const callee = getNodeName(node.callee) ?? getNodeName(node.callee?.property);
+  if (!callee || !["jsx", "jsxs", "jsxDEV", "_jsx", "_jsxs", "_jsxDEV", "createElement", "_createElement"].includes(callee)) return null;
   const tag = jsxFactoryName(node.arguments?.[0]?.expression ?? node.arguments?.[0]);
   const props = unwrapExpression(node.arguments?.[1]?.expression ?? node.arguments?.[1]);
-  if (!tag || props?.type !== "ObjectExpression") return null;
+  if (!tag || (props && props.type !== "ObjectExpression")) return null;
   const attributes: any[] = [];
   const children: any[] = [];
-  for (const property of props.properties ?? []) {
+  for (const property of props?.properties ?? []) {
     if (property.type === "SpreadElement" || property.type === "SpreadProperty") {
       attributes.push({ type: "SpreadElement", arguments: property.arguments ?? property.argument });
       continue;
@@ -1868,6 +1901,9 @@ function jsxFactoryElement(node: any): any | null {
     }
     attributes.push({ type: "JSXAttribute", name: { type: "Identifier", value: name }, value: value?.type === "StringLiteral" ? value : { type: "JSXExpressionContainer", expression: value } });
   }
+  // createElement carries children as positional arguments rather than the
+  // JSX-runtime `children` property. Normalize both forms identically.
+  if (callee === "createElement" || callee === "_createElement") for (const argument of (node.arguments ?? []).slice(2)) appendFactoryChildren(argument.expression ?? argument, children);
   return { type: "JSXElement", opening: { type: "JSXOpeningElement", name: tag, attributes }, closing: children.length ? { type: "JSXClosingElement", name: tag } : null, children };
 }
 function jsxFactoryName(value: any): any | null {
@@ -2034,6 +2070,16 @@ function lowerExpression(input: any, state: CompilerState, resolving = new Set<s
   if (node.type === "MemberExpression") return { kind: "member", object: lowerExpression(node.object, state, resolving), property: getNodeName(node.property) ?? "" };
   if (node.type === "OptionalChainingExpression" || node.type === "OptionalMemberExpression") return { kind: "member", object: lowerExpression(node.base ?? node.object, state, resolving), property: getNodeName(node.property) ?? "" };
   if (node.type === "CallExpression" && node.callee?.type === "MemberExpression" && getNodeName(node.callee.property) === "getFullYear" && node.callee.object?.type === "NewExpression" && getNodeName(node.callee.object.callee) === "Date") return { kind: "host", name: "currentYear" };
+  if (node.type === "CallExpression" && (getNodeName(node.callee) === "useContext" || getNodeName(node.callee?.property) === "useContext")) {
+    const argument = node.arguments?.[0]?.expression ?? node.arguments?.[0];
+    const name = getNodeName(argument);
+    const context = name ? resolveContext(name, state) : undefined;
+    if (!context) {
+      reportUnsupported(state, "UNRESOLVED_CONTEXT_READ", "useContext requires a reachable createContext declaration.");
+      return { kind: "literal", value: null };
+    }
+    return { kind: "context", contextId: context.id };
+  }
   if (node.type === "CallExpression" && getNodeName(node.callee) === "Boolean" && node.arguments?.length === 1) {
     const argument = lowerExpression(node.arguments[0]?.expression ?? node.arguments[0], state, resolving);
     return { kind: "unary", op: "!", argument: { kind: "unary", op: "!", argument } };
@@ -2056,6 +2102,12 @@ function lowerExpression(input: any, state: CompilerState, resolving = new Set<s
           ? ({ kind: "spread", value: lowerExpression(property.arguments ?? property.argument, state, new Set(resolving)) })
           : ({ kind: "entry", key: objectPropertyName(property) ?? "", value: lowerExpression(objectPropertyValue(property), state, new Set(resolving)) }))
     };
+  }
+  // Ordered prop composition is a value primitive. Preserve each argument as
+  // a spread so last-write-wins remains runtime observable; no library call
+  // identity survives in the IR.
+  if (node.type === "CallExpression" && isObjectMergeCall(node)) {
+    return { kind: "object", properties: (node.arguments ?? []).map((argument: any) => ({ kind: "spread", value: lowerExpression(argument.expression ?? argument, state, new Set(resolving)) })) };
   }
   if (node.type === "CallExpression" && ["cn", "clsx", "classnames"].includes(getNodeName(node.callee) ?? "")) return { kind: "intrinsic", name: getNodeName(node.callee), args: (node.arguments ?? []).map((arg: any) => lowerExpression(arg.expression ?? arg, state, resolving)) };
   if (node.type === "CallExpression" && ["useMemo", "useCallback"].includes(getNodeName(node.callee) ?? getNodeName(node.callee?.property) ?? "")) {
