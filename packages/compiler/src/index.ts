@@ -417,9 +417,13 @@ function lowerJsxElement(node: any, parentId: string | null, state: CompilerStat
     }
 
     if (name === "ref" && attributeNode.value?.type === "JSXExpressionContainer") {
-      const refId = getNodeName(unwrapExpression(attributeNode.value.expression)) ?? `ref${state.ir.refs.length + 1}`;
-      state.ir.refs.push({ id: `r${state.ir.refs.length + 1}`, targetId: elementId, refId, kind: "callback" });
-      state.ir.hostElementRefs.push({ id: `hr${state.ir.hostElementRefs.length + 1}`, targetId: elementId, attachments: [refId] });
+      const value = unwrapExpression(attributeNode.value.expression);
+      const attachments = value?.type === "ArrayExpression"
+        ? (value.elements ?? []).map((entry: any) => getNodeName(unwrapExpression(entry?.expression ?? entry))).filter(Boolean)
+        : [getNodeName(value)].filter(Boolean);
+      const refs = attachments.length ? attachments : [`ref${state.ir.refs.length + 1}`];
+      for (const refId of refs) state.ir.refs.push({ id: `r${state.ir.refs.length + 1}`, targetId: elementId, refId, kind: "callback" });
+      state.ir.hostElementRefs.push({ id: `hr${state.ir.hostElementRefs.length + 1}`, targetId: elementId, attachments: refs });
       propWrites.push({ name, kind: "ref" });
       continue;
     }
@@ -2072,7 +2076,17 @@ function lowerExpression(input: any, state: CompilerState, resolving = new Set<s
     if (identifier && state.expressionScope[identifier] && !resolving.has(identifier)) { resolving.add(identifier); return lowerExpression(state.expressionScope[identifier], state, resolving); }
     return { kind: "identifier", name: identifier ?? "unknown" };
   }
-  if (node.type === "MemberExpression") return { kind: "member", object: lowerExpression(node.object, state, resolving), property: getNodeName(node.property) ?? "" };
+  if (node.type === "MemberExpression") {
+    const ref = node.object;
+    const refName = ref?.type === "MemberExpression" && getNodeName(ref.property) === "current" ? getNodeName(ref.object) : undefined;
+    const property = getNodeName(node.property);
+    if (refName && property && ["value", "name", "disabled", "checked", "tagName"].includes(property)) {
+      const capability = { kind: "property", name: property };
+      state.ir.hostElementReads.push({ id: `hr${state.ir.hostElementReads.length + 1}`, refId: refName, capability });
+      return { kind: "host-element-read", refId: refName, capability };
+    }
+    return { kind: "member", object: lowerExpression(node.object, state, resolving), property: property ?? "" };
+  }
   if (node.type === "OptionalChainingExpression" || node.type === "OptionalMemberExpression") return { kind: "member", object: lowerExpression(node.base ?? node.object, state, resolving), property: getNodeName(node.property) ?? "" };
   if (node.type === "CallExpression" && node.callee?.type === "MemberExpression" && getNodeName(node.callee.property) === "getFullYear" && node.callee.object?.type === "NewExpression" && getNodeName(node.callee.object.callee) === "Date") return { kind: "host", name: "currentYear" };
   if (node.type === "CallExpression" && (getNodeName(node.callee) === "useContext" || getNodeName(node.callee?.property) === "useContext")) {
@@ -2084,6 +2098,16 @@ function lowerExpression(input: any, state: CompilerState, resolving = new Set<s
       return { kind: "literal", value: null };
     }
     return { kind: "context", contextId: context.id };
+  }
+  if (node.type === "CallExpression" && node.callee?.type === "MemberExpression" && getNodeName(node.callee.property) === "closest") {
+    const ref = node.callee.object;
+    const refName = ref?.type === "MemberExpression" && getNodeName(ref.property) === "current" ? getNodeName(ref.object) : undefined;
+    const selector = node.arguments?.[0]?.expression ?? node.arguments?.[0];
+    if (refName && selector?.type === "StringLiteral" && /^[a-z][a-z0-9-]*$/.test(selector.value)) {
+      const capability = { kind: "closest", selector: selector.value };
+      state.ir.hostElementReads.push({ id: `hr${state.ir.hostElementReads.length + 1}`, refId: refName, capability });
+      return { kind: "host-element-read", refId: refName, capability };
+    }
   }
   if (node.type === "CallExpression" && getNodeName(node.callee) === "Boolean" && node.arguments?.length === 1) {
     const argument = lowerExpression(node.arguments[0]?.expression ?? node.arguments[0], state, resolving);

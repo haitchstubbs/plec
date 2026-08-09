@@ -201,6 +201,22 @@ describe("compile", () => {
     ]);
   });
 
+  it("lowers bounded ref.current host reads without dynamic DOM access", () => {
+    const result = compile(`function App({ inputRef }) { return <output>{inputRef.current.value}{inputRef.current.closest('label') ? ' labelled' : ''}</output> }`, { rootComponent: "App" });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.ir.hostElementReads).toEqual([
+      expect.objectContaining({ refId: "inputRef", capability: { kind: "property", name: "value" } }),
+      expect.objectContaining({ refId: "inputRef", capability: { kind: "closest", selector: "label" } }),
+    ]);
+  });
+
+  it("represents composed ref attachment as one opaque host handle", () => {
+    const result = compile(`function App({ forwardedRef, localRef }) { return <input ref={[forwardedRef, localRef]} /> }`, { rootComponent: "App" });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.ir.refs.map((ref) => ref.refId)).toEqual(["forwardedRef", "localRef"]);
+    expect(result.ir.hostElementRefs).toEqual([expect.objectContaining({ attachments: ["forwardedRef", "localRef"] })]);
+  });
+
   it("describes scalar and object inputs by the paths the view reads", () => {
     const result = compile(`function Profile({ selectedId, user }) { return <div data-selected={selectedId}>{user.name}</div> }`);
     expect(result.ir.inputs).toEqual([
