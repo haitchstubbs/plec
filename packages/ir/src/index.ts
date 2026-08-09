@@ -8,6 +8,7 @@ export const ExpressionSchema: z.ZodType<any> = z.lazy(() => z.discriminatedUnio
   z.object({ kind: z.literal("binary"), op: z.string(), left: ExpressionSchema, right: ExpressionSchema }),
   z.object({ kind: z.literal("logical"), op: z.enum(["&&", "||", "??"]), left: ExpressionSchema, right: ExpressionSchema }),
   z.object({ kind: z.literal("conditional"), test: ExpressionSchema, consequent: ExpressionSchema, alternate: ExpressionSchema }),
+  z.object({ kind: z.literal("unary"), op: z.enum(["!", "+", "-"]), argument: ExpressionSchema }),
   z.object({ kind: z.literal("template"), parts: z.array(z.union([z.string(), ExpressionSchema])) }),
   z.object({ kind: z.literal("array"), items: z.array(ExpressionSchema) }),
   z.object({ kind: z.literal("object"), entries: z.array(z.object({ key: z.string(), value: ExpressionSchema })) }),
