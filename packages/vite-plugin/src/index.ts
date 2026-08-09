@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { compile, type CompileOptions } from "../../compiler/src/index.ts";
+import { compile, type CompileOptions } from "@wasm-runtime/compiler";
 import type { Plugin } from "vite";
 
 const runtimeBuilds = new Map<string, Promise<void>>();

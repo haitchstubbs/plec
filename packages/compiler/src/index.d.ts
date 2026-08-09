@@ -5,7 +5,7 @@ export interface CompilerDiagnostic {
 }
 interface BindingNode {
     id: string;
-    kind: "text" | "attribute";
+    kind: "text" | "attribute" | "property";
     targetId: string;
     attributeName?: string;
     expression: string;
@@ -17,15 +17,18 @@ interface ExpressionNode {
 }
 interface EventNode {
     id: string;
-    type: "change" | "click";
+    type: string;
     targetId: string;
     actionId: string;
     args: string[];
     field?: string;
+    callbackName?: string;
     navigate?: {
         href: string;
         replace?: boolean;
     };
+    stopPropagation?: boolean;
+    preventDefault?: boolean;
 }
 interface IslandNode {
     islandInstanceId: string;
@@ -103,7 +106,7 @@ interface TextNode {
     staticValue?: string;
 }
 interface ApplicationIr {
-    version: "0.4";
+    version: "0.5";
     revision?: string;
     rootElementId: string;
     elements: ElementNode[];
@@ -114,7 +117,38 @@ interface ApplicationIr {
     loops: LoopNode[];
     bindings: BindingNode[];
     expressions: ExpressionNode[];
+    propPrograms: Array<{
+        id: string;
+        targetId: string;
+        writes: Array<{
+            name: string;
+            staticValue?: string;
+            expressionId?: string;
+            kind: "attribute" | "property" | "event" | "ref";
+        }>;
+    }>;
     events: EventNode[];
+    refs: Array<{
+        id: string;
+        targetId: string;
+        refId: string;
+        kind: "callback" | "object";
+    }>;
+    contexts: Array<{
+        id: string;
+        parentId: string | null;
+        values: Array<{
+            name: string;
+            expressionId?: string;
+            staticValue?: string;
+        }>;
+    }>;
+    conditionals: Array<{
+        id: string;
+        parentId: string;
+        expressionId: string;
+        children: string[];
+    }>;
     localStates: Array<{
         id: string;
         name: string;
@@ -128,7 +162,6 @@ interface ApplicationIr {
     }>;
     lifecycleEffects: Array<any>;
     stateTransitions: Array<any>;
-    toggles: Array<any>;
     islands: IslandNode[];
     components: ComponentMetadata[];
 }

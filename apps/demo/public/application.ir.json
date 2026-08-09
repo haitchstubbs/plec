@@ -1,6 +1,6 @@
 {
   "version": "0.5",
-  "revision": "43f03574865151cc4d1be0222336d11ff5eff184d2207bff8fd4a7e8e14d1fd3",
+  "revision": "1f29d085e4dafdffe876508a656b490d34d680643e0d93a90965f4188db28c1a",
   "rootElementId": "e1",
   "elements": [
     {
@@ -195,7 +195,58 @@
           "bindingId": "b6"
         }
       ],
+      "children": [
+        "t3",
+        "t4",
+        "e12",
+        "e13",
+        "e14"
+      ]
+    },
+    {
+      "id": "e12",
+      "tag": "input",
+      "parentId": "e11",
+      "attributes": [
+        {
+          "name": "suppressHydrationWarning",
+          "bindingId": "b9"
+        }
+      ],
       "children": []
+    },
+    {
+      "id": "e13",
+      "tag": "input",
+      "parentId": "e11",
+      "attributes": [
+        {
+          "name": "type",
+          "bindingId": "b10"
+        },
+        {
+          "name": "data-slot",
+          "bindingId": "b11"
+        },
+        {
+          "name": "className",
+          "bindingId": "b12"
+        },
+        {
+          "name": "value",
+          "bindingId": "b13"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "e14",
+      "tag": "span",
+      "parentId": "e11",
+      "attributes": [],
+      "children": [
+        "t5"
+      ]
     }
   ],
   "texts": [
@@ -208,6 +259,21 @@
       "id": "t2",
       "parentId": "e6",
       "staticValue": "Renderer parity Todo list"
+    },
+    {
+      "id": "t3",
+      "parentId": "e11",
+      "staticValue": ""
+    },
+    {
+      "id": "t4",
+      "parentId": "e11",
+      "staticValue": ""
+    },
+    {
+      "id": "t5",
+      "parentId": "e14",
+      "staticValue": ""
     }
   ],
   "inputs": [
@@ -292,6 +358,67 @@
       "attributeName": "className",
       "expression": "CallExpression",
       "expressionId": "x5"
+    },
+    {
+      "id": "b7",
+      "kind": "text",
+      "targetId": "t3",
+      "expression": "Identifier",
+      "expressionId": "x6"
+    },
+    {
+      "id": "b8",
+      "kind": "text",
+      "targetId": "t4",
+      "expression": "BinaryExpression",
+      "expressionId": "x7"
+    },
+    {
+      "id": "b9",
+      "kind": "attribute",
+      "targetId": "e12",
+      "attributeName": "suppressHydrationWarning",
+      "expression": "BooleanLiteral",
+      "expressionId": "x8"
+    },
+    {
+      "id": "b10",
+      "kind": "attribute",
+      "targetId": "e13",
+      "attributeName": "type",
+      "expression": "osCo",
+      "expressionId": "x9"
+    },
+    {
+      "id": "b11",
+      "kind": "attribute",
+      "targetId": "e13",
+      "attributeName": "data-slot",
+      "expression": "cons",
+      "expressionId": "x10"
+    },
+    {
+      "id": "b12",
+      "kind": "attribute",
+      "targetId": "e13",
+      "attributeName": "className",
+      "expression": "= useLiveQuery(todosCollection)\n  function updateTodo() {}\n  return <div data-compiled-route-root><TodoListView todos={todos as any} onUpdate={updateTodo} /></div>\n}",
+      "expressionId": "x11"
+    },
+    {
+      "id": "b13",
+      "kind": "attribute",
+      "targetId": "e13",
+      "attributeName": "value",
+      "expression": "MemberExpression",
+      "expressionId": "x12"
+    },
+    {
+      "id": "b14",
+      "kind": "text",
+      "targetId": "t5",
+      "expression": "ConditionalExpression",
+      "expressionId": "x13"
     }
   ],
   "expressions": [
@@ -356,6 +483,147 @@
             "value": "flex items-center gap-3"
           }
         ]
+      }
+    },
+    {
+      "id": "x6",
+      "expression": {
+        "kind": "literal",
+        "value": ""
+      }
+    },
+    {
+      "id": "x7",
+      "expression": {
+        "kind": "binary",
+        "op": "&&",
+        "left": {
+          "kind": "binary",
+          "op": "&&",
+          "left": {
+            "kind": "binary",
+            "op": "&&",
+            "left": {
+              "kind": "binary",
+              "op": "&&",
+              "left": {
+                "kind": "binary",
+                "op": "&&",
+                "left": {
+                  "kind": "literal",
+                  "value": ""
+                },
+                "right": {
+                  "kind": "literal",
+                  "value": ""
+                }
+              },
+              "right": {
+                "kind": "binary",
+                "op": "??",
+                "left": {
+                  "kind": "identifier",
+                  "name": "fieldName"
+                },
+                "right": {
+                  "kind": "identifier",
+                  "name": "nameProp"
+                }
+              }
+            },
+            "right": {
+              "kind": "literal",
+              "value": ""
+            }
+          },
+          "right": {
+            "kind": "binary",
+            "op": "!==",
+            "left": {
+              "kind": "identifier",
+              "name": "uncheckedValue"
+            },
+            "right": {
+              "kind": "identifier",
+              "name": "undefined"
+            }
+          }
+        },
+        "right": {
+          "kind": "literal",
+          "value": ""
+        }
+      }
+    },
+    {
+      "id": "x8",
+      "expression": {
+        "kind": "literal",
+        "value": true
+      }
+    },
+    {
+      "id": "x9",
+      "expression": {
+        "kind": "identifier",
+        "name": "undefined"
+      }
+    },
+    {
+      "id": "x10",
+      "expression": {
+        "kind": "literal",
+        "value": "input"
+      }
+    },
+    {
+      "id": "x11",
+      "expression": {
+        "kind": "intrinsic",
+        "name": "cn",
+        "args": [
+          {
+            "kind": "literal",
+            "value": "h-9 w-full min-w-0 rounded-4xl border border-input bg-input/30 px-3 py-1 text-base transition-colors outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-[3px] aria-invalid:ring-destructive/20 md:text-sm dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
+          },
+          {
+            "kind": "identifier",
+            "name": "undefined"
+          }
+        ]
+      }
+    },
+    {
+      "id": "x12",
+      "expression": {
+        "kind": "member",
+        "object": {
+          "kind": "identifier",
+          "name": "todo"
+        },
+        "property": "title"
+      }
+    },
+    {
+      "id": "x13",
+      "expression": {
+        "kind": "conditional",
+        "test": {
+          "kind": "member",
+          "object": {
+            "kind": "identifier",
+            "name": "todo"
+          },
+          "property": "done"
+        },
+        "consequent": {
+          "kind": "literal",
+          "value": "Completed"
+        },
+        "alternate": {
+          "kind": "literal",
+          "value": "Open"
+        }
       }
     }
   ],
@@ -514,11 +782,87 @@
           "kind": "attribute"
         }
       ]
+    },
+    {
+      "id": "p11",
+      "targetId": "e12",
+      "writes": [
+        {
+          "name": "suppressHydrationWarning",
+          "expressionId": "x8",
+          "kind": "attribute"
+        }
+      ]
+    },
+    {
+      "id": "p12",
+      "targetId": "e13",
+      "writes": [
+        {
+          "name": "ref",
+          "kind": "ref"
+        },
+        {
+          "name": "type",
+          "expressionId": "x9",
+          "kind": "attribute"
+        },
+        {
+          "name": "data-slot",
+          "expressionId": "x10",
+          "kind": "attribute"
+        },
+        {
+          "name": "className",
+          "expressionId": "x11",
+          "kind": "attribute"
+        },
+        {
+          "name": "value",
+          "expressionId": "x12",
+          "kind": "property"
+        },
+        {
+          "name": "onChange",
+          "kind": "event"
+        }
+      ]
     }
   ],
-  "events": [],
-  "refs": [],
-  "contexts": [],
+  "events": [
+    {
+      "id": "ev1",
+      "type": "change",
+      "targetId": "e13",
+      "actionId": "a1",
+      "args": [
+        "MemberExpression",
+        "ObjectExpression"
+      ],
+      "field": "title",
+      "callbackName": "updateTodo"
+    }
+  ],
+  "refs": [
+    {
+      "id": "r1",
+      "targetId": "e13",
+      "refId": "forwardedRef",
+      "kind": "callback"
+    }
+  ],
+  "contexts": [
+    {
+      "id": "c1",
+      "parentId": "e11",
+      "values": [
+        {
+          "name": "value",
+          "expressionId": "x6"
+        }
+      ]
+    }
+  ],
   "conditionals": [],
   "localStates": [],
   "hostValues": [],
@@ -539,16 +883,29 @@
         "e8",
         "e9",
         "e10",
-        "e11"
+        "e11",
+        "e12",
+        "e13",
+        "e14"
       ],
       "bindingIds": [
         "b2",
         "b3",
         "b4",
         "b5",
-        "b6"
+        "b6",
+        "b7",
+        "b8",
+        "b9",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14"
       ],
-      "eventIds": []
+      "eventIds": [
+        "ev1"
+      ]
     },
     {
       "name": "Card",
@@ -562,16 +919,29 @@
         "e8",
         "e9",
         "e10",
-        "e11"
+        "e11",
+        "e12",
+        "e13",
+        "e14"
       ],
       "bindingIds": [
         "b2",
         "b3",
         "b4",
         "b5",
-        "b6"
+        "b6",
+        "b7",
+        "b8",
+        "b9",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14"
       ],
-      "eventIds": []
+      "eventIds": [
+        "ev1"
+      ]
     },
     {
       "name": "CardHeader",
@@ -601,75 +971,164 @@
         "e8",
         "e9",
         "e10",
-        "e11"
+        "e11",
+        "e12",
+        "e13",
+        "e14"
       ],
       "bindingIds": [
         "b2",
         "b3",
         "b4",
         "b5",
-        "b6"
+        "b6",
+        "b7",
+        "b8",
+        "b9",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14"
       ],
-      "eventIds": []
+      "eventIds": [
+        "ev1"
+      ]
     },
     {
       "name": "Card",
       "moduleId": "@wasm-runtime/ui/atoms/card",
       "elementIds": [
         "e10",
-        "e11"
+        "e11",
+        "e12",
+        "e13",
+        "e14"
       ],
       "bindingIds": [
         "b4",
         "b5",
-        "b6"
+        "b6",
+        "b7",
+        "b8",
+        "b9",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14"
       ],
-      "eventIds": []
+      "eventIds": [
+        "ev1"
+      ]
     },
     {
       "name": "CardContent",
       "moduleId": "@wasm-runtime/ui/atoms/card",
       "elementIds": [
-        "e11"
+        "e11",
+        "e12",
+        "e13",
+        "e14"
       ],
       "bindingIds": [
-        "b6"
+        "b6",
+        "b7",
+        "b8",
+        "b9",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14"
       ],
-      "eventIds": []
+      "eventIds": [
+        "ev1"
+      ]
     },
     {
       "name": "Checkbox",
       "moduleId": "@wasm-runtime/ui/atoms/checkbox",
-      "elementIds": [],
-      "bindingIds": [],
+      "elementIds": [
+        "e12"
+      ],
+      "bindingIds": [
+        "b7",
+        "b8",
+        "b9"
+      ],
       "eventIds": []
     },
     {
       "name": "CheckboxPrimitive.Root",
       "moduleId": "@base-ui/react/checkbox/root/CheckboxRoot.mjs",
-      "elementIds": [],
-      "bindingIds": [],
+      "elementIds": [
+        "e12"
+      ],
+      "bindingIds": [
+        "b7",
+        "b8",
+        "b9"
+      ],
       "eventIds": []
     },
     {
       "name": "Input",
       "moduleId": "@wasm-runtime/ui/atoms/input",
-      "elementIds": [],
-      "bindingIds": [],
-      "eventIds": []
+      "elementIds": [
+        "e13"
+      ],
+      "bindingIds": [
+        "b10",
+        "b11",
+        "b12",
+        "b13"
+      ],
+      "eventIds": [
+        "ev1"
+      ]
     },
     {
       "name": "InputPrimitive",
       "moduleId": "@base-ui/react/input/Input.mjs",
-      "elementIds": [],
-      "bindingIds": [],
-      "eventIds": []
+      "elementIds": [
+        "e13"
+      ],
+      "bindingIds": [
+        "b10",
+        "b11",
+        "b12",
+        "b13"
+      ],
+      "eventIds": [
+        "ev1"
+      ]
+    },
+    {
+      "name": "Field.Control",
+      "moduleId": "@base-ui/react/field/control/FieldControl.mjs",
+      "elementIds": [
+        "e13"
+      ],
+      "bindingIds": [
+        "b10",
+        "b11",
+        "b12",
+        "b13"
+      ],
+      "eventIds": [
+        "ev1"
+      ]
     },
     {
       "name": "Badge",
       "moduleId": "@wasm-runtime/ui/atoms/badge",
-      "elementIds": [],
-      "bindingIds": [],
+      "elementIds": [
+        "e14"
+      ],
+      "bindingIds": [
+        "b14"
+      ],
       "eventIds": []
     }
   ]
