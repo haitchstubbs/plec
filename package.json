@@ -1,0 +1,30 @@
+{
+  "name": "wasm-runtime",
+  "private": true,
+  "packageManager": "yarn@4.17.1",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "bench": "yarn workspace @wasm-runtime/demo bench",
+    "clean": "turbo run clean && git clean -xdf .turbo",
+    "dev:demo": "yarn workspace @wasm-runtime/demo dev",
+    "build:demo": "yarn workspace @wasm-runtime/demo build",
+    "test:demo": "yarn workspace @wasm-runtime/demo test",
+    "compile:ir": "turbo run build --filter=@wasm-runtime/demo",
+    "shadcn": "shadcn add -c apps/demo"
+  },
+  "devDependencies": {
+    "@types/node": "^24.4.0",
+    "shadcn": "^4.16.2",
+    "turbo": "^2.5.6",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

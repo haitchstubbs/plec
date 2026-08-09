@@ -1,0 +1,35 @@
+# Node and Yarn
+node_modules/
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.pnp.*
+
+# Turbo
+.turbo/
+
+# Build outputs
+dist/
+build/
+coverage/
+
+# Rust and WASM
+**/target/
+**/*.wasm
+
+# Env and logs
+.env
+.env.*
+!.env.benchmark
+*.log
+
+# IDE and OS
+.vscode/*.code-workspace
+.DS_Store
+Thumbs.db
+
+# Benchmark artifacts
+benchmarks/results/*
