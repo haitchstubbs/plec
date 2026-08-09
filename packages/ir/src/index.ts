@@ -11,14 +11,17 @@ export const ExpressionSchema: z.ZodType<any> = z.lazy(() => z.discriminatedUnio
   z.object({ kind: z.literal("unary"), op: z.enum(["!", "+", "-"]), argument: ExpressionSchema }),
   z.object({ kind: z.literal("template"), parts: z.array(z.union([z.string(), ExpressionSchema])) }),
   z.object({ kind: z.literal("array"), items: z.array(ExpressionSchema) }),
-  z.object({ kind: z.literal("object"), entries: z.array(z.object({ key: z.string(), value: ExpressionSchema })) }),
+  z.object({ kind: z.literal("object"), properties: z.array(z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("entry"), key: z.string(), value: ExpressionSchema }),
+    z.object({ kind: z.literal("spread"), value: ExpressionSchema })
+  ])).optional(), entries: z.array(z.object({ key: z.string(), value: ExpressionSchema })).optional() }),
   z.object({ kind: z.literal("intrinsic"), name: z.enum(["clsx", "classnames"]), args: z.array(ExpressionSchema) }),
   z.object({ kind: z.literal("host"), name: z.literal("currentYear") })
 ]));
 
 export const ExpressionNodeSchema = z.object({ id: z.string(), expression: ExpressionSchema });
 export const BindingSchema = z.object({ id: z.string(), kind: z.enum(["text", "attribute", "property"]), targetId: z.string(), attributeName: z.string().optional(), expressionId: z.string().optional(), expression: z.string().optional() });
-export const PropWriteSchema = z.object({ name: z.string(), staticValue: z.string().optional(), expressionId: z.string().optional(), kind: z.enum(["attribute", "property", "event", "ref"]).default("attribute") });
+export const PropWriteSchema = z.object({ name: z.string(), staticValue: z.string().optional(), expressionId: z.string().optional(), kind: z.enum(["attribute", "property", "event", "ref", "spread"]).default("attribute") });
 export const PropProgramSchema = z.object({ id: z.string(), targetId: z.string(), writes: z.array(PropWriteSchema) });
 export const EventSchema = z.object({ id: z.string(), type: z.string().regex(/^[a-z][a-z0-9-]*$/), targetId: z.string(), actionId: z.string(), args: z.array(z.string()).default([]), field: z.string().optional(), callbackName: z.string().optional(), navigate: z.object({ href: z.string(), replace: z.boolean().optional() }).optional(), stopPropagation: z.boolean().optional(), preventDefault: z.boolean().optional() });
 export const RefBindingSchema = z.object({ id: z.string(), targetId: z.string(), refId: z.string(), kind: z.enum(["callback", "object"]) });

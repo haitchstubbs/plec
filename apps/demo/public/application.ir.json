@@ -1,6 +1,6 @@
 {
   "version": "0.5",
-  "revision": "1f29d085e4dafdffe876508a656b490d34d680643e0d93a90965f4188db28c1a",
+  "revision": "c4c41b4da1e958dd8feb587fff8b56f81186d56f201e2984dcf09996f2802da4",
   "rootElementId": "e1",
   "elements": [
     {
@@ -364,14 +364,14 @@
       "kind": "text",
       "targetId": "t3",
       "expression": "Identifier",
-      "expressionId": "x6"
+      "expressionId": "x7"
     },
     {
       "id": "b8",
       "kind": "text",
       "targetId": "t4",
       "expression": "BinaryExpression",
-      "expressionId": "x7"
+      "expressionId": "x8"
     },
     {
       "id": "b9",
@@ -379,7 +379,7 @@
       "targetId": "e12",
       "attributeName": "suppressHydrationWarning",
       "expression": "BooleanLiteral",
-      "expressionId": "x8"
+      "expressionId": "x9"
     },
     {
       "id": "b10",
@@ -387,7 +387,7 @@
       "targetId": "e13",
       "attributeName": "type",
       "expression": "osCo",
-      "expressionId": "x9"
+      "expressionId": "x10"
     },
     {
       "id": "b11",
@@ -395,7 +395,7 @@
       "targetId": "e13",
       "attributeName": "data-slot",
       "expression": "cons",
-      "expressionId": "x10"
+      "expressionId": "x11"
     },
     {
       "id": "b12",
@@ -403,7 +403,7 @@
       "targetId": "e13",
       "attributeName": "className",
       "expression": "= useLiveQuery(todosCollection)\n  function updateTodo() {}\n  return <div data-compiled-route-root><TodoListView todos={todos as any} onUpdate={updateTodo} /></div>\n}",
-      "expressionId": "x11"
+      "expressionId": "x12"
     },
     {
       "id": "b13",
@@ -411,14 +411,14 @@
       "targetId": "e13",
       "attributeName": "value",
       "expression": "MemberExpression",
-      "expressionId": "x12"
+      "expressionId": "x13"
     },
     {
       "id": "b14",
       "kind": "text",
       "targetId": "t5",
       "expression": "ConditionalExpression",
-      "expressionId": "x13"
+      "expressionId": "x14"
     }
   ],
   "expressions": [
@@ -488,38 +488,53 @@
     {
       "id": "x6",
       "expression": {
-        "kind": "literal",
-        "value": ""
+        "kind": "object",
+        "entries": []
       }
     },
     {
       "id": "x7",
       "expression": {
-        "kind": "binary",
+        "kind": "literal",
+        "value": ""
+      }
+    },
+    {
+      "id": "x8",
+      "expression": {
+        "kind": "logical",
         "op": "&&",
         "left": {
-          "kind": "binary",
+          "kind": "logical",
           "op": "&&",
           "left": {
-            "kind": "binary",
+            "kind": "logical",
             "op": "&&",
             "left": {
-              "kind": "binary",
+              "kind": "logical",
               "op": "&&",
               "left": {
-                "kind": "binary",
+                "kind": "logical",
                 "op": "&&",
                 "left": {
-                  "kind": "literal",
-                  "value": ""
+                  "kind": "unary",
+                  "op": "!",
+                  "argument": {
+                    "kind": "identifier",
+                    "name": "checked"
+                  }
                 },
                 "right": {
-                  "kind": "literal",
-                  "value": ""
+                  "kind": "unary",
+                  "op": "!",
+                  "argument": {
+                    "kind": "literal",
+                    "value": ""
+                  }
                 }
               },
               "right": {
-                "kind": "binary",
+                "kind": "logical",
                 "op": "??",
                 "left": {
                   "kind": "identifier",
@@ -532,8 +547,12 @@
               }
             },
             "right": {
-              "kind": "literal",
-              "value": ""
+              "kind": "unary",
+              "op": "!",
+              "argument": {
+                "kind": "identifier",
+                "name": "parent"
+              }
             }
           },
           "right": {
@@ -556,28 +575,28 @@
       }
     },
     {
-      "id": "x8",
+      "id": "x9",
       "expression": {
         "kind": "literal",
         "value": true
       }
     },
     {
-      "id": "x9",
+      "id": "x10",
       "expression": {
         "kind": "identifier",
         "name": "undefined"
       }
     },
     {
-      "id": "x10",
+      "id": "x11",
       "expression": {
         "kind": "literal",
         "value": "input"
       }
     },
     {
-      "id": "x11",
+      "id": "x12",
       "expression": {
         "kind": "intrinsic",
         "name": "cn",
@@ -594,7 +613,7 @@
       }
     },
     {
-      "id": "x12",
+      "id": "x13",
       "expression": {
         "kind": "member",
         "object": {
@@ -605,7 +624,7 @@
       }
     },
     {
-      "id": "x13",
+      "id": "x14",
       "expression": {
         "kind": "conditional",
         "test": {
@@ -789,7 +808,7 @@
       "writes": [
         {
           "name": "suppressHydrationWarning",
-          "expressionId": "x8",
+          "expressionId": "x9",
           "kind": "attribute"
         }
       ]
@@ -804,22 +823,22 @@
         },
         {
           "name": "type",
-          "expressionId": "x9",
-          "kind": "attribute"
-        },
-        {
-          "name": "data-slot",
           "expressionId": "x10",
           "kind": "attribute"
         },
         {
-          "name": "className",
+          "name": "data-slot",
           "expressionId": "x11",
           "kind": "attribute"
         },
         {
-          "name": "value",
+          "name": "className",
           "expressionId": "x12",
+          "kind": "attribute"
+        },
+        {
+          "name": "value",
+          "expressionId": "x13",
           "kind": "property"
         },
         {
