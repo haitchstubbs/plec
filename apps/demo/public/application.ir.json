@@ -1,6 +1,6 @@
 {
   "version": "0.5",
-  "revision": "c4c41b4da1e958dd8feb587fff8b56f81186d56f201e2984dcf09996f2802da4",
+  "revision": "b853eaf857b3388fbab2b91554fa58993e6fc4e826e9878e49ba8d27d8bd527b",
   "rootElementId": "e1",
   "elements": [
     {
@@ -489,7 +489,163 @@
       "id": "x6",
       "expression": {
         "kind": "object",
-        "entries": []
+        "properties": [
+          {
+            "kind": "spread",
+            "value": {
+              "kind": "identifier",
+              "name": "fieldState"
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "checked",
+            "value": {
+              "kind": "conditional",
+              "test": {
+                "kind": "binary",
+                "op": "!==",
+                "left": {
+                  "kind": "conditional",
+                  "test": {
+                    "kind": "binary",
+                    "op": "===",
+                    "left": {
+                      "kind": "member",
+                      "object": {
+                        "kind": "member",
+                        "object": {
+                          "kind": "literal",
+                          "value": ""
+                        },
+                        "property": "allValues"
+                      },
+                      "property": ""
+                    },
+                    "right": {
+                      "kind": "identifier",
+                      "name": "undefined"
+                    }
+                  },
+                  "consequent": {
+                    "kind": "identifier",
+                    "name": "undefined"
+                  },
+                  "alternate": {
+                    "kind": "member",
+                    "object": {
+                      "kind": "identifier",
+                      "name": "groupContext"
+                    },
+                    "property": "parent"
+                  }
+                },
+                "right": {
+                  "kind": "identifier",
+                  "name": "undefined"
+                }
+              },
+              "consequent": {
+                "kind": "literal",
+                "value": ""
+              },
+              "alternate": {
+                "kind": "identifier",
+                "name": "checked"
+              }
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "disabled",
+            "value": {
+              "kind": "literal",
+              "value": ""
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "readOnly",
+            "value": {
+              "kind": "literal",
+              "value": ""
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "required",
+            "value": {
+              "kind": "literal",
+              "value": ""
+            }
+          },
+          {
+            "kind": "entry",
+            "key": "indeterminate",
+            "value": {
+              "kind": "conditional",
+              "test": {
+                "kind": "binary",
+                "op": "!==",
+                "left": {
+                  "kind": "conditional",
+                  "test": {
+                    "kind": "binary",
+                    "op": "===",
+                    "left": {
+                      "kind": "member",
+                      "object": {
+                        "kind": "member",
+                        "object": {
+                          "kind": "literal",
+                          "value": ""
+                        },
+                        "property": "allValues"
+                      },
+                      "property": ""
+                    },
+                    "right": {
+                      "kind": "identifier",
+                      "name": "undefined"
+                    }
+                  },
+                  "consequent": {
+                    "kind": "identifier",
+                    "name": "undefined"
+                  },
+                  "alternate": {
+                    "kind": "member",
+                    "object": {
+                      "kind": "identifier",
+                      "name": "groupContext"
+                    },
+                    "property": "parent"
+                  }
+                },
+                "right": {
+                  "kind": "identifier",
+                  "name": "undefined"
+                }
+              },
+              "consequent": {
+                "kind": "logical",
+                "op": "||",
+                "left": {
+                  "kind": "identifier",
+                  "name": "groupIndeterminate"
+                },
+                "right": {
+                  "kind": "identifier",
+                  "name": "indeterminate"
+                }
+              },
+              "alternate": {
+                "kind": "identifier",
+                "name": "indeterminate"
+              }
+            }
+          }
+        ]
       }
     },
     {
@@ -806,6 +962,11 @@
       "id": "p11",
       "targetId": "e12",
       "writes": [
+        {
+          "name": "",
+          "expressionId": "x7",
+          "kind": "spread"
+        },
         {
           "name": "suppressHydrationWarning",
           "expressionId": "x9",

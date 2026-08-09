@@ -139,12 +139,14 @@ interface CompilerState {
   scope: Record<string, unknown>;
   expressionScope: Record<string, any>;
   components: Map<string, { name: string; body: any; params: any[]; moduleId: string }>;
+  functions: Map<string, { name: string; body: any; params: any[]; moduleId: string }>;
   importSymbols: Map<string, { moduleId: string; exportName: string }>;
   exports: Map<string, Map<string, { moduleId: string; exportName: string }>>;
   moduleExpressions: Map<string, Record<string, any>>;
   routerLinkBindings: Set<string>;
   islandComponents: Set<string>;
   componentStack: string[];
+  functionStack: string[];
   activeModuleId: string;
   ir: ApplicationIr;
 }
@@ -177,12 +179,14 @@ export function compile(source: string, options: CompileOptions = {}): CompileRe
     scope: {},
     expressionScope: {},
     components: new Map(),
+    functions: new Map(),
     importSymbols: new Map(),
     exports: new Map(),
     moduleExpressions: new Map(),
     routerLinkBindings: new Set(),
     islandComponents: new Set(options.islandComponents ?? []),
     componentStack: [],
+    functionStack: [],
     activeModuleId: options.moduleId ?? "<entry>",
     ir: {
       version: "0.5",
@@ -383,11 +387,7 @@ function lowerJsxElement(node: any, parentId: string | null, state: CompilerStat
   for (const attributeNode of expandIntrinsicAttributes(node.opening?.attributes ?? [], state)) {
     if (attributeNode.type === "SpreadElement") {
       const expression = attributeNode.arguments ?? attributeNode.argument;
-      const record = lowerExpression(expression, state);
-      if (record.kind !== "object") {
-        reportUnsupported(state, "UNSUPPORTED_SPREAD_PROPS", "A runtime JSX spread must evaluate to a serializable record.");
-        continue;
-      }
+      lowerExpression(expression, state);
       propWrites.push({ name: "", expressionId: internExpression(expression, state), kind: "spread" });
       continue;
     }
@@ -910,7 +910,6 @@ function lowerComponentElement(node: any, parentId: string | null, state: Compil
   const result = literalScope && Object.keys(literalScope).length
     ? lowerJsxNodeWithScope(returned, parentId, state, literalScope)
     : lowerJsxNode(returned, parentId, state);
-  if (name === "ThemeToggle") lowerThemeToggleSemantics(component.body, state, before);
   metadata.elementIds = state.ir.elements.slice(before.e).map((element) => element.id);
   metadata.bindingIds = state.ir.bindings.slice(before.b).map((binding) => binding.id);
   metadata.eventIds = state.ir.events.slice(before.ev).map((event) => event.id);
@@ -1568,9 +1567,12 @@ function evaluateCva(definition: any, call: any, state: CompilerState, scope: Re
 function collectComponents(moduleAst: any, state: CompilerState, moduleId: string): void {
   for (const original of getStatements(moduleAst)) {
     const statement = original.declaration ?? original.decl ?? original;
-    if ((statement.type === "FunctionDeclaration" || statement.type === "FnDecl") && isComponentName(getNodeName(statement.identifier ?? statement.id))) {
-      const name = getNodeName(statement.identifier ?? statement.id)!;
-      state.components.set(componentKey(moduleId, name), { name, body: getFunctionBody(statement), params: statement.params ?? statement.function?.params ?? [], moduleId });
+    if (statement.type === "FunctionDeclaration" || statement.type === "FnDecl") {
+      const name = getNodeName(statement.identifier ?? statement.id);
+      if (!name) continue;
+      const definition = { name, body: getFunctionBody(statement), params: statement.params ?? statement.function?.params ?? [], moduleId };
+      state.functions.set(componentKey(moduleId, name), definition);
+      if (isComponentName(name)) state.components.set(componentKey(moduleId, name), definition);
     }
     if (statement.type === "FunctionExpression" && isComponentName(getNodeName(statement.identifier ?? statement.id))) {
       const name = getNodeName(statement.identifier ?? statement.id)!;
@@ -1579,7 +1581,11 @@ function collectComponents(moduleAst: any, state: CompilerState, moduleId: strin
     if (statement.type === "VariableDeclaration" || statement.type === "VarDecl") for (const declaration of statement.declarations ?? statement.decls ?? []) {
       const name = getPatternName(declaration.id); const init = declaration.init;
       const implementation = unwrapComponentFactory(init);
-      if (name && isComponentName(name) && implementation) state.components.set(componentKey(moduleId, name), { name, body: getFunctionBody(implementation), params: implementation.params ?? [], moduleId });
+      if (name && implementation) {
+        const definition = { name, body: getFunctionBody(implementation), params: implementation.params ?? [], moduleId };
+        state.functions.set(componentKey(moduleId, name), definition);
+        if (isComponentName(name)) state.components.set(componentKey(moduleId, name), definition);
+      }
     }
   }
 }
@@ -1718,6 +1724,15 @@ function getLocalComponent(name: string, state: CompilerState) {
   }
   return state.components.get(componentKey(state.activeModuleId, root ?? name))
     ?? [...state.components.values()].find((component) => component.name === (root ?? name));
+}
+function getLocalFunction(name: string, state: CompilerState) {
+  const [root] = name.split(".");
+  const imported = state.importSymbols.get(`${state.activeModuleId}::${root}`);
+  if (imported) {
+    const resolved = resolveExport(imported.moduleId, imported.exportName, state);
+    return state.functions.get(componentKey(resolved.moduleId, resolved.exportName)) ?? state.functions.get(componentKey(imported.moduleId, imported.exportName));
+  }
+  return state.functions.get(componentKey(state.activeModuleId, root ?? name));
 }
 function resolveExport(moduleId: string, name: string, state: CompilerState): { moduleId: string; exportName: string } {
   const [head, ...tail] = name.split("."); const found = state.exports.get(moduleId)?.get(head ?? name);
@@ -2019,6 +2034,10 @@ function lowerExpression(input: any, state: CompilerState, resolving = new Set<s
   if (node.type === "MemberExpression") return { kind: "member", object: lowerExpression(node.object, state, resolving), property: getNodeName(node.property) ?? "" };
   if (node.type === "OptionalChainingExpression" || node.type === "OptionalMemberExpression") return { kind: "member", object: lowerExpression(node.base ?? node.object, state, resolving), property: getNodeName(node.property) ?? "" };
   if (node.type === "CallExpression" && node.callee?.type === "MemberExpression" && getNodeName(node.callee.property) === "getFullYear" && node.callee.object?.type === "NewExpression" && getNodeName(node.callee.object.callee) === "Date") return { kind: "host", name: "currentYear" };
+  if (node.type === "CallExpression" && getNodeName(node.callee) === "Boolean" && node.arguments?.length === 1) {
+    const argument = lowerExpression(node.arguments[0]?.expression ?? node.arguments[0], state, resolving);
+    return { kind: "unary", op: "!", argument: { kind: "unary", op: "!", argument } };
+  }
   if (node.type === "BinaryExpression" && ["&&", "||", "??"].includes(node.operator)) return { kind: "logical", op: node.operator, left: lowerExpression(node.left, state, resolving), right: lowerExpression(node.right, state, resolving) };
   if (node.type === "BinaryExpression") return { kind: "binary", op: node.operator, left: lowerExpression(node.left, state, resolving), right: lowerExpression(node.right, state, resolving) };
   if (node.type === "LogicalExpression") return { kind: "logical", op: node.operator, left: lowerExpression(node.left, state, resolving), right: lowerExpression(node.right, state, resolving) };
@@ -2044,6 +2063,10 @@ function lowerExpression(input: any, state: CompilerState, resolving = new Set<s
     const returned = callback?.body?.type === "BlockStatement" ? findReturnedExpression(callback.body) : callback?.body;
     if (returned) return lowerExpression(returned, state, resolving);
   }
+  if (node.type === "CallExpression") {
+    const inlined = lowerSourceFunctionCall(node, state, resolving);
+    if (inlined) return inlined;
+  }
   reportUnsupported(state, "UNSUPPORTED_EXPRESSION", `Unsupported expression: ${node.type}${describeExpression(node) ? ` (${describeExpression(node)})` : ""}.`);
   return { kind: "literal", value: "" };
 }
@@ -2051,6 +2074,53 @@ function lowerExpression(input: any, state: CompilerState, resolving = new Set<s
 function describeExpression(node: any): string | undefined {
   if (node?.type !== "CallExpression" && node?.type !== "NewExpression") return undefined;
   return getNodeName(node.callee) ?? getNodeName(node.callee?.property);
+}
+
+/** Inline reachable, expression-only helpers (including custom hooks) using
+ * ordinary lexical parameter binding. No helper name or package is special. */
+function lowerSourceFunctionCall(node: any, state: CompilerState, resolving: Set<string>): any | null {
+  const name = getNodeName(node.callee);
+  if (!name) return null;
+  const definition = getLocalFunction(name, state);
+  if (!definition) return null;
+  const key = `${definition.moduleId}::${definition.name}`;
+  if (state.functionStack.includes(key)) {
+    reportUnsupported(state, "RECURSIVE_SOURCE_FUNCTION", `Recursive source function: ${[...state.functionStack, key].join(" → ")}.`);
+    return { kind: "literal", value: "" };
+  }
+  const previousScope = state.expressionScope;
+  const previousModule = state.activeModuleId;
+  const scope = { ...previousScope, ...(state.moduleExpressions.get(definition.moduleId) ?? {}) };
+  for (let index = 0; index < (definition.params ?? []).length; index += 1) {
+    const parameter = definition.params[index]?.pat ?? definition.params[index]?.pattern ?? definition.params[index];
+    const parameterName = getPatternName(parameter);
+    const argument = node.arguments?.[index]?.expression ?? node.arguments?.[index];
+    if (!parameterName || !argument) {
+      reportUnsupported(state, "UNSUPPORTED_SOURCE_FUNCTION_PARAMETER", `Function ${name} requires simple positional parameters.`);
+      return null;
+    }
+    scope[parameterName] = argument;
+  }
+  for (const statement of getStatements(definition.body)) {
+    if (statement.type !== "VariableDeclaration" && statement.type !== "VarDecl") continue;
+    for (const declaration of statement.declarations ?? statement.decls ?? []) {
+      const local = getPatternName(declaration.id);
+      if (local && declaration.init) scope[local] = declaration.init;
+    }
+  }
+  const returned = findReturnedExpression(definition.body);
+  if (!returned) {
+    reportUnsupported(state, "UNSUPPORTED_SOURCE_FUNCTION_BODY", `Function ${name} must return a supported expression.`);
+    return null;
+  }
+  state.expressionScope = scope;
+  state.activeModuleId = definition.moduleId;
+  state.functionStack.push(key);
+  const result = lowerExpression(returned, state, new Set(resolving));
+  state.functionStack.pop();
+  state.expressionScope = previousScope;
+  state.activeModuleId = previousModule;
+  return result;
 }
 
 function objectPropertyName(property: any): string | undefined {
