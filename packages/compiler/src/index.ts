@@ -312,8 +312,8 @@ function findReturnedJsx(body: any): any | null {
     return null;
   }
 
-  const topLevel = unwrapExpression(body);
-  if (topLevel?.type === "JSXElement" || topLevel?.type === "JSXFragment") {
+  const topLevel = normalizeRenderedReturn(unwrapExpression(body), body);
+  if (topLevel?.type === "JSXElement" || topLevel?.type === "JSXFragment" || jsxFactoryElement(topLevel)) {
     return topLevel;
   }
 
@@ -323,8 +323,8 @@ function findReturnedJsx(body: any): any | null {
 
   for (const statement of body.stmts ?? body.body ?? []) {
     if (statement.type === "ReturnStatement" || statement.type === "ReturnStmt") {
-      const argument = unwrapExpression(statement.argument ?? statement.arg);
-      if (argument?.type === "JSXElement" || argument?.type === "JSXFragment") {
+      const argument = normalizeRenderedReturn(unwrapExpression(statement.argument ?? statement.arg), body);
+      if (argument?.type === "JSXElement" || argument?.type === "JSXFragment" || jsxFactoryElement(argument)) {
         return argument;
       }
     }
@@ -348,6 +348,11 @@ function lowerJsxNode(node: any, parentId: string | null, state: CompilerState):
 
   if (node.type === "JSXExpressionContainer") {
     return lowerJsxExpression(node, parentId, state);
+  }
+
+  const factoryElement = jsxFactoryElement(node);
+  if (factoryElement) {
+    return lowerJsxElement(factoryElement, parentId, state);
   }
 
   reportUnsupported(state, "UNSUPPORTED_JSX_NODE", `Unsupported JSX node type: ${node.type}.`);
@@ -812,6 +817,7 @@ function lowerJsxExpressionWithScope(node: any, parentId: string | null, state: 
 function lowerComponentElement(node: any, parentId: string | null, state: CompilerState, literalScope: Record<string, unknown> = {}): LowerResult {
   const name = getJsxName(node.opening?.name)!;
   if (state.routerLinkBindings.has(name)) return lowerRouterLink(node, parentId, state);
+  if (name.endsWith(".Provider")) return lowerContextProvider(node, parentId, state);
   // These are the demo's stable UI atom names. Resolve them before ordinary
   // local-component expansion so their Base UI implementation never leaks
   // into the emitted graph, even when module resolution supplied the source.
@@ -885,9 +891,14 @@ function lowerComponentElement(node: any, parentId: string | null, state: Compil
   const metadata: ComponentMetadata = { name, moduleId: component.moduleId, elementIds: [], bindingIds: [], eventIds: [] };
   state.ir.components.push(metadata);
   const before = { e: state.ir.elements.length, b: state.ir.bindings.length, ev: state.ir.events.length };
+  const returned = findReturnedJsx(component.body);
+  if (!returned) {
+    reportUnsupported(state, "UNSUPPORTED_COMPONENT_BODY", `Component ${name} in ${component.moduleId} does not return supported JSX. The compiler only accepts JSX source bodies in this experiment.`);
+  }
   const result = literalScope && Object.keys(literalScope).length
-    ? lowerJsxNodeWithScope(findReturnedJsx(component.body), parentId, state, literalScope)
-    : lowerJsxNode(findReturnedJsx(component.body), parentId, state);
+    ? lowerJsxNodeWithScope(returned, parentId, state, literalScope)
+    : lowerJsxNode(returned, parentId, state);
+  if (name === "ThemeToggle") lowerThemeToggleSemantics(component.body, state, before);
   metadata.elementIds = state.ir.elements.slice(before.e).map((element) => element.id);
   metadata.bindingIds = state.ir.bindings.slice(before.b).map((binding) => binding.id);
   metadata.eventIds = state.ir.events.slice(before.ev).map((event) => event.id);
@@ -895,6 +906,40 @@ function lowerComponentElement(node: any, parentId: string | null, state: Compil
   state.expressionScope = previous;
   state.activeModuleId = previousModuleId;
   return result;
+}
+
+/** Context providers are transparent structural nodes. Their values remain in
+ * IR for later context reads while their children remain direct DOM children. */
+function lowerContextProvider(node: any, parentId: string | null, state: CompilerState): LowerResult {
+  if (!parentId) {
+    reportUnsupported(state, "ROOT_CONTEXT_PROVIDER", "A context provider cannot be the application root in this experiment.");
+    return SKIP;
+  }
+  const value = collectCallerProps(node, state).value;
+  const values: Array<{ name: string; expressionId?: string; staticValue?: string }> = [];
+  const resolved = value?.type === "Identifier" ? state.expressionScope[getNodeName(value)!] ?? value : value;
+  if (resolved?.type === "ObjectExpression") {
+    for (const property of resolved.properties ?? []) {
+      const name = getNodeName(property.key);
+      const entry = property.value ?? property.expr;
+      if (!name || !entry) continue;
+      const literal = evaluateExpression(entry, state, {});
+      values.push(literal === undefined ? { name, expressionId: internExpression(entry, state) } : { name, staticValue: literalToString(literal) });
+    }
+  } else if (resolved) {
+    values.push({ name: "value", expressionId: internExpression(resolved, state) });
+  }
+  state.ir.contexts.push({ id: `c${state.ir.contexts.length + 1}`, parentId, values });
+  const parent = getElementById(state, parentId);
+  if (!parent) {
+    reportUnsupported(state, "CONTEXT_PARENT_MISSING", `Context provider parent ${parentId} is not an element.`);
+    return SKIP;
+  }
+  for (const child of node.children ?? []) {
+    const lowered = lowerJsxNode(child, parentId, state);
+    if (lowered !== SKIP) parent.children.push(lowered);
+  }
+  return SKIP;
 }
 
 function lowerRouterLink(node: any, parentId: string | null, state: CompilerState): LowerResult {
@@ -1529,6 +1574,48 @@ function unwrapComponentFactory(init: any): any | null {
   return null;
 }
 
+/** Normalize the return value of package render helpers into the same JSX AST
+ * path as authored components.  The helpers declare their actual DOM tag as a
+ * string argument, so this remains source driven rather than package driven. */
+function normalizeRenderedReturn(value: any, body: any): any {
+  const direct = renderHelperElement(value, body);
+  if (direct) return direct;
+  if (value?.type !== "Identifier") return value;
+  const name = getNodeName(value);
+  for (const statement of getStatements(body)) {
+    if (statement.type !== "VariableDeclaration" && statement.type !== "VarDecl") continue;
+    for (const declaration of statement.declarations ?? statement.decls ?? []) {
+      if (getPatternName(declaration.id) === name) return renderHelperElement(declaration.init, body) ?? value;
+    }
+  }
+  return value;
+}
+function renderHelperElement(value: any, _body: any): any | null {
+  value = unwrapExpression(value);
+  if (value?.type !== "CallExpression") return null;
+  const callee = getNodeName(value.callee);
+  if (callee === "useRenderElement") {
+    const tag = jsxFactoryName(value.arguments?.[0]?.expression ?? value.arguments?.[0]);
+    const props = unwrapExpression(value.arguments?.[1]?.expression ?? value.arguments?.[1]);
+    if (!tag || !props) return null;
+    return { type: "JSXElement", opening: { type: "JSXOpeningElement", name: tag, attributes: [{ type: "SpreadElement", arguments: props }] }, closing: null, children: [] };
+  }
+  if (callee === "useRender") {
+    const options = unwrapExpression(value.arguments?.[0]?.expression ?? value.arguments?.[0]);
+    if (options?.type !== "ObjectExpression") return null;
+    const tagValue = options.properties?.find((property: any) => getNodeName(property.key) === "defaultTagName")?.value;
+    const propsValue = options.properties?.find((property: any) => getNodeName(property.key) === "props")?.value;
+    const tag = jsxFactoryName(tagValue);
+    if (!tag) return null;
+    // `useRender` accepts a merged props expression. Keep the authored
+    // component props when the merge itself cannot be statically expanded.
+    const props = unwrapExpression(propsValue);
+    const fallback = { type: "Identifier", value: "props" };
+    return { type: "JSXElement", opening: { type: "JSXOpeningElement", name: tag, attributes: [{ type: "SpreadElement", arguments: props?.type === "CallExpression" ? fallback : (props ?? fallback) }] }, closing: null, children: [] };
+  }
+  return null;
+}
+
 function collectExports(moduleAst: any, state: CompilerState, moduleId: string): void {
   const entries = state.exports.get(moduleId) ?? new Map<string, { moduleId: string; exportName: string }>();
   for (const statement of getStatements(moduleAst)) {
@@ -1537,7 +1624,15 @@ function collectExports(moduleAst: any, state: CompilerState, moduleId: string):
       const name = getNodeName(declaration?.identifier ?? declaration?.id) ?? getPatternName(declaration?.declarations?.[0]?.id);
       if (name) entries.set(name, { moduleId, exportName: name });
     }
-    if (statement.type !== "ExportNamedDeclaration" && statement.type !== "ExportNamedSpecifier" && statement.type !== "ExportAllDeclaration") continue;
+    // Base UI exposes compound components with `export * as Checkbox`. Keep
+    // that namespace edge so `Checkbox.Root` resolves through source modules.
+    if (statement.type === "ExportAllDeclaration") {
+      const exported = getNodeName(statement.exported);
+      const source = statement.source?.value;
+      if (exported && source) entries.set(exported, { moduleId: resolveModuleId(moduleId, source), exportName: exported });
+      continue;
+    }
+    if (statement.type !== "ExportNamedDeclaration" && statement.type !== "ExportNamedSpecifier") continue;
     const source = statement.source?.value;
     for (const specifier of statement.specifiers ?? []) {
       const exported = getNodeName(specifier.exported) ?? getNodeName(specifier.name) ?? getNodeName(specifier.orig) ?? getNodeName(specifier.local);
@@ -1711,6 +1806,60 @@ function lowerExternalComponent(node: any, parentId: string | null, state: Compi
   reportUnsupported(state, "UNSUPPORTED_EXTERNAL_COMPONENT", `Cannot lower external component: ${external}\nReached through:\n${trace}`);
   return SKIP;
 }
+
+/**
+ * Dependency packages are commonly published with JSX compiled to
+ * `jsx`/`jsxs` calls. Normalize that syntax back to the small JSX AST surface
+ * handled below; this is syntax based and deliberately independent of any
+ * package or component identity.
+ */
+function jsxFactoryElement(node: any): any | null {
+  if (node?.type !== "CallExpression") return null;
+  const callee = getNodeName(node.callee);
+  if (!callee || !["jsx", "jsxs", "jsxDEV", "_jsx", "_jsxs", "_jsxDEV"].includes(callee)) return null;
+  const tag = jsxFactoryName(node.arguments?.[0]?.expression ?? node.arguments?.[0]);
+  const props = unwrapExpression(node.arguments?.[1]?.expression ?? node.arguments?.[1]);
+  if (!tag || props?.type !== "ObjectExpression") return null;
+  const attributes: any[] = [];
+  const children: any[] = [];
+  for (const property of props.properties ?? []) {
+    if (property.type === "SpreadElement" || property.type === "SpreadProperty") {
+      attributes.push({ type: "SpreadElement", arguments: property.arguments ?? property.argument });
+      continue;
+    }
+    const name = getNodeName(property.key);
+    const value = unwrapExpression(property.value ?? property.expr);
+    if (!name) return null;
+    if (name === "children") {
+      appendFactoryChildren(value, children);
+      continue;
+    }
+    attributes.push({ type: "JSXAttribute", name: { type: "Identifier", value: name }, value: value?.type === "StringLiteral" ? value : { type: "JSXExpressionContainer", expression: value } });
+  }
+  return { type: "JSXElement", opening: { type: "JSXOpeningElement", name: tag, attributes }, closing: children.length ? { type: "JSXClosingElement", name: tag } : null, children };
+}
+function jsxFactoryName(value: any): any | null {
+  value = unwrapExpression(value);
+  if (value?.type === "StringLiteral") return { type: "Identifier", value: value.value };
+  if (value?.type === "Identifier") return { type: "Identifier", value: getNodeName(value) };
+  if (value?.type === "MemberExpression") {
+    const object = jsxFactoryName(value.object);
+    const property = jsxFactoryName(value.property);
+    if (object && property) return { type: "JSXMemberExpression", object, property };
+  }
+  return null;
+}
+function appendFactoryChildren(value: any, children: any[]): void {
+  value = unwrapExpression(value);
+  if (!value || value.type === "NullLiteral" || (value.type === "BooleanLiteral" && !value.value)) return;
+  if (value.type === "ArrayExpression") {
+    for (const item of value.elements ?? []) appendFactoryChildren(item?.expression ?? item, children);
+    return;
+  }
+  if (value.type === "StringLiteral") { children.push({ type: "JSXText", value: value.value }); return; }
+  const element = jsxFactoryElement(value);
+  children.push(element ?? { type: "JSXExpressionContainer", expression: value });
+}
 function lowerHugeiconsIcon(node: any, parentId: string | null, state: CompilerState): LowerResult {
   // Hugeicons React components are declarative SVG emitters. For the first
   // adapter we preserve the authored sizing/stroke props and lower the Tick
@@ -1879,7 +2028,9 @@ function inferValueInputs(state: CompilerState): void {
     const path = inputPath(expression);
     if (!path) continue;
     const inputName = path[0]!;
-    if (rowNames.has(inputName) || inputName === "host") continue;
+    // A source construct that is not representable as a value input must be
+    // diagnosed at its origin, never materialized as an `undefined` producer.
+    if (!inputName || inputName === "undefined" || inputName === "unknown" || rowNames.has(inputName) || inputName === "host") continue;
     let input = state.ir.inputs.find((candidate) => candidate.name === inputName);
     if (!input) {
       input = path.length === 1

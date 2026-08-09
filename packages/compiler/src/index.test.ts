@@ -102,6 +102,17 @@ describe("compile", () => {
     `);
   });
 
+  it("normalizes published React jsx factory calls without package adapters", () => {
+    const result = compile(`function App() { return _jsxs("label", { className: "field", children: [_jsx("input", { type: "checkbox", checked: true }), _jsx("span", { children: "Ready" })] }); }`, { rootComponent: "App" });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.ir.elements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ tag: "label" }),
+      expect.objectContaining({ tag: "input", attributes: expect.arrayContaining([expect.objectContaining({ name: "type", staticValue: "checkbox" })]) }),
+      expect.objectContaining({ tag: "span" }),
+    ]));
+    expect(result.ir.texts).toEqual(expect.arrayContaining([expect.objectContaining({ staticValue: "Ready" })]));
+  });
+
   it("describes scalar and object inputs by the paths the view reads", () => {
     const result = compile(`function Profile({ selectedId, user }) { return <div data-selected={selectedId}>{user.name}</div> }`);
     expect(result.ir.inputs).toEqual([
