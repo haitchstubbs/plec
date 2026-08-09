@@ -1,0 +1,26 @@
+{
+  "name": "@wasm-runtime/tanstack-adapter",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "yarn --cwd ../.. tsc -p packages/tanstack-adapter/tsconfig.json",
+    "test": "yarn exec vitest run",
+    "lint": "echo lint not configured for @wasm-runtime/tanstack-adapter",
+    "typecheck": "yarn exec tsc -p tsconfig.json --noEmit",
+    "clean": "powershell -NoProfile -Command \"if (Test-Path dist) { Remove-Item -Recurse -Force dist }\""
+  },
+  "dependencies": {
+    "@tanstack/db": "latest",
+    "@wasm-runtime/browser": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}
