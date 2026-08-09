@@ -92,6 +92,8 @@ interface ApplicationIr {
   propPrograms: Array<{ id: string; targetId: string; writes: Array<{ name: string; staticValue?: string; expressionId?: string; kind: "attribute" | "property" | "event" | "ref" | "spread" }> }>;
   events: EventNode[];
   refs: Array<{ id: string; targetId: string; refId: string; kind: "callback" | "object" }>;
+  hostElementRefs: Array<{ id: string; targetId: string; attachments: string[] }>;
+  hostElementReads: Array<{ id: string; refId: string; capability: unknown }>;
   contexts: Array<{ id: string; contextId: string; parentId: string | null; valueExpressionId?: string; values: Array<{ name: string; expressionId?: string; staticValue?: string }>; children: string[] }>;
   contextDefinitions: Array<{ id: string; defaultExpressionId: string }>;
   conditionals: Array<{ id: string; parentId: string; expressionId: string; children: string[] }>;
@@ -206,6 +208,8 @@ export function compile(source: string, options: CompileOptions = {}): CompileRe
       propPrograms: [],
       events: [],
       refs: [],
+      hostElementRefs: [],
+      hostElementReads: [],
       contexts: [],
       contextDefinitions: [],
       conditionals: [],
@@ -415,6 +419,7 @@ function lowerJsxElement(node: any, parentId: string | null, state: CompilerStat
     if (name === "ref" && attributeNode.value?.type === "JSXExpressionContainer") {
       const refId = getNodeName(unwrapExpression(attributeNode.value.expression)) ?? `ref${state.ir.refs.length + 1}`;
       state.ir.refs.push({ id: `r${state.ir.refs.length + 1}`, targetId: elementId, refId, kind: "callback" });
+      state.ir.hostElementRefs.push({ id: `hr${state.ir.hostElementRefs.length + 1}`, targetId: elementId, attachments: [refId] });
       propWrites.push({ name, kind: "ref" });
       continue;
     }
