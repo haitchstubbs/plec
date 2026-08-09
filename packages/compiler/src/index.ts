@@ -676,25 +676,88 @@ function lowerReturnedElementExpression(expression: any, parentId: string | null
   const name = getNodeName(value.callee);
   const definition = name ? getLocalFunction(name, state) : undefined;
   if (!definition) return SKIP;
-  const returned = findReturnedJsx(definition.body);
-  if (!returned) return SKIP;
+  // Element production is a language capability, not a component convention.
+  // Follow a source function's lexical environment and its statically known
+  // branches before deciding whether its result is structural. This covers
+  // helpers which select an element tag or assemble props before returning it.
+  const returned = findStructuralFunctionReturn(definition.body, state, value, definition);
+  if (!returned || !(returned.type === "JSXElement" || returned.type === "JSXFragment" || jsxFactoryElement(returned))) return SKIP;
   const previousScope = state.expressionScope;
   const previousModule = state.activeModuleId;
   const scope = { ...previousScope, ...(state.moduleExpressions.get(definition.moduleId) ?? {}) };
-  for (let index = 0; index < (definition.params ?? []).length; index += 1) {
-    const parameter = definition.params[index]?.pat ?? definition.params[index]?.pattern ?? definition.params[index];
-    const argument = value.arguments?.[index]?.expression ?? value.arguments?.[index];
-    const parameterName = getPatternName(parameter);
-    if (!parameterName || !argument) { reportUnsupported(state, "UNSUPPORTED_RENDER_FUNCTION_PARAMETER", `Element-returning function ${name} requires simple supplied parameters.`); return SKIP; }
-    scope[parameterName] = argument;
-  }
-  for (const statement of getStatements(definition.body)) if (statement.type === "VariableDeclaration" || statement.type === "VarDecl") for (const declaration of statement.declarations ?? statement.decls ?? []) { const local = getPatternName(declaration.id); if (local && declaration.init) scope[local] = declaration.init; }
+  bindFunctionArguments(definition.params ?? [], value.arguments ?? [], scope, state, name);
+  populateFunctionLocals(definition.body, scope);
   state.expressionScope = scope;
   state.activeModuleId = definition.moduleId;
   const result = Object.keys(literalScope).length ? lowerJsxNodeWithScope(returned, parentId, state, literalScope) : lowerJsxNode(returned, parentId, state);
   state.expressionScope = previousScope;
   state.activeModuleId = previousModule;
   return result;
+}
+
+/** Bind an ordinary JS pattern to an AST value.  Keeping the value as syntax
+ * lets the existing expression lowering preserve reactive paths. */
+function bindLexicalPattern(pattern: any, value: any, scope: Record<string, any>): boolean {
+  pattern = pattern?.pat ?? pattern?.pattern ?? pattern;
+  if (!pattern) return false;
+  const name = getPatternName(pattern);
+  if (name) { scope[name] = value; return true; }
+  if (pattern.type === "AssignmentPattern") return bindLexicalPattern(pattern.left, value ?? pattern.right, scope);
+  if (pattern.type === "ObjectPattern") {
+    const consumed: string[] = [];
+    for (const property of pattern.properties ?? []) {
+      if (property.type === "RestElement") continue;
+      const key = getNodeName(property.key);
+      const target = property.value ?? property.argument;
+      if (!key || !bindLexicalPattern(target, { type: "MemberExpression", object: value, property: { type: "Identifier", value: key } }, scope)) return false;
+      consumed.push(key);
+    }
+    for (const property of pattern.properties ?? []) if (property.type === "RestElement") {
+      const rest = getPatternName(property.argument);
+      if (rest) scope[rest] = { type: "ObjectExpression", properties: [{ type: "SpreadElement", argument: value, excludedKeys: consumed }] };
+    }
+    return true;
+  }
+  if (pattern.type === "ArrayPattern") {
+    for (let index = 0; index < (pattern.elements ?? []).length; index += 1) if (pattern.elements[index]) bindLexicalPattern(pattern.elements[index], { type: "MemberExpression", object: value, property: { type: "NumericLiteral", value: index } }, scope);
+    return true;
+  }
+  return false;
+}
+function bindFunctionArguments(params: any[], args: any[], scope: Record<string, any>, state: CompilerState, name: string): void {
+  for (let index = 0; index < params.length; index += 1) {
+    const parameter = params[index]?.pat ?? params[index]?.pattern ?? params[index];
+    const argument = args[index]?.expression ?? args[index] ?? { type: "Identifier", value: "undefined" };
+    if (!bindLexicalPattern(parameter, argument, scope)) reportUnsupported(state, "UNSUPPORTED_SOURCE_FUNCTION_PARAMETER", `Function ${name} uses an unsupported parameter pattern.`);
+  }
+}
+function populateFunctionLocals(body: any, scope: Record<string, any>): void {
+  for (const statement of getStatements(body)) {
+    if (statement.type !== "VariableDeclaration" && statement.type !== "VarDecl") continue;
+    for (const declaration of statement.declarations ?? statement.decls ?? []) if (declaration.init) bindLexicalPattern(declaration.id, declaration.init, scope);
+  }
+}
+/** Return the structural value selected by a function body when its control
+ * flow is decidable from lexical inputs. Dynamic branches deliberately remain
+ * for the render-slot primitive rather than silently turning into text. */
+function findStructuralFunctionReturn(body: any, state: CompilerState, call: any, definition: any): any | null {
+  const scope: Record<string, any> = { ...state.expressionScope, ...(state.moduleExpressions.get(definition.moduleId) ?? {}) };
+  bindFunctionArguments(definition.params ?? [], call.arguments ?? [], scope, state, definition.name ?? "<anonymous>");
+  populateFunctionLocals(body, scope);
+  const visit = (statements: any[]): any | null => {
+    for (const statement of statements) {
+      if (statement.type === "ReturnStatement" || statement.type === "ReturnStmt") return unwrapExpression(statement.argument ?? statement.arg);
+      if (statement.type !== "IfStatement") continue;
+      const test = evaluateExpression(statement.test, state, scope);
+      if (test === undefined) continue;
+      const branch = test ? statement.consequent : statement.alternate;
+      if (!branch) continue;
+      const found = branch.type === "BlockStatement" ? visit(getStatements(branch)) : visit([branch]);
+      if (found) return found;
+    }
+    return null;
+  };
+  return visit(getStatements(body));
 }
 function findReturnedExpression(body: any): any | null {
   for (const statement of getStatements(body)) {
