@@ -755,6 +755,8 @@
   ],
   "events": [],
   "refs": [],
+  "hostElementRefs": [],
+  "hostElementReads": [],
   "contexts": [],
   "contextDefinitions": [],
   "conditionals": [],

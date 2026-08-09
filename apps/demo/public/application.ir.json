@@ -1,6 +1,6 @@
 {
   "version": "0.5",
-  "revision": "2486d687d72152d309d0f949b7f523eed317f65d21de7b0edfbb4a99153f9eca",
+  "revision": "ae9583aeb257471bbe888625171bd6ceffe3ff02de8fc31af63155dbf5060e92",
   "rootElementId": "e1",
   "elements": [
     {
@@ -1275,6 +1275,8 @@
   ],
   "events": [],
   "refs": [],
+  "hostElementRefs": [],
+  "hostElementReads": [],
   "contexts": [
     {
       "id": "c1",
