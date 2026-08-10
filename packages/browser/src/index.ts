@@ -46,6 +46,9 @@ export function createCompiledInputChannel<T>(initialValue: T): CompiledInputCha
 
 export interface CompiledMountOptions {
   root: Element;
+  /** Set false when this mount intentionally replaces an existing runtime
+   * subtree, such as an O1 route outlet. */
+  adopt?: boolean;
   /** Package-neutral producer boundary. Prefer this for new integrations. */
   inputs?: Record<string, CompiledInputProducer<any>>;
   /** @deprecated Use inputs. Retained while existing applications migrate. */
@@ -72,7 +75,7 @@ export interface RuntimeMountMetrics { decodeUs: number; staticMountUs: number; 
 export interface MountMetrics extends RuntimeMountMetrics { irFetchMs: number; irParseMs: number; wasmInitMs: number; runtimeLoadMs: number; renderMode: "adopt" | "mount" }
 export interface CompiledQueryUpdate extends CompiledUpdateMetrics { adapterMs: number; reconciliationMs?: number; deltaCount?: number }
 export interface CompiledControllerDiagnostics { activeQuerySubscriptions: number; activeInputSubscriptions: number; activeActionListeners: number; activeIslands: number; queryIds: string[]; inputIds: string[]; disposed: boolean }
-export interface CompiledRuntimeController { readonly mountMetrics: MountMetrics; diagnostics(): CompiledControllerDiagnostics; dispose(): void; applyDelta(delta: RuntimeDelta): CompiledUpdateMetrics; applyHostValues(values: NonNullable<CompiledMountOptions['hostValues']>): void }
+export interface CompiledRuntimeController { readonly mountMetrics: MountMetrics; diagnostics(): CompiledControllerDiagnostics; dispose(): void; applyDelta(delta: RuntimeDelta): CompiledUpdateMetrics; applyHostValues(values: NonNullable<CompiledMountOptions['hostValues']>): void; outlet(id?: string): Element | null }
 
 interface WasmRuntimeInstance {
   load_application(ir: unknown): void;
@@ -88,46 +91,76 @@ const DEFAULT_IR_URL = "/application.ir.json";
 const DEFAULT_RUNTIME_JS_URL = "/runtime/runtime.js";
 const DEFAULT_RUNTIME_WASM_URL = "/runtime/runtime_bg.wasm";
 
+export const O1_TIMING_MARKS = ["o1:artifact-fetch-start", "o1:artifact-ready", "o1:ir-parse-start", "o1:ir-parse-end", "o1:runtime-init-start", "o1:runtime-ready", "o1:runtime-load-start", "o1:runtime-load-end", "o1:mount-start", "o1:mount-end", "o1:mount-error"] as const;
+export type O1TimingMark = typeof O1_TIMING_MARKS[number];
+
+/** User Timing is deliberately optional so the runtime remains usable in non-browser tests. */
+export function markO1Timing(name: O1TimingMark): void {
+  if (typeof performance !== "undefined" && typeof performance.mark === "function") performance.mark(name);
+}
+
 export async function mountCompiledApplication(options: CompiledMountOptions): Promise<CompiledRuntimeController> {
-  const fetchStart = performance.now();
-  const [runtimeModule, response] = await Promise.all([loadRuntimeModule(options.runtimeJsUrl ?? DEFAULT_RUNTIME_JS_URL), fetch(options.irUrl ?? DEFAULT_IR_URL)]);
-  const irFetchMs = performance.now() - fetchStart;
-  if (!response.ok) throw new Error(`Failed to load IR: ${response.status}`);
-  const parseStart = performance.now();
-  const ir = resolveHostValues(await response.json(), options.hostValues ?? { currentYear: new Date().getFullYear() });
-  const irParseMs = performance.now() - parseStart;
-  const wasmStart = performance.now();
-  await runtimeModule.default({ module_or_path: options.runtimeWasmUrl ?? DEFAULT_RUNTIME_WASM_URL });
-  const wasmInitMs = performance.now() - wasmStart;
-  const runtime = new runtimeModule.Runtime();
-  const loadStart = performance.now();
-  runtime.load_application(ir);
-  const adoptedMetrics = runtime.adopt(options.root);
-  const staticMetrics = adoptedMetrics ?? runtime.mount(options.root);
-  const renderMode = adoptedMetrics ? "adopt" as const : "mount" as const;
-  const runtimeLoadMs = performance.now() - loadStart;
-  const disposeIslands = mountIslands(options.root, ir, options.islands ?? {});
-  const applyHostValues = (values: NonNullable<CompiledMountOptions['hostValues']>) => applyStaticHostBindings(options.root, ir, values);
-  applyHostValues(options.hostValues ?? { location: { pathname: window.location.pathname } });
-  const removeActions = bindActions(options.root, ir, options.actions ?? {}, options.callbacks ?? {}, options.refs ?? {}, options.onNavigate);
-  const inputSchemas = new Map<string, any>((ir.inputs ?? []).map((input: any): [string, any] => [input.id, input]));
-  const inputs: Record<string, CompiledInputProducer<any>> = {
-    ...Object.fromEntries(Object.entries(options.queries ?? {}).map(([id, collection]) => {
-      const inputId = (ir.loops ?? []).find((loop: any) => loop.queryId === id)?.inputId ?? ((ir.inputs ?? []).length === 1 ? ir.inputs[0].id : id);
-      return [inputId, liveCollectionProducer(inputId, collection)];
-    })),
-    ...(options.inputs ?? {})
-  };
-  const initialMetrics = Object.entries(inputs).flatMap(([inputId, producer]) => {
-    const shape = inputSchemas.get(inputId)?.shape;
-    return shape?.kind === "collection" ? [runtime.initialize_input(inputId, producer.getSnapshot())] : [];
-  });
-  const mountMetrics = mergeMountMetrics(staticMetrics, initialMetrics, { irFetchMs, irParseMs, wasmInitMs, runtimeLoadMs, renderMode });
-  options.onMount?.(mountMetrics);
-  const subscriptions = Object.entries(inputs).flatMap(([inputId, producer]) => subscribeInput(runtime, inputId, producer, inputSchemas.get(inputId), options.onQueryUpdate));
-  let disposed = false;
-  const diagnostics = (): CompiledControllerDiagnostics => ({ activeQuerySubscriptions: 0, activeInputSubscriptions: disposed ? 0 : subscriptions.length, activeActionListeners: disposed ? 0 : 1, activeIslands: disposed ? 0 : disposeIslands.length, queryIds: Object.keys(options.queries ?? {}), inputIds: Object.keys(inputs), disposed });
-  return { mountMetrics, diagnostics, applyDelta: (delta) => apply(runtime, delta), applyHostValues, dispose: () => { if (disposed) return; disposed = true; runtime.dispose(); disposeIslands.forEach((dispose) => dispose()); removeActions(); subscriptions.forEach((dispose) => dispose()); } };
+  try {
+    const fetchStart = performance.now();
+    markO1Timing("o1:artifact-fetch-start");
+    const runtimeModulePromise = loadRuntimeModule(options.runtimeJsUrl ?? DEFAULT_RUNTIME_JS_URL);
+    const response = await fetch(options.irUrl ?? DEFAULT_IR_URL);
+    const irFetchMs = performance.now() - fetchStart;
+    if (!response.ok) throw new Error(`Failed to load IR: ${response.status}`);
+    markO1Timing("o1:ir-parse-start");
+    const parseStart = performance.now();
+    const ir = resolveHostValues(await response.json(), options.hostValues ?? { currentYear: new Date().getFullYear() });
+    const irParseMs = performance.now() - parseStart;
+    markO1Timing("o1:ir-parse-end");
+    markO1Timing("o1:artifact-ready");
+    const runtimeModule = await runtimeModulePromise;
+    markO1Timing("o1:runtime-init-start");
+    const wasmStart = performance.now();
+    await runtimeModule.default({ module_or_path: options.runtimeWasmUrl ?? DEFAULT_RUNTIME_WASM_URL });
+    const wasmInitMs = performance.now() - wasmStart;
+    markO1Timing("o1:runtime-ready");
+    const runtime = new runtimeModule.Runtime();
+    markO1Timing("o1:runtime-load-start");
+    markO1Timing("o1:mount-start");
+    const loadStart = performance.now();
+    runtime.load_application(ir);
+    const adoptedMetrics = options.adopt === false ? null : runtime.adopt(options.root);
+    const staticMetrics = adoptedMetrics ?? runtime.mount(options.root);
+    const renderMode = adoptedMetrics ? "adopt" as const : "mount" as const;
+    const runtimeLoadMs = performance.now() - loadStart;
+    markO1Timing("o1:runtime-load-end");
+    const disposeIslands = mountIslands(options.root, ir, options.islands ?? {});
+    const applyHostValues = (values: NonNullable<CompiledMountOptions['hostValues']>) => applyStaticHostBindings(options.root, ir, values);
+    applyHostValues(options.hostValues ?? { location: { pathname: window.location.pathname } });
+    const removeActions = bindActions(options.root, ir, options.actions ?? {}, options.callbacks ?? {}, options.refs ?? {}, options.onNavigate);
+    const disposeSidebar = mountSidebarCapability(options.root, ir);
+    const inputSchemas = new Map<string, any>((ir.inputs ?? []).map((input: any): [string, any] => [input.id, input]));
+    const inputs: Record<string, CompiledInputProducer<any>> = {
+      ...Object.fromEntries(Object.entries(options.queries ?? {}).map(([id, collection]) => {
+        const inputId = (ir.loops ?? []).find((loop: any) => loop.queryId === id)?.inputId ?? ((ir.inputs ?? []).length === 1 ? ir.inputs[0].id : id);
+        return [inputId, liveCollectionProducer(inputId, collection)];
+      })),
+      ...(options.inputs ?? {})
+    };
+    const initialMetrics = Object.entries(inputs).flatMap(([inputId, producer]) => {
+      const shape = inputSchemas.get(inputId)?.shape;
+      return shape?.kind === "collection" ? [runtime.initialize_input(inputId, producer.getSnapshot())] : [];
+    });
+    const mountMetrics = mergeMountMetrics(staticMetrics, initialMetrics, { irFetchMs, irParseMs, wasmInitMs, runtimeLoadMs, renderMode });
+    options.onMount?.(mountMetrics);
+    const subscriptions = Object.entries(inputs).flatMap(([inputId, producer]) => subscribeInput(runtime, inputId, producer, inputSchemas.get(inputId), options.onQueryUpdate));
+    markO1Timing("o1:mount-end");
+    let disposed = false;
+    const diagnostics = (): CompiledControllerDiagnostics => ({ activeQuerySubscriptions: 0, activeInputSubscriptions: disposed ? 0 : subscriptions.length, activeActionListeners: disposed ? 0 : 1, activeIslands: disposed ? 0 : disposeIslands.length, queryIds: Object.keys(options.queries ?? {}), inputIds: Object.keys(inputs), disposed });
+    const outlet = (id = "main") => {
+      const descriptor = (ir.layout?.routeOutlets ?? []).find((entry: any) => entry.id === id);
+      return descriptor ? options.root.querySelector(`[data-runtime-node="${descriptor.elementId}"]`) : null;
+    };
+    return { mountMetrics, diagnostics, applyDelta: (delta) => apply(runtime, delta), applyHostValues, outlet, dispose: () => { if (disposed) return; disposed = true; runtime.dispose(); disposeSidebar(); disposeIslands.forEach((dispose) => dispose()); removeActions(); subscriptions.forEach((dispose) => dispose()); } };
+  } catch (error) {
+    markO1Timing("o1:mount-error");
+    throw error;
+  }
 }
 
 function applyStaticHostBindings(root: Element, ir: any, values: NonNullable<CompiledMountOptions['hostValues']>) {
@@ -140,6 +173,60 @@ function applyStaticHostBindings(root: Element, ir: any, values: NonNullable<Com
     const value = evaluateHostExpression(expression, { host: values });
     node.setAttribute(binding.attributeName === 'className' ? 'class' : binding.attributeName, String(value ?? ''));
   }
+  const links: string[] = ir.layout?.sidebar?.linkElementIds ?? [];
+  for (const id of links) {
+    const node = root.querySelector<HTMLElement>(`[data-runtime-node="${id}"]`);
+    if (!node) continue;
+    const active = node.getAttribute("href") === values.location?.pathname;
+    node.dataset.active = String(active);
+    if (active) node.setAttribute("aria-current", "page"); else node.removeAttribute("aria-current");
+  }
+}
+function mountSidebarCapability(root: Element, ir: any): () => void {
+  const metadata = ir.layout?.sidebar;
+  if (!metadata) return () => {};
+  const byId = (id?: string) => id ? root.querySelector<HTMLElement>(`[data-runtime-node="${id}"]`) : null;
+  const frame = byId(metadata.rootElementId);
+  const panel = byId(metadata.panelElementId);
+  if (!frame || !panel) return () => {};
+  const desktopToggle = byId(metadata.desktopToggleElementId);
+  const mobileToggle = byId(metadata.mobileToggleElementId);
+  const backdrop = byId(metadata.backdropElementId);
+  const links: HTMLElement[] = metadata.linkElementIds.map((id: string) => byId(id)).filter((node: HTMLElement | null): node is HTMLElement => Boolean(node));
+  const cookieName = metadata.persistenceKey ?? "sidebar_state";
+  const cookieState = document.cookie.split("; ").find((entry) => entry.startsWith(`${cookieName}=`))?.split("=")[1];
+  let collapsed = cookieState === "false";
+  let mobileOpen = false;
+  let previousFocus: Element | null = null;
+  const apply = () => {
+    frame.dataset.state = collapsed ? "collapsed" : "expanded";
+    frame.dataset.mobileOpen = mobileOpen ? "true" : "false";
+    desktopToggle?.setAttribute("aria-expanded", String(!collapsed));
+    mobileToggle?.setAttribute("aria-expanded", String(mobileOpen));
+    backdrop?.setAttribute("aria-hidden", String(!mobileOpen));
+  };
+  const setCollapsed = (next: boolean) => { collapsed = next; document.cookie = `${cookieName}=${!collapsed}; path=/; max-age=604800`; apply(); };
+  const setMobileOpen = (next: boolean) => {
+    if (next && !mobileOpen) previousFocus = document.activeElement;
+    mobileOpen = next; apply();
+    if (!next && previousFocus instanceof HTMLElement) previousFocus.focus();
+    if (next) panel.focus();
+  };
+  const onKeydown = (event: KeyboardEvent) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") { event.preventDefault(); setCollapsed(!collapsed); }
+    if (event.key === "Escape" && mobileOpen) { event.preventDefault(); setMobileOpen(false); }
+  };
+  const onDesktopToggle = () => setCollapsed(!collapsed);
+  const onMobileToggle = () => setMobileOpen(!mobileOpen);
+  const onBackdrop = () => setMobileOpen(false);
+  const onLink = () => setMobileOpen(false);
+  apply();
+  desktopToggle?.addEventListener("click", onDesktopToggle);
+  mobileToggle?.addEventListener("click", onMobileToggle);
+  backdrop?.addEventListener("click", onBackdrop);
+  links.forEach((link) => link.addEventListener("click", onLink));
+  window.addEventListener("keydown", onKeydown);
+  return () => { desktopToggle?.removeEventListener("click", onDesktopToggle); mobileToggle?.removeEventListener("click", onMobileToggle); backdrop?.removeEventListener("click", onBackdrop); links.forEach((link) => link.removeEventListener("click", onLink)); window.removeEventListener("keydown", onKeydown); };
 }
 function dependsOnHost(expression: any): boolean { return expression?.kind === 'identifier' ? expression.name === 'host' : expression?.kind === 'member' ? dependsOnHost(expression.object) : expression?.kind === 'binary' ? dependsOnHost(expression.left) || dependsOnHost(expression.right) : expression?.kind === 'conditional' ? dependsOnHost(expression.test) || dependsOnHost(expression.consequent) || dependsOnHost(expression.alternate) : false }
 function evaluateHostExpression(expression: any, scope: any): any { if (expression?.kind === 'literal') return expression.value; if (expression?.kind === 'identifier') return scope[expression.name]; if (expression?.kind === 'member') return evaluateHostExpression(expression.object, scope)?.[expression.property]; if (expression?.kind === 'binary') return expression.op === '===' ? evaluateHostExpression(expression.left, scope) === evaluateHostExpression(expression.right, scope) : null; if (expression?.kind === 'conditional') return evaluateHostExpression(expression.test, scope) ? evaluateHostExpression(expression.consequent, scope) : evaluateHostExpression(expression.alternate, scope); return null }

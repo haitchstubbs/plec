@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { createFileRoute, useNavigate, useRouterState } from '@tanstack/react-router'
 import { mountCompiledApplication, type CompiledQueryUpdate } from '@wasm-runtime/browser'
 import { createTanStackAdapter } from '@wasm-runtime/tanstack-adapter'
@@ -23,8 +23,12 @@ function CompiledTodosRoute() {
   const requestedSize = Number(search.get('size'))
   const size = benchmark && [10, 100, 1000, 10000, 50000].includes(requestedSize) ? requestedSize : 50000
   const todosCollection = useMemo(() => createTodoCollection(size), [size])
-  const [tanstackAdapter, setTanstackAdapter] = useState<ReturnType<typeof createTanStackAdapter<Todo, string>> | null>(null)
-  const [status, setStatus] = useState<'idle' | 'mounting' | 'mounted' | 'error'>('idle')
+  const tanstackAdapterRef = useRef<ReturnType<typeof createTanStackAdapter<Todo, string>> | null>(null)
+  // This route's React tree is only the static shell. Updating React state
+  // after the WASM runtime has populated its query loop makes React restore
+  // that shell's intentionally empty `<ul>`. Keep mount status out of React
+  // state so it is available to the benchmark without reconciling runtime DOM.
+  const statusRef = useRef<'idle' | 'mounting' | 'mounted' | 'error'>('idle')
   const sequence = useRef(0)
   const rowCount = useRef(size)
   const benchmarkIds = useRef(new Set<string>())
@@ -36,13 +40,21 @@ function CompiledTodosRoute() {
   const unmanagedMutations = useRef(0)
   const navigate = useNavigate()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
+  // Router hooks may return a new callback during a React commit. The WASM
+  // mount must outlive those commits: its cleanup disposes the renderer and
+  // clears every runtime-owned row. Keep the latest navigation callback and
+  // pathname available without making them mount-effect dependencies.
+  const navigateRef = useRef(navigate)
+  const pathnameRef = useRef(pathname)
+  navigateRef.current = navigate
+  pathnameRef.current = pathname
   // Profiler callbacks are development-oriented; this direct counter remains
   // meaningful in production benchmark builds as well.
   reactCommits.current += 1
 
-  // `createTanStackAdapter` subscribes to raw collection changes. Do not create
-  // it in useMemo: React Strict Mode may invoke a memo initializer twice and
-  // discard one value without giving it a cleanup opportunity.
+  // `createTanStackAdapter` subscribes to raw collection changes. Keep it and
+  // the WASM controller out of React state: a React commit after WASM has
+  // populated the loop restores React's empty static shell.
   useEffect(() => {
     const adapter = createTanStackAdapter<Todo, string>({
       collection: todosCollection,
@@ -53,49 +65,55 @@ function CompiledTodosRoute() {
       getInitialRows: () => [...todosCollection.toArray].sort(compareTodos),
       onUnmanagedChanges: import.meta.env.DEV || benchmark ? (changes) => { unmanagedMutations.current += changes.length; console.warn('Compiled runtime ignored a TanStack mutation that bypassed its adapter.', changes) } : undefined,
     })
-    setTanstackAdapter(adapter)
-    return () => adapter.dispose()
-  }, [todosCollection])
-
-  function onCompiledQueryUpdate(update: CompiledQueryUpdate) {
-    if (activeMeasurement.current) activeMeasurement.current.compiledUpdate = update
-  }
-
-  useEffect(() => {
+    tanstackAdapterRef.current = adapter
     const runtimeRoot = document.querySelector<HTMLDivElement>('#compiled-todos-root')
-    if (!runtimeRoot) return
+    if (!runtimeRoot) return () => { adapter.dispose(); if (tanstackAdapterRef.current === adapter) tanstackAdapterRef.current = null }
     let cancelled = false
     let controller: Awaited<ReturnType<typeof mountCompiledApplication>> | null = null
-    setStatus('mounting')
-    if (!tanstackAdapter) return
-    void mountCompiledApplication({ root: runtimeRoot, queries: { i1: tanstackAdapter.liveCollection }, actions: { updateTodo }, hostValues: { currentYear: new Date().getFullYear(), location: { pathname } }, onNavigate: ({ href, replace }: { href: string; replace?: boolean }) => { void navigate({ to: href as any, replace }) }, onQueryUpdate: onCompiledQueryUpdate })
+    statusRef.current = 'mounting'
+    // Creating the adapter queues React work. Let that work commit before the
+    // synchronous WASM mount claims this element, otherwise React can flush
+    // its empty shell just after the runtime appends its initial rows.
+    void afterReactSettles().then(() => {
+      if (cancelled) return null
+      return mountCompiledApplication({ root: runtimeRoot, queries: { i1: adapter.liveCollection }, actions: { updateTodo }, hostValues: { currentYear: new Date().getFullYear(), location: { pathname: pathnameRef.current } }, onNavigate: ({ href, replace }: { href: string; replace?: boolean }) => { void navigateRef.current({ to: href as any, replace }) }, onQueryUpdate: onCompiledQueryUpdate })
+    })
       .then((mounted) => {
+        if (!mounted) return
         // React development/Strict Mode may clean up this effect before the
         // async WASM mount resolves. Dispose that late controller immediately
         // so its delegated DOM listeners cannot issue duplicate mutations.
         if (cancelled) { mounted.dispose(); return }
         controller = mounted
         controllerRef.current = mounted
-        setStatus('mounted')
+        statusRef.current = 'mounted'
         // `setStatus` and the mount-metrics callback both schedule React work.
         // Establish the benchmark baseline only after their commit opportunity
         // and one subsequent frame have passed.
         requestAnimationFrame(() => requestAnimationFrame(() => { reactCommitBaseline.current = reactCommits.current }))
       })
-      .catch(() => { if (!cancelled) setStatus('error') })
-    return () => { cancelled = true; controller?.dispose(); if (controllerRef.current === controller) controllerRef.current = null }
-  }, [tanstackAdapter, navigate])
+      .catch((error) => {
+        // Keep the route usable while surfacing an actionable runtime failure
+        // in development instead of silently presenting an empty shell.
+        console.error('Failed to mount compiled todo application.', error)
+        if (!cancelled) statusRef.current = 'error'
+      })
+    return () => { cancelled = true; controller?.dispose(); if (controllerRef.current === controller) controllerRef.current = null; adapter.dispose(); if (tanstackAdapterRef.current === adapter) tanstackAdapterRef.current = null }
+  }, [todosCollection])
+
+  function onCompiledQueryUpdate(update: CompiledQueryUpdate) {
+    if (activeMeasurement.current) activeMeasurement.current.compiledUpdate = update
+  }
 
   useEffect(() => { controllerRef.current?.applyHostValues({ location: { pathname } }) }, [pathname])
 
   function updateTodo(id: string, changes: Partial<Todo>) {
-    if (!tanstackAdapter) return
-    tanstackAdapter.update(id, changes)
+    tanstackAdapterRef.current?.update(id, changes)
   }
 
   function requireAdapter() {
-    if (!tanstackAdapter) throw new Error('Compiled runtime adapter is not ready.')
-    return tanstackAdapter
+    if (!tanstackAdapterRef.current) throw new Error('Compiled runtime adapter is not ready.')
+    return tanstackAdapterRef.current
   }
 
   function planOperation(operation: BenchmarkOperation) {
@@ -131,7 +149,7 @@ function CompiledTodosRoute() {
   }
 
   async function measure(operation: BenchmarkOperation): Promise<LatencySample> {
-    if (status !== 'mounted') throw new Error('Compiled runtime is not mounted.')
+    if (statusRef.current !== 'mounted') throw new Error('Compiled runtime is not mounted.')
     const root = document.querySelector('#compiled-todos-root')
     if (!root) throw new Error('Missing compiled benchmark root.')
     const plan = planOperation(operation)
@@ -166,10 +184,10 @@ function CompiledTodosRoute() {
     }
     ;(window as any).__wasmRuntimeBenchmark = api
     return () => { delete (window as any).__wasmRuntimeBenchmark }
-  }, [benchmark, status, todosCollection])
+  }, [benchmark, todosCollection])
 
   function integrity() {
-    const adapter = tanstackAdapter?.diagnostics()
+    const adapter = tanstackAdapterRef.current?.diagnostics()
     const controller = controllerRef.current?.diagnostics()
     const reactRendersSinceMount = reactCommitBaseline.current == null ? null : reactCommits.current - reactCommitBaseline.current
     return evaluateCompiledIntegrity({
@@ -211,4 +229,10 @@ function validateFullDom(root: Element, todos: Todo[]) {
 
 function compareTodos(left: Todo, right: Todo) {
   return left.sortOrder - right.sortOrder || left.id.localeCompare(right.id)
+}
+
+function afterReactSettles() {
+  // TanStack Start completes its streamed hydration after route effects begin.
+  // Wait for that hand-off before mounting an opaque DOM owner.
+  return new Promise<void>((resolve) => setTimeout(resolve, 2_000))
 }

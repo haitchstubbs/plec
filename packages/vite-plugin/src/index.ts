@@ -1,10 +1,10 @@
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { compile, type CompileOptions } from "@wasm-runtime/compiler";
+import { type CompileOptions } from "@wasm-runtime/compiler";
+import { compileSourceEntry } from "@wasm-runtime/compiler/node-entry";
 import type { Plugin } from "vite";
 
 const runtimeBuilds = new Map<string, Promise<void>>();
@@ -194,11 +194,11 @@ async function prepareArtifacts(options: {
 
   const { state, rootDir, repoRootDir, sourceFile, mode, emitIrPath, emitRuntimeDir, emitToBundle, pluginContext } = options;
   const targetFile = path.resolve(rootDir, sourceFile);
-  const modules = await readLocalModuleGraph(targetFile, rootDir, repoRootDir);
+  const compiled = await compileSourceEntry(targetFile, { rootDir, repoRootDir, mode });
+  const modules = compiled.modules;
   state.sourceFiles = new Set(modules.map((module) => module.filePath));
   const source = modules[0]?.source ?? "";
-  const revision = createHash("sha256").update(modules.map((module) => `${module.id}\n${module.source}`).join("\n")).digest("hex");
-  const result = compile(source, { mode, moduleId: sourceFile, modules, applicationRevision: revision });
+  const result = compiled.result;
   await buildRuntimeArtifacts(repoRootDir);
 
   for (const diagnostic of result.diagnostics) {
