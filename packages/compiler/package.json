@@ -5,6 +5,10 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./node-entry": { "types": "./dist/node-entry.d.ts", "default": "./dist/node-entry.js" }
+  },
   "files": [
     "dist"
   ],

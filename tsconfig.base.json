@@ -18,6 +18,7 @@
     "paths": {
       "@wasm-runtime/browser": ["packages/browser/src/index.ts"],
       "@wasm-runtime/compiler": ["packages/compiler/src/index.ts"],
+      "@wasm-runtime/compiler/node-entry": ["packages/compiler/src/node-entry.ts"],
       "@wasm-runtime/ir": ["packages/ir/src/index.ts"],
       "@wasm-runtime/tanstack-adapter": ["packages/tanstack-adapter/src/index.ts"],
       "@wasm-runtime/vite-plugin": ["packages/vite-plugin/src/index.ts"]

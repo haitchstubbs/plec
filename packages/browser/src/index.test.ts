@@ -1,9 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { reconcileInputSnapshot, type CollectionProjection } from "./index";
+import { describe, expect, it, vi } from "vitest";
+import { markO1Timing, reconcileInputSnapshot, type CollectionProjection } from "./index";
 
 describe("compiled browser adapter", () => {
-  it("reserves timing marks for adapter and runtime stages", () => {
-    expect(["adapter-start", "adapter-end", "runtime-apply-start", "runtime-apply-end"]).toHaveLength(4);
+  it("emits named O1 mount boundaries through User Timing", () => {
+    const mark = vi.fn();
+    vi.stubGlobal("performance", { mark });
+    markO1Timing("o1:artifact-fetch-start");
+    markO1Timing("o1:mount-end");
+    markO1Timing("o1:mount-error");
+    expect(mark.mock.calls).toEqual([["o1:artifact-fetch-start"], ["o1:mount-end"], ["o1:mount-error"]]);
+    vi.unstubAllGlobals();
   });
 
   it("reconciles only observed fields for a snapshot collection", () => {

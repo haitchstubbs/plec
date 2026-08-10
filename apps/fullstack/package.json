@@ -1,0 +1,28 @@
+{
+  "name": "@wasm-runtime/fullstack",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "yarn build && node --watch dist/server.mjs",
+    "build": "yarn workspace @wasm-runtime/ir build && yarn workspace @wasm-runtime/compiler build && yarn workspace @wasm-runtime/browser build && yarn workspace @wasm-runtime/runtime build:wasm && node scripts/build.mjs",
+    "bench:navigation": "node scripts/bench-navigation.mjs",
+    "bench:navigation:smoke": "node scripts/bench-navigation-smoke.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "clean": "powershell -NoProfile -Command \"if (Test-Path dist) { Remove-Item -Recurse -Force dist }\""
+  },
+  "dependencies": {
+    "@tanstack/router-core": "latest"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
+    "@wasm-runtime/browser": "workspace:*",
+    "@wasm-runtime/compiler": "workspace:*",
+    "@wasm-runtime/ir": "workspace:*",
+    "esbuild": "^0.27.4",
+    "playwright": "^1.55.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

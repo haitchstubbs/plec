@@ -104,6 +104,7 @@ interface ApplicationIr {
   stateTransitions: Array<any>;
   islands: IslandNode[];
   components: ComponentMetadata[];
+  layout?: { routeOutlets: Array<{ id: string; elementId: string }>; sidebar?: { rootElementId: string; panelElementId: string; desktopToggleElementId?: string; mobileToggleElementId?: string; backdropElementId?: string; linkElementIds: string[]; persistenceKey: string } };
 }
 
 export interface CompileOptions {
@@ -272,6 +273,7 @@ export function compile(source: string, options: CompileOptions = {}): CompileRe
   }
 
   inferValueInputs(state);
+  discoverLayoutMetadata(state);
 
   throwIfStrict(state);
 
@@ -473,6 +475,17 @@ function lowerJsxElement(node: any, parentId: string | null, state: CompilerStat
   if (propWrites.length) state.ir.propPrograms.push({ id: `p${state.ir.propPrograms.length + 1}`, targetId: elementId, writes: propWrites });
 
   for (const child of [...getSpreadChildren(node.opening?.attributes ?? [], state), ...(node.children ?? [])]) {
+    // A component's `{children}` expression can expand to several sibling
+    // nodes. Return values carry only one node ID, so append every forwarded
+    // child here rather than silently retaining the first sibling.
+    const forwarded = child?.type === "JSXExpressionContainer" ? getForwardedChildren(unwrapExpression(child.expression), state) : null;
+    if (forwarded) {
+      for (const forwardedChild of forwarded) {
+        const lowered = lowerJsxNode(forwardedChild, elementId, state);
+        if (lowered !== SKIP) element.children.push(lowered);
+      }
+      continue;
+    }
     const lowered = lowerJsxNode(child, elementId, state);
     if (lowered !== SKIP) {
       element.children.push(lowered);
@@ -664,6 +677,31 @@ function lowerMapExpression(expression: any, parentId: string | null, state: Com
   return loopId;
 }
 
+/** Browser primitives are ordinary TSX components. Their static data markers
+ * are lowered into explicit metadata so the browser never has to infer a UI
+ * structure from application-owned DOM. */
+function discoverLayoutMetadata(state: CompilerState): void {
+  const marked = (marker: string, value?: string) => state.ir.elements.filter((element) => element.attributes.some((attribute) => attribute.name === marker && (value === undefined || attribute.staticValue === value)));
+  const outletElements = marked("data-o1-route-outlet");
+  const root = marked("data-o1-sidebar", "root")[0];
+  const panel = marked("data-o1-sidebar", "panel")[0];
+  if (!outletElements.length && !root) return;
+  state.ir.layout = {
+    routeOutlets: outletElements.map((element) => ({ id: element.attributes.find((attribute) => attribute.name === "data-o1-route-outlet")?.staticValue ?? "main", elementId: element.id })),
+    ...(root && panel ? {
+      sidebar: {
+        rootElementId: root.id,
+        panelElementId: panel.id,
+        desktopToggleElementId: marked("data-o1-sidebar", "desktop-toggle")[0]?.id,
+        mobileToggleElementId: marked("data-o1-sidebar", "mobile-toggle")[0]?.id,
+        backdropElementId: marked("data-o1-sidebar", "backdrop")[0]?.id,
+        linkElementIds: marked("data-o1-sidebar-link").map((element) => element.id),
+        persistenceKey: root.attributes.find((attribute) => attribute.name === "data-o1-sidebar-persistence")?.staticValue ?? "sidebar_state"
+      }
+    } : {})
+  };
+}
+
 /** Compile an ordinary reachable function which produces a JSX value. This is
  * deliberately based on its source body; no render helper is recognized by
  * name. Dynamic branch selection remains a structural concern and is rejected
@@ -685,11 +723,13 @@ function lowerReturnedElementExpression(expression: any, parentId: string | null
   const previousScope = state.expressionScope;
   const previousModule = state.activeModuleId;
   const scope = { ...previousScope, ...(state.moduleExpressions.get(definition.moduleId) ?? {}) };
-  bindFunctionArguments(definition.params ?? [], value.arguments ?? [], scope, state, name);
+  bindFunctionArguments(definition.params ?? [], value.arguments ?? [], scope, state, name ?? "<anonymous>");
   populateFunctionLocals(definition.body, scope);
   state.expressionScope = scope;
   state.activeModuleId = definition.moduleId;
-  const result = Object.keys(literalScope).length ? lowerJsxNodeWithScope(returned, parentId, state, literalScope) : lowerJsxNode(returned, parentId, state);
+  const result = returned.type === "CallExpression"
+    ? lowerReturnedElementExpression(returned, parentId, state, literalScope)
+    : Object.keys(literalScope).length ? lowerJsxNodeWithScope(returned, parentId, state, literalScope) : lowerJsxNode(returned, parentId, state);
   state.expressionScope = previousScope;
   state.activeModuleId = previousModule;
   return result;
@@ -748,7 +788,12 @@ function findStructuralFunctionReturn(body: any, state: CompilerState, call: any
     for (const statement of statements) {
       if (statement.type === "ReturnStatement" || statement.type === "ReturnStmt") return unwrapExpression(statement.argument ?? statement.arg);
       if (statement.type !== "IfStatement") continue;
-      const test = evaluateExpression(statement.test, state, scope);
+      let test = evaluateExpression(statement.test, state, scope);
+      // An absent property on a syntactically known props record is a known
+      // undefined value, not an unknown runtime value. This distinction is
+      // what permits ordinary optional render props to take their default
+      // structural branch without treating a helper name specially.
+      if (test === undefined && isStaticallyAbsent(statement.test, scope)) test = false;
       if (test === undefined) continue;
       const branch = test ? statement.consequent : statement.alternate;
       if (!branch) continue;
@@ -758,6 +803,21 @@ function findStructuralFunctionReturn(body: any, state: CompilerState, call: any
     return null;
   };
   return visit(getStatements(body));
+}
+function isStaticallyAbsent(input: any, scope: Record<string, any>, seen = new Set<string>()): boolean {
+  const node = unwrapExpression(input);
+  if (node?.type === "Identifier") {
+    const name = getNodeName(node);
+    if (!name || seen.has(name) || !scope[name]) return false;
+    seen.add(name);
+    return isStaticallyAbsent(scope[name], scope, seen);
+  }
+  if (node?.type !== "MemberExpression") return false;
+  const property = getNodeName(node.property);
+  let object = unwrapExpression(node.object);
+  if (object?.type === "Identifier") object = unwrapExpression(scope[getNodeName(object)!] ?? object);
+  if (object?.type !== "ObjectExpression" || !property) return false;
+  return !(object.properties ?? []).some((entry: any) => getNodeName(entry.key) === property || entry.type === "SpreadElement" || entry.type === "SpreadProperty");
 }
 function findReturnedExpression(body: any): any | null {
   for (const statement of getStatements(body)) {
