@@ -1,0 +1,35 @@
+{
+  "name": "plec-compiler",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./node-entry": {
+      "types": "./dist/node-entry.d.ts",
+      "default": "./dist/node-entry.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "yarn --cwd ../.. exec tsc -p packages/plec-compiler/tsconfig.json",
+    "test": "vitest run",
+    "lint": "echo lint not configured for plec-compiler",
+    "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec-compiler/tsconfig.typecheck.json",
+    "clean": "powershell -NoProfile -Command \"if (Test-Path dist) { Remove-Item -Recurse -Force dist }\""
+  },
+  "dependencies": {
+    "@swc/core": "^1.13.5",
+    "plec-ir": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}
