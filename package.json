@@ -14,6 +14,8 @@
     "format": "prettier --write . && cargo fmt --manifest-path packages/plec-runtime/crates/runtime/Cargo.toml",
     "format:check": "prettier --check . && cargo fmt --manifest-path packages/plec-runtime/crates/runtime/Cargo.toml --check",
     "typecheck": "turbo run typecheck",
+    "measure:runtime-baseline": "node benchmarks/measure-runtime-baseline.mjs",
+    "measure:runtime-baseline:verify": "node benchmarks/measure-runtime-baseline.mjs --verify",
     "clean": "turbo run clean && git clean -xdf .turbo"
   },
   "devDependencies": {

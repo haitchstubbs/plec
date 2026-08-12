@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "commands": [
+    "yarn workspace plec-runtime build:wasm",
+    "yarn workspace @wasm-runtime/fullstack build"
+  ],
+  "toolchain": {
+    "node": "v22.15.0",
+    "yarn": "4.17.1",
+    "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+    "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+    "wasmPack": "wasm-pack 0.15.0",
+    "wasmTarget": "wasm32-unknown-unknown"
+  },
+  "buildProfile": {
+    "wasmOpt": false,
+    "brotliQuality": 11
+  },
+  "artifacts": [
+    {
+      "path": "packages/plec-runtime/crates/runtime/dist/runtime/runtime_bg.wasm",
+      "raw": 724862,
+      "gzip": 236289,
+      "brotliQ11": 173641
+    },
+    {
+      "path": "packages/plec-runtime/crates/runtime/dist/runtime/runtime.js",
+      "raw": 49203,
+      "gzip": 8962,
+      "brotliQ11": 7519
+    },
+    {
+      "path": "apps/fullstack/dist/public/runtime/runtime_bg.wasm",
+      "raw": 724862,
+      "gzip": 236289,
+      "brotliQ11": 173641
+    },
+    {
+      "path": "apps/fullstack/dist/public/runtime/runtime.js",
+      "raw": 49203,
+      "gzip": 8962,
+      "brotliQ11": 7519
+    },
+    {
+      "path": "apps/fullstack/dist/public/route-manifest.json",
+      "raw": 1402,
+      "gzip": 524,
+      "brotliQ11": 448
+    },
+    {
+      "path": "apps/fullstack/dist/public/graphs/g-19yewiq.json",
+      "raw": 46962,
+      "gzip": 4568,
+      "brotliQ11": 3654
+    },
+    {
+      "path": "apps/fullstack/dist/public/graphs/g-1baeemh.json",
+      "raw": 3532,
+      "gzip": 866,
+      "brotliQ11": 730
+    },
+    {
+      "path": "apps/fullstack/dist/public/graphs/g-1djexgi.json",
+      "raw": 11453,
+      "gzip": 1621,
+      "brotliQ11": 1313
+    },
+    {
+      "path": "apps/fullstack/dist/public/graphs/g-1v46s8b.json",
+      "raw": 3901,
+      "gzip": 831,
+      "brotliQ11": 691
+    },
+    {
+      "path": "apps/fullstack/dist/public/graphs/g-9ekz2s.json",
+      "raw": 9307,
+      "gzip": 1514,
+      "brotliQ11": 1232
+    },
+    {
+      "path": "apps/fullstack/dist/public/graphs/g-ilwwb8.json",
+      "raw": 73560,
+      "gzip": 6696,
+      "brotliQ11": 5164
+    },
+    {
+      "path": "apps/fullstack/dist/public/graphs/g-llshtm.json",
+      "raw": 2742,
+      "gzip": 738,
+      "brotliQ11": 629
+    }
+  ]
+}
