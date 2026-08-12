@@ -74,6 +74,7 @@ const routeManifest = {
     graphId: route.graph.graphId,
     pendingGraphId: route.pendingGraph?.graphId,
     errorGraphId: route.errorGraph?.graphId,
+    loader: route.loader,
     outletId: route.outletId,
   })),
 };
