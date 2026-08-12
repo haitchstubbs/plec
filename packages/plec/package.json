@@ -1,0 +1,27 @@
+{
+  "name": "plec",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./jsx-runtime": {
+      "types": "./dist/jsx-runtime.d.ts",
+      "import": "./dist/jsx-runtime.js"
+    },
+    "./client/effects/development-memory-hud": {
+      "types": "./dist/client/effects/development-memory-hud.d.ts",
+      "import": "./dist/client/effects/development-memory-hud.js"
+    }
+  },
+  "scripts": {
+    "build": "yarn --cwd ../.. exec tsc -p packages/plec/tsconfig.json",
+    "test": "yarn --cwd ../.. exec vitest run packages/plec/src --passWithNoTests",
+    "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec/tsconfig.json --noEmit"
+  }
+}
