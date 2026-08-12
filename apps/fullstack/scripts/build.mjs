@@ -81,6 +81,12 @@ await writeFile(
   path.join(publicDir, 'route-manifest.json'),
   `${JSON.stringify(routeManifest, null, 2)}\n`,
 );
+// wasm-pack falls back to `cargo install wasm-bindgen` on hosts without a
+// matching prebuilt binary. Keep that temporary install work inside the
+// workspace so locked-down user temp directories do not make an otherwise
+// successful Rust/WASM build fail.
+const wasmTempDir = path.join(repoRoot, '.tmp', 'wasm-pack');
+await mkdir(wasmTempDir, { recursive: true });
 execFileSync(
   'wasm-pack',
   [
@@ -93,7 +99,11 @@ execFileSync(
     '--out-name',
     'runtime',
   ],
-  { cwd: repoRoot, stdio: 'inherit' },
+  {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: { ...process.env, TMP: wasmTempDir, TEMP: wasmTempDir },
+  },
 );
 await Promise.all(
   ['runtime.js', 'runtime_bg.wasm'].map((file) =>
