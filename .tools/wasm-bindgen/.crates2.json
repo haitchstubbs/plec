@@ -1,1 +1,18 @@
-{"installs":{"wasm-bindgen-cli 0.2.126 (registry+https://github.com/rust-lang/crates.io-index)":{"version_req":"=0.2.126","bins":["wasm-bindgen-test-runner.exe","wasm-bindgen.exe","wasm2es6js.exe"],"features":[],"all_features":false,"no_default_features":false,"profile":"release","target":"x86_64-pc-windows-msvc","rustc":"rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2\n"}}}
+{
+  "installs": {
+    "wasm-bindgen-cli 0.2.126 (registry+https://github.com/rust-lang/crates.io-index)": {
+      "version_req": "=0.2.126",
+      "bins": [
+        "wasm-bindgen-test-runner.exe",
+        "wasm-bindgen.exe",
+        "wasm2es6js.exe"
+      ],
+      "features": [],
+      "all_features": false,
+      "no_default_features": false,
+      "profile": "release",
+      "target": "x86_64-pc-windows-msvc",
+      "rustc": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2\n"
+    }
+  }
+}

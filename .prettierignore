@@ -1,0 +1,24 @@
+# Dependencies and tool caches
+node_modules/
+.yarn/
+.pnp.*
+.turbo/
+.tools/
+
+# Build output
+dist/
+build/
+coverage/
+**/target/
+
+# Generated files
+packages/lucide-plec/src/icons.generated.ts
+packages/lucide-plec/packages/lucide-plec/src/icons.generated.ts
+packages/compiler/src/index.js
+packages/compiler/src/index.d.ts
+packages/compiler/src/index.js.map
+packages/compiler/src/index.d.ts.map
+packages/ir/src/index.js
+packages/ir/src/index.d.ts
+packages/ir/src/index.js.map
+packages/ir/src/index.d.ts.map

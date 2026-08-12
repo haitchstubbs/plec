@@ -1,8 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "paths": {
-      "@wasm-runtime/compiler": ["packages/compiler/dist/index.d.ts"]
-    }
-  }
-}

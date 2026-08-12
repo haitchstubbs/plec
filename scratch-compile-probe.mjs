@@ -1,4 +1,4 @@
-import { compile } from './packages/compiler/dist/index.js'
+import { compile } from './packages/compiler/dist/index.js';
 
 const source = `
 const todoSeed = Array.from({ length: 3 }, (_, index) => ({
@@ -19,11 +19,19 @@ function BenchmarkTodos() {
     </ul>
   )
 }
-`
+`;
 
-const result = compile(source, { mode: 'lenient' })
-console.log(JSON.stringify({
-  loops: result.ir.loops.length,
-  bindings: result.ir.bindings.length,
-  diagnostics: result.diagnostics.map((diagnostic) => diagnostic.code),
-}, null, 2))
+const result = compile(source, { mode: 'lenient' });
+console.log(
+  JSON.stringify(
+    {
+      loops: result.ir.loops.length,
+      bindings: result.ir.bindings.length,
+      diagnostics: result.diagnostics.map(
+        (diagnostic) => diagnostic.code,
+      ),
+    },
+    null,
+    2,
+  ),
+);
