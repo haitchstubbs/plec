@@ -1,0 +1,37 @@
+{
+  "name": "@wasm-runtime/lucide-plec",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./icons/*": {
+      "types": "./dist/icons/*.d.ts",
+      "default": "./dist/icons/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "description": "Unofficial experimental PLEC integration for Lucide icons; not affiliated with or supported by Lucide.",
+  "license": "UNLICENSED",
+  "keywords": [
+    "plec",
+    "lucide",
+    "icons",
+    "experimental"
+  ],
+  "scripts": {
+    "build": "node scripts/generate-icons.mjs && yarn --cwd ../.. exec tsc -p packages/lucide-plec/tsconfig.json",
+    "test": "yarn exec vitest run --passWithNoTests",
+    "typecheck": "node scripts/generate-icons.mjs && yarn --cwd ../.. exec tsc -p packages/lucide-plec/tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "lucide": "^1.31.0"
+  }
+}
