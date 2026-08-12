@@ -1,0 +1,34 @@
+{
+  "name": "plec-ir",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "default": "./dist/runtime.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "yarn --cwd ../.. exec tsc -p packages/plec-ir/tsconfig.json",
+    "test": "yarn exec vitest run --passWithNoTests",
+    "lint": "echo lint not configured for plec-ir",
+    "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec-ir/tsconfig.typecheck.json",
+    "clean": "powershell -NoProfile -Command \"if (Test-Path dist) { Remove-Item -Recurse -Force dist }\""
+  },
+  "dependencies": {
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}

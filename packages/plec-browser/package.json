@@ -1,0 +1,35 @@
+{
+  "name": "plec-browser",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./compiled-subtree": {
+      "types": "./dist/compiled-subtree-entry.d.ts",
+      "default": "./dist/compiled-subtree-entry.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "yarn --cwd ../.. exec tsc -p packages/plec-browser/tsconfig.json",
+    "test": "yarn exec vitest run --passWithNoTests",
+    "lint": "echo lint not configured for plec-browser",
+    "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec-browser/tsconfig.json --noEmit",
+    "clean": "powershell -NoProfile -Command \"if (Test-Path dist) { Remove-Item -Recurse -Force dist }\""
+  },
+  "dependencies": {
+    "comlink": "^4.4.2",
+    "plec-ir": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}
