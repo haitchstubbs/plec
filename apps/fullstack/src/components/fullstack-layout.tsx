@@ -1,9 +1,122 @@
-import { AppSidebar } from "./app-sidebar"
-import { RouteOutlet } from "../browser-primitives"
+import { AppSidebar } from './app-sidebar';
+import { ChevronRight } from '@wasm-runtime/lucide-plec/icons/chevron-right';
+import { PanelLeft } from '@wasm-runtime/lucide-plec/icons/panel-left';
+import {
+  useState,
+  useEffect,
+  useRef,
+  useLocation,
+  Outlet,
+  Link,
+} from 'plec';
 
 export function FullstackLayout() {
-  return <div className="o1-app-layout">
-    <AppSidebar />
-    <RouteOutlet id="main" />
-  </div>
+  const [collapsed, setCollapsed] = useState(
+    document.cookie.includes('sidebar_state=false'),
+  );
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const previousFocus = useRef<Element | null>(null);
+  const location = useLocation();
+  const setSidebarCollapsed = (next: boolean) => {
+    document.cookie = `sidebar_state=${!next}; path=/; max-age=604800`;
+    setCollapsed(next);
+  };
+  const closeMobile = () => setMobileOpen(false);
+
+  useEffect(() => {
+    const onKeydown = (event: KeyboardEvent) => {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === 'b'
+      ) {
+        event.preventDefault();
+        setSidebarCollapsed(!collapsed);
+      }
+      if (event.key === 'Escape' && mobileOpen) {
+        event.preventDefault();
+        closeMobile();
+      }
+    };
+    window.addEventListener('keydown', onKeydown);
+    return () => window.removeEventListener('keydown', onKeydown);
+  }, [collapsed, mobileOpen]);
+
+  useEffect(() => {
+    if (mobileOpen) {
+      previousFocus.current = document.activeElement;
+      panelRef.current?.focus();
+    } else if (previousFocus.current instanceof HTMLElement)
+      previousFocus.current.focus();
+  }, [mobileOpen]);
+
+  const page =
+    location.pathname === '/'
+      ? 'Home'
+      : location.pathname === '/about'
+        ? 'About'
+        : location.pathname === '/todos'
+          ? 'Todos'
+          : 'Not found';
+
+  return (
+    <div className="min-h-svh md:[&_.plec-sidebar-inset]:ml-[17rem] md:has-[[data-collapsed=true]]:[&_.plec-sidebar-inset]:ml-16">
+      <AppSidebar
+        collapsed={collapsed}
+        mobileOpen={mobileOpen}
+        pathname={location.pathname}
+        onDesktopToggle={() => setSidebarCollapsed(!collapsed)}
+        onMobileToggle={() => {
+          if (!mobileOpen)
+            previousFocus.current = document.activeElement;
+          setMobileOpen(!mobileOpen);
+        }}
+        onCloseMobile={closeMobile}
+      />
+      <div className="plec-sidebar-inset min-h-svh bg-background transition-[margin] duration-200">
+        <header className="flex h-16 items-center gap-2 border-b bg-background/80 px-4">
+          <button
+            type="button"
+            onClick={() =>
+              window.matchMedia('(max-width: 767px)').matches
+                ? setMobileOpen(!mobileOpen)
+                : setSidebarCollapsed(!collapsed)
+            }
+            className="inline-grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Toggle sidebar"
+          >
+            <PanelLeft className="size-4" />
+            <span className="sr-only">Toggle sidebar</span>
+          </button>
+          <div className="mr-2 h-4 w-px bg-border" aria-hidden="true" />
+          <nav aria-label="Breadcrumb">
+            <ol className="flex items-center gap-2 text-sm text-muted-foreground">
+              <li className="hidden md:block">
+                <Link
+                  className="no-underline hover:text-foreground"
+                  to="/"
+                >
+                  Plec Fullstack
+                </Link>
+              </li>
+              <li className="hidden md:block" aria-hidden="true">
+                <ChevronRight className="block size-3.5" />
+              </li>
+              <li
+                aria-current="page"
+                className="font-medium text-foreground"
+              >
+                {page}
+              </li>
+            </ol>
+          </nav>
+        </header>
+        <Outlet
+          id="main"
+          className="min-h-[calc(100svh-4rem)]"
+          aria-live="polite"
+        />
+      </div>
+    </div>
+  );
 }
