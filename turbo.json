@@ -6,35 +6,31 @@
       "persistent": true
     },
     "build": {
-      "dependsOn": [
-        "^build"
-      ],
-      "outputs": [
-        "dist/**",
-        "build/**"
-      ]
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", "build/**"]
+    },
+    "plec-runtime#build": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@wasm-runtime/fullstack#build": {
+      "cache": false,
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"]
     },
     "test": {
-      "outputs": [
-        "coverage/**"
-      ]
+      "outputs": ["coverage/**"]
     },
     "lint": {
       "outputs": []
     },
     "typecheck": {
-      "dependsOn": [
-        "^typecheck"
-      ],
+      "dependsOn": ["^typecheck"],
       "outputs": []
     },
     "bench": {
-      "dependsOn": [
-        "build"
-      ],
-      "outputs": [
-        "benchmarks/results/**"
-      ]
+      "dependsOn": ["build"],
+      "outputs": ["benchmarks/results/**"]
     },
     "clean": {
       "cache": false

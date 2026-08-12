@@ -48,11 +48,17 @@ Persistence can be added later once the compiler/runtime model is proven.
 
 ## Repository structure
 
-Create a monorepo roughly like:
+`apps/fullstack` is a Plec application and must remain React-free. Do not add
+`react` or `react-dom` dependencies, or import either package there. Its
+`check:no-react` script enforces this at development, build, test, and
+typecheck time.
+
+The monorepo is organized roughly like:
 
 ```text
 apps/
-  demo/
+  fullstack/
+  plec/
 
 packages/
   compiler/
@@ -64,40 +70,19 @@ packages/
 
 Responsibilities:
 
-### `apps/demo`
-
-A very small, ordinary TanStack application used as the reference workload.
-
-Use React, TanStack Router/Start where appropriate, and TanStack DB.
-
-The app should look like something a normal React developer would write.
-
-Use a Todo-style application because it exposes:
-
-* collections
-* live queries
-* lists
-* filtering
-* text bindings
-* event handlers
-* conditional rendering
-* incremental updates
-
-Do not introduce custom framework syntax into the demo.
-
 ### `packages/compiler`
 
 This is one of the two important experimental components.
 
 Responsibilities:
 
-* parse TS/TSX
-* identify supported JSX structures
-* identify supported TanStack DB query usage
-* construct a view graph
-* construct bindings from query results/state into the view graph
-* emit application IR
-* explicitly identify unsupported constructs
+- parse TS/TSX
+- identify supported JSX structures
+- identify supported TanStack DB query usage
+- construct a view graph
+- construct bindings from query results/state into the view graph
+- emit application IR
+- explicitly identify unsupported constructs
 
 Start syntax-first.
 
@@ -105,16 +90,16 @@ Use SWC rather than the TypeScript compiler unless type information is genuinely
 
 Initial supported constructs should be deliberately narrow:
 
-* JSX intrinsic elements
-* simple function components
-* props
-* text bindings
-* property bindings
-* simple conditionals
-* `.map()` list rendering
-* `useLiveQuery`
-* straightforward event handlers
-* simple local scalar state if inexpensive
+- JSX intrinsic elements
+- simple function components
+- props
+- text bindings
+- property bindings
+- simple conditionals
+- `.map()` list rendering
+- `useLiveQuery`
+- straightforward event handlers
+- simple local scalar state if inexpensive
 
 Unsupported or dynamic constructs should fail clearly or be marked as future JS-island candidates.
 
@@ -130,28 +115,28 @@ Implement it in Rust and compile it to WASM.
 
 Responsibilities:
 
-* load application IR
-* instantiate a view graph
-* create DOM elements
-* maintain node/binding IDs
-* apply targeted DOM mutations
-* accept data/query deltas
-* update only bindings affected by those deltas
+- load application IR
+- instantiate a view graph
+- create DOM elements
+- maintain node/binding IDs
+- apply targeted DOM mutations
+- accept data/query deltas
+- update only bindings affected by those deltas
 
 Use:
 
-* `wasm-bindgen`
-* `serde`
-* `serde-wasm-bindgen`
-* `web-sys`
-* `js-sys`
+- `wasm-bindgen`
+- `serde`
+- `serde-wasm-bindgen`
+- `web-sys`
+- `js-sys`
 
 The runtime should initially expose a very small API, conceptually similar to:
 
 ```ts
-loadApplication(ir)
-mount(root)
-applyDelta(delta)
+loadApplication(ir);
+mount(root);
+applyDelta(delta);
 ```
 
 Avoid inventing a broad runtime API.
@@ -216,27 +201,24 @@ Use Vite rather than building a custom bundler.
 
 Responsibilities:
 
-* inspect/transform relevant source modules
-* invoke the compiler
-* emit the application IR
-* expose compiler diagnostics during development
-* integrate the WASM runtime
-* preserve normal Vite development ergonomics as much as possible
+- inspect/transform relevant source modules
+- invoke the compiler
+- emit the application IR
+- expose compiler diagnostics during development
+- integrate the WASM runtime
+- preserve normal Vite development ergonomics as much as possible
 
 Use:
 
-* `vite`
-* `@vitejs/plugin-react`
-* `@swc/core`
-* `magic-string`
+- `vite`
+- `@vitejs/plugin-react`
+- `@swc/core`
+- `magic-string`
 
 The plugin should eventually make enabling the experiment feel approximately like:
 
 ```ts
-plugins: [
-  react(),
-  experimentalRuntime()
-]
+plugins: [react(), experimentalRuntime()];
 ```
 
 Do not attempt sophisticated HMR initially unless it falls out naturally.
@@ -384,23 +366,23 @@ For this MVP, unsupported constructs may simply produce clear compiler diagnosti
 
 Do NOT build any of the following unless necessary to complete the core experiment:
 
-* custom router
-* custom bundler
-* custom sync engine
-* SQLite abstraction
-* OPFS abstraction
-* replication protocol
-* service worker framework
-* offline-first framework
-* custom binary format
-* JS-to-WASM compiler
-* full React compatibility
-* custom state-management library
-* visual devtools
-* complex worker scheduler
-* production security model
-* SSR implementation
-* component library
+- custom router
+- custom bundler
+- custom sync engine
+- SQLite abstraction
+- OPFS abstraction
+- replication protocol
+- service worker framework
+- offline-first framework
+- custom binary format
+- JS-to-WASM compiler
+- full React compatibility
+- custom state-management library
+- visual devtools
+- complex worker scheduler
+- production security model
+- SSR implementation
+- component library
 
 Do not turn this into a general framework project.
 
@@ -421,7 +403,7 @@ The IR should be readable enough to inspect manually.
 Add compiler snapshot tests such as:
 
 ```ts
-expect(compile(source)).toMatchSnapshot()
+expect(compile(source)).toMatchSnapshot();
 ```
 
 Use `insta` where useful for Rust runtime representations.
@@ -434,11 +416,11 @@ Create a small benchmark harness comparing the normal implementation and compile
 
 Measure at minimum:
 
-* initial mount time
-* update of one list row
-* addition/removal of one row
-* generated JS size
-* WASM + IR size
+- initial mount time
+- update of one list row
+- addition/removal of one row
+- generated JS size
+- WASM + IR size
 
 Do not optimize based on synthetic benchmarks before the architecture works.
 
@@ -474,7 +456,7 @@ Example:
 
 ```tsx
 function Hello({ name }) {
-  return <div>Hello {name}</div>
+  return <div>Hello {name}</div>;
 }
 ```
 
@@ -493,9 +475,9 @@ At this point React should not be responsible for rendering the compiled compone
 Support a simple loop such as:
 
 ```tsx
-{todos.map(todo => (
-  <li>{todo.title}</li>
-))}
+{
+  todos.map((todo) => <li>{todo.title}</li>);
+}
 ```
 
 Represent the loop and row bindings explicitly in the IR.
@@ -513,9 +495,7 @@ Instrument DOM mutation counts.
 Support one straightforward event path such as:
 
 ```tsx
-<button onClick={() => complete(todo.id)}>
-  Complete
-</button>
+<button onClick={() => complete(todo.id)}>Complete</button>
 ```
 
 Keep the supported action semantics narrow.
@@ -526,14 +506,14 @@ Compare the normal React/TanStack implementation against the compiled implementa
 
 Document:
 
-* what compiled cleanly
-* what required special handling
-* what could not compile
-* bundle/runtime overhead
-* DOM operation counts
-* runtime performance
-* compiler complexity
-* whether the architecture still appears worth pursuing
+- what compiled cleanly
+- what required special handling
+- what could not compile
+- bundle/runtime overhead
+- DOM operation counts
+- runtime performance
+- compiler complexity
+- whether the architecture still appears worth pursuing
 
 Do not proceed into persistence or sync until this evaluation is complete.
 

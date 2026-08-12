@@ -33,3 +33,9 @@ Thumbs.db
 
 # Benchmark artifacts
 benchmarks/results/*
+
+# Generated Icon Files
+packages/lucide-plec/src/icons/
+
+# Executable files
+*.exe
