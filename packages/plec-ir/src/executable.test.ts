@@ -126,4 +126,19 @@ describe('ExecutableApplication 0.9', () => {
       /MISSING_LOADER_RESULT_DESTINATION/,
     );
   });
+  it('rejects frame accesses outside their declared layout', () => {
+    const expression: any = application();
+    expression.expressions[0] = {
+      frameSlots: 0,
+      instructions: [{ op: 'loadFrame', slot: 0 }, { op: 'return' }],
+    };
+    expect(() => validateExecutableApplication(expression)).toThrow(
+      /FRAME_SLOT_OUT_OF_RANGE/,
+    );
+    const action: any = application();
+    action.actions[0].frameSlots = 1;
+    expect(() => validateExecutableApplication(action)).toThrow(
+      /FRAME_SLOT_OUT_OF_RANGE/,
+    );
+  });
 });
