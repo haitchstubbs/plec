@@ -1,10 +1,14 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { compileRouteEntry, readSourceGraph, validateRouteLoaderAction } from './node-entry.ts';
 
 describe('readSourceGraph', () => {
   it('follows authored JavaScript specifiers to available TypeScript source', async () => {
-    const repoRoot = process.cwd();
+    const repoRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../..',
+    );
     const entry = path.join(
       repoRoot,
       'packages/lucide-plec/src/icons/workflow.ts',
