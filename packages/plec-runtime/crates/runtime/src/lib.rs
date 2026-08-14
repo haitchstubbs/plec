@@ -86,7 +86,7 @@ struct TypedAction { instructions: Vec<TypedActionInstruction>, #[serde(default)
 #[serde(tag = "op", rename_all = "camelCase")]
 enum TypedActionInstruction {
     Evaluate { expression: usize }, StoreState { state: usize },
-    CollectionMutation { input: usize, kind: String }, PreventDefault,
+    CollectionMutation { input: usize, kind: String, key: usize, value: Option<usize> }, PreventDefault,
     Call { action: usize, #[serde(default)] arguments: Vec<usize> },
     Jump { target: usize }, JumpIfFalse { target: usize },
     CapabilityRequest { capability: String, request: TypedFetchRequest, success_pc: usize, failure_pc: usize, finally_pc: Option<usize>, result_slot: usize, error_slot: usize },
@@ -98,6 +98,35 @@ struct TypedFetchRequest { url: usize, method: String, #[serde(default)] headers
 #[derive(Clone, Deserialize)]
 struct TypedFetchHeader { name: usize, value: usize }
 fn default_true() -> bool { true }
+
+/** Rules shared by the WASM trust boundary and host-native unit tests. */
+fn validate_typed_action_contract(
+    action: &TypedAction,
+    expression_count: usize,
+    input_kinds: &[String],
+) -> Result<(), &'static str> {
+    let mut parameter_slots = HashSet::new();
+    for slot in &action.parameter_slots {
+        if *slot >= action.frame_slots { return Err("action parameter frame slot out of range"); }
+        if !parameter_slots.insert(*slot) { return Err("duplicate action parameter frame slot"); }
+    }
+    for instruction in &action.instructions {
+        if let TypedActionInstruction::CollectionMutation { input, key, value, kind } = instruction {
+            if *input >= input_kinds.len() { return Err("action input handle out of range"); }
+            if input_kinds[*input] != "collection" { return Err("collection mutation requires a collection input"); }
+            if *key >= expression_count { return Err("collection mutation key expression handle out of range"); }
+            match (kind.as_str(), value) {
+                ("append" | "keyedReplace", Some(value)) if *value < expression_count => {},
+                ("append" | "keyedReplace", Some(_)) => return Err("collection mutation value expression handle out of range"),
+                ("append" | "keyedReplace", None) => return Err("collection mutation requires a value expression"),
+                ("keyedRemove", None) => {},
+                ("keyedRemove", Some(_)) => return Err("collection remove forbids a value expression"),
+                _ => return Err("unknown collection mutation kind"),
+            }
+        }
+    }
+    Ok(())
+}
 #[derive(Clone, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 enum TypedNode {
@@ -3081,12 +3110,13 @@ impl TypedApplication {
             }
         }
         for action in &self.actions {
-            for slot in &action.parameter_slots { if *slot >= action.frame_slots { return Err(JsValue::from_str("action parameter frame slot out of range")); } }
+            let input_kinds = self.inputs.iter().map(|input| input.kind.clone()).collect::<Vec<_>>();
+            validate_typed_action_contract(action, self.expressions.len(), &input_kinds).map_err(JsValue::from_str)?;
             for instruction in &action.instructions {
                 match instruction {
                     TypedActionInstruction::Evaluate { expression } if *expression >= self.expressions.len() => return Err(JsValue::from_str("action expression handle out of range")),
                     TypedActionInstruction::StoreState { state } if *state >= self.state_slots.len() => return Err(JsValue::from_str("action state handle out of range")),
-                    TypedActionInstruction::CollectionMutation { input, .. } if *input >= self.inputs.len() => return Err(JsValue::from_str("action input handle out of range")),
+                    TypedActionInstruction::CollectionMutation { .. } => {}
                     TypedActionInstruction::Call { action, .. } if *action >= self.actions.len() => return Err(JsValue::from_str("action handle out of range")),
                     TypedActionInstruction::Jump { target } | TypedActionInstruction::JumpIfFalse { target } if *target >= action.instructions.len() => return Err(JsValue::from_str("action jump target out of range")),
                     TypedActionInstruction::CapabilityRequest { request, success_pc, failure_pc, finally_pc, result_slot, error_slot, .. } => {
@@ -4428,5 +4458,46 @@ mod tests {
             graph_instance_id(Some("root/outlet:main"), "rows", Some("todo/1")),
             "root%2Foutlet:main/outlet:rows/key:todo%2F1"
         );
+    }
+
+    fn typed_action_artifact(instruction: Value, input_kind: &str) -> TypedApplication {
+        serde_json::from_value(serde_json::json!({
+            "version": "0.9",
+            "rootNode": 0,
+            "strings": ["div"],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "inputs": [{"name": 0, "kind": input_kind}],
+            "expressions": [{"instructions": []}],
+            "actions": [{"instructions": [instruction]}]
+        })).unwrap()
+    }
+
+    #[test]
+    fn typed_decoder_rejects_invalid_collection_action_operands() {
+        let scalar = typed_action_artifact(
+            serde_json::json!({"op":"collectionMutation","input":0,"kind":"append","key":0,"value":0}),
+            "scalar",
+        );
+        assert!(validate_typed_action_contract(&scalar.actions[0], scalar.expressions.len(), &["scalar".into()]).unwrap_err().contains("collection input"));
+
+        let missing_value = typed_action_artifact(
+            serde_json::json!({"op":"collectionMutation","input":0,"kind":"append","key":0}),
+            "collection",
+        );
+        assert!(validate_typed_action_contract(&missing_value.actions[0], missing_value.expressions.len(), &["collection".into()]).unwrap_err().contains("requires a value"));
+
+        let remove_value = typed_action_artifact(
+            serde_json::json!({"op":"collectionMutation","input":0,"kind":"keyedRemove","key":0,"value":0}),
+            "collection",
+        );
+        assert!(validate_typed_action_contract(&remove_value.actions[0], remove_value.expressions.len(), &["collection".into()]).unwrap_err().contains("forbids a value"));
+    }
+
+    #[test]
+    fn typed_decoder_rejects_duplicate_parameter_slots() {
+        let mut app = typed_action_artifact(serde_json::json!({"op":"return"}), "collection");
+        app.actions[0].frame_slots = 1;
+        app.actions[0].parameter_slots = vec![0, 0];
+        assert!(validate_typed_action_contract(&app.actions[0], app.expressions.len(), &["collection".into()]).unwrap_err().contains("duplicate"));
     }
 }
