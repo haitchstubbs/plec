@@ -427,6 +427,8 @@ struct RouterListener {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RouteManifest {
+    #[serde(default)]
+    version: Option<u32>,
     root_graph_id: String,
     routes: Vec<RouteManifestEntry>,
 }
@@ -440,6 +442,8 @@ struct RouteManifestEntry {
     loader: Option<Action>,
     #[serde(default)]
     loader_state_slot_id: Option<String>,
+    #[serde(default)]
+    loader_action: Option<usize>,
 }
 #[derive(Clone)]
 struct RouterState {
@@ -456,6 +460,8 @@ pub struct PlecRuntime {
     router: Rc<RefCell<Option<RouterState>>>,
     router_listeners: Rc<RefCell<Vec<RouterListener>>>,
     typed: Rc<RefCell<Option<TypedRuntime>>>,
+    typed_registry: Rc<RefCell<HashMap<String, TypedApplication>>>,
+    typed_manifest: Rc<RefCell<Option<RouteManifest>>>,
 }
 impl Clone for PlecRuntime {
     fn clone(&self) -> Self {
@@ -465,6 +471,8 @@ impl Clone for PlecRuntime {
             router: Rc::clone(&self.router),
             router_listeners: Rc::clone(&self.router_listeners),
             typed: Rc::clone(&self.typed),
+            typed_registry: Rc::clone(&self.typed_registry),
+            typed_manifest: Rc::clone(&self.typed_manifest),
         }
     }
 }
@@ -478,6 +486,8 @@ impl PlecRuntime {
             router: Rc::new(RefCell::new(None)),
             router_listeners: Rc::new(RefCell::new(Vec::new())),
             typed: Rc::new(RefCell::new(None)),
+            typed_registry: Rc::new(RefCell::new(HashMap::new())),
+            typed_manifest: Rc::new(RefCell::new(None)),
         }
     }
     pub fn load_application(&self, ir: JsValue) -> Result<(), JsValue> {
@@ -501,6 +511,13 @@ impl PlecRuntime {
     /** Registering is definition-only: it creates no DOM, listeners, or
      * runtime identity. A route/outlet mount chooses an instance later. */
     pub fn register_graph(&self, graph_id: String, ir: JsValue) -> Result<(), JsValue> {
+        let value: Value = serde_wasm_bindgen::from_value(ir.clone()).map_err(error)?;
+        if value.get("version").and_then(Value::as_str) == Some("0.9") {
+            let app: TypedApplication = serde_json::from_value(value).map_err(error)?;
+            app.validate()?;
+            self.typed_registry.borrow_mut().insert(graph_id, app);
+            return Ok(());
+        }
         let application: Application = serde_wasm_bindgen::from_value(ir).map_err(error)?;
         if application.version != "0.8" {
             return Err(JsValue::from_str("unsupported application IR version"));
@@ -516,6 +533,13 @@ impl PlecRuntime {
      * outlet replacement never return to TypeScript. */
     pub fn start(&self, root: Element, manifest: JsValue) -> Result<(), JsValue> {
         let manifest: RouteManifest = serde_wasm_bindgen::from_value(manifest).map_err(error)?;
+        if manifest.version == Some(3) {
+            if !self.typed_registry.borrow().contains_key(&manifest.root_graph_id) {
+                return Err(JsValue::from_str("typed root graph is not registered"));
+            }
+            *self.typed_manifest.borrow_mut() = Some(manifest);
+            return self.navigate_typed_route(&window()?.location().pathname().unwrap_or_else(|_| "/".into()), root);
+        }
         self.dispose_router_listeners();
         let root_instance_id = graph_instance_id(None, "main", None);
         if self.instances.borrow().contains_key(&root_instance_id) {
@@ -541,6 +565,11 @@ impl PlecRuntime {
         self.navigate_internal(&pathname, true)
     }
     pub fn navigate(&self, href: String, replace: bool) -> Result<(), JsValue> {
+        if self.typed_manifest.borrow().is_some() {
+            let root = self.typed.borrow().as_ref().and_then(|typed| typed.root.clone())
+                .ok_or_else(|| JsValue::from_str("typed router has not started"))?;
+            return self.navigate_typed_route(&href, root);
+        }
         self.navigate_internal(&href, replace)
     }
     pub fn mount(&self, root: Element) -> Result<JsValue, JsValue> {
@@ -714,6 +743,8 @@ impl PlecRuntime {
         }
         self.dispose_router_listeners();
         *self.router.borrow_mut() = None;
+        *self.typed_manifest.borrow_mut() = None;
+        self.typed_registry.borrow_mut().clear();
         let instance_ids = self.instances.borrow().keys().cloned().collect::<Vec<_>>();
         for instance_id in instance_ids {
             if self.instances.borrow().contains_key(&instance_id) {
@@ -2347,6 +2378,41 @@ impl PlecRuntime {
         m.dom_operations += 1;
         Ok(())
     }
+    /** Version-3 artifacts never enter the string-id router. Until nested
+     * typed outlets gain their own instance table, navigation replaces the
+     * typed mount root as one owned instance. */
+    fn navigate_typed_route(&self, href: &str, root: Element) -> Result<(), JsValue> {
+        let manifest = self.typed_manifest.borrow().clone()
+            .ok_or_else(|| JsValue::from_str("typed router manifest missing"))?;
+        let pathname = href.split('?').next().unwrap_or(href);
+        let route = manifest.routes.iter().find(|route| route.path == pathname)
+            .or_else(|| manifest.routes.iter().find(|route| route.path == "*"));
+        let (graph_id, loader_action) = match route {
+            Some(route) => (&route.graph_id, route.loader_action),
+            None => (&manifest.root_graph_id, None),
+        };
+        let app = self.typed_registry.borrow().get(graph_id).cloned()
+            .ok_or_else(|| JsValue::from_str("typed route graph is not registered"))?;
+        let typed = TypedRuntime::new(app)?;
+        *self.typed.borrow_mut() = Some(typed);
+        self.mount_typed(root)?;
+        if let Some(action) = loader_action {
+            #[cfg(not(feature = "fetch"))]
+            return Err(JsValue::from_str("fetch capability is disabled"));
+            #[cfg(feature = "fetch")]
+            {
+                let pending = {
+                    let mut typed = self.typed.borrow_mut();
+                    let typed = typed.as_mut().expect("typed runtime installed");
+                    let mut metrics = UpdateMetrics::default();
+                    typed.execute_action(action, &[], None, None, &mut metrics)?;
+                    typed.take_pending_fetches()
+                };
+                for request in pending { self.start_typed_fetch(request)?; }
+            }
+        }
+        Ok(())
+    }
     fn mount_typed(&self, root: Element) -> Result<JsValue, JsValue> {
         let metrics = {
             let mut typed = self.typed.borrow_mut();
@@ -2438,7 +2504,17 @@ impl PlecRuntime {
             if typed.root.is_none() { return Ok(()); }
             let mut frame = pending.frame;
             let pc = match result {
-                Ok(value) => { if pending.result_slot >= frame.len() { return Err(JsValue::from_str("result frame slot out of range")); } frame[pending.result_slot] = value; pending.success_pc }
+                Ok(value) => {
+                    if pending.result_slot >= frame.len() { return Err(JsValue::from_str("result frame slot out of range")); }
+                    frame[pending.result_slot] = value.clone();
+                    if let Some(state) = typed.app.actions.get(pending.action).and_then(|action| action.route_loader.then_some(action.loader_result_state).flatten()) {
+                        if state >= typed.states.len() { return Err(JsValue::from_str("loader state handle out of range")); }
+                        typed.states[state] = value;
+                        let mut loader_metrics = UpdateMetrics::default();
+                        typed.refresh_state(state, &mut loader_metrics)?;
+                    }
+                    pending.success_pc
+                }
                 Err(error) => { if pending.error_slot >= frame.len() { return Err(JsValue::from_str("error frame slot out of range")); } frame[pending.error_slot] = serde_json::json!({"message": error.as_string().unwrap_or_else(|| "network request failed".into())}); pending.failure_pc }
             };
             let mut metrics = UpdateMetrics::default();
@@ -2481,11 +2557,7 @@ fn graph_instance_id(parent: Option<&str>, outlet: &str, key: Option<&str>) -> S
 
 impl TypedRuntime {
     fn new(app: TypedApplication) -> Result<Self, JsValue> {
-        if app.version != "0.9" {
-            return Err(JsValue::from_str(
-                "unsupported executable application version",
-            ));
-        }
+        app.validate()?;
         let mut states = Vec::new();
         for slot in &app.state_slots {
             states.push(typed_eval(&app, slot.initial_expression, &[], None, 0)?);
@@ -2989,6 +3061,40 @@ impl TypedRuntime {
                 .collect::<Vec<_>>();
             let parent = self.parent_for_loop(loop_index)?;
             self.reconcile_loop(loop_index, &parent, projection, metrics)?;
+        }
+        Ok(())
+    }
+}
+
+impl TypedApplication {
+    /** Cheap decoder validation mirrors the TypeScript schema at the WASM
+     * trust boundary, before an instruction can reach the VM. */
+    fn validate(&self) -> Result<(), JsValue> {
+        if self.version != "0.9" { return Err(JsValue::from_str("unsupported executable application version")); }
+        if self.root_node >= self.nodes.len() { return Err(JsValue::from_str("root node handle out of range")); }
+        for state in &self.state_slots {
+            if state.initial_expression >= self.expressions.len() { return Err(JsValue::from_str("state expression handle out of range")); }
+        }
+        for event in &self.events {
+            if event.target >= self.nodes.len() || event.event_type >= self.strings.len() || event.action >= self.actions.len() || event.fields.iter().any(|field| *field >= self.strings.len()) {
+                return Err(JsValue::from_str("event handle out of range"));
+            }
+        }
+        for action in &self.actions {
+            for slot in &action.parameter_slots { if *slot >= action.frame_slots { return Err(JsValue::from_str("action parameter frame slot out of range")); } }
+            for instruction in &action.instructions {
+                match instruction {
+                    TypedActionInstruction::Evaluate { expression } if *expression >= self.expressions.len() => return Err(JsValue::from_str("action expression handle out of range")),
+                    TypedActionInstruction::StoreState { state } if *state >= self.state_slots.len() => return Err(JsValue::from_str("action state handle out of range")),
+                    TypedActionInstruction::CollectionMutation { input, .. } if *input >= self.inputs.len() => return Err(JsValue::from_str("action input handle out of range")),
+                    TypedActionInstruction::Call { action, .. } if *action >= self.actions.len() => return Err(JsValue::from_str("action handle out of range")),
+                    TypedActionInstruction::Jump { target } | TypedActionInstruction::JumpIfFalse { target } if *target >= action.instructions.len() => return Err(JsValue::from_str("action jump target out of range")),
+                    TypedActionInstruction::CapabilityRequest { request, success_pc, failure_pc, finally_pc, result_slot, error_slot, .. } => {
+                        if request.url >= self.expressions.len() || request.body.map(|body| body >= self.expressions.len()).unwrap_or(false) || request.headers.iter().any(|header| header.name >= self.strings.len() || header.value >= self.expressions.len()) || *success_pc >= action.instructions.len() || *failure_pc >= action.instructions.len() || finally_pc.map(|pc| pc >= action.instructions.len()).unwrap_or(false) || *result_slot >= action.frame_slots || *error_slot >= action.frame_slots { return Err(JsValue::from_str("invalid action continuation")); }
+                    }
+                    _ => {}
+                }
+            }
         }
         Ok(())
     }
