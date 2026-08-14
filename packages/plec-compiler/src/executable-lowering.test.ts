@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lowerExecutableApplication } from './executable-lowering.ts';
+import { lowerCompilerFacts, lowerExecutableApplication } from './executable-lowering.ts';
 
 describe('executable lowering seam', () => {
   it('assigns stable table handles from compiler fact order without reading 0.8 IR', () => {
@@ -168,5 +168,24 @@ describe('executable lowering seam', () => {
       loops: [{ sourceExpression: 1, dependencySlots: [0] }],
       actions: [{ routeLoader: true, loaderResultState: 0 }],
     });
+  });
+  it('rejects unresolved action references instead of emitting handle zero', () => {
+    expect(() =>
+      lowerExecutableApplication({
+        strings: ['div'],
+        nodes: [{ op: 'element', tag: 0, parent: null, children: [] }],
+        rootNode: 0,
+        events: [{ target: 0, type: 0, action: 3, fields: [] }],
+      }),
+    ).toThrow(/HANDLE_OUT_OF_RANGE:actions:3/);
+  });
+  it('rejects unresolved legacy action references instead of substituting handle zero', () => {
+    expect(() =>
+      lowerCompilerFacts({
+        rootElementId: 'root',
+        elements: [{ id: 'root', tag: 'div' }],
+        actions: [{ id: 'a1', operations: [{ kind: 'invoke-action-ref', actionId: 'missing' }] }],
+      }),
+    ).toThrow(/EXECUTABLE_REFERENCE_MISSING:action a1 call missing/);
   });
 });

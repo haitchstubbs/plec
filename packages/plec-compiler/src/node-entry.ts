@@ -304,7 +304,29 @@ function compileRouteLoader(
   });
   const action = (result.ir as any).actions[0];
   if (!action) throw new Error(`Route loader in ${loader.moduleId} did not lower to an action.`);
+  validateRouteLoaderAction(action, loader.moduleId);
   return { ...action, parameterSlots: [] };
+}
+
+/** Router policy is intentionally stricter than the generic typed action VM. */
+export function validateRouteLoaderAction(action: any, moduleId = 'route loader') {
+  const requests = (action.instructions ?? []).filter(
+    (instruction: any) => instruction.op === 'capabilityRequest' && instruction.capability === 'fetch',
+  );
+  if (requests.length !== 1)
+    throw new Error(`Route loader in ${moduleId} requires exactly one terminal fetch capability request.`);
+  const request = requests[0];
+  const length = action.instructions.length;
+  if (
+    !Number.isInteger(request.successPc) ||
+    !Number.isInteger(request.failurePc) ||
+    request.successPc < 0 ||
+    request.failurePc < 0 ||
+    request.successPc >= length ||
+    request.failurePc >= length ||
+    (request.finallyPc !== undefined && (!Number.isInteger(request.finallyPc) || request.finallyPc < 0 || request.finallyPc >= length))
+  )
+    throw new Error(`Route loader in ${moduleId} has invalid terminal fetch continuations.`);
 }
 
 function importBindings(module: SourceGraphModule): Map<string, string> {

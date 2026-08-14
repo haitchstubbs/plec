@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { compileRouteEntry, readSourceGraph } from './node-entry.ts';
+import { compileRouteEntry, readSourceGraph, validateRouteLoaderAction } from './node-entry.ts';
 
 describe('readSourceGraph', () => {
   it('follows authored JavaScript specifiers to available TypeScript source', async () => {
@@ -25,5 +25,27 @@ describe('Slice 3 route cutover', () => {
         repoRootDir: '.',
       }),
     ).rejects.toThrow(/ENOENT/);
+  });
+  it('requires one valid terminal fetch for typed route loaders', () => {
+    expect(() => validateRouteLoaderAction({ instructions: [] }, 'routes/todos.tsx')).toThrow(
+      /exactly one terminal fetch/,
+    );
+    expect(() =>
+      validateRouteLoaderAction({
+        instructions: [
+          { op: 'capabilityRequest', capability: 'fetch', successPc: 1, failurePc: 1 },
+          { op: 'return' },
+        ],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateRouteLoaderAction({
+        instructions: [
+          { op: 'capabilityRequest', capability: 'fetch', successPc: 1, failurePc: 1 },
+          { op: 'capabilityRequest', capability: 'fetch', successPc: 2, failurePc: 2 },
+          { op: 'return' },
+        ],
+      }),
+    ).toThrow(/exactly one terminal fetch/);
   });
 });

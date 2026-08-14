@@ -43,6 +43,11 @@ export function lowerCompilerFacts(
       index,
     ]),
   );
+  const required = <T>(value: T | undefined, description: string): T => {
+    if (value === undefined)
+      throw new Error(`EXECUTABLE_REFERENCE_MISSING:${description}`);
+    return value;
+  };
   const hostSlots: any[] = [];
   const host = (value: any) => {
     const key = `${value.name}:${value.query ?? ''}`;
@@ -289,7 +294,10 @@ export function lowerCompilerFacts(
       keyExpression,
       itemSlot: 0,
       ...(loop.indexName ? { indexSlot: 1 } : {}),
-      rowTemplate: nodeIndex.get(loop.rowTemplateRootElementId) ?? 0,
+      rowTemplate: required(
+        nodeIndex.get(loop.rowTemplateRootElementId),
+        `loop ${loop.id} row template ${loop.rowTemplateRootElementId}`,
+      ),
       dependencySlots: (ir.localStates ?? []).flatMap(
         (slot: any, index: number) =>
           (loop.dependencyStateNames ?? []).includes(slot.name) ||
@@ -299,8 +307,13 @@ export function lowerCompilerFacts(
       ),
       ...(loop.inputId
         ? {
-            input: (ir.inputs ?? []).findIndex(
-              (input: any) => input.id === loop.inputId,
+            input: required(
+              (ir.inputs ?? []).findIndex(
+                (input: any) => input.id === loop.inputId,
+              ) >= 0
+                ? (ir.inputs ?? []).findIndex((input: any) => input.id === loop.inputId)
+                : undefined,
+              `loop ${loop.id} input ${loop.inputId}`,
             ),
           }
         : {}),
@@ -321,12 +334,12 @@ export function lowerCompilerFacts(
     nodes[nodeIndex.get(text.id)!].parent =
       nodeIndex.get(text.parentId) ?? null;
   const bindings = (ir.bindings ?? []).map((binding: any) => ({
-    target: nodeIndex.get(binding.targetId) ?? 0,
+    target: required(nodeIndex.get(binding.targetId), `binding ${binding.id} target ${binding.targetId}`),
     sink: binding.kind,
     ...(binding.attributeName
       ? { name: string(binding.attributeName) }
       : {}),
-    expression: expressionById.get(binding.expressionId) ?? 0,
+    expression: required(expressionById.get(binding.expressionId), `binding ${binding.id} expression ${binding.expressionId}`),
   }));
   for (const [index, binding] of (ir.bindings ?? []).entries())
     if (binding.kind === 'text')
@@ -343,7 +356,7 @@ export function lowerCompilerFacts(
         name: string(write.name),
         kind: write.kind,
         ...(write.expressionId
-          ? { expression: expressionById.get(write.expressionId) ?? 0 }
+          ? { expression: required(expressionById.get(write.expressionId), `prop ${entry.id} expression ${write.expressionId}`) }
           : { constant: constant(write.staticValue ?? '') }),
       })),
   }));
@@ -362,7 +375,7 @@ export function lowerCompilerFacts(
       frameSlot: index,
     }),
   );
-  const rootNode = nodeIndex.get(ir.rootElementId) ?? 0;
+  const rootNode = required(nodeIndex.get(ir.rootElementId), `root node ${ir.rootElementId}`);
   const actionById = new Map<string, number>(
     (ir.actions ?? []).map((action: any, index: number) => [action.id, index]),
   );
@@ -384,13 +397,27 @@ export function lowerCompilerFacts(
         switch (operation?.kind) {
           case 'set-state':
             instructions.push({ op: 'evaluate', expression: expression(operation.value, { slots, eventFields: fieldSlots }) });
-            instructions.push({ op: 'storeState', state: stateByName.get((ir.localStates ?? []).find((state: any) => state.id === operation.stateSlotId)?.name) ?? 0 });
+            instructions.push({ op: 'storeState', state: required(stateByName.get((ir.localStates ?? []).find((state: any) => state.id === operation.stateSlotId)?.name), `action ${action.id} state ${operation.stateSlotId}`) });
             break;
           case 'prevent-default': instructions.push({ op: 'preventDefault' }); break;
           case 'return': instructions.push({ op: 'return' }); break;
           case 'invoke-action-ref':
-            instructions.push({ op: 'call', action: actionById.get(operation.actionId) ?? 0, arguments: (operation.parameters ?? []).map((value: any) => expression(value, { slots, eventFields: fieldSlots })) });
+            instructions.push({ op: 'call', action: required(actionById.get(operation.actionId), `action ${action.id} call ${operation.actionId}`), arguments: (operation.parameters ?? []).map((value: any) => expression(value, { slots, eventFields: fieldSlots })) });
             break;
+          case 'collection': {
+            const input = (ir.inputs ?? []).findIndex((entry: any) => entry.id === operation.inputId);
+            if (input < 0) throw new Error(`EXECUTABLE_REFERENCE_MISSING:action ${action.id} collection input ${operation.inputId}`);
+            if (!operation.key) throw new Error(`EXECUTABLE_COLLECTION_KEY_MISSING:action ${action.id}`);
+            if (operation.operation !== 'keyed-remove' && !operation.value)
+              throw new Error(`EXECUTABLE_COLLECTION_VALUE_MISSING:action ${action.id}`);
+            instructions.push({
+              op: 'collectionMutation', input,
+              kind: operation.operation === 'keyed-replace' ? 'keyedReplace' : operation.operation === 'keyed-remove' ? 'keyedRemove' : 'append',
+              key: expression(operation.key, { slots, eventFields: fieldSlots }),
+              ...(operation.value ? { value: expression(operation.value, { slots, eventFields: fieldSlots }) } : {}),
+            });
+            break;
+          }
           case 'if': {
             instructions.push({ op: 'evaluate', expression: expression(operation.test, { slots, eventFields: fieldSlots }) });
             const branch = instructions.length;
@@ -436,9 +463,10 @@ export function lowerCompilerFacts(
     return { instructions, frameSlots: nextSlot, parameterSlots: [] };
   });
   for (const event of ir.events ?? []) {
-    const actionIndex: number = actionById.get(event.actionId) ?? 0;
+    const actionIndex: number = required(actionById.get(event.actionId), `event ${event.id} action ${event.actionId}`);
     const fields = eventFields((ir.actions ?? [])[actionIndex]?.operations ?? []);
-    events.push({ target: nodeIndex.get(event.targetId) ?? 0, type: string(event.type), action: actionIndex, fields: fields.map((field) => string(field)), ...(event.loopId ? { loop: (ir.loops ?? []).findIndex((loop: any) => loop.id === event.loopId) } : {}) });
+    const loop = event.loopId ? (ir.loops ?? []).findIndex((entry: any) => entry.id === event.loopId) : undefined;
+    events.push({ target: required(nodeIndex.get(event.targetId), `event ${event.id} target ${event.targetId}`), type: string(event.type), action: actionIndex, fields: fields.map((field) => string(field)), ...(loop === undefined ? {} : { loop: required(loop >= 0 ? loop : undefined, `event ${event.id} loop ${event.loopId}`) }) });
   }
   const dependencyEdges: any[] = [];
   const loopIndexById = new Map(

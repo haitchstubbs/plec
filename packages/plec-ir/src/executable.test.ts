@@ -141,4 +141,46 @@ describe('ExecutableApplication 0.9', () => {
       /FRAME_SLOT_OUT_OF_RANGE/,
     );
   });
+  it('validates explicit, typed collection mutation operands', () => {
+    const valid: any = application();
+    valid.inputs = [{ name: 1, kind: 'collection' }];
+    valid.actions[0] = {
+      instructions: [
+        { op: 'collectionMutation', input: 0, kind: 'append', key: 0, value: 0 },
+        { op: 'collectionMutation', input: 0, kind: 'keyedReplace', key: 0, value: 0 },
+        { op: 'collectionMutation', input: 0, kind: 'keyedRemove', key: 0 },
+      ],
+    };
+    expect(() => validateExecutableApplication(valid)).not.toThrow();
+
+    const missingValue: any = structuredClone(valid);
+    delete missingValue.actions[0].instructions[0].value;
+    expect(() => validateExecutableApplication(missingValue)).toThrow(
+      /COLLECTION_MUTATION_REQUIRES_VALUE/,
+    );
+    const removeValue: any = structuredClone(valid);
+    removeValue.actions[0].instructions[2].value = 0;
+    expect(() => validateExecutableApplication(removeValue)).toThrow(
+      /COLLECTION_REMOVE_FORBIDS_VALUE/,
+    );
+    const scalarInput: any = structuredClone(valid);
+    scalarInput.inputs[0].kind = 'scalar';
+    expect(() => validateExecutableApplication(scalarInput)).toThrow(
+      /COLLECTION_MUTATION_REQUIRES_COLLECTION_INPUT/,
+    );
+  });
+  it('rejects duplicate action parameter slots while allowing implicit returns', () => {
+    const implicitReturn: any = application();
+    implicitReturn.actions[0] = { instructions: [{ op: 'preventDefault' }] };
+    expect(() => validateExecutableApplication(implicitReturn)).not.toThrow();
+    const duplicate: any = structuredClone(implicitReturn);
+    duplicate.actions[0] = {
+      frameSlots: 1,
+      parameterSlots: [0, 0],
+      instructions: [{ op: 'return' }],
+    };
+    expect(() => validateExecutableApplication(duplicate)).toThrow(
+      /DUPLICATE_PARAMETER_SLOT/,
+    );
+  });
 });
