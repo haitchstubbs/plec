@@ -490,7 +490,10 @@ export function validateExecutableApplication(
         instruction.op === 'loadFrame' &&
         instruction.slot >= program.frameSlots
       )
-        issue([...path, 'slot'], 'FRAME_SLOT_OUT_OF_RANGE');
+        issue(
+          ['expressions', expressionIndex, 'instructions', instructionIndex, 'slot'],
+          'FRAME_SLOT_OUT_OF_RANGE',
+        );
     }),
   );
   app.actions.forEach((program, actionIndex) => {
