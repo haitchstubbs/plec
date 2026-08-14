@@ -100,7 +100,7 @@ describe('executable lowering seam', () => {
       ],
       texts: [{ binding: 0 }],
       bindings: [{ target: 1, sink: 'text', expression: 1 }],
-      events: [{ target: 0, type: 2, action: 0, fields: [2] }],
+      events: [{ target: 0, type: 2, action: 0, fields: [{ name: 2, slot: 0 }] }],
       stateSlots: [{ initialExpression: 0, frameSlot: 0 }],
       expressions: [
         {

@@ -240,7 +240,8 @@ export const ExecutableApplicationSchema = z.object({
         target: ExecutableHandleSchema,
         type: ExecutableHandleSchema,
         action: ExecutableHandleSchema,
-        fields: z.array(ExecutableHandleSchema).default([]),
+        /** Dispatch initializes these action-frame slots in declaration order. */
+        fields: z.array(z.object({ name: ExecutableHandleSchema, slot: ExecutableHandleSchema })).default([]),
         loop: ExecutableHandleSchema.optional(),
       }),
     )
@@ -394,10 +395,34 @@ export function validateExecutableApplication(
     check(event.target, 'nodes', ['events', index, 'target']);
     check(event.type, 'strings', ['events', index, 'type']);
     check(event.action, 'actions', ['events', index, 'action']);
-    event.fields.forEach((field, fieldIndex) =>
-      check(field, 'strings', ['events', index, 'fields', fieldIndex]),
-    );
+    const action = app.actions[event.action];
+    const declaredSlots = new Set(event.fields.map((field) => field.slot));
+    event.fields.forEach((field, fieldIndex) => {
+      check(field.name, 'strings', ['events', index, 'fields', fieldIndex, 'name']);
+      if (action !== undefined && field.slot >= action.frameSlots)
+        issue(['events', index, 'fields', fieldIndex, 'slot'], 'FRAME_SLOT_OUT_OF_RANGE');
+    });
     check(event.loop, 'loops', ['events', index, 'loop']);
+    if (action !== undefined) {
+      const visited = new Set<number>();
+      const checkExpressionEventSlots = (expression: number) => {
+        if (visited.has(expression)) return;
+        visited.add(expression);
+        const program = app.expressions[expression];
+        program?.instructions.forEach((instruction) => {
+          if (instruction.op === 'loadEventField' && !declaredSlots.has(instruction.field))
+            issue(['events', index, 'fields'], 'UNDECLARED_EVENT_FRAME_SLOT');
+          if (instruction.op === 'filter') checkExpressionEventSlots(instruction.predicate);
+          if (instruction.op === 'map') checkExpressionEventSlots(instruction.mapper);
+        });
+      };
+      action.instructions.forEach((instruction) => {
+        if (instruction.op === 'evaluate') checkExpressionEventSlots(instruction.expression);
+        if (instruction.op === 'call') instruction.arguments.forEach(checkExpressionEventSlots);
+        if (instruction.op === 'collectionMutation') { checkExpressionEventSlots(instruction.key); if (instruction.value !== undefined) checkExpressionEventSlots(instruction.value); }
+        if (instruction.op === 'capabilityRequest') { checkExpressionEventSlots(instruction.request.url); if (instruction.request.body !== undefined) checkExpressionEventSlots(instruction.request.body); instruction.request.headers.forEach((header) => checkExpressionEventSlots(header.value)); }
+      });
+    }
   });
   app.propPrograms.forEach((program, index) => {
     check(program.target, 'nodes', ['propPrograms', index, 'target']);

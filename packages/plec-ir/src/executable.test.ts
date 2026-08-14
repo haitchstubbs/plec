@@ -16,7 +16,7 @@ function application(): ExecutableApplication {
     ],
     texts: [{ binding: 0 }],
     bindings: [{ target: 1, sink: 'text', expression: 1 }],
-    events: [{ target: 0, type: 1, action: 0, fields: [1] }],
+    events: [{ target: 0, type: 1, action: 0, fields: [{ name: 1, slot: 0 }] }],
     propPrograms: [],
     inputs: [],
     stateSlots: [{ initialExpression: 0, frameSlot: 0 }],
@@ -145,6 +145,7 @@ describe('ExecutableApplication 0.9', () => {
     const valid: any = application();
     valid.inputs = [{ name: 1, kind: 'collection' }];
     valid.actions[0] = {
+      frameSlots: 1,
       instructions: [
         { op: 'collectionMutation', input: 0, kind: 'append', key: 0, value: 0 },
         { op: 'collectionMutation', input: 0, kind: 'keyedReplace', key: 0, value: 0 },
@@ -171,7 +172,7 @@ describe('ExecutableApplication 0.9', () => {
   });
   it('rejects duplicate action parameter slots while allowing implicit returns', () => {
     const implicitReturn: any = application();
-    implicitReturn.actions[0] = { instructions: [{ op: 'preventDefault' }] };
+    implicitReturn.actions[0] = { frameSlots: 1, instructions: [{ op: 'preventDefault' }] };
     expect(() => validateExecutableApplication(implicitReturn)).not.toThrow();
     const duplicate: any = structuredClone(implicitReturn);
     duplicate.actions[0] = {
