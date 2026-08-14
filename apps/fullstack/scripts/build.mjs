@@ -66,7 +66,7 @@ for (const graph of graphs)
     `${JSON.stringify(graph, null, 2)}\n`,
   );
 const routeManifest = {
-  version: 2,
+  version: 3,
   revision: compiledRoutes.revision,
   rootGraphId: compiledRoutes.rootGraph.graphId,
   routes: compiledRoutes.routes.map((route) => ({
@@ -74,8 +74,7 @@ const routeManifest = {
     graphId: route.graph.graphId,
     pendingGraphId: route.pendingGraph?.graphId,
     errorGraphId: route.errorGraph?.graphId,
-    loader: route.loader,
-    loaderStateSlotId: route.loaderStateSlotId,
+    loaderAction: route.loaderAction,
     outletId: route.outletId,
   })),
 };

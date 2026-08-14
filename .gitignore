@@ -39,3 +39,6 @@ packages/lucide-plec/src/icons/
 
 # Executable files
 *.exe
+
+# Temporary files
+.tmp
