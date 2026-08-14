@@ -14,6 +14,16 @@ const features = process.env.PLEC_RUNTIME_FEATURES
   .map((feature) => feature.trim())
   .filter(Boolean);
 await mkdir(temporaryDirectory, { recursive: true });
+const profile = process.env.PLEC_RUNTIME_PROFILE ?? 'full';
+const profileFeatures = {
+  full: undefined,
+  core: [],
+  router: ['router'],
+  fetch: ['fetch'],
+}[profile];
+if (profileFeatures === undefined && profile !== 'full')
+  throw new Error(`Unknown PLEC_RUNTIME_PROFILE: ${profile}`);
+const selectedFeatures = features ?? profileFeatures;
 execFileSync(
   'wasm-pack',
   [
@@ -25,7 +35,9 @@ execFileSync(
     'dist/runtime',
     '--out-name',
     'runtime',
-    ...(features?.length ? ['--', '--features', features.join(',')] : []),
+    ...(selectedFeatures
+      ? ['--', ...(profile === 'core' || profile === 'router' || profile === 'fetch' ? ['--no-default-features'] : []), ...(selectedFeatures.length ? ['--features', selectedFeatures.join(',')] : [])]
+      : []),
   ],
   {
     cwd: packageRoot,
