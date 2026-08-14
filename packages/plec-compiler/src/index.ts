@@ -2624,7 +2624,9 @@ function buildTypedActionFact(
   const eventFields = actionEventFields(sourceOperations);
   const eventSlots = new Map(eventFields.map((field, index) => [field, index]));
   const slots = new Map<string, number>();
-  let nextSlot = 0;
+  // Event values are ordinary initialized action-frame slots; locally
+  // allocated continuation slots therefore begin after them.
+  let nextSlot = eventFields.length;
   const slot = (name: string) => {
     const existing = slots.get(name);
     if (existing !== undefined) return existing;

@@ -43,7 +43,10 @@ export function lowerCompilerFacts(
       index,
     ]),
   );
-  const required = <T>(value: T | undefined, description: string): T => {
+  const required = <T>(
+    value: T | undefined,
+    description: string,
+  ): T => {
     if (value === undefined)
       throw new Error(`EXECUTABLE_REFERENCE_MISSING:${description}`);
     return value;
@@ -70,7 +73,12 @@ export function lowerCompilerFacts(
   );
   const program = (
     expression: any,
-    frame: { item?: string; index?: string; slots?: Map<string, number>; eventFields?: Map<string, number> } = {},
+    frame: {
+      item?: string;
+      index?: string;
+      slots?: Map<string, number>;
+      eventFields?: Map<string, number>;
+    } = {},
   ) => {
     const instructions: any[] = [];
     const emit = (value: any): void => {
@@ -94,7 +102,10 @@ export function lowerCompilerFacts(
         else if (value.name === frame.item || rowNames.has(value.name))
           instructions.push({ op: 'loadRowField', field: string('') });
         else if (frame.slots?.has(value.name))
-          instructions.push({ op: 'loadFrame', slot: frame.slots.get(value.name) });
+          instructions.push({
+            op: 'loadFrame',
+            slot: frame.slots.get(value.name),
+          });
         else if (value.name === 'host')
           instructions.push({
             op: 'loadHost',
@@ -114,7 +125,10 @@ export function lowerCompilerFacts(
       if (value.kind === 'member') {
         const eventField = eventMember(value);
         if (eventField && frame.eventFields?.has(eventField)) {
-          instructions.push({ op: 'loadEventField', field: frame.eventFields.get(eventField) });
+          instructions.push({
+            op: 'loadEventField',
+            field: frame.eventFields.get(eventField),
+          });
           return;
         }
         emit(value.object);
@@ -254,8 +268,10 @@ export function lowerCompilerFacts(
   const expressions: any[] = [];
   for (const entry of ir.expressions ?? [])
     expressions.push(program(entry.expression));
-  const expression = (value: any, frame: Parameters<typeof program>[1] = {}) =>
-    expressions.push(program(value, frame)) - 1;
+  const expression = (
+    value: any,
+    frame: Parameters<typeof program>[1] = {},
+  ) => expressions.push(program(value, frame)) - 1;
   const nodeIndex = new Map<string, number>();
   const nodes: any[] = [];
   for (const element of ir.elements ?? []) {
@@ -311,7 +327,9 @@ export function lowerCompilerFacts(
               (ir.inputs ?? []).findIndex(
                 (input: any) => input.id === loop.inputId,
               ) >= 0
-                ? (ir.inputs ?? []).findIndex((input: any) => input.id === loop.inputId)
+                ? (ir.inputs ?? []).findIndex(
+                    (input: any) => input.id === loop.inputId,
+                  )
                 : undefined,
               `loop ${loop.id} input ${loop.inputId}`,
             ),
@@ -334,12 +352,18 @@ export function lowerCompilerFacts(
     nodes[nodeIndex.get(text.id)!].parent =
       nodeIndex.get(text.parentId) ?? null;
   const bindings = (ir.bindings ?? []).map((binding: any) => ({
-    target: required(nodeIndex.get(binding.targetId), `binding ${binding.id} target ${binding.targetId}`),
+    target: required(
+      nodeIndex.get(binding.targetId),
+      `binding ${binding.id} target ${binding.targetId}`,
+    ),
     sink: binding.kind,
     ...(binding.attributeName
       ? { name: string(binding.attributeName) }
       : {}),
-    expression: required(expressionById.get(binding.expressionId), `binding ${binding.id} expression ${binding.expressionId}`),
+    expression: required(
+      expressionById.get(binding.expressionId),
+      `binding ${binding.id} expression ${binding.expressionId}`,
+    ),
   }));
   for (const [index, binding] of (ir.bindings ?? []).entries())
     if (binding.kind === 'text')
@@ -356,7 +380,12 @@ export function lowerCompilerFacts(
         name: string(write.name),
         kind: write.kind,
         ...(write.expressionId
-          ? { expression: required(expressionById.get(write.expressionId), `prop ${entry.id} expression ${write.expressionId}`) }
+          ? {
+              expression: required(
+                expressionById.get(write.expressionId),
+                `prop ${entry.id} expression ${write.expressionId}`,
+              ),
+            }
           : { constant: constant(write.staticValue ?? '') }),
       })),
   }));
@@ -375,40 +404,166 @@ export function lowerCompilerFacts(
       frameSlot: index,
     }),
   );
-  const rootNode = required(nodeIndex.get(ir.rootElementId), `root node ${ir.rootElementId}`);
+  const rootNode = required(
+    nodeIndex.get(ir.rootElementId),
+    `root node ${ir.rootElementId}`,
+  );
   const actionById = new Map<string, number>(
-    (ir.actionFacts ?? []).map((action: any, index: number) => [action.id, index]),
+    (ir.actionFacts ?? []).map((action: any, index: number) => [
+      action.id,
+      index,
+    ]),
   );
   const events: any[] = [];
   const actions = (ir.actionFacts ?? []).map((action: any) => {
     const actionInstruction = (instruction: any): any => {
-      const frame = { slots: instruction.slots as Map<string, number> | undefined, eventFields: instruction.eventSlots as Map<string, number> | undefined };
+      const frame = {
+        slots: instruction.slots as Map<string, number> | undefined,
+        eventFields: instruction.eventSlots as
+          Map<string, number> | undefined,
+      };
       switch (instruction.op) {
-        case 'evaluate': return { op: 'evaluate', expression: expression(instruction.expression, frame) };
-        case 'storeState': return { op: 'storeState', state: required(stateByName.get((ir.localStates ?? []).find((state: any) => state.id === instruction.stateSlotId)?.name), `action ${action.id} state ${instruction.stateSlotId}`) };
-        case 'preventDefault': case 'jump': case 'jumpIfFalse': case 'return': return { ...instruction, eventSlots: undefined, slots: undefined };
-        case 'call': return { op: 'call', action: required(actionById.get(instruction.actionId), `action ${action.id} call ${instruction.actionId}`), arguments: (instruction.arguments ?? []).map((value: any) => expression(value, frame)) };
+        case 'evaluate':
+          return {
+            op: 'evaluate',
+            expression: expression(instruction.expression, frame),
+          };
+        case 'storeState':
+          return {
+            op: 'storeState',
+            state: required(
+              stateByName.get(
+                (ir.localStates ?? []).find(
+                  (state: any) => state.id === instruction.stateSlotId,
+                )?.name,
+              ),
+              `action ${action.id} state ${instruction.stateSlotId}`,
+            ),
+          };
+        case 'preventDefault':
+        case 'jump':
+        case 'jumpIfFalse':
+        case 'return':
+          return {
+            ...instruction,
+            eventSlots: undefined,
+            slots: undefined,
+          };
+        case 'call':
+          return {
+            op: 'call',
+            action: required(
+              actionById.get(instruction.actionId),
+              `action ${action.id} call ${instruction.actionId}`,
+            ),
+            arguments: (instruction.arguments ?? []).map((value: any) =>
+              expression(value, frame),
+            ),
+          };
         case 'collectionMutation': {
-          const input = (ir.inputs ?? []).findIndex((entry: any) => entry.id === instruction.inputId);
-          if (input < 0) throw new Error(`EXECUTABLE_REFERENCE_MISSING:action ${action.id} collection input ${instruction.inputId}`);
-          if (!instruction.key) throw new Error(`EXECUTABLE_COLLECTION_KEY_MISSING:action ${action.id}`);
-          if (instruction.kind !== 'keyed-remove' && !instruction.value) throw new Error(`EXECUTABLE_COLLECTION_VALUE_MISSING:action ${action.id}`);
-          return { op: 'collectionMutation', input, kind: instruction.kind === 'keyed-replace' ? 'keyedReplace' : instruction.kind === 'keyed-remove' ? 'keyedRemove' : 'append', key: expression(instruction.key, frame), ...(instruction.value ? { value: expression(instruction.value, frame) } : {}) };
+          const input = (ir.inputs ?? []).findIndex(
+            (entry: any) => entry.id === instruction.inputId,
+          );
+          if (input < 0)
+            throw new Error(
+              `EXECUTABLE_REFERENCE_MISSING:action ${action.id} collection input ${instruction.inputId}`,
+            );
+          if (!instruction.key)
+            throw new Error(
+              `EXECUTABLE_COLLECTION_KEY_MISSING:action ${action.id}`,
+            );
+          if (instruction.kind !== 'keyed-remove' && !instruction.value)
+            throw new Error(
+              `EXECUTABLE_COLLECTION_VALUE_MISSING:action ${action.id}`,
+            );
+          return {
+            op: 'collectionMutation',
+            input,
+            kind:
+              instruction.kind === 'keyed-replace'
+                ? 'keyedReplace'
+                : instruction.kind === 'keyed-remove'
+                  ? 'keyedRemove'
+                  : 'append',
+            key: expression(instruction.key, frame),
+            ...(instruction.value
+              ? { value: expression(instruction.value, frame) }
+              : {}),
+          };
         }
         case 'capabilityRequest': {
           const request = instruction.request ?? {};
-          return { op: 'capabilityRequest', capability: 'fetch', request: { url: expression(request.url, frame), method: request.method ?? 'GET', decode: request.decode ?? 'json', requireOk: request.requireOk !== false, headers: Object.entries(request.headers ?? {}).map(([name, value]) => ({ name: string(name), value: expression(value, frame) })), ...(request.jsonBody ? { body: expression(request.jsonBody, frame) } : {}) }, successPc: instruction.successPc, failurePc: instruction.failurePc, ...(instruction.finallyPc === undefined ? {} : { finallyPc: instruction.finallyPc }), resultSlot: instruction.resultSlot, errorSlot: instruction.errorSlot };
+          return {
+            op: 'capabilityRequest',
+            capability: 'fetch',
+            request: {
+              url: expression(request.url, frame),
+              method: request.method ?? 'GET',
+              decode: request.decode ?? 'json',
+              requireOk: request.requireOk !== false,
+              headers: Object.entries(request.headers ?? {}).map(
+                ([name, value]) => ({
+                  name: string(name),
+                  value: expression(value, frame),
+                }),
+              ),
+              ...(request.jsonBody
+                ? { body: expression(request.jsonBody, frame) }
+                : {}),
+            },
+            successPc: instruction.successPc,
+            failurePc: instruction.failurePc,
+            ...(instruction.finallyPc === undefined
+              ? {}
+              : { finallyPc: instruction.finallyPc }),
+            resultSlot: instruction.resultSlot,
+            errorSlot: instruction.errorSlot,
+          };
         }
-        default: throw new Error(`EXECUTABLE_ACTION_FACT_INVALID:${instruction.op}`);
+        default:
+          throw new Error(
+            `EXECUTABLE_ACTION_FACT_INVALID:${instruction.op}`,
+          );
       }
     };
-    return { instructions: action.instructions.map(actionInstruction), frameSlots: action.frameSlots, parameterSlots: action.parameterSlots };
+    return {
+      instructions: action.instructions.map(actionInstruction),
+      frameSlots: action.frameSlots,
+      parameterSlots: action.parameterSlots,
+    };
   });
   for (const event of ir.events ?? []) {
-    const actionIndex: number = required(actionById.get(event.actionId), `event ${event.id} action ${event.actionId}`);
-    const fields = (ir.actionFacts ?? [])[actionIndex]?.eventFields ?? [];
-    const loop = event.loopId ? (ir.loops ?? []).findIndex((entry: any) => entry.id === event.loopId) : undefined;
-    events.push({ target: required(nodeIndex.get(event.targetId), `event ${event.id} target ${event.targetId}`), type: string(event.type), action: actionIndex, fields: fields.map((field: string) => string(field)), ...(loop === undefined ? {} : { loop: required(loop >= 0 ? loop : undefined, `event ${event.id} loop ${event.loopId}`) }) });
+    const actionIndex: number = required(
+      actionById.get(event.actionId),
+      `event ${event.id} action ${event.actionId}`,
+    );
+    const fields =
+      (ir.actionFacts ?? [])[actionIndex]?.eventFields ?? [];
+    const loop = event.loopId
+      ? (ir.loops ?? []).findIndex(
+          (entry: any) => entry.id === event.loopId,
+        )
+      : undefined;
+    events.push({
+      target: required(
+        nodeIndex.get(event.targetId),
+        `event ${event.id} target ${event.targetId}`,
+      ),
+      type: string(event.type),
+      action: actionIndex,
+      fields: fields.map((field: string, slot: number) => ({
+        name: string(field),
+        slot,
+      })),
+      ...(loop === undefined
+        ? {}
+        : {
+            loop: required(
+              loop >= 0 ? loop : undefined,
+              `event ${event.id} loop ${event.loopId}`,
+            ),
+          }),
+    });
   }
   const dependencyEdges: any[] = [];
   const loopIndexById = new Map(
@@ -529,13 +684,24 @@ export function lowerCompilerFacts(
   function eventMember(value: any): string | undefined {
     const property = value?.property;
     const object = value?.object;
-    if (object?.kind === 'identifier' && object.name === 'event') return property;
-    if (object?.kind === 'member' && object.object?.kind === 'identifier' && object.object.name === 'event' && object.property === 'currentTarget') return property;
+    if (object?.kind === 'identifier' && object.name === 'event')
+      return property;
+    if (
+      object?.kind === 'member' &&
+      object.object?.kind === 'identifier' &&
+      object.object.name === 'event' &&
+      object.property === 'currentTarget'
+    )
+      return property;
     return undefined;
   }
   function parseInitialValue(value: string | undefined) {
     if (!value || value === 'undefined') return null;
-    try { return JSON.parse(value); } catch { return null; }
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
   }
 }
 
