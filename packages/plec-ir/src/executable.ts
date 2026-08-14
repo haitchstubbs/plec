@@ -132,6 +132,10 @@ export const ActionInstructionSchema = z.discriminatedUnion('op', [
     op: z.literal('collectionMutation'),
     input: ExecutableHandleSchema,
     kind: z.enum(['append', 'keyedReplace', 'keyedRemove']),
+    /** The key is always explicit so collection identity never depends on row shape. */
+    key: ExecutableHandleSchema,
+    /** Remove is the only mutation that does not construct a replacement row. */
+    value: ExecutableHandleSchema.optional(),
   }),
   z.object({ op: z.literal('preventDefault') }),
   z.object({
@@ -497,9 +501,13 @@ export function validateExecutableApplication(
     }),
   );
   app.actions.forEach((program, actionIndex) => {
+    const parameterSlots = new Set<number>();
     program.parameterSlots.forEach((slot, parameterIndex) => {
       if (slot >= program.frameSlots)
         issue(['actions', actionIndex, 'parameterSlots', parameterIndex], 'FRAME_SLOT_OUT_OF_RANGE');
+      if (parameterSlots.has(slot))
+        issue(['actions', actionIndex, 'parameterSlots', parameterIndex], 'DUPLICATE_PARAMETER_SLOT');
+      parameterSlots.add(slot);
     });
     program.instructions.forEach((instruction, instructionIndex) => {
       const path = [
@@ -519,6 +527,16 @@ export function validateExecutableApplication(
         check(instruction.action, 'actions', [...path, 'action']);
       if ('input' in instruction)
         check(instruction.input, 'inputs', [...path, 'input']);
+      if (instruction.op === 'collectionMutation') {
+        check(instruction.key, 'expressions', [...path, 'key']);
+        check(instruction.value, 'expressions', [...path, 'value']);
+        if (app.inputs[instruction.input]?.kind !== 'collection')
+          issue([...path, 'input'], 'COLLECTION_MUTATION_REQUIRES_COLLECTION_INPUT');
+        if (instruction.kind === 'keyedRemove' && instruction.value !== undefined)
+          issue([...path, 'value'], 'COLLECTION_REMOVE_FORBIDS_VALUE');
+        if (instruction.kind !== 'keyedRemove' && instruction.value === undefined)
+          issue([...path, 'value'], 'COLLECTION_MUTATION_REQUIRES_VALUE');
+      }
       if (
         'target' in instruction &&
         instruction.target >= program.instructions.length
