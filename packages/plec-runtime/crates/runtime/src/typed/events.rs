@@ -8,6 +8,25 @@ pub(crate) struct TypedListener {
     pub(crate) loop_index: Option<usize>,
     pub(crate) row_key: Option<String>,
     pub(crate) generation: u64,
+    /// Runtime-instance identity. This is deliberately not part of the
+    /// executable artifact: graph definitions are immutable while listeners
+    /// belong to concrete DOM instances.
+    pub(crate) owner: TypedListenerOwner,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TypedListenerOwner {
+    Static,
+    Row {
+        loop_index: usize,
+        row_key: String,
+        generation: u64,
+    },
+    Conditional {
+        conditional: usize,
+        generation: u64,
+        row: Option<Box<TypedListenerOwner>>,
+    },
 }
 
 impl PlecRuntime {
@@ -18,9 +37,20 @@ impl PlecRuntime {
                 .as_ref()
                 .ok_or_else(|| JsValue::from_str("typed application missing"))?;
             let mut result = Vec::new();
+            let conditional_nodes = typed
+                .conditionals
+                .values()
+                .flat_map(|region| region.nodes.values())
+                .cloned()
+                .collect::<Vec<_>>();
             for binding in &typed.app.events {
                 if let Some(node) = typed.nodes.get(&binding.target) {
-                    result.push((binding.clone(), node.clone(), None, None, 0));
+                    if !conditional_nodes
+                        .iter()
+                        .any(|candidate| candidate.is_same_node(Some(node)))
+                    {
+                        result.push((binding.clone(), node.clone(), None, None, 0));
+                    }
                 }
                 if let Some(loop_index) = binding.r#loop {
                     if let Some(rows) = typed.loops.get(&loop_index) {
@@ -38,9 +68,45 @@ impl PlecRuntime {
                     }
                 }
             }
+            // Conditional branch nodes deliberately do not live in the global
+            // node map once their branch is replaced.
+            for (_conditional, region) in &typed.conditionals {
+                for binding in &typed.app.events {
+                    if let Some(node) = region.nodes.get(&binding.target) {
+                        result.push((binding.clone(), node.clone(), None, None, 0));
+                    }
+                }
+            }
             result
         };
         for (binding, node, loop_index, row_key, generation) in candidates {
+            let owner = loop_index
+                .map(|loop_index| TypedListenerOwner::Row {
+                    loop_index,
+                    row_key: row_key.clone().unwrap_or_default(),
+                    generation,
+                })
+                .unwrap_or_else(|| {
+                    let typed = self.typed.borrow();
+                    typed
+                        .as_ref()
+                        .unwrap()
+                        .conditionals
+                        .iter()
+                        .find(|(_, region)| {
+                            region
+                                .nodes
+                                .get(&binding.target)
+                                .map(|candidate| candidate.is_same_node(Some(&node)))
+                                .unwrap_or(false)
+                        })
+                        .map(|(conditional, region)| TypedListenerOwner::Conditional {
+                            conditional: *conditional,
+                            generation: region.generation,
+                            row: None,
+                        })
+                        .unwrap_or(TypedListenerOwner::Static)
+                });
             let element = node
                 .dyn_into::<Element>()
                 .map_err(|_| JsValue::from_str("event target is not an element"))?;
@@ -67,6 +133,8 @@ impl PlecRuntime {
                         && entry.loop_index == loop_index
                         && entry.row_key == row_key
                         && entry.generation == generation
+                        && entry.listener.event_type == event_type
+                        && entry.owner == owner
                 })
             {
                 continue;
@@ -77,14 +145,16 @@ impl PlecRuntime {
             let captured_loop = loop_index;
             let captured_key = row_key.clone();
             let callback = Closure::wrap(Box::new(move |event: Event| {
-                let _ = runtime.dispatch_typed_event(
+                if let Err(error) = runtime.dispatch_typed_event(
                     action,
                     captured_loop,
                     captured_key.clone(),
                     generation,
                     &fields,
                     event,
-                );
+                ) {
+                    web_sys::console::error_1(&error);
+                }
             }) as Box<dyn FnMut(Event)>);
             element
                 .add_event_listener_with_callback(&event_type, callback.as_ref().unchecked_ref())?;
@@ -104,6 +174,7 @@ impl PlecRuntime {
                     loop_index,
                     row_key,
                     generation,
+                    owner,
                 });
         }
         Ok(())
@@ -133,19 +204,18 @@ impl PlecRuntime {
             fields
                 .iter()
                 .map(|field| {
-                    (
+                    Ok((
                         field.slot,
                         typed_event_field(
-                            app.strings
-                                .get(field.name)
-                                .map(String::as_str)
-                                .unwrap_or(""),
+                            app.strings.get(field.name).ok_or_else(|| {
+                                JsValue::from_str("event field handle out of range")
+                            })?,
                             &event,
                             target.as_ref(),
-                        ),
-                    )
+                        )?,
+                    ))
                 })
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, JsValue>>()?
         };
         let row = if let (Some(loop_index), Some(key)) = (loop_index, row_key) {
             let typed = self.typed.borrow();
@@ -192,49 +262,49 @@ pub(crate) fn typed_event_field(
     name: &str,
     event: &Event,
     target: Option<&Element>,
-) -> RuntimeValue {
+) -> Result<RuntimeValue, JsValue> {
     match name {
-        "type" => RuntimeValue::String(event.type_()),
+        "type" => Ok(RuntimeValue::String(event.type_())),
         "value" => target
             .and_then(|element| element.clone().dyn_into::<HtmlInputElement>().ok())
             .map(|input| RuntimeValue::String(input.value()))
-            .unwrap_or(RuntimeValue::Null),
+            .map_or(Ok(RuntimeValue::Null), Ok),
         "checked" => target
             .and_then(|element| element.clone().dyn_into::<HtmlInputElement>().ok())
             .map(|input| RuntimeValue::Bool(input.checked()))
-            .unwrap_or(RuntimeValue::Null),
+            .map_or(Ok(RuntimeValue::Null), Ok),
         "rowKey" => target
             .and_then(|element| element.closest("[data-runtime-row-key]").ok().flatten())
             .and_then(|row| row.get_attribute("data-runtime-row-key"))
             .map(RuntimeValue::String)
-            .unwrap_or(RuntimeValue::Null),
+            .map_or(Ok(RuntimeValue::Null), Ok),
         "key" => event
             .clone()
             .dyn_into::<KeyboardEvent>()
             .map(|key| RuntimeValue::String(key.key()))
-            .unwrap_or(RuntimeValue::Null),
+            .map_or(Ok(RuntimeValue::Null), Ok),
         "button" => event
             .clone()
             .dyn_into::<MouseEvent>()
             .map(|mouse| RuntimeValue::Number(mouse.button() as f64))
-            .unwrap_or(RuntimeValue::Null),
-        "metaKey" => RuntimeValue::Bool(
+            .map_or(Ok(RuntimeValue::Null), Ok),
+        "metaKey" => Ok(RuntimeValue::Bool(
             event
                 .clone()
                 .dyn_into::<KeyboardEvent>()
                 .map(|key| key.meta_key())
                 .or_else(|event| event.dyn_into::<MouseEvent>().map(|mouse| mouse.meta_key()))
                 .unwrap_or(false),
-        ),
-        "ctrlKey" => RuntimeValue::Bool(
+        )),
+        "ctrlKey" => Ok(RuntimeValue::Bool(
             event
                 .clone()
                 .dyn_into::<KeyboardEvent>()
                 .map(|key| key.ctrl_key())
                 .or_else(|event| event.dyn_into::<MouseEvent>().map(|mouse| mouse.ctrl_key()))
                 .unwrap_or(false),
-        ),
-        "shiftKey" => RuntimeValue::Bool(
+        )),
+        "shiftKey" => Ok(RuntimeValue::Bool(
             event
                 .clone()
                 .dyn_into::<KeyboardEvent>()
@@ -245,15 +315,15 @@ pub(crate) fn typed_event_field(
                         .map(|mouse| mouse.shift_key())
                 })
                 .unwrap_or(false),
-        ),
-        "altKey" => RuntimeValue::Bool(
+        )),
+        "altKey" => Ok(RuntimeValue::Bool(
             event
                 .clone()
                 .dyn_into::<KeyboardEvent>()
                 .map(|key| key.alt_key())
                 .or_else(|event| event.dyn_into::<MouseEvent>().map(|mouse| mouse.alt_key()))
                 .unwrap_or(false),
-        ),
-        _ => RuntimeValue::Null,
+        )),
+        _ => Err(JsValue::from_str("unsupported typed event field")),
     }
 }

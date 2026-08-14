@@ -13,6 +13,19 @@ pub(crate) struct TypedRow {
     pub(crate) root: Node,
     pub(crate) values: HashMap<String, RuntimeValue>,
     pub(crate) nodes: HashMap<usize, Node>,
+    /// The selected branch for every conditional in this concrete row. Row
+    /// conditionals have row-local frames, so a changed selection replaces
+    /// only this keyed row generation.
+    pub(crate) conditional_selections: HashMap<usize, Option<usize>>,
+    pub(crate) generation: u64,
+}
+
+/// Mutable ownership for a static conditional branch. The graph node table is
+/// immutable; this region owns the concrete nodes that exist for one branch.
+pub(crate) struct TypedConditionalRegion {
+    pub(crate) end: Node,
+    pub(crate) selected: Option<usize>,
+    pub(crate) nodes: HashMap<usize, Node>,
     pub(crate) generation: u64,
 }
 
@@ -23,6 +36,7 @@ pub(crate) struct TypedRuntime {
     pub(crate) states: Vec<RuntimeValue>,
     pub(crate) collections: HashMap<usize, TypedCollection>,
     pub(crate) loops: HashMap<usize, TypedLoopRows>,
+    pub(crate) conditionals: HashMap<usize, TypedConditionalRegion>,
     pub(crate) listeners: Vec<TypedListener>,
     pub(crate) next_generation: u64,
     pub(crate) pending_fetches: Vec<TypedPendingFetch>,
@@ -141,6 +155,7 @@ impl TypedRuntime {
             nodes: HashMap::new(),
             states,
             loops: HashMap::new(),
+            conditionals: HashMap::new(),
             collections: HashMap::new(),
             listeners: Vec::new(),
             next_generation: 1,
@@ -151,9 +166,11 @@ impl TypedRuntime {
 
 impl TypedRuntime {
     pub(crate) fn mount(&mut self, root: Element) -> Result<MountMetrics, JsValue> {
+        self.clear_listeners();
         root.set_inner_html("");
         self.nodes.clear();
         self.loops.clear();
+        self.conditionals.clear();
         let doc = document()?;
         let node =
             self.instantiate_node(&doc, self.app.root_node, None, None, 0, &mut HashMap::new())?;
@@ -196,10 +213,29 @@ impl TypedRuntime {
     ) {
         let mut keep = Vec::new();
         for entry in self.listeners.drain(..) {
-            if entry.loop_index == Some(loop_index)
-                && entry.row_key.as_deref() == Some(key)
-                && entry.generation == generation
+            if entry.owner
+                == (TypedListenerOwner::Row {
+                    loop_index,
+                    row_key: key.to_owned(),
+                    generation,
+                })
             {
+                let listener = entry.listener;
+                let _ = listener.element.remove_event_listener_with_callback(
+                    &listener.event_type,
+                    listener.callback.as_ref().unchecked_ref(),
+                );
+            } else {
+                keep.push(entry);
+            }
+        }
+        self.listeners = keep;
+    }
+
+    pub(crate) fn dispose_owner_listeners(&mut self, owner: &TypedListenerOwner) {
+        let mut keep = Vec::new();
+        for entry in self.listeners.drain(..) {
+            if &entry.owner == owner {
                 let listener = entry.listener;
                 let _ = listener.element.remove_event_listener_with_callback(
                     &listener.event_type,
@@ -281,21 +317,178 @@ impl TypedRuntime {
                 )?;
                 Ok(marker)
             }
-            TypedNode::Conditional {
-                test,
+            TypedNode::Conditional { test, .. } => {
+                let parent =
+                    parent.ok_or_else(|| JsValue::from_str("conditional parent missing"))?;
+                let start: Node = doc
+                    .create_comment(&format!("plec:conditional:{index}"))
+                    .into();
+                let end: Node = doc
+                    .create_comment(&format!("plec:conditional-end:{index}"))
+                    .into();
+                parent.append_child(&start)?;
+                parent.append_child(&end)?;
+                if row.is_some() {
+                    let TypedNode::Conditional {
+                        consequent,
+                        alternate,
+                        ..
+                    } = self.app.nodes[index].clone()
+                    else {
+                        unreachable!()
+                    };
+                    let selected = if typed_truthy(&typed_eval(
+                        &self.app,
+                        test,
+                        &self.states,
+                        row,
+                        row_index,
+                    )?) {
+                        Some(consequent)
+                    } else {
+                        alternate
+                    };
+                    if let Some(selected) = selected {
+                        let child = self.instantiate_node(
+                            doc,
+                            selected,
+                            Some(parent),
+                            row,
+                            row_index,
+                            local,
+                        )?;
+                        parent.insert_before(&child, Some(&end))?;
+                    }
+                } else {
+                    self.conditionals.insert(
+                        index,
+                        TypedConditionalRegion {
+                            end,
+                            selected: None,
+                            nodes: HashMap::new(),
+                            generation: 0,
+                        },
+                    );
+                    self.reconcile_static_conditional(index, &mut UpdateMetrics::default())?;
+                }
+                Ok(start)
+            }
+        }
+    }
+}
+
+impl TypedRuntime {
+    pub(crate) fn reconcile_static_conditional(
+        &mut self,
+        conditional: usize,
+        metrics: &mut UpdateMetrics,
+    ) -> Result<(), JsValue> {
+        let TypedNode::Conditional {
+            test,
+            consequent,
+            alternate,
+            ..
+        } = self
+            .app
+            .nodes
+            .get(conditional)
+            .cloned()
+            .ok_or_else(|| JsValue::from_str("conditional handle out of range"))?
+        else {
+            return Err(JsValue::from_str("conditional node expected"));
+        };
+        let selected = if typed_truthy(&typed_eval(&self.app, test, &self.states, None, 0)?) {
+            Some(consequent)
+        } else {
+            alternate
+        };
+        if self
+            .conditionals
+            .get(&conditional)
+            .map(|region| region.selected == selected)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        let mut region = self
+            .conditionals
+            .remove(&conditional)
+            .ok_or_else(|| JsValue::from_str("conditional region missing"))?;
+        self.dispose_owner_listeners(&TypedListenerOwner::Conditional {
+            conditional,
+            generation: region.generation,
+            row: None,
+        });
+        for node in region.nodes.values() {
+            if let Some(parent) = node.parent_node() {
+                parent.remove_child(node)?;
+                metrics.dom_operations += 1;
+            }
+            self.nodes
+                .retain(|_, existing| !existing.is_same_node(Some(node)));
+        }
+        region.nodes.clear();
+        region.selected = selected;
+        region.generation = self.next_generation;
+        self.next_generation += 1;
+        if let Some(selected) = selected {
+            let parent = region
+                .end
+                .parent_node()
+                .ok_or_else(|| JsValue::from_str("conditional parent missing"))?;
+            let child = self.instantiate_node(
+                &document()?,
+                selected,
+                Some(&parent),
+                None,
+                0,
+                &mut HashMap::new(),
+            )?;
+            parent.insert_before(&child, Some(&region.end))?;
+            self.collect_branch_nodes(selected, &mut region.nodes);
+            self.apply_bindings_to_nodes(&region.nodes, None, metrics)?;
+        }
+        self.conditionals.insert(conditional, region);
+        Ok(())
+    }
+
+    fn collect_branch_nodes(&self, index: usize, output: &mut HashMap<usize, Node>) {
+        if let Some(node) = self.nodes.get(&index) {
+            output.insert(index, node.clone());
+        }
+        match self.app.nodes.get(index) {
+            Some(TypedNode::Element { children, .. }) => {
+                for child in children {
+                    self.collect_branch_nodes(*child, output);
+                }
+            }
+            Some(TypedNode::Conditional {
                 consequent,
                 alternate,
                 ..
-            } => {
-                let selected =
-                    if typed_truthy(&typed_eval(&self.app, test, &self.states, row, row_index)?) {
-                        consequent
-                    } else {
-                        alternate.unwrap_or(consequent)
-                    };
-                self.instantiate_node(doc, selected, parent, row, row_index, local)
+            }) => {
+                self.collect_branch_nodes(*consequent, output);
+                if let Some(alternate) = alternate {
+                    self.collect_branch_nodes(*alternate, output);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_bindings_to_nodes(
+        &self,
+        nodes: &HashMap<usize, Node>,
+        row: Option<&HashMap<String, RuntimeValue>>,
+        metrics: &mut UpdateMetrics,
+    ) -> Result<(), JsValue> {
+        for binding in &self.app.bindings {
+            if let Some(node) = nodes.get(&binding.target) {
+                typed_apply_binding(&self.app, binding, node, &self.states, row, 0)?;
+                metrics.bindings_touched += 1;
             }
         }
+        Ok(())
     }
 }
 
@@ -495,6 +688,7 @@ impl TypedRuntime {
             element.set_attribute("data-runtime-row-key", &key)?;
         }
         parent.append_child(&root)?;
+        let conditional_selections = self.row_conditional_selections(template, &values, index)?;
         let generation = self.next_generation;
         self.next_generation += 1;
         self.loops.entry(loop_index).or_default().rows.insert(
@@ -503,6 +697,7 @@ impl TypedRuntime {
                 root,
                 values,
                 nodes,
+                conditional_selections,
                 generation,
             },
         );
@@ -519,6 +714,40 @@ impl TypedRuntime {
         values: HashMap<String, RuntimeValue>,
         metrics: &mut UpdateMetrics,
     ) -> Result<(), JsValue> {
+        let template = self.app.loops[loop_index].row_template;
+        let row_index = self
+            .loops
+            .get(&loop_index)
+            .and_then(|rows| rows.order.iter().position(|entry| entry == key))
+            .unwrap_or(0);
+        let next_conditionals = self.row_conditional_selections(template, &values, row_index)?;
+        let replaces_branch = self
+            .loops
+            .get(&loop_index)
+            .and_then(|rows| rows.rows.get(key))
+            .map(|row| row.conditional_selections != next_conditionals)
+            .ok_or_else(|| JsValue::from_str("row missing"))?;
+        if replaces_branch {
+            let row = self
+                .loops
+                .get_mut(&loop_index)
+                .and_then(|rows| rows.rows.remove(key))
+                .ok_or_else(|| JsValue::from_str("row missing"))?;
+            self.dispose_region_listeners(loop_index, key, row.generation);
+            if let Some(parent) = row.root.parent_node() {
+                parent.remove_child(&row.root)?;
+                metrics.dom_operations += 1;
+            }
+            let parent = self.parent_for_loop(loop_index)?;
+            return self.insert_typed_row(
+                loop_index,
+                &parent,
+                key.to_owned(),
+                values,
+                row_index,
+                metrics,
+            );
+        }
         let row = self
             .loops
             .get_mut(&loop_index)
@@ -539,6 +768,58 @@ impl TypedRuntime {
                 metrics.dom_operations += 1;
                 metrics.bindings_touched += 1;
             }
+        }
+        Ok(())
+    }
+
+    fn row_conditional_selections(
+        &self,
+        node: usize,
+        row: &HashMap<String, RuntimeValue>,
+        row_index: usize,
+    ) -> Result<HashMap<usize, Option<usize>>, JsValue> {
+        let mut selections = HashMap::new();
+        self.collect_row_conditional_selections(node, row, row_index, &mut selections)?;
+        Ok(selections)
+    }
+
+    fn collect_row_conditional_selections(
+        &self,
+        node: usize,
+        row: &HashMap<String, RuntimeValue>,
+        row_index: usize,
+        selections: &mut HashMap<usize, Option<usize>>,
+    ) -> Result<(), JsValue> {
+        match self.app.nodes.get(node) {
+            Some(TypedNode::Element { children, .. }) => {
+                for child in children {
+                    self.collect_row_conditional_selections(*child, row, row_index, selections)?;
+                }
+            }
+            Some(TypedNode::Conditional {
+                test,
+                consequent,
+                alternate,
+                ..
+            }) => {
+                let selected = if typed_truthy(&typed_eval(
+                    &self.app,
+                    *test,
+                    &self.states,
+                    Some(row),
+                    row_index,
+                )?) {
+                    Some(*consequent)
+                } else {
+                    *alternate
+                };
+                selections.insert(node, selected);
+                if let Some(selected) = selected {
+                    self.collect_row_conditional_selections(selected, row, row_index, selections)?;
+                }
+            }
+            Some(_) => {}
+            None => return Err(JsValue::from_str("conditional node handle out of range")),
         }
         Ok(())
     }

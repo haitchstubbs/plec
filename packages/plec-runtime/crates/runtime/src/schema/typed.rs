@@ -340,6 +340,77 @@ pub fn validate_typed_action_contract(
     Ok(())
 }
 
+pub fn validate_typed_event_contract(
+    event: &TypedEvent,
+    node_count: usize,
+    string_count: usize,
+    action_count: usize,
+    loop_count: usize,
+    frame_slots: usize,
+) -> Result<(), &'static str> {
+    if event.target >= node_count
+        || event.event_type >= string_count
+        || event.action >= action_count
+    {
+        return Err("event handle out of range");
+    }
+    if event
+        .r#loop
+        .map(|loop_index| loop_index >= loop_count)
+        .unwrap_or(false)
+    {
+        return Err("event loop handle out of range");
+    }
+    let mut slots = HashSet::new();
+    for field in &event.fields {
+        if field.name >= string_count || field.slot >= frame_slots {
+            return Err("event field handle out of range");
+        }
+        if !slots.insert(field.slot) {
+            return Err("duplicate event frame slot");
+        }
+    }
+    Ok(())
+}
+
+fn supported_event_field(name: &str) -> bool {
+    matches!(
+        name,
+        "type"
+            | "value"
+            | "checked"
+            | "rowKey"
+            | "key"
+            | "button"
+            | "metaKey"
+            | "ctrlKey"
+            | "shiftKey"
+            | "altKey"
+    )
+}
+
+fn subtree_contains(nodes: &[TypedNode], root: usize, target: usize) -> bool {
+    if root == target {
+        return true;
+    }
+    match nodes.get(root) {
+        Some(TypedNode::Element { children, .. }) => children
+            .iter()
+            .any(|child| subtree_contains(nodes, *child, target)),
+        Some(TypedNode::Conditional {
+            consequent,
+            alternate,
+            ..
+        }) => {
+            subtree_contains(nodes, *consequent, target)
+                || alternate
+                    .map(|child| subtree_contains(nodes, child, target))
+                    .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
 impl TypedApplication {
     /// Validates untrusted executable IR before it reaches the typed runtime.
     pub(crate) fn validate(&self) -> Result<(), JsValue> {
@@ -357,15 +428,49 @@ impl TypedApplication {
             }
         }
         for event in &self.events {
-            if event.target >= self.nodes.len()
-                || event.event_type >= self.strings.len()
-                || event.action >= self.actions.len()
-                || event.fields.iter().any(|field| {
-                    field.name >= self.strings.len()
-                        || field.slot >= self.actions[event.action].frame_slots
-                })
-            {
-                return Err(JsValue::from_str("event handle out of range"));
+            let frame_slots = self
+                .actions
+                .get(event.action)
+                .map(|action| action.frame_slots)
+                .unwrap_or(0);
+            validate_typed_event_contract(
+                event,
+                self.nodes.len(),
+                self.strings.len(),
+                self.actions.len(),
+                self.loops.len(),
+                frame_slots,
+            )
+            .map_err(JsValue::from_str)?;
+            if event.fields.iter().any(|field| {
+                self.strings
+                    .get(field.name)
+                    .map(String::as_str)
+                    .map(|name| !supported_event_field(name))
+                    .unwrap_or(true)
+            }) {
+                return Err(JsValue::from_str("unsupported typed event field"));
+            }
+            let in_any_loop = self
+                .loops
+                .iter()
+                .any(|loop_def| subtree_contains(&self.nodes, loop_def.row_template, event.target));
+            match event.r#loop {
+                Some(loop_index)
+                    if !subtree_contains(
+                        &self.nodes,
+                        self.loops[loop_index].row_template,
+                        event.target,
+                    ) =>
+                {
+                    return Err(JsValue::from_str(
+                        "event target is outside its loop template",
+                    ))
+                }
+                None if in_any_loop => {
+                    return Err(JsValue::from_str("loop event is missing loop ownership"))
+                }
+                _ => {}
             }
         }
         for action in &self.actions {
@@ -514,5 +619,56 @@ mod tests {
         )
         .unwrap_err()
         .contains("duplicate"));
+    }
+
+    #[test]
+    fn typed_decoder_rejects_duplicate_event_slots_and_unknown_loop() {
+        let mut app = typed_action_artifact(serde_json::json!({"op":"return"}), "collection");
+        app.actions[0].frame_slots = 2;
+        app.events.push(TypedEvent {
+            target: 0,
+            event_type: 0,
+            action: 0,
+            fields: vec![
+                TypedEventField { name: 0, slot: 0 },
+                TypedEventField { name: 0, slot: 0 },
+            ],
+            r#loop: None,
+        });
+        assert!(validate_typed_event_contract(
+            &app.events[0],
+            app.nodes.len(),
+            app.strings.len(),
+            app.actions.len(),
+            app.loops.len(),
+            app.actions[0].frame_slots,
+        )
+        .is_err());
+
+        app.events[0].fields.pop();
+        app.events[0].r#loop = Some(0);
+        assert!(validate_typed_event_contract(
+            &app.events[0],
+            app.nodes.len(),
+            app.strings.len(),
+            app.actions.len(),
+            app.loops.len(),
+            app.actions[0].frame_slots,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn typed_decoder_rejects_unsupported_event_fields_and_wrong_loop_ownership() {
+        let app = typed_action_artifact(serde_json::json!({"op":"return"}), "collection");
+        let event = TypedEvent {
+            target: 0,
+            event_type: 0,
+            action: 0,
+            fields: vec![TypedEventField { name: 0, slot: 0 }],
+            r#loop: None,
+        };
+        assert!(!supported_event_field("notAnEventField"));
+        assert!(subtree_contains(&app.nodes, app.root_node, event.target));
     }
 }

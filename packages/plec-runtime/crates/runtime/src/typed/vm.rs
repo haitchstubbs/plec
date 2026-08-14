@@ -370,6 +370,8 @@ impl TypedRuntime {
             } else if kind == "loop" {
                 let parent = self.parent_for_loop(handle)?;
                 self.render_loop(handle, &parent)?;
+            } else if kind == "conditional" {
+                self.reconcile_static_conditional(handle, metrics)?;
             }
         }
         Ok(())

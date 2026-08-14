@@ -162,6 +162,10 @@ impl PlecRuntime {
         for request in more {
             self.start_typed_fetch(request)?;
         }
+        // A continuation may have changed state and therefore replaced a
+        // conditional branch; its listeners are installed after the borrow of
+        // the typed instance has been released.
+        self.install_typed_event_listeners()?;
         Ok(())
     }
 }

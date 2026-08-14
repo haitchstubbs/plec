@@ -7,6 +7,7 @@
     "build": "cargo check --manifest-path crates/runtime/Cargo.toml",
     "build:wasm": "node scripts/build-wasm.mjs",
     "test": "cargo test --manifest-path crates/runtime/Cargo.toml --lib",
+    "test:wasm": "wasm-pack test --headless --chrome crates/runtime",
     "lint": "echo lint not configured for plec-runtime",
     "typecheck": "echo typecheck not applicable for Rust package",
     "clean": "cargo clean --manifest-path crates/runtime/Cargo.toml"
