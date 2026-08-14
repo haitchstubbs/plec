@@ -170,15 +170,18 @@ interface LegacyApplicationFacts {
     refId: string;
     capability: unknown;
   }>;
-  actions: Array<{
+  /** Compiler-owned action facts. These are not a serialized executable
+   * format: symbolic references are resolved only while emitting 0.9. */
+  actionFacts: Array<{
     id: string;
     parameters: Array<{
       name: string;
       type: 'event' | 'string' | 'boolean' | 'number' | 'json';
     }>;
-    captures: string[];
-    operations: unknown[];
-    result: { type: 'void' | 'string' | 'boolean' | 'number' | 'json' };
+    eventFields: string[];
+    frameSlots: number;
+    parameterSlots: number[];
+    instructions: Array<any>;
   }>;
   contexts: Array<{
     id: string;
@@ -340,7 +343,7 @@ export function compile(
       refs: [],
       hostElementRefs: [],
       hostElementReads: [],
-      actions: [],
+      actionFacts: [],
       contexts: [],
       contextDefinitions: [],
       conditionals: [],
@@ -2569,6 +2572,8 @@ function lowerEvent(
       );
       return;
     }
+    const actionFact = buildTypedActionFact(declaredActionId, handler, state);
+    if (!actionFact) return;
     state.eventCounter += 1;
     state.ir.events.push({
       id: eventId,
@@ -2578,19 +2583,15 @@ function lowerEvent(
       args: [],
       ...(state.activeLoopId ? { loopId: state.activeLoopId } : {}),
     });
-    state.ir.actions.push({
-      id: declaredActionId,
-      parameters: [{ name: 'event', type: 'event' }],
-      captures: [],
-      operations: lowerActionOperations(handler, state),
-      result: { type: 'void' },
-    });
+    state.ir.actionFacts.push(actionFact);
     return;
   }
   const change = call.arguments?.[1]?.expression ?? call.arguments?.[1];
   let field: string | undefined;
   if (change?.type === 'ObjectExpression')
     field = getNodeName(change.properties?.[0]?.key);
+  const actionFact = buildTypedActionFact(declaredActionId, handler, state);
+  if (!actionFact) return;
   state.eventCounter += 1;
   state.ir.events.push({
     id: eventId,
@@ -2607,13 +2608,121 @@ function lowerEvent(
     field,
     ...(state.activeLoopId ? { loopId: state.activeLoopId } : {}),
   });
-  state.ir.actions.push({
-    id: declaredActionId,
-    parameters: [{ name: 'event', type: 'event' }],
-    captures: [],
-    operations: lowerActionOperations(handler, state),
-    result: { type: 'void' },
-  });
+  state.ir.actionFacts.push(actionFact);
+}
+
+/** Build the typed control-flow fact while source syntax is still available.
+ * Handles remain symbolic here and become artifact-local table indexes only
+ * in executable-lowering. */
+function buildTypedActionFact(
+  id: string,
+  handler: any,
+  state: CompilerState,
+) {
+  const diagnosticStart = state.diagnostics.length;
+  const sourceOperations = lowerActionOperations(handler, state) as any[];
+  const eventFields = actionEventFields(sourceOperations);
+  const eventSlots = new Map(eventFields.map((field, index) => [field, index]));
+  const slots = new Map<string, number>();
+  let nextSlot = 0;
+  const slot = (name: string) => {
+    const existing = slots.get(name);
+    if (existing !== undefined) return existing;
+    slots.set(name, nextSlot);
+    return nextSlot++;
+  };
+  const instructions: any[] = [];
+  const emit = (operations: any[]) => {
+    for (const operation of operations ?? []) {
+      switch (operation?.kind) {
+        case 'set-state':
+          instructions.push({ op: 'evaluate', expression: operation.value, eventSlots, slots });
+          instructions.push({ op: 'storeState', stateSlotId: operation.stateSlotId });
+          break;
+        case 'prevent-default': instructions.push({ op: 'preventDefault' }); break;
+        case 'return':
+          if (operation.value) {
+            reportUnsupported(state, 'UNSUPPORTED_ACTION_RETURN_VALUE', 'Action return values are not supported.');
+            break;
+          }
+          instructions.push({ op: 'return' });
+          break;
+        case 'invoke-action-ref':
+          instructions.push({ op: 'call', actionId: operation.actionId, arguments: operation.parameters ?? [], eventSlots, slots });
+          break;
+        case 'collection':
+          instructions.push({ op: 'collectionMutation', inputId: operation.inputId, kind: operation.operation, key: operation.key, value: operation.value, eventSlots, slots });
+          break;
+        case 'if': {
+          instructions.push({ op: 'evaluate', expression: operation.test, eventSlots, slots });
+          const branch = instructions.length;
+          instructions.push({ op: 'jumpIfFalse', target: 0 });
+          emit(operation.consequent);
+          const done = instructions.length;
+          instructions.push({ op: 'jump', target: 0 });
+          instructions[branch].target = instructions.length;
+          emit(operation.alternate);
+          instructions[done].target = instructions.length;
+          break;
+        }
+        case 'capability-request': {
+          if (operation.capability !== 'network.fetch') {
+            reportUnsupported(state, 'UNSUPPORTED_ACTION_CAPABILITY', `Capability ${operation.capability} is not supported.`);
+            break;
+          }
+          const resultSlot = slot(operation.successResultName ?? 'result');
+          const errorSlot = slot(operation.failureErrorName ?? 'error');
+          const request: any = {
+            op: 'capabilityRequest', capability: 'fetch', request: operation.request,
+            successPc: 0, failurePc: 0, finallyPc: undefined, resultSlot, errorSlot,
+            eventSlots, slots,
+          };
+          instructions.push(request);
+          request.successPc = instructions.length;
+          emit(operation.success);
+          const successDone = instructions.length;
+          instructions.push({ op: 'jump', target: 0 });
+          request.failurePc = instructions.length;
+          emit(operation.failure);
+          const failureDone = instructions.length;
+          instructions.push({ op: 'jump', target: 0 });
+          if (operation.finally?.length) {
+            request.finallyPc = instructions.length;
+            emit(operation.finally);
+          }
+          instructions.push({ op: 'return' });
+          instructions[successDone].target = request.finallyPc ?? instructions.length - 1;
+          instructions[failureDone].target = request.finallyPc ?? instructions.length - 1;
+          break;
+        }
+        default:
+          reportUnsupported(state, 'UNSUPPORTED_ACTION_OPERATION', `Action operation ${String(operation?.kind ?? 'unknown')} is not supported.`);
+      }
+    }
+  };
+  emit(sourceOperations);
+  // Emit an explicit terminator so branch targets at a source block boundary
+  // remain valid instruction indexes, while the VM still accepts implicit EOF
+  // returns from hand-authored/test artifacts.
+  if (!instructions.length || instructions.at(-1)?.op !== 'return')
+    instructions.push({ op: 'return' });
+  if (state.diagnostics.length !== diagnosticStart) return undefined;
+  return { id, parameters: [{ name: 'event', type: 'event' as const }], eventFields, frameSlots: nextSlot, parameterSlots: [], instructions };
+}
+
+function actionEventFields(operations: any[]): string[] {
+  const fields = new Set<string>();
+  const visit = (value: any): void => {
+    if (!value || typeof value !== 'object') return;
+    const field = value.kind === 'member' && value.object?.kind === 'identifier' && value.object.name === 'event'
+      ? value.property
+      : value.kind === 'member' && value.object?.kind === 'member' && value.object.object?.kind === 'identifier' && value.object.object.name === 'event' && value.object.property === 'currentTarget'
+        ? value.property : undefined;
+    if (field && ['value', 'checked', 'key', 'rowKey', 'button', 'metaKey', 'ctrlKey', 'shiftKey', 'altKey', 'type'].includes(field)) fields.add(field);
+    Object.values(value).forEach((child: any) => Array.isArray(child) ? child.forEach(visit) : visit(child));
+  };
+  visit(operations);
+  return [...fields];
 }
 
 function lowerActionOperations(
@@ -2626,6 +2735,10 @@ function lowerActionOperations(
   let body = unwrapExpression(handler?.body);
   const name = getNodeName(handler);
   if (!body && name) body = getLocalFunction(name, state)?.body;
+  if (!body && !handler) {
+    reportUnsupported(state, 'UNSUPPORTED_ACTION', 'Action handler must be statically resolvable.');
+    return [];
+  }
   return body?.type === 'BlockStatement'
     ? lowerActionStatements(getStatements(body), state)
     : body
@@ -2742,6 +2855,7 @@ function lowerActionStatements(
         },
       ];
     }
+    reportUnsupported(state, 'UNSUPPORTED_ACTION_STATEMENT', `Unsupported action statement ${statement.type}.`);
     return [];
   })();
   return [...current, ...lowerActionStatements(rest, state)];
@@ -2997,7 +3111,10 @@ function lowerActionExpression(
     )
       return lowerActionOperations(target, state);
   }
-  if (expression?.type !== 'CallExpression') return [];
+  if (expression?.type !== 'CallExpression') {
+    reportUnsupported(state, 'UNSUPPORTED_ACTION_EXPRESSION', 'Action expression must be a supported call, conditional, or callback.');
+    return [];
+  }
   let callee = getNodeName(expression.callee);
   const value =
     expression.arguments?.[0]?.expression ?? expression.arguments?.[0];
@@ -3051,7 +3168,10 @@ function lowerActionExpression(
     getNodeName(expression.callee.property) === 'preventDefault'
   )
     return [{ kind: 'prevent-default' }];
-  if (!callee) return [];
+  if (!callee) {
+    reportUnsupported(state, 'UNSUPPORTED_ACTION_CALL', 'Action call target must be a static identifier.');
+    return [];
+  }
   const local = getLocalFunction(callee, state);
   if (local) {
     // Helpers defined by this graph are compiled into the same executable

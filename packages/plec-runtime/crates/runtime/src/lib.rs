@@ -12,6 +12,36 @@ use web_sys::{
     KeyboardEvent, MouseEvent, Node, Request, RequestInit, Response,
 };
 
+/** Closed values used by the executable 0.9 graph.  `serde_json::Value` is
+ * deliberately retained below for the 0.8 compatibility executor only. */
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+enum RuntimeValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<RuntimeValue>),
+    Record(HashMap<String, RuntimeValue>),
+}
+
+impl Default for RuntimeValue { fn default() -> Self { Self::Null } }
+
+impl RuntimeValue {
+    fn record(&self) -> Option<&HashMap<String, RuntimeValue>> {
+        if let Self::Record(value) = self { Some(value) } else { None }
+    }
+    fn array(&self) -> Option<&[RuntimeValue]> {
+        if let Self::Array(value) = self { Some(value) } else { None }
+    }
+    fn is_null(&self) -> bool { matches!(self, Self::Null) }
+    fn number(&self) -> f64 { if let Self::Number(value) = self { *value } else { 0.0 } }
+    fn json_body(&self) -> Result<String, JsValue> {
+        serde_json::to_string(self).map_err(error)
+    }
+}
+fn runtime_from_json(value: Value) -> Result<RuntimeValue, JsValue> { serde_json::from_value(value).map_err(error) }
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Application {
@@ -57,7 +87,7 @@ struct TypedApplication {
     root_node: usize,
     strings: Vec<String>,
     #[serde(default)]
-    constants: Vec<Value>,
+    constants: Vec<RuntimeValue>,
     nodes: Vec<TypedNode>,
     #[serde(default)]
     texts: Vec<TypedText>,
@@ -175,8 +205,21 @@ struct TypedStateSlot {
 }
 #[derive(Clone, Deserialize)]
 struct TypedProgram {
-    instructions: Vec<Value>,
+    instructions: Vec<TypedExpressionInstruction>,
 }
+#[derive(Clone, Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase")]
+enum TypedExpressionInstruction {
+    Constant { constant: usize }, LoadState { state: usize }, LoadRowField { field: usize },
+    LoadEventField { field: usize }, LoadFrame { slot: usize },
+    Field { field: usize }, Index,
+    Unary { kind: String }, Binary { kind: String }, String { kind: String, #[serde(default = "one")] count: usize },
+    MakeArray { count: usize }, MakeRecord { fields: Vec<usize> },
+    Filter { predicate: usize, item_slot: usize, index_slot: Option<usize> },
+    Map { mapper: usize, item_slot: usize, index_slot: Option<usize> },
+    Jump { target: usize }, JumpIfFalse { target: usize }, JumpIfTrue { target: usize }, Return,
+}
+fn one() -> usize { 1 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TypedLoop {
@@ -202,7 +245,7 @@ struct TypedDependencyEndpoint {
 }
 struct TypedRow {
     root: Node,
-    values: serde_json::Map<String, Value>,
+    values: HashMap<String, RuntimeValue>,
     nodes: HashMap<usize, Node>,
 }
 #[derive(Default)]
@@ -214,13 +257,16 @@ struct TypedRuntime {
     app: TypedApplication,
     root: Option<Element>,
     nodes: HashMap<usize, Node>,
-    states: Vec<Value>,
+    states: Vec<RuntimeValue>,
+    collections: HashMap<usize, TypedCollection>,
     loops: HashMap<usize, TypedLoopRows>,
     listeners: Vec<Listener>,
     pending_fetches: Vec<TypedPendingFetch>,
 }
+#[derive(Clone, Default)]
+struct TypedCollection { order: Vec<String>, rows: HashMap<String, HashMap<String, RuntimeValue>> }
 #[derive(Clone)]
-struct TypedPendingFetch { action: usize, success_pc: usize, failure_pc: usize, finally_pc: Option<usize>, result_slot: usize, error_slot: usize, frame: Vec<Value>, event: Vec<Value>, row: Option<serde_json::Map<String, Value>>, url: String, method: String, headers: Vec<(String, String)>, body: Option<String>, decode: String, require_ok: bool }
+struct TypedPendingFetch { action: usize, success_pc: usize, failure_pc: usize, finally_pc: Option<usize>, finalizers: Vec<usize>, result_slot: usize, error_slot: usize, frame: Vec<RuntimeValue>, event: Vec<RuntimeValue>, row: Option<HashMap<String, RuntimeValue>>, url: String, method: String, headers: Vec<(String, String)>, body: Option<String>, decode: String, require_ok: bool }
 #[derive(Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct LayoutMetadata {
@@ -2516,8 +2562,8 @@ impl PlecRuntime {
                 let response: Response = JsFuture::from(window()?.fetch_with_request(&request)).await?.dyn_into()?;
                 if pending.require_ok && !response.ok() { return Err(JsValue::from_str(&format!("request failed ({})", response.status()))); }
                 match pending.decode.as_str() {
-                    "empty" => Ok(Value::Null),
-                    "text" => Ok(Value::String(JsFuture::from(response.text()?).await?.as_string().unwrap_or_default())),
+                    "empty" => Ok(RuntimeValue::Null),
+                    "text" => Ok(RuntimeValue::String(JsFuture::from(response.text()?).await?.as_string().unwrap_or_default())),
                     _ => serde_wasm_bindgen::from_value(JsFuture::from(response.json()?).await?).map_err(error),
                 }
             }.await;
@@ -2526,7 +2572,7 @@ impl PlecRuntime {
         Ok(())
     }
     #[cfg(feature = "fetch")]
-    fn complete_typed_fetch(&self, pending: TypedPendingFetch, result: Result<Value, JsValue>) -> Result<(), JsValue> {
+    fn complete_typed_fetch(&self, pending: TypedPendingFetch, result: Result<RuntimeValue, JsValue>) -> Result<(), JsValue> {
         let more = {
             let mut typed = self.typed.borrow_mut();
             let Some(typed) = typed.as_mut() else { return Ok(()); };
@@ -2544,11 +2590,25 @@ impl PlecRuntime {
                     }
                     pending.success_pc
                 }
-                Err(error) => { if pending.error_slot >= frame.len() { return Err(JsValue::from_str("error frame slot out of range")); } frame[pending.error_slot] = serde_json::json!({"message": error.as_string().unwrap_or_else(|| "network request failed".into())}); pending.failure_pc }
+                Err(error) => { if pending.error_slot >= frame.len() { return Err(JsValue::from_str("error frame slot out of range")); } frame[pending.error_slot] = RuntimeValue::Record(HashMap::from([("message".into(), RuntimeValue::String(error.as_string().unwrap_or_else(|| "network request failed".into())))])); pending.failure_pc }
             };
             let mut metrics = UpdateMetrics::default();
-            typed.execute_action_at(pending.action, pc, frame, &pending.event, pending.row, None, &mut metrics)?;
-            typed.take_pending_fetches()
+            typed.execute_action_at(pending.action, pc, frame.clone(), &pending.event, pending.row.clone(), None, &mut metrics)?;
+            let mut requests = typed.take_pending_fetches();
+            if requests.is_empty() {
+                let mut finalizers = pending.finalizers.clone();
+                if let Some(finally_pc) = pending.finally_pc { finalizers.push(finally_pc); }
+                for finally_pc in finalizers.into_iter().rev() {
+                    typed.execute_action_at(pending.action, finally_pc, frame.clone(), &pending.event, pending.row.clone(), None, &mut metrics)?;
+                    requests.extend(typed.take_pending_fetches());
+                }
+            } else {
+                for request in &mut requests {
+                    request.finalizers.extend(pending.finalizers.iter().copied());
+                    if let Some(finally_pc) = pending.finally_pc { request.finalizers.push(finally_pc); }
+                }
+            }
+            requests
         };
         for request in more { self.start_typed_fetch(request)?; }
         Ok(())
@@ -2597,6 +2657,7 @@ impl TypedRuntime {
             nodes: HashMap::new(),
             states,
             loops: HashMap::new(),
+            collections: HashMap::new(),
             listeners: Vec::new(),
             pending_fetches: Vec::new(),
         })
@@ -2629,35 +2690,38 @@ impl TypedRuntime {
             let _ = listener.element.remove_event_listener_with_callback(&listener.event_type, listener.callback.as_ref().unchecked_ref());
         }
     }
-    fn execute_action(&mut self, action: usize, event: &[Value], row: Option<serde_json::Map<String, Value>>, native_event: Option<&Event>, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
+    fn execute_action(&mut self, action: usize, event: &[RuntimeValue], row: Option<HashMap<String, RuntimeValue>>, native_event: Option<&Event>, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
         let program = self.app.actions.get(action).cloned().ok_or_else(|| JsValue::from_str("action handle out of range"))?;
-        let mut frame = vec![Value::Null; program.frame_slots];
+        let frame = vec![RuntimeValue::Null; program.frame_slots];
         self.execute_action_at(action, 0, frame, event, row, native_event, metrics)
     }
-    fn execute_action_at(&mut self, action: usize, mut pc: usize, mut frame: Vec<Value>, event: &[Value], row: Option<serde_json::Map<String, Value>>, native_event: Option<&Event>, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
+    fn execute_action_at(&mut self, action: usize, mut pc: usize, mut frame: Vec<RuntimeValue>, event: &[RuntimeValue], row: Option<HashMap<String, RuntimeValue>>, native_event: Option<&Event>, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
         let program = self.app.actions.get(action).cloned().ok_or_else(|| JsValue::from_str("action handle out of range"))?;
         let mut stack = Vec::new();
         while let Some(instruction) = program.instructions.get(pc).cloned() {
             match instruction {
                 TypedActionInstruction::Evaluate { expression } => stack.push(typed_eval_frame(&self.app, expression, &self.states, row.as_ref(), 0, &frame, event)?),
                 TypedActionInstruction::StoreState { state } => {
-                    let value = stack.pop().unwrap_or(Value::Null);
+                    let value = stack.pop().ok_or_else(|| JsValue::from_str("action stack underflow: storeState"))?;
                     if state >= self.states.len() { return Err(JsValue::from_str("state handle out of range")); }
                     self.states[state] = value;
                     self.refresh_state(state, metrics)?;
                 }
                 TypedActionInstruction::PreventDefault => if let Some(event) = native_event { event.prevent_default(); },
                 TypedActionInstruction::Jump { target } => { pc = target; continue; }
-                TypedActionInstruction::JumpIfFalse { target } => if !typed_truthy(stack.last().unwrap_or(&Value::Null)) { pc = target; continue; },
+                TypedActionInstruction::JumpIfFalse { target } => if !typed_truthy(&stack.pop().ok_or_else(|| JsValue::from_str("action stack underflow: jumpIfFalse"))?) { pc = target; continue; },
                 TypedActionInstruction::Call { action: target, arguments } => {
                     let target_program = self.app.actions.get(target).cloned().ok_or_else(|| JsValue::from_str("action handle out of range"))?;
-                    let mut child = vec![Value::Null; target_program.frame_slots];
-                    for (index, expression) in arguments.into_iter().enumerate() {
-                        if let Some(slot) = target_program.parameter_slots.get(index) { child[*slot] = typed_eval_frame(&self.app, expression, &self.states, row.as_ref(), 0, &frame, event)?; }
-                    }
+                    if arguments.len() != target_program.parameter_slots.len() { return Err(JsValue::from_str("action call arity mismatch")); }
+                    let mut child = vec![RuntimeValue::Null; target_program.frame_slots];
+                    for (expression, slot) in arguments.into_iter().zip(target_program.parameter_slots) { child[slot] = typed_eval_frame(&self.app, expression, &self.states, row.as_ref(), 0, &frame, event)?; }
                     self.execute_action_at(target, 0, child, event, row.clone(), native_event, metrics)?;
                 }
-                TypedActionInstruction::CollectionMutation { .. } => return Err(JsValue::from_str("collection mutations require an explicit lowering")),
+                TypedActionInstruction::CollectionMutation { input, kind, key, value } => {
+                    let key = typed_value_string(&typed_eval_frame(&self.app, key, &self.states, row.as_ref(), 0, &frame, event)?);
+                    let value = value.map(|program| typed_eval_frame(&self.app, program, &self.states, row.as_ref(), 0, &frame, event)).transpose()?;
+                    self.mutate_collection(input, &kind, key, value, metrics)?;
+                },
                 TypedActionInstruction::CapabilityRequest { capability, request, success_pc, failure_pc, finally_pc, result_slot, error_slot } => {
                     if capability != "fetch" { return Err(JsValue::from_str("unsupported typed capability")); }
                     #[cfg(not(feature = "fetch"))]
@@ -2667,8 +2731,8 @@ impl TypedRuntime {
                         let url = typed_value_string(&typed_eval_frame(&self.app, request.url, &self.states, row.as_ref(), 0, &frame, event)?);
                         if url.is_empty() { return Err(JsValue::from_str("fetch URL is empty")); }
                         let headers = request.headers.iter().map(|header| Ok((self.app.strings.get(header.name).cloned().ok_or_else(|| JsValue::from_str("header name handle out of range"))?, typed_value_string(&typed_eval_frame(&self.app, header.value, &self.states, row.as_ref(), 0, &frame, event)?)))).collect::<Result<Vec<_>, JsValue>>()?;
-                        let body = request.body.map(|expression| typed_eval_frame(&self.app, expression, &self.states, row.as_ref(), 0, &frame, event).map(|value| value.to_string())).transpose()?;
-                        self.pending_fetches.push(TypedPendingFetch { action, success_pc, failure_pc, finally_pc, result_slot, error_slot, frame, event: event.to_vec(), row, url, method: request.method, headers, body, decode: request.decode, require_ok: request.require_ok });
+                        let body = request.body.map(|expression| typed_eval_frame(&self.app, expression, &self.states, row.as_ref(), 0, &frame, event).and_then(|value| value.json_body())).transpose()?;
+                        self.pending_fetches.push(TypedPendingFetch { action, success_pc, failure_pc, finally_pc, finalizers: Vec::new(), result_slot, error_slot, frame, event: event.to_vec(), row, url, method: request.method, headers, body, decode: request.decode, require_ok: request.require_ok });
                         return Ok(());
                     }
                 },
@@ -2679,6 +2743,25 @@ impl TypedRuntime {
         Ok(())
     }
     fn take_pending_fetches(&mut self) -> Vec<TypedPendingFetch> { std::mem::take(&mut self.pending_fetches) }
+    /** Collection writes commit here; rendering is deliberately delegated to
+     * the same collection invalidation path used by external deltas. */
+    fn mutate_collection(&mut self, input: usize, kind: &str, key: String, value: Option<RuntimeValue>, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
+        let next = value.as_ref().and_then(|value| value.record().cloned());
+        let collection = self.collections.entry(input).or_default();
+        match kind {
+            "append" => { let value = next.ok_or_else(|| JsValue::from_str("collection append value must be a record"))?; if collection.rows.contains_key(&key) { return Err(JsValue::from_str("collection append key already exists")); } collection.order.push(key.clone()); collection.rows.insert(key, value); }
+            "keyedReplace" => { let value = next.ok_or_else(|| JsValue::from_str("collection replace value must be a record"))?; if !collection.rows.contains_key(&key) { return Err(JsValue::from_str("collection replace key missing")); } collection.rows.insert(key, value); }
+            "keyedRemove" => { if value.is_some() { return Err(JsValue::from_str("collection remove forbids a value")); } if collection.rows.remove(&key).is_none() { return Err(JsValue::from_str("collection remove key missing")); } collection.order.retain(|entry| entry != &key); }
+            _ => return Err(JsValue::from_str("unknown collection mutation kind")),
+        }
+        self.invalidate_collection(input, metrics)
+    }
+    fn invalidate_collection(&mut self, input: usize, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
+        let snapshot = self.collections.get(&input).cloned().unwrap_or_default();
+        let targets = self.app.loops.iter().enumerate().filter_map(|(index, entry)| (entry.input == Some(input)).then_some(index)).collect::<Vec<_>>();
+        for loop_index in targets { let parent = self.parent_for_loop(loop_index)?; let projection = snapshot.order.iter().filter_map(|key| snapshot.rows.get(key).cloned().map(|row| (key.clone(), row))).collect(); self.reconcile_loop(loop_index, &parent, projection, metrics)?; }
+        Ok(())
+    }
     fn refresh_state(&mut self, state: usize, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
         let targets = self.app.dependency_edges.iter().filter_map(|edge| (edge.source.kind == "state" && edge.source.handle == state).then(|| (edge.target.kind.clone(), edge.target.handle))).collect::<Vec<_>>();
         for (kind, handle) in targets {
@@ -2696,7 +2779,7 @@ impl TypedRuntime {
         doc: &Document,
         index: usize,
         parent: Option<&Node>,
-        row: Option<&serde_json::Map<String, Value>>,
+        row: Option<&HashMap<String, RuntimeValue>>,
         row_index: usize,
         local: &mut HashMap<usize, Node>,
     ) -> Result<Node, JsValue> {
@@ -2783,13 +2866,13 @@ impl TypedRuntime {
             .clone();
         let values = typed_eval(&self.app, loop_def.source_expression, &self.states, None, 0)?;
         let rows = values
-            .as_array()
+            .array()
             .ok_or_else(|| JsValue::from_str("LOOP_SOURCE_NOT_ARRAY"))?
             .clone();
         let mut projection = Vec::new();
         for (index, value) in rows.into_iter().enumerate() {
             let row = value
-                .as_object()
+                .record()
                 .cloned()
                 .ok_or_else(|| JsValue::from_str("LOOP_ROW_NOT_OBJECT"))?;
             let key = typed_value_string(&typed_eval(
@@ -2801,7 +2884,7 @@ impl TypedRuntime {
             )?);
             if projection
                 .iter()
-                .any(|(existing, _): &(String, serde_json::Map<String, Value>)| existing == &key)
+                .any(|(existing, _): &(String, HashMap<String, RuntimeValue>)| existing == &key)
             {
                 return Err(JsValue::from_str("DUPLICATE_LOOP_KEY"));
             }
@@ -2838,8 +2921,8 @@ impl TypedRuntime {
             let parent = self.parent_for_loop(loop_index)?;
             let mut projection = Vec::new();
             for (index, value) in values.iter().enumerate() {
-                let row = value
-                    .as_object()
+                let row = runtime_from_json(value.clone())?
+                    .record()
                     .cloned()
                     .ok_or_else(|| JsValue::from_str("LOOP_ROW_NOT_OBJECT"))?;
                 projection.push((
@@ -2880,7 +2963,7 @@ impl TypedRuntime {
         &mut self,
         loop_index: usize,
         parent: &Node,
-        projection: Vec<(String, serde_json::Map<String, Value>)>,
+        projection: Vec<(String, HashMap<String, RuntimeValue>)>,
         metrics: &mut UpdateMetrics,
     ) -> Result<(), JsValue> {
         let desired = projection
@@ -2945,7 +3028,7 @@ impl TypedRuntime {
         loop_index: usize,
         parent: &Node,
         key: String,
-        values: serde_json::Map<String, Value>,
+        values: HashMap<String, RuntimeValue>,
         index: usize,
         metrics: &mut UpdateMetrics,
     ) -> Result<(), JsValue> {
@@ -2972,7 +3055,7 @@ impl TypedRuntime {
         &mut self,
         loop_index: usize,
         key: &str,
-        values: serde_json::Map<String, Value>,
+        values: HashMap<String, RuntimeValue>,
         metrics: &mut UpdateMetrics,
     ) -> Result<(), JsValue> {
         let row = self
@@ -3051,7 +3134,7 @@ impl TypedRuntime {
                     let row = values
                         .get_mut(row_key)
                         .ok_or_else(|| JsValue::from_str("row missing"))?;
-                    row.extend(changes.clone());
+                    row.extend(changes.clone().into_iter().map(|(key, value)| Ok((key, runtime_from_json(value)?))).collect::<Result<HashMap<_, _>, JsValue>>()?);
                 }
                 Delta::Insert {
                     row_key,
@@ -3059,7 +3142,7 @@ impl TypedRuntime {
                     before_row_key,
                     ..
                 } => {
-                    values.insert(row_key.clone(), row.clone().into_iter().collect());
+                    values.insert(row_key.clone(), row.clone().into_iter().map(|(key, value)| Ok((key, runtime_from_json(value)?))).collect::<Result<HashMap<_, _>, JsValue>>()?);
                     keys.retain(|key| key != row_key);
                     let position = before_row_key
                         .as_ref()
@@ -3117,7 +3200,10 @@ impl TypedApplication {
                     TypedActionInstruction::Evaluate { expression } if *expression >= self.expressions.len() => return Err(JsValue::from_str("action expression handle out of range")),
                     TypedActionInstruction::StoreState { state } if *state >= self.state_slots.len() => return Err(JsValue::from_str("action state handle out of range")),
                     TypedActionInstruction::CollectionMutation { .. } => {}
-                    TypedActionInstruction::Call { action, .. } if *action >= self.actions.len() => return Err(JsValue::from_str("action handle out of range")),
+                    TypedActionInstruction::Call { action, arguments } => {
+                        let target = self.actions.get(*action).ok_or_else(|| JsValue::from_str("action handle out of range"))?;
+                        if arguments.len() != target.parameter_slots.len() || arguments.iter().any(|expression| *expression >= self.expressions.len()) { return Err(JsValue::from_str("invalid action call")); }
+                    }
                     TypedActionInstruction::Jump { target } | TypedActionInstruction::JumpIfFalse { target } if *target >= action.instructions.len() => return Err(JsValue::from_str("action jump target out of range")),
                     TypedActionInstruction::CapabilityRequest { request, success_pc, failure_pc, finally_pc, result_slot, error_slot, .. } => {
                         if request.url >= self.expressions.len() || request.body.map(|body| body >= self.expressions.len()).unwrap_or(false) || request.headers.iter().any(|header| header.name >= self.strings.len() || header.value >= self.expressions.len()) || *success_pc >= action.instructions.len() || *failure_pc >= action.instructions.len() || finally_pc.map(|pc| pc >= action.instructions.len()).unwrap_or(false) || *result_slot >= action.frame_slots || *error_slot >= action.frame_slots { return Err(JsValue::from_str("invalid action continuation")); }
@@ -3125,163 +3211,110 @@ impl TypedApplication {
                     _ => {}
                 }
             }
+            if let Some(state) = action.loader_result_state { if state >= self.state_slots.len() { return Err(JsValue::from_str("loader result state handle out of range")); } }
         }
         Ok(())
     }
 }
 
-fn typed_eval(
-    app: &TypedApplication,
-    program: usize,
-    states: &[Value],
-    row: Option<&serde_json::Map<String, Value>>,
-    row_index: usize,
-) -> Result<Value, JsValue> {
+fn typed_eval(app: &TypedApplication, program: usize, states: &[RuntimeValue], row: Option<&HashMap<String, RuntimeValue>>, row_index: usize) -> Result<RuntimeValue, JsValue> {
     typed_eval_frame(app, program, states, row, row_index, &[], &[])
 }
 fn typed_eval_frame(
     app: &TypedApplication,
     program: usize,
-    states: &[Value],
-    row: Option<&serde_json::Map<String, Value>>,
+    states: &[RuntimeValue],
+    row: Option<&HashMap<String, RuntimeValue>>,
     row_index: usize,
-    frame: &[Value],
-    event: &[Value],
-) -> Result<Value, JsValue> {
+    frame: &[RuntimeValue], event: &[RuntimeValue],
+) -> Result<RuntimeValue, JsValue> {
     let instructions = &app
         .expressions
         .get(program)
         .ok_or_else(|| JsValue::from_str("expression handle out of range"))?
         .instructions;
-    let mut stack = Vec::<Value>::new();
+    let mut stack = Vec::<RuntimeValue>::new();
     let mut pc = 0usize;
     while pc < instructions.len() {
         let instruction = &instructions[pc];
-        let op = instruction.get("op").and_then(Value::as_str).unwrap_or("");
-        match op {
-            "constant" => stack.push(
+        match instruction {
+            TypedExpressionInstruction::Constant { constant } => stack.push(
                 app.constants
-                    .get(
-                        instruction
-                            .get("constant")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0) as usize,
-                    )
+                    .get(*constant)
                     .cloned()
-                    .unwrap_or(Value::Null),
+                    .unwrap_or(RuntimeValue::Null),
             ),
-            "loadState" => stack.push(
+            TypedExpressionInstruction::LoadState { state } => stack.push(
                 states
-                    .get(
-                        instruction
-                            .get("state")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0) as usize,
-                    )
+                    .get(*state)
                     .cloned()
-                    .unwrap_or(Value::Null),
+                    .unwrap_or(RuntimeValue::Null),
             ),
-            "loadRowField" => {
+            TypedExpressionInstruction::LoadRowField { field } => {
                 let field = app
                     .strings
-                    .get(
-                        instruction
-                            .get("field")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0) as usize,
-                    )
+                    .get(*field)
                     .map(String::as_str)
                     .unwrap_or("");
                 stack.push(if field.is_empty() {
-                    Value::Object(row.cloned().unwrap_or_default())
+                    RuntimeValue::Record(row.cloned().unwrap_or_default())
                 } else {
                     row.and_then(|value| value.get(field))
                         .cloned()
-                        .unwrap_or(Value::Null)
+                        .unwrap_or(RuntimeValue::Null)
                 });
             }
-            "loadEventField" => stack.push(event.get(instruction.get("field").and_then(Value::as_u64).unwrap_or(0) as usize).cloned().unwrap_or(Value::Null)),
-            "loadFrame" => stack.push(frame.get(instruction.get("slot").and_then(Value::as_u64).unwrap_or(0) as usize).cloned().unwrap_or(Value::Null)),
-            "field" => {
-                let object = stack.pop().unwrap_or(Value::Null);
+            TypedExpressionInstruction::LoadEventField { field } => stack.push(event.get(*field).cloned().unwrap_or(RuntimeValue::Null)),
+            TypedExpressionInstruction::LoadFrame { slot } => stack.push(frame.get(*slot).cloned().unwrap_or(RuntimeValue::Null)),
+            TypedExpressionInstruction::Field { field } => {
+                let object = stack.pop().ok_or_else(|| JsValue::from_str("expression stack underflow: field"))?;
                 let field = app
                     .strings
-                    .get(
-                        instruction
-                            .get("field")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0) as usize,
-                    )
+                    .get(*field)
                     .map(String::as_str)
                     .unwrap_or("");
-                stack.push(object.get(field).cloned().unwrap_or(Value::Null));
+                stack.push(object.record().and_then(|value| value.get(field)).cloned().unwrap_or(RuntimeValue::Null));
             }
-            "filter" | "map" => {
-                let source = stack.pop().unwrap_or(Value::Null);
-                let callback = instruction
-                    .get(if op == "filter" {
-                        "predicate"
-                    } else {
-                        "mapper"
-                    })
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0) as usize;
+            TypedExpressionInstruction::Filter { predicate, .. } | TypedExpressionInstruction::Map { mapper: predicate, .. } => {
+                let source = stack.pop().ok_or_else(|| JsValue::from_str("expression stack underflow: collection"))?;
                 let mut output = Vec::new();
-                for (index, value) in source
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .enumerate()
-                {
-                    let object = value.as_object().cloned().unwrap_or_default();
-                    let value = typed_eval(app, callback, states, Some(&object), index)?;
-                    if op == "map" {
+                for (index, item) in source.array().unwrap_or(&[]).iter().cloned().enumerate() {
+                    let object = item.record().cloned().unwrap_or_default();
+                    let value = typed_eval(app, *predicate, states, Some(&object), index)?;
+                    if matches!(instruction, TypedExpressionInstruction::Map { .. }) {
                         output.push(value);
                     } else if typed_truthy(&value) {
-                        output.push(Value::Object(object));
+                        output.push(RuntimeValue::Record(object));
                     }
                 }
-                stack.push(Value::Array(output));
+                stack.push(RuntimeValue::Array(output));
             }
-            "string" => {
-                let count = instruction
-                    .get("count")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(1) as usize;
-                let mut parts = (0..count).filter_map(|_| stack.pop()).collect::<Vec<_>>();
+            TypedExpressionInstruction::String { kind, count } => {
+                if stack.len() < *count { return Err(JsValue::from_str("expression stack underflow: string")); }
+                let mut parts = (0..*count).filter_map(|_| stack.pop()).collect::<Vec<_>>();
                 parts.reverse();
-                let kind = instruction
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .unwrap_or("concat");
-                let result = match kind {
-                    "trim" => typed_value_string(parts.first().unwrap_or(&Value::Null))
+                let result = match kind.as_str() {
+                    "trim" => typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
                         .trim()
                         .to_owned(),
                     "lower" => {
-                        typed_value_string(parts.first().unwrap_or(&Value::Null)).to_lowercase()
+                        typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null)).to_lowercase()
                     }
                     "upper" => {
-                        typed_value_string(parts.first().unwrap_or(&Value::Null)).to_uppercase()
+                        typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null)).to_uppercase()
                     }
-                    "includes" => typed_value_string(parts.first().unwrap_or(&Value::Null))
-                        .contains(&typed_value_string(parts.get(1).unwrap_or(&Value::Null)))
+                    "includes" => typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
+                        .contains(&typed_value_string(parts.get(1).unwrap_or(&RuntimeValue::Null)))
                         .to_string(),
                     _ => parts.iter().map(typed_value_string).collect::<String>(),
                 };
-                stack.push(Value::String(result));
+                stack.push(RuntimeValue::String(result));
             }
-            "binary" => {
-                let right = stack.pop().unwrap_or(Value::Null);
-                let left = stack.pop().unwrap_or(Value::Null);
-                let result = match instruction
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                {
-                    "equal" => Value::Bool(left == right),
-                    "notEqual" => Value::Bool(left != right),
+            TypedExpressionInstruction::Binary { kind } => {
+                let right = stack.pop().ok_or_else(|| JsValue::from_str("expression stack underflow: binary"))?;
+                let left = stack.pop().ok_or_else(|| JsValue::from_str("expression stack underflow: binary"))?;
+                let result = match kind.as_str() {
+                    "equal" => RuntimeValue::Bool(left == right), "notEqual" => RuntimeValue::Bool(left != right),
                     "and" => {
                         if typed_truthy(&left) {
                             right
@@ -3303,52 +3336,38 @@ fn typed_eval_frame(
                             left
                         }
                     }
-                    "add" => Value::String(format!(
+                    "add" => RuntimeValue::String(format!(
                         "{}{}",
                         typed_value_string(&left),
                         typed_value_string(&right)
                     )),
-                    _ => Value::Null,
+                    _ => RuntimeValue::Null,
                 };
                 stack.push(result);
             }
-            "unary" => {
-                let value = stack.pop().unwrap_or(Value::Null);
-                stack.push(match instruction.get("kind").and_then(Value::as_str) {
-                    Some("not") => Value::Bool(!typed_truthy(&value)),
-                    Some("minus") => Value::from(-value.as_f64().unwrap_or(0.0)),
+            TypedExpressionInstruction::Unary { kind } => {
+                let value = stack.pop().ok_or_else(|| JsValue::from_str("expression stack underflow: unary"))?;
+                stack.push(match kind.as_str() {
+                    "not" => RuntimeValue::Bool(!typed_truthy(&value)), "minus" => RuntimeValue::Number(-value.number()),
                     _ => value,
                 });
             }
-            "jumpIfFalse" => {
-                if !typed_truthy(stack.last().unwrap_or(&Value::Null)) {
-                    pc = instruction
-                        .get("target")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(pc as u64) as usize;
-                    continue;
-                }
-            }
-            "jump" => {
-                pc = instruction
-                    .get("target")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(pc as u64) as usize;
-                continue;
-            }
-            "return" => return Ok(stack.pop().unwrap_or(Value::Null)),
-            _ => {}
+            TypedExpressionInstruction::JumpIfFalse { target } => { if !typed_truthy(&stack.pop().ok_or_else(|| JsValue::from_str("expression stack underflow: jumpIfFalse"))?) { pc = *target; continue; } }
+            TypedExpressionInstruction::JumpIfTrue { target } => { if typed_truthy(&stack.pop().ok_or_else(|| JsValue::from_str("expression stack underflow: jumpIfTrue"))?) { pc = *target; continue; } }
+            TypedExpressionInstruction::Jump { target } => { pc = *target; continue; }
+            TypedExpressionInstruction::Return => return Ok(stack.pop().unwrap_or(RuntimeValue::Null)),
+            _ => return Err(JsValue::from_str("unsupported typed expression instruction")),
         };
         pc += 1;
     }
-    Ok(stack.pop().unwrap_or(Value::Null))
+    Ok(stack.pop().unwrap_or(RuntimeValue::Null))
 }
 fn typed_apply_binding(
     app: &TypedApplication,
     binding: &TypedBinding,
     node: &Node,
-    states: &[Value],
-    row: Option<&serde_json::Map<String, Value>>,
+    states: &[RuntimeValue],
+    row: Option<&HashMap<String, RuntimeValue>>,
     index: usize,
 ) -> Result<(), JsValue> {
     let value = typed_eval(app, binding.expression, states, row, index)?;
@@ -3380,38 +3399,33 @@ fn typed_apply_binding(
     }
     Ok(())
 }
-fn typed_truthy(value: &Value) -> bool {
+fn typed_truthy(value: &RuntimeValue) -> bool {
     match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64().unwrap_or(0.0) != 0.0,
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(_) => true,
+        RuntimeValue::Null => false, RuntimeValue::Bool(value) => *value,
+        RuntimeValue::Number(value) => *value != 0.0, RuntimeValue::String(value) => !value.is_empty(),
+        RuntimeValue::Array(value) => !value.is_empty(), RuntimeValue::Record(_) => true,
     }
 }
-fn typed_value_string(value: &Value) -> String {
+fn typed_value_string(value: &RuntimeValue) -> String {
     match value {
-        Value::String(value) => value.clone(),
-        Value::Null => String::new(),
-        Value::Bool(value) => value.to_string(),
-        Value::Number(value) => value.to_string(),
-        _ => value.to_string(),
+        RuntimeValue::String(value) => value.clone(), RuntimeValue::Null => String::new(),
+        RuntimeValue::Bool(value) => value.to_string(), RuntimeValue::Number(value) => value.to_string(),
+        RuntimeValue::Array(_) | RuntimeValue::Record(_) => serde_json::to_string(value).unwrap_or_default(),
     }
 }
-fn typed_event_field(name: &str, event: &Event, target: Option<&Element>) -> Value {
+fn typed_event_field(name: &str, event: &Event, target: Option<&Element>) -> RuntimeValue {
     match name {
-        "type" => Value::String(event.type_()),
-        "value" => target.and_then(|element| element.clone().dyn_into::<HtmlInputElement>().ok()).map(|input| Value::String(input.value())).unwrap_or(Value::Null),
-        "checked" => target.and_then(|element| element.clone().dyn_into::<HtmlInputElement>().ok()).map(|input| Value::Bool(input.checked())).unwrap_or(Value::Null),
-        "rowKey" => target.and_then(|element| element.closest("[data-runtime-row-key]").ok().flatten()).and_then(|row| row.get_attribute("data-runtime-row-key")).map(Value::String).unwrap_or(Value::Null),
-        "key" => event.clone().dyn_into::<KeyboardEvent>().map(|key| Value::String(key.key())).unwrap_or(Value::Null),
-        "button" => event.clone().dyn_into::<MouseEvent>().map(|mouse| Value::from(mouse.button())).unwrap_or(Value::Null),
-        "metaKey" => event.clone().dyn_into::<KeyboardEvent>().map(|key| Value::Bool(key.meta_key())).or_else(|event| event.dyn_into::<MouseEvent>().map(|mouse| Value::Bool(mouse.meta_key()))).unwrap_or(Value::Bool(false)),
-        "ctrlKey" => event.clone().dyn_into::<KeyboardEvent>().map(|key| Value::Bool(key.ctrl_key())).or_else(|event| event.dyn_into::<MouseEvent>().map(|mouse| Value::Bool(mouse.ctrl_key()))).unwrap_or(Value::Bool(false)),
-        "shiftKey" => event.clone().dyn_into::<KeyboardEvent>().map(|key| Value::Bool(key.shift_key())).or_else(|event| event.dyn_into::<MouseEvent>().map(|mouse| Value::Bool(mouse.shift_key()))).unwrap_or(Value::Bool(false)),
-        "altKey" => event.clone().dyn_into::<KeyboardEvent>().map(|key| Value::Bool(key.alt_key())).or_else(|event| event.dyn_into::<MouseEvent>().map(|mouse| Value::Bool(mouse.alt_key()))).unwrap_or(Value::Bool(false)),
-        _ => Value::Null,
+        "type" => RuntimeValue::String(event.type_()),
+        "value" => target.and_then(|element| element.clone().dyn_into::<HtmlInputElement>().ok()).map(|input| RuntimeValue::String(input.value())).unwrap_or(RuntimeValue::Null),
+        "checked" => target.and_then(|element| element.clone().dyn_into::<HtmlInputElement>().ok()).map(|input| RuntimeValue::Bool(input.checked())).unwrap_or(RuntimeValue::Null),
+        "rowKey" => target.and_then(|element| element.closest("[data-runtime-row-key]").ok().flatten()).and_then(|row| row.get_attribute("data-runtime-row-key")).map(RuntimeValue::String).unwrap_or(RuntimeValue::Null),
+        "key" => event.clone().dyn_into::<KeyboardEvent>().map(|key| RuntimeValue::String(key.key())).unwrap_or(RuntimeValue::Null),
+        "button" => event.clone().dyn_into::<MouseEvent>().map(|mouse| RuntimeValue::Number(mouse.button() as f64)).unwrap_or(RuntimeValue::Null),
+        "metaKey" => RuntimeValue::Bool(event.clone().dyn_into::<KeyboardEvent>().map(|key| key.meta_key()).or_else(|event| event.dyn_into::<MouseEvent>().map(|mouse| mouse.meta_key())).unwrap_or(false)),
+        "ctrlKey" => RuntimeValue::Bool(event.clone().dyn_into::<KeyboardEvent>().map(|key| key.ctrl_key()).or_else(|event| event.dyn_into::<MouseEvent>().map(|mouse| mouse.ctrl_key())).unwrap_or(false)),
+        "shiftKey" => RuntimeValue::Bool(event.clone().dyn_into::<KeyboardEvent>().map(|key| key.shift_key()).or_else(|event| event.dyn_into::<MouseEvent>().map(|mouse| mouse.shift_key())).unwrap_or(false)),
+        "altKey" => RuntimeValue::Bool(event.clone().dyn_into::<KeyboardEvent>().map(|key| key.alt_key()).or_else(|event| event.dyn_into::<MouseEvent>().map(|mouse| mouse.alt_key())).unwrap_or(false)),
+        _ => RuntimeValue::Null,
     }
 }
 fn instantiate(
@@ -4500,4 +4514,5 @@ mod tests {
         app.actions[0].parameter_slots = vec![0, 0];
         assert!(validate_typed_action_contract(&app.actions[0], app.expressions.len(), &["collection".into()]).unwrap_err().contains("duplicate"));
     }
+
 }

@@ -377,96 +377,38 @@ export function lowerCompilerFacts(
   );
   const rootNode = required(nodeIndex.get(ir.rootElementId), `root node ${ir.rootElementId}`);
   const actionById = new Map<string, number>(
-    (ir.actions ?? []).map((action: any, index: number) => [action.id, index]),
+    (ir.actionFacts ?? []).map((action: any, index: number) => [action.id, index]),
   );
   const events: any[] = [];
-  const actions = (ir.actions ?? []).map((action: any) => {
-    const fields = eventFields(action.operations ?? []);
-    const fieldSlots = new Map(fields.map((field, index) => [field, index]));
-    const slots = new Map<string, number>();
-    let nextSlot = 0;
-    const slot = (name: string) => {
-      const found = slots.get(name);
-      if (found !== undefined) return found;
-      slots.set(name, nextSlot);
-      return nextSlot++;
-    };
-    const instructions: any[] = [];
-    const emit = (operations: any[]) => {
-      for (const operation of operations ?? []) {
-        switch (operation?.kind) {
-          case 'set-state':
-            instructions.push({ op: 'evaluate', expression: expression(operation.value, { slots, eventFields: fieldSlots }) });
-            instructions.push({ op: 'storeState', state: required(stateByName.get((ir.localStates ?? []).find((state: any) => state.id === operation.stateSlotId)?.name), `action ${action.id} state ${operation.stateSlotId}`) });
-            break;
-          case 'prevent-default': instructions.push({ op: 'preventDefault' }); break;
-          case 'return': instructions.push({ op: 'return' }); break;
-          case 'invoke-action-ref':
-            instructions.push({ op: 'call', action: required(actionById.get(operation.actionId), `action ${action.id} call ${operation.actionId}`), arguments: (operation.parameters ?? []).map((value: any) => expression(value, { slots, eventFields: fieldSlots })) });
-            break;
-          case 'collection': {
-            const input = (ir.inputs ?? []).findIndex((entry: any) => entry.id === operation.inputId);
-            if (input < 0) throw new Error(`EXECUTABLE_REFERENCE_MISSING:action ${action.id} collection input ${operation.inputId}`);
-            if (!operation.key) throw new Error(`EXECUTABLE_COLLECTION_KEY_MISSING:action ${action.id}`);
-            if (operation.operation !== 'keyed-remove' && !operation.value)
-              throw new Error(`EXECUTABLE_COLLECTION_VALUE_MISSING:action ${action.id}`);
-            instructions.push({
-              op: 'collectionMutation', input,
-              kind: operation.operation === 'keyed-replace' ? 'keyedReplace' : operation.operation === 'keyed-remove' ? 'keyedRemove' : 'append',
-              key: expression(operation.key, { slots, eventFields: fieldSlots }),
-              ...(operation.value ? { value: expression(operation.value, { slots, eventFields: fieldSlots }) } : {}),
-            });
-            break;
-          }
-          case 'if': {
-            instructions.push({ op: 'evaluate', expression: expression(operation.test, { slots, eventFields: fieldSlots }) });
-            const branch = instructions.length;
-            instructions.push({ op: 'jumpIfFalse', target: 0 });
-            emit(operation.consequent);
-            const done = instructions.length;
-            instructions.push({ op: 'jump', target: 0 });
-            instructions[branch].target = instructions.length;
-            emit(operation.alternate);
-            instructions[done].target = instructions.length;
-            break;
-          }
-          case 'capability-request': {
-            const request = operation.request ?? {};
-            const resultSlot = slot(operation.successResultName ?? 'result');
-            const errorSlot = slot(operation.failureErrorName ?? 'error');
-            const requestInstruction: any = {
-              op: 'capabilityRequest', capability: 'fetch',
-              request: {
-                url: expression(request.url, { slots, eventFields: fieldSlots }),
-                method: request.method ?? 'GET', decode: request.decode ?? 'json', requireOk: request.requireOk !== false,
-                headers: Object.entries(request.headers ?? {}).map(([name, value]) => ({ name: string(name), value: expression(value, { slots, eventFields: fieldSlots }) })),
-                ...(request.jsonBody ? { body: expression(request.jsonBody, { slots, eventFields: fieldSlots }) } : {}),
-              }, successPc: 0, failurePc: 0, finallyPc: undefined, resultSlot, errorSlot,
-            };
-            instructions.push(requestInstruction);
-            requestInstruction.successPc = instructions.length;
-            emit(operation.success);
-            const afterSuccess = instructions.length;
-            if (operation.finally?.length) { requestInstruction.finallyPc = afterSuccess; emit(operation.finally); }
-            instructions.push({ op: 'return' });
-            requestInstruction.failurePc = instructions.length;
-            emit(operation.failure);
-            if (operation.finally?.length) emit(operation.finally);
-            instructions.push({ op: 'return' });
-            break;
-          }
+  const actions = (ir.actionFacts ?? []).map((action: any) => {
+    const actionInstruction = (instruction: any): any => {
+      const frame = { slots: instruction.slots as Map<string, number> | undefined, eventFields: instruction.eventSlots as Map<string, number> | undefined };
+      switch (instruction.op) {
+        case 'evaluate': return { op: 'evaluate', expression: expression(instruction.expression, frame) };
+        case 'storeState': return { op: 'storeState', state: required(stateByName.get((ir.localStates ?? []).find((state: any) => state.id === instruction.stateSlotId)?.name), `action ${action.id} state ${instruction.stateSlotId}`) };
+        case 'preventDefault': case 'jump': case 'jumpIfFalse': case 'return': return { ...instruction, eventSlots: undefined, slots: undefined };
+        case 'call': return { op: 'call', action: required(actionById.get(instruction.actionId), `action ${action.id} call ${instruction.actionId}`), arguments: (instruction.arguments ?? []).map((value: any) => expression(value, frame)) };
+        case 'collectionMutation': {
+          const input = (ir.inputs ?? []).findIndex((entry: any) => entry.id === instruction.inputId);
+          if (input < 0) throw new Error(`EXECUTABLE_REFERENCE_MISSING:action ${action.id} collection input ${instruction.inputId}`);
+          if (!instruction.key) throw new Error(`EXECUTABLE_COLLECTION_KEY_MISSING:action ${action.id}`);
+          if (instruction.kind !== 'keyed-remove' && !instruction.value) throw new Error(`EXECUTABLE_COLLECTION_VALUE_MISSING:action ${action.id}`);
+          return { op: 'collectionMutation', input, kind: instruction.kind === 'keyed-replace' ? 'keyedReplace' : instruction.kind === 'keyed-remove' ? 'keyedRemove' : 'append', key: expression(instruction.key, frame), ...(instruction.value ? { value: expression(instruction.value, frame) } : {}) };
         }
+        case 'capabilityRequest': {
+          const request = instruction.request ?? {};
+          return { op: 'capabilityRequest', capability: 'fetch', request: { url: expression(request.url, frame), method: request.method ?? 'GET', decode: request.decode ?? 'json', requireOk: request.requireOk !== false, headers: Object.entries(request.headers ?? {}).map(([name, value]) => ({ name: string(name), value: expression(value, frame) })), ...(request.jsonBody ? { body: expression(request.jsonBody, frame) } : {}) }, successPc: instruction.successPc, failurePc: instruction.failurePc, ...(instruction.finallyPc === undefined ? {} : { finallyPc: instruction.finallyPc }), resultSlot: instruction.resultSlot, errorSlot: instruction.errorSlot };
+        }
+        default: throw new Error(`EXECUTABLE_ACTION_FACT_INVALID:${instruction.op}`);
       }
     };
-    emit(action.operations ?? []);
-    if (!instructions.length || instructions.at(-1)?.op !== 'return') instructions.push({ op: 'return' });
-    return { instructions, frameSlots: nextSlot, parameterSlots: [] };
+    return { instructions: action.instructions.map(actionInstruction), frameSlots: action.frameSlots, parameterSlots: action.parameterSlots };
   });
   for (const event of ir.events ?? []) {
     const actionIndex: number = required(actionById.get(event.actionId), `event ${event.id} action ${event.actionId}`);
-    const fields = eventFields((ir.actions ?? [])[actionIndex]?.operations ?? []);
+    const fields = (ir.actionFacts ?? [])[actionIndex]?.eventFields ?? [];
     const loop = event.loopId ? (ir.loops ?? []).findIndex((entry: any) => entry.id === event.loopId) : undefined;
-    events.push({ target: required(nodeIndex.get(event.targetId), `event ${event.id} target ${event.targetId}`), type: string(event.type), action: actionIndex, fields: fields.map((field) => string(field)), ...(loop === undefined ? {} : { loop: required(loop >= 0 ? loop : undefined, `event ${event.id} loop ${event.loopId}`) }) });
+    events.push({ target: required(nodeIndex.get(event.targetId), `event ${event.id} target ${event.targetId}`), type: string(event.type), action: actionIndex, fields: fields.map((field: string) => string(field)), ...(loop === undefined ? {} : { loop: required(loop >= 0 ? loop : undefined, `event ${event.id} loop ${event.loopId}`) }) });
   }
   const dependencyEdges: any[] = [];
   const loopIndexById = new Map(
@@ -594,17 +536,6 @@ export function lowerCompilerFacts(
   function parseInitialValue(value: string | undefined) {
     if (!value || value === 'undefined') return null;
     try { return JSON.parse(value); } catch { return null; }
-  }
-  function eventFields(operations: any[]): string[] {
-    const found = new Set<string>();
-    const visit = (value: any): void => {
-      if (!value || typeof value !== 'object') return;
-      const field = eventMember(value);
-      if (field && ['value', 'checked', 'key', 'rowKey', 'button', 'metaKey', 'ctrlKey', 'shiftKey', 'altKey', 'type'].includes(field)) found.add(field);
-      Object.values(value).forEach((child: any) => Array.isArray(child) ? child.forEach(visit) : visit(child));
-    };
-    visit(operations);
-    return [...found];
   }
 }
 

@@ -179,12 +179,15 @@ describe('executable lowering seam', () => {
       }),
     ).toThrow(/HANDLE_OUT_OF_RANGE:actions:3/);
   });
-  it('rejects unresolved legacy action references instead of substituting handle zero', () => {
+  it('rejects unresolved typed action-fact references instead of substituting handle zero', () => {
     expect(() =>
       lowerCompilerFacts({
         rootElementId: 'root',
         elements: [{ id: 'root', tag: 'div' }],
-        actions: [{ id: 'a1', operations: [{ kind: 'invoke-action-ref', actionId: 'missing' }] }],
+        actionFacts: [{
+          id: 'a1', eventFields: [], frameSlots: 0, parameterSlots: [],
+          instructions: [{ op: 'call', actionId: 'missing', arguments: [] }],
+        }],
       }),
     ).toThrow(/EXECUTABLE_REFERENCE_MISSING:action a1 call missing/);
   });
