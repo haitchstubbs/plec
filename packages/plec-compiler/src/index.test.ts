@@ -82,6 +82,81 @@ describe('compile executable application', () => {
     );
   });
 
+  it('keeps derived collection transforms out of typed action programs', () => {
+    const result = compile(
+      `function App() {
+        const [todos, setTodos] = useState([{ id: 'a', title: 'Alpha' }]);
+        const [search, setSearch] = useState('');
+        const filtered = todos.filter((todo) => todo.title.includes(search));
+        return <div><input onInput={(event) => setSearch(event.currentTarget.value)} />{filtered.map((todo) => <span key={todo.id}>{todo.title}</span>)}</div>;
+      }`,
+      { mode: 'strict' },
+    );
+    expect(result.ir.loops).toHaveLength(1);
+    expect(result.ir.dependencyEdges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: { kind: 'state', handle: 0 } }),
+        expect.objectContaining({ source: { kind: 'state', handle: 1 } }),
+      ]),
+    );
+    const actionText = JSON.stringify(result.ir.actions);
+    expect(actionText).not.toMatch(/todos|search|filter|map/);
+    expect(result.ir.actions[0]?.instructions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ op: 'storeState', state: 1 }),
+      ]),
+    );
+  });
+
+  it('emits flattened typed action control flow and omits unsupported lenient handlers', () => {
+    const typed = compile(
+      `function App() { const [open, setOpen] = useState(false); return <button onClick={() => { if (open) setOpen(false); else setOpen(true); }} /> }`,
+      { mode: 'strict' },
+    );
+    const instructions = typed.ir.actions[0]!.instructions as any[];
+    expect(instructions.map((instruction) => instruction.op)).toEqual(
+      expect.arrayContaining(['evaluate', 'jumpIfFalse', 'jump', 'storeState']),
+    );
+    expect(instructions.every((instruction) => !('kind' in instruction))).toBe(true);
+
+    const lenient = compile(
+      `function App() { return <button onClick={() => missingAction} /> }`,
+      { mode: 'lenient' },
+    );
+    expect(lenient.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'UNSUPPORTED_ACTION_EXPRESSION',
+    );
+    expect(lenient.ir.events).toEqual([]);
+    expect(lenient.ir.actions).toEqual([]);
+  });
+
+  it('assigns deterministic continuation slots and PCs for supported fetch helpers', () => {
+    const result = compile(
+      `function App() {
+        const [pending, setPending] = useState(false);
+        const [error, setError] = useState('');
+        async function request(action) {
+          setPending(true);
+          try { await action(); }
+          catch (reason) { setError('failed'); }
+          finally { setPending(false); }
+        }
+        async function save() { await request(() => fetch('/api/save', { method: 'POST' })); }
+        return <button onClick={save} />;
+      }`,
+      { mode: 'strict' },
+    );
+    const action = result.ir.actions[0]!;
+    const request = action.instructions.find(
+      (instruction: any) => instruction.op === 'capabilityRequest',
+    ) as any;
+    expect(request).toMatchObject({ capability: 'fetch', resultSlot: 0, errorSlot: 1 });
+    expect(request.successPc).toBeGreaterThan(0);
+    expect(request.failurePc).toBeGreaterThan(request.successPc);
+    expect(request.finallyPc).toBeGreaterThan(request.failurePc);
+    expect(action.frameSlots).toBe(2);
+  });
+
   it('continues to reject unsupported source in strict mode', () => {
     expect(() =>
       compile(`function App() { return <><span /></> }`, {
