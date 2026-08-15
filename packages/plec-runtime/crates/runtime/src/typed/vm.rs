@@ -1,7 +1,12 @@
 use crate::dom::bindings::*;
 use crate::eval::typed_vm::*;
 use crate::runtime::lifecycle::*;
-use crate::typed::{fetch::*, runtime::*};
+#[cfg(feature = "fetch")]
+use crate::typed::fetch::*;
+use crate::typed::runtime::*;
+use crate::typed::cookie::*;
+use crate::schema::typed::TypedCapabilityRequest;
+use crate::dom::platform::document;
 
 impl TypedRuntime {
     pub(crate) fn execute_action(
@@ -91,6 +96,11 @@ impl TypedRuntime {
                         event.prevent_default();
                     }
                 }
+                TypedActionInstruction::StoreHostRef { r#ref } => {
+                    let name = self.app.strings.get(r#ref).cloned().ok_or_else(|| JsValue::from_str("host ref handle out of range"))?;
+                    if let Some(active) = document()?.active_element() { self.host_refs.insert(name, active.into()); }
+                    else { self.host_refs.remove(&name); }
+                }
                 TypedActionInstruction::Jump { target } => {
                     pc = target;
                     continue;
@@ -108,6 +118,10 @@ impl TypedRuntime {
                 TypedActionInstruction::Call {
                     action: target,
                     arguments,
+                    success_pc: _,
+                    failure_pc: _,
+                    result_slot: _,
+                    error_slot: _,
                 } => {
                     let target_program = self
                         .app
@@ -173,7 +187,6 @@ impl TypedRuntime {
                     self.mutate_collection(input, &kind, key, value, metrics)?;
                 }
                 TypedActionInstruction::CapabilityRequest {
-                    capability,
                     request,
                     success_pc,
                     failure_pc,
@@ -181,13 +194,22 @@ impl TypedRuntime {
                     result_slot,
                     error_slot,
                 } => {
-                    if capability != "fetch" {
-                        return Err(JsValue::from_str("unsupported typed capability"));
+                    if let TypedCapabilityRequest::Cookie(request) = request {
+                        let name = self.app.strings.get(request.name).cloned().ok_or_else(|| JsValue::from_str("cookie name handle out of range"))?;
+                        let value = request.value.map(|expression| typed_eval_frame(&self.app, expression, &self.states, row.as_ref(), 0, &frame, event).map(|value| typed_value_string(&value))).transpose()?;
+                        let operation = request.operation.clone();
+                        // Name is validated here, before control crosses the host boundary.
+                        if !self.app.capabilities.iter().any(|entry| entry.kind == "cookie" && entry.name == name && entry.operations.iter().any(|allowed| allowed == &operation)) { return Err(JsValue::from_str("cookie operation is not declared")); }
+                        self.pending_cookies.push(TypedPendingCookie { instance_id: String::new(), request_id: 0, action, success_pc, failure_pc, finally_pc, result_slot, error_slot, frame, event: event.to_vec(), row, request, value, graph_generation: self.graph_generation });
+                        return Ok(());
                     }
                     #[cfg(not(feature = "fetch"))]
                     return Err(JsValue::from_str("fetch capability is disabled"));
                     #[cfg(feature = "fetch")]
                     {
+                        let TypedCapabilityRequest::Fetch(request) = request else {
+                            return Err(JsValue::from_str("unsupported typed capability"));
+                        };
                         let url = typed_value_string(&typed_eval_frame(
                             &self.app,
                             request.url,
@@ -236,6 +258,7 @@ impl TypedRuntime {
                             })
                             .transpose()?;
                         self.pending_fetches.push(TypedPendingFetch {
+                            instance_id: String::new(),
                             action,
                             success_pc,
                             failure_pc,
@@ -252,11 +275,13 @@ impl TypedRuntime {
                             body,
                             decode: request.decode,
                             require_ok: request.require_ok,
+                            graph_generation: self.graph_generation,
+                            request_id: 0,
                         });
                         return Ok(());
                     }
                 }
-                TypedActionInstruction::Return => return Ok(()),
+                TypedActionInstruction::Return { outcome: _, value: _ } => return Ok(()),
             }
             pc += 1;
         }
