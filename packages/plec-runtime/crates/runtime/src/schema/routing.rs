@@ -14,6 +14,9 @@ pub struct RouteManifest {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteManifestEntry {
+    pub id: String,
+    #[serde(default)]
+    pub parent_id: Option<String>,
     pub path: String,
     pub graph_id: String,
     pub outlet_id: String,
