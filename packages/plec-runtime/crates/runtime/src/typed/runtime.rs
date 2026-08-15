@@ -73,7 +73,27 @@ pub(crate) struct TypedGraphInstance {
     pub(crate) graph_id: String,
     pub(crate) route_id: Option<String>,
     pub(crate) match_key: Option<String>,
+    pub(crate) route_state: Option<TypedRouteState>,
+    /// The normal graph remains alive only while its route loader is pending.
+    pub(crate) loader_runtime: Option<TypedRuntime>,
     pub(crate) runtime: TypedRuntime,
+}
+
+pub(crate) struct TypedRouteState {
+    pub(crate) normal_graph_id: String,
+    pub(crate) pending_graph_id: Option<String>,
+    pub(crate) error_graph_id: Option<String>,
+    pub(crate) loader_action: Option<usize>,
+    pub(crate) params: HashMap<String, String>,
+    pub(crate) location: (String, String, String),
+    pub(crate) phase: TypedRoutePhase,
+}
+
+#[derive(PartialEq, Eq)]
+pub(crate) enum TypedRoutePhase {
+    Normal,
+    Loading,
+    Error,
 }
 
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -184,6 +204,13 @@ impl PlecRuntime {
 }
 
 impl TypedRuntime {
+    pub(crate) fn set_route_error(&mut self, error: RuntimeValue) -> Result<(), JsValue> {
+        let state = self.app.route_error_state
+            .ok_or_else(|| JsValue::from_str("typed error graph has no route error state"))?;
+        self.states[state] = error;
+        Ok(())
+    }
+
     pub(crate) fn set_host_inputs(&mut self, inputs: HashMap<String, RuntimeValue>) -> Result<(), JsValue> {
         self.host_inputs = inputs;
         self.app.host_inputs = self.host_inputs.clone();
