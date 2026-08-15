@@ -246,23 +246,26 @@ function TodoRow({
         aria-label={`Mark ${todo.title} ${todo.completed ? 'open' : 'complete'}`}
       />
       {editing ? (
-        <input
-          id={`todo-edit-${todo.id}`}
-          className="min-w-0 flex-1 rounded border bg-background px-2 py-1"
-          value={editingTitle}
-          onInput={(event: Event) =>
-            onEditTitle((event.currentTarget as HTMLInputElement).value)
-          }
-          onKeyDown={(event: KeyboardEvent) => {
-            if (event.key === 'Enter') onSave();
-            if (event.key === 'Escape') {
-              onCancel();
+        <label className="contents">
+          <span className="sr-only">{todo.title}</span>
+          <input
+            id={`todo-edit-${todo.id}`}
+            className="min-w-0 flex-1 rounded border bg-background px-2 py-1"
+            value={editingTitle}
+            onInput={(event: Event) =>
+              onEditTitle((event.currentTarget as HTMLInputElement).value)
             }
-          }}
-          onBlur={onSave}
-          aria-label={`Rename ${todo.title}`}
-          disabled={pending}
-        />
+            onKeyDown={(event: KeyboardEvent) => {
+              if (event.key === 'Enter') onSave();
+              if (event.key === 'Escape') {
+                onCancel();
+              }
+            }}
+            onBlur={onSave}
+            aria-label={`Rename ${todo.title}`}
+            disabled={pending}
+          />
+        </label>
       ) : (
         <span
           className={`min-w-0 flex-1 ${todo.completed ? 'text-muted-foreground line-through' : ''}`}

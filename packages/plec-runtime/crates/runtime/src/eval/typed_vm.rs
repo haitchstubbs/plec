@@ -82,7 +82,15 @@ pub(crate) fn typed_eval_frame(
                 let mut output = Vec::new();
                 for (index, item) in source.array().unwrap_or(&[]).iter().cloned().enumerate() {
                     let object = item.record().cloned().unwrap_or_default();
-                    let value = typed_eval(app, *predicate, states, Some(&object), index)?;
+                    let value = typed_eval_frame(
+                        app,
+                        *predicate,
+                        states,
+                        Some(&object),
+                        index,
+                        frame,
+                        event,
+                    )?;
                     if matches!(instruction, TypedExpressionInstruction::Map { .. }) {
                         output.push(value);
                     } else if typed_truthy(&value) {

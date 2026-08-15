@@ -193,6 +193,20 @@ describe('compile executable application', () => {
     expect(action.frameSlots).toBe(2);
   });
 
+  it('keeps an HTTP rejection message when the catch variable shadows state', () => {
+    const result = compile(`function App() {
+      const [error, setError] = useState();
+      async function request(action) {
+        try { const response = await action(); if (!response.ok) throw new Error('rejected'); }
+        catch (error) { setError(error.message); }
+      }
+      async function save() { await request(() => fetch('/api/save')); }
+      return <button onClick={save} />;
+    }`, { mode: 'strict' });
+    const text = JSON.stringify(result.ir);
+    expect(text).toContain('rejected');
+  });
+
   it('selects typed fetch decoders from the response method', () => {
     const result = compile(`function App() {
       async function text() { const response = await fetch('/text'); const value = await response.text(); }

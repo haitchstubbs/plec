@@ -250,6 +250,8 @@ export function lowerCompilerFacts(
             program(value.expression, {
               item: value.itemName,
               index: value.indexName,
+              slots: frame.slots,
+              eventFields: frame.eventFields,
             }),
           ) - 1;
         instructions.push({

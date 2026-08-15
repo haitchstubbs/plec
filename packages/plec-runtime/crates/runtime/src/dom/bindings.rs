@@ -34,6 +34,20 @@ pub(crate) fn typed_apply_value(
         .map(String::as_str)
         .unwrap_or("");
     if sink == "property" {
+        if let Ok(input) = element.clone().dyn_into::<web_sys::HtmlInputElement>() {
+            if name == "checked" {
+                let checked = matches!(value, RuntimeValue::Bool(true));
+                input.set_checked(checked);
+                if !checked { element.remove_attribute("checked")?; }
+                return Ok(());
+            }
+            if name == "disabled" {
+                let disabled = matches!(value, RuntimeValue::Bool(true));
+                input.set_disabled(disabled);
+                if !disabled { element.remove_attribute("disabled")?; }
+                return Ok(());
+            }
+        }
         js_sys::Reflect::set(
             &element,
             &JsValue::from_str(name),
