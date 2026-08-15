@@ -184,4 +184,21 @@ describe('ExecutableApplication 0.9', () => {
       /DUPLICATE_PARAMETER_SLOT/,
     );
   });
+  it('validates value-returning call continuations', () => {
+    const value: any = application();
+    value.actions = [
+      { frameSlots: 2, instructions: [{ op: 'call', action: 1, arguments: [], successPc: 1, failurePc: 1, resultSlot: 0, errorSlot: 1 }, { op: 'return' }] },
+      { frameSlots: 0, instructions: [{ op: 'return', outcome: 'success', value: 0 }] },
+    ];
+    expect(() => validateExecutableApplication(value)).not.toThrow();
+    value.actions[0].instructions[0].resultSlot = 2;
+    expect(() => validateExecutableApplication(value)).toThrow(/FRAME_SLOT_OUT_OF_RANGE/);
+  });
+  it('allows only complete call continuation metadata', () => {
+    const legacy: any = application();
+    legacy.actions[0] = { frameSlots: 1, instructions: [{ op: 'call', action: 0 }, { op: 'return' }] };
+    expect(() => validateExecutableApplication(legacy)).not.toThrow();
+    legacy.actions[0].instructions[0].successPc = 1;
+    expect(() => validateExecutableApplication(legacy)).toThrow(/PARTIAL_CALL_CONTINUATION/);
+  });
 });

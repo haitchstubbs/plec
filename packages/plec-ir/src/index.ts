@@ -522,6 +522,8 @@ export const ComponentGraphSchema = ApplicationSchema.extend({
 export type ComponentGraph = z.infer<typeof ComponentGraphSchema>;
 
 export const RouteManifestEntrySchema = z.object({
+  id: z.string().optional(),
+  parentId: z.string().optional(),
   path: z.string(),
   graphId: z.string(),
   pendingGraphId: z.string().optional(),
