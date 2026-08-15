@@ -35,6 +35,7 @@ describe('executable lowering seam', () => {
             "target": 1,
           },
         ],
+        "capabilities": [],
         "constants": [
           "Hello",
         ],
@@ -75,6 +76,7 @@ describe('executable lowering seam', () => {
         ],
         "propPrograms": [],
         "rootNode": 0,
+        "routeOutlets": [],
         "stateSlots": [],
         "strings": [
           "div",

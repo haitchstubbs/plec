@@ -211,6 +211,7 @@ interface LegacyApplicationFacts {
     id: string;
     name: string;
     initialValue: string;
+    initialExpression?: any;
     values: string[];
   }>;
   hostValues: Array<{ id: string; kind: 'media-query'; query: string }>;
@@ -233,6 +234,8 @@ export interface CompileOptions {
 export interface CompileResult {
   ir: ExecutableApplication;
   diagnostics: CompilerDiagnostic[];
+  /** Compiler-only route metadata. It is deliberately not emitted in IR. */
+  loaderResultState?: number;
 }
 
 class CompileFailure extends Error {
@@ -276,6 +279,7 @@ interface CompilerState {
     { id: string; defaultExpressionId: string }
   >;
   stateSetters: Map<string, string>;
+  loaderResultState?: number;
   routerLinkBindings: Set<string>;
   islandComponents: Set<string>;
   componentStack: string[];
@@ -442,6 +446,9 @@ export function compile(
   return {
     ir: lowerCompilerFacts(state.ir),
     diagnostics: state.diagnostics,
+    ...(state.loaderResultState === undefined
+      ? {}
+      : { loaderResultState: state.loaderResultState }),
   };
 }
 
@@ -2620,13 +2627,20 @@ function buildTypedActionFact(
   state: CompilerState,
 ) {
   const diagnosticStart = state.diagnostics.length;
+  const loaderContext = loaderContextParameters(handler, state);
   const sourceOperations = lowerActionOperations(handler, state) as any[];
   const eventFields = actionEventFields(sourceOperations);
   const eventSlots = new Map(eventFields.map((field, index) => [field, index]));
   const slots = new Map<string, number>();
   // Event values are ordinary initialized action-frame slots; locally
   // allocated continuation slots therefore begin after them.
-  let nextSlot = eventFields.length;
+  // Route loaders are ordinary action programs with two compiler-reserved
+  // arguments. `signal` stays browser-owned and is deliberately not a value.
+  if (loaderContext) {
+    slots.set('params', 0);
+    slots.set('location', 1);
+  }
+  let nextSlot = loaderContext ? 2 : eventFields.length;
   const slot = (name: string) => {
     const existing = slots.get(name);
     if (existing !== undefined) return existing;
@@ -2642,15 +2656,17 @@ function buildTypedActionFact(
           instructions.push({ op: 'storeState', stateSlotId: operation.stateSlotId });
           break;
         case 'prevent-default': instructions.push({ op: 'preventDefault' }); break;
+        case 'store-host-ref': instructions.push({ op: 'storeHostRef', refId: operation.refId }); break;
         case 'return':
-          if (operation.value) {
-            reportUnsupported(state, 'UNSUPPORTED_ACTION_RETURN_VALUE', 'Action return values are not supported.');
-            break;
-          }
-          instructions.push({ op: 'return' });
+          instructions.push({ op: 'return', outcome: operation.outcome ?? 'success', ...(operation.value ? { value: operation.value, eventSlots, slots } : {}) });
           break;
         case 'invoke-action-ref':
-          instructions.push({ op: 'call', actionId: operation.actionId, arguments: operation.parameters ?? [], eventSlots, slots });
+          instructions.push({
+            op: 'call', actionId: operation.actionId, arguments: operation.parameters ?? [],
+            resultSlot: slot(`__call_result_${instructions.length}`),
+            errorSlot: slot(`__call_error_${instructions.length}`),
+            successPc: 0, failurePc: 0, eventSlots, slots,
+          });
           break;
         case 'collection':
           instructions.push({ op: 'collectionMutation', inputId: operation.inputId, kind: operation.operation, key: operation.key, value: operation.value, eventSlots, slots });
@@ -2668,14 +2684,14 @@ function buildTypedActionFact(
           break;
         }
         case 'capability-request': {
-          if (operation.capability !== 'network.fetch') {
+          if (!['network.fetch', 'cookie'].includes(operation.capability)) {
             reportUnsupported(state, 'UNSUPPORTED_ACTION_CAPABILITY', `Capability ${operation.capability} is not supported.`);
             break;
           }
           const resultSlot = slot(operation.successResultName ?? 'result');
           const errorSlot = slot(operation.failureErrorName ?? 'error');
           const request: any = {
-            op: 'capabilityRequest', capability: 'fetch', request: operation.request,
+            op: 'capabilityRequest', capability: operation.capability === 'cookie' ? 'cookie' : 'fetch', request: operation.request,
             successPc: 0, failurePc: 0, finallyPc: undefined, resultSlot, errorSlot,
             eventSlots, slots,
           };
@@ -2708,8 +2724,49 @@ function buildTypedActionFact(
   // returns from hand-authored/test artifacts.
   if (!instructions.length || instructions.at(-1)?.op !== 'return')
     instructions.push({ op: 'return' });
+  for (let index = 0; index < instructions.length; index += 1)
+    if (instructions[index].op === 'call') {
+      instructions[index].successPc = Math.min(index + 1, instructions.length - 1);
+      instructions[index].failurePc = Math.min(index + 1, instructions.length - 1);
+    }
+  for (const instruction of instructions)
+    if ((instruction.op === 'jump' || instruction.op === 'jumpIfFalse') && instruction.target >= instructions.length)
+      instruction.target = instructions.length - 1;
   if (state.diagnostics.length !== diagnosticStart) return undefined;
-  return { id, parameters: [{ name: 'event', type: 'event' as const }], eventFields, frameSlots: nextSlot, parameterSlots: [], instructions };
+  return {
+    id,
+    parameters: loaderContext
+      ? [
+          { name: 'params', type: 'json' as const },
+          { name: 'location', type: 'json' as const },
+        ]
+      : [{ name: 'event', type: 'event' as const }],
+    eventFields,
+    frameSlots: nextSlot,
+    parameterSlots: loaderContext ? [0, 1] : [],
+    instructions,
+  };
+}
+
+/** Loader context is intentionally a narrow structural convention. It keeps
+ * the public `{ params, location, signal }` API while only serializing the
+ * two declarative values the typed VM can consume. */
+function loaderContextParameters(handler: any, state: CompilerState) {
+  const name = getNodeName(handler);
+  const resolved = name ? unwrapExpression(state.expressionScope[name]) : handler;
+  const functionDefinition = name
+    ? state.functions.get(componentKey(state.activeModuleId, name))
+    : undefined;
+  handler = (resolved ?? handler)?.function ?? resolved ?? handler;
+  const parameter = functionDefinition?.params?.[0]?.pat
+    ?? functionDefinition?.params?.[0]
+    ?? handler?.params?.[0]?.pat
+    ?? handler?.params?.[0];
+  if (parameter?.type !== 'ObjectPattern') return false;
+  return (parameter.properties ?? []).some((property: any) => {
+    const key = getNodeName(property.key);
+    return key === 'params' || key === 'location' || key === 'signal';
+  });
 }
 
 function actionEventFields(operations: any[]): string[] {
@@ -2778,19 +2835,19 @@ function lowerActionStatements(
     // failure continuation; consume that redundant guard with the adjacent
     // response.json declaration as one typed decode boundary.
     const decodeIndex = rest.findIndex((statement: any) =>
-      responseJsonBinding(statement, binding),
+      responseDecodeBinding(statement, binding),
     );
     const decode =
       decodeIndex >= 0
-        ? responseJsonBinding(rest[decodeIndex], binding)
+        ? responseDecodeBinding(rest[decodeIndex], binding)
         : undefined;
     const remaining = decode ? rest.slice(decodeIndex + 1) : rest;
-    const resultName = decode ?? binding ?? 'result';
+    const resultName = decode?.name ?? binding ?? 'result';
     return [
       {
         kind: 'capability-request',
         capability: 'network.fetch',
-        request: { ...fetch, decode: decode ? 'json' : 'empty' },
+        request: { ...fetch, decode: decode?.kind ?? 'empty' },
         continuationId: `c${state.eventCounter + 1}`,
         successResultName: resultName,
         failureErrorName: 'error',
@@ -2800,6 +2857,9 @@ function lowerActionStatements(
       },
     ];
   }
+  const cookie = awaited && cookieOperation(awaited, state);
+  if (cookie)
+    return [{ ...cookie, successResultName: binding ?? 'result', success: lowerActionStatements(rest, state) }];
   if (awaited) {
     const lowered = lowerAwaitedHelperCall(
       awaited,
@@ -2829,6 +2889,18 @@ function lowerActionStatements(
           : {}),
       },
     ];
+  if (statement.type === 'ThrowStatement') {
+    const thrown = unwrapExpression(statement.argument);
+    const value = thrown?.type === 'NewExpression'
+      ? lowerExpression(thrown.arguments?.[0]?.expression ?? thrown.arguments?.[0], state)
+      : lowerExpression(statement.argument, state);
+    return [{ kind: 'return', outcome: 'failure', value }];
+  }
+  if (statement.type === 'ExpressionStatement') {
+    const cookie = cookieOperation(unwrapExpression(statement.expression?.type === 'UnaryExpression' && statement.expression.operator === 'void' ? statement.expression.argument : statement.expression), state);
+    if (cookie)
+      return [{ ...cookie, success: lowerActionStatements(rest, state) }];
+  }
   const current = (() => {
     if (statement.type === 'ExpressionStatement')
       return lowerActionExpression(statement.expression, state);
@@ -2924,9 +2996,9 @@ function lowerAwaitedHelperCall(
       statements.slice(0, tryIndex),
       state,
     );
-    const decode = responseJsonBinding(rest[0], binding);
+    const decode = responseDecodeBinding(rest[0], binding);
     const remaining = decode ? rest.slice(1) : rest;
-    const resultName = decode ?? binding ?? 'result';
+    const resultName = decode?.name ?? binding ?? 'result';
     const successPrevious = state.expressionScope;
     state.expressionScope = {
       ...successPrevious,
@@ -2955,7 +3027,7 @@ function lowerAwaitedHelperCall(
       {
         kind: 'capability-request',
         capability: 'network.fetch',
-        request: { ...fetch, decode: 'json', requireOk: true },
+        request: { ...fetch, decode: decode?.kind ?? 'empty', requireOk: true },
         continuationId: `c${state.eventCounter + 1}`,
         successResultName: resultName,
         failureErrorName: 'error',
@@ -2970,10 +3042,10 @@ function lowerAwaitedHelperCall(
   }
 }
 
-function responseJsonBinding(
+function responseDecodeBinding(
   statement: any,
   responseName: string | undefined,
-): string | undefined {
+): { name: string; kind: 'json' | 'text' } | undefined {
   const returned = unwrapExpression(statement?.argument);
   const returnedAwaited =
     returned?.type === 'AwaitExpression'
@@ -2984,9 +3056,9 @@ function responseJsonBinding(
     statement?.type === 'ReturnStatement' &&
     returnedAwaited?.type === 'CallExpression' &&
     getNodeName(returnedAwaited.callee.object) === responseName &&
-    getNodeName(returnedAwaited.callee.property) === 'json'
+    ['json', 'text'].includes(getNodeName(returnedAwaited.callee.property) ?? '')
   )
-    return '__loader_result';
+    return { name: '__loader_result', kind: getNodeName(returnedAwaited.callee.property) as 'json' | 'text' };
   if (
     !responseName ||
     !['VariableDeclaration', 'VarDecl'].includes(statement?.type)
@@ -3001,9 +3073,12 @@ function responseJsonBinding(
   if (
     awaited?.type === 'CallExpression' &&
     getNodeName(awaited.callee.object) === responseName &&
-    getNodeName(awaited.callee.property) === 'json'
+    ['json', 'text'].includes(getNodeName(awaited.callee.property) ?? '')
   )
-    return getPatternName(declaration.id);
+    return {
+      name: getPatternName(declaration.id)!,
+      kind: getNodeName(awaited.callee.property) as 'json' | 'text',
+    };
   return undefined;
 }
 
@@ -3114,7 +3189,11 @@ function lowerActionExpression(
       return lowerActionOperations(target, state);
   }
   if (expression?.type !== 'CallExpression') {
-    reportUnsupported(state, 'UNSUPPORTED_ACTION_EXPRESSION', 'Action expression must be a supported call, conditional, or callback.');
+    if (expression?.type === 'AssignmentExpression' && getNodeName(expression.left?.object) && getNodeName(expression.left?.property) === 'current' && getNodeName(expression.right?.object) === 'document' && getNodeName(expression.right?.property) === 'activeElement')
+      return [{ kind: 'store-host-ref', refId: getNodeName(expression.left.object) }];
+    if (expression?.type === 'AssignmentExpression' && getNodeName(expression.left?.object) === 'document' && getNodeName(expression.left?.property) === 'cookie')
+      reportUnsupported(state, 'UNSUPPORTED_DOCUMENT_COOKIE', 'Use cookie.set or cookie.delete; document.cookie assignment is not safely compilable.');
+    else reportUnsupported(state, 'UNSUPPORTED_ACTION_EXPRESSION', 'Action expression must be a supported call, conditional, or callback.');
     return [];
   }
   let callee = getNodeName(expression.callee);
@@ -3165,6 +3244,8 @@ function lowerActionExpression(
         value: lowerStateSetterValue(value, callee, state),
       },
     ];
+  const cookie = cookieOperation(expression, state);
+  if (cookie) return [cookie];
   if (
     expression.callee?.type === 'MemberExpression' &&
     getNodeName(expression.callee.property) === 'preventDefault'
@@ -3218,6 +3299,34 @@ function lowerActionExpression(
 /** Functional state setters remain a pure value transform in the action IR.
  * Binding the callback parameter to the current state expression is enough
  * for array map/filter/append transforms and avoids serializing a closure. */
+function cookieOperation(expression: any, state: CompilerState): any | undefined {
+  if (expression?.callee?.type !== 'MemberExpression' || getNodeName(expression.callee.object) !== 'cookie') return undefined;
+  const operation = getNodeName(expression.callee.property);
+  if (!['get', 'set', 'delete'].includes(operation ?? '')) return undefined;
+  const argument = (index: number) => expression.arguments?.[index]?.expression ?? expression.arguments?.[index];
+  const name = argument(0);
+  if (name?.type !== 'StringLiteral') {
+    reportUnsupported(state, 'UNSUPPORTED_COOKIE_NAME', `cookie.${operation} requires a static cookie name.`);
+    return undefined;
+  }
+  const options = unwrapExpression(argument(operation === 'set' ? 2 : 1));
+  const option = (key: string) => objectPropertyValue((options?.properties ?? []).find((item: any) => objectPropertyName(item) === key));
+  const path = option('path'); const sameSite = option('sameSite'); const secure = option('secure'); const maxAge = option('maxAge');
+  if ((path && path.type !== 'StringLiteral') || (sameSite && sameSite.type !== 'StringLiteral') || (secure && secure.type !== 'BooleanLiteral') || (maxAge && maxAge.type !== 'NumericLiteral')) {
+    reportUnsupported(state, 'UNSUPPORTED_COOKIE_OPTIONS', 'cookie options must be static path, sameSite, secure, and maxAge values.');
+    return undefined;
+  }
+  if (sameSite && !['lax', 'strict', 'none'].includes(sameSite.value)) {
+    reportUnsupported(state, 'UNSUPPORTED_COOKIE_OPTIONS', 'cookie.sameSite must be lax, strict, or none.');
+    return undefined;
+  }
+  if (operation === 'set' && !argument(1)) {
+    reportUnsupported(state, 'UNSUPPORTED_COOKIE_VALUE', 'cookie.set requires a value.');
+    return undefined;
+  }
+  return { kind: 'capability-request', capability: 'cookie', request: { operation, name: name.value, ...(operation === 'set' ? { value: lowerExpression(argument(1), state) } : {}), path: path?.value ?? '/', ...(sameSite ? { sameSite: sameSite.value } : {}), ...(secure ? { secure: secure.value } : {}), expiry: maxAge ? 'maxAge' : 'session', ...(maxAge ? { maxAge: maxAge.value } : {}) }, continuationId: `c${state.eventCounter + 1}`, successResultName: 'result', failureErrorName: 'error', success: [], failure: [], finally: [] };
+}
+
 function lowerStateSetterValue(
   value: any,
   setter: string,
@@ -3704,6 +3813,10 @@ function evaluateExpression(
   }
 
   if (node.type === 'MemberExpression') {
+    if (getNodeName(node.object) === 'document' && getNodeName(node.property) === 'cookie') {
+      reportUnsupported(state, 'UNSUPPORTED_DOCUMENT_COOKIE', 'Use cookie.getSync/get/set/delete; document.cookie parsing is not safely compilable.');
+      return { kind: 'literal', value: null };
+    }
     const objectValue = evaluateExpression(
       node.object,
       state,
@@ -4150,12 +4263,20 @@ function collectModuleFacts(body: any, state: CompilerState): void {
           const slotId = `s${state.ir.localStates.length + 1}`;
           const initial =
             init.arguments?.[0]?.expression ?? init.arguments?.[0];
+          const loaderResultState = isLoaderDataExpression(initial, state);
           state.ir.localStates.push({
             id: slotId,
             name: valueName,
-            initialValue: serializeInitialState(initial, state),
+            // A loader owns this value until its typed result arrives. Null is
+            // the only general initial value without executing user code.
+            initialValue: loaderResultState ? 'null' : serializeInitialState(initial, state),
+            initialExpression: loaderResultState
+              ? { kind: 'literal', value: null }
+              : lowerExpression(initial, state),
             values: [],
           });
+          if (loaderResultState)
+            state.loaderResultState = state.ir.localStates.length - 1;
           state.stateSetters.set(setterName, slotId);
           state.expressionScope[valueName] = {
             type: 'Identifier',
@@ -4178,6 +4299,22 @@ function collectModuleFacts(body: any, state: CompilerState): void {
   }
 
   collectLiteralScope(body, state);
+}
+
+function isLoaderDataExpression(
+  input: any,
+  state: CompilerState,
+  seen = new Set<string>(),
+): boolean {
+  const value = unwrapExpression(input);
+  if (value?.type === 'CallExpression')
+    return getNodeName(value.callee?.property) === 'useLoaderData';
+  const name = getNodeName(value);
+  if (!name || seen.has(name)) return false;
+  const resolved = state.expressionScope[name];
+  return Boolean(
+    resolved && isLoaderDataExpression(resolved, state, new Set([...seen, name])),
+  );
 }
 
 function isAsyncFunction(node: any): boolean {
@@ -5475,6 +5612,19 @@ function lowerExpression(
       ),
       property: getNodeName(node.property) ?? '',
     };
+  if (
+    node.type === 'CallExpression' &&
+    node.callee?.type === 'MemberExpression' &&
+    getNodeName(node.callee.object) === 'cookie' &&
+    getNodeName(node.callee.property) === 'getSync'
+  ) {
+    const name = node.arguments?.[0]?.expression ?? node.arguments?.[0];
+    if (name?.type !== 'StringLiteral') {
+      reportUnsupported(state, 'UNSUPPORTED_COOKIE_NAME', 'cookie.getSync requires a static cookie name.');
+      return { kind: 'literal', value: null };
+    }
+    return { kind: 'host', name: 'cookie', query: name.value };
+  }
   if (
     node.type === 'CallExpression' &&
     node.callee?.type === 'MemberExpression' &&
