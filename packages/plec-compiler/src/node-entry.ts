@@ -215,22 +215,47 @@ export async function compileRouteEntry(
     routes: definitions.filter((definition) => definition !== root).map((definition) => {
       const compiled = compileGraph(definition.component);
       const graph = compiled.graph;
+      const sameModule = (left: string, right: string) =>
+        left.replace(/\.[^.]+$/, '') === right.replace(/\.[^.]+$/, '');
+      const parent = definition.parentRoute &&
+        (definitions.find((candidate) =>
+          sameModule(candidate.component.moduleId, definition.parentRoute!.moduleId) &&
+          candidate.component.name === definition.parentRoute!.name,
+        ) ??
+          (sameModule(definition.parentRoute.moduleId, root.component.moduleId)
+            ? root
+            : definitions.find(
+                (candidate) =>
+                  sameModule(candidate.component.moduleId, definition.parentRoute!.moduleId),
+              )));
       let loaderAction: number | undefined;
       if (definition.loader) {
         const state = compiled.loaderResultState;
         if (state === undefined)
           throw new Error(`Route loader in ${definition.component.moduleId} has no typed loader state.`);
+        const loader = compileRouteLoader(definition.loader, modules, options, revision);
+        const constantOffset = graph.constants.length;
+        const expressionOffset = graph.expressions.length;
+        graph.constants.push(...loader.constants);
+        graph.expressions.push(...loader.expressions.map((program: any) => ({
+          ...program,
+          instructions: program.instructions.map((instruction: any) =>
+            instruction.op === 'constant'
+              ? { ...instruction, constant: instruction.constant + constantOffset }
+              : instruction,
+          ),
+        })));
         loaderAction = graph.actions.length;
         graph.actions.push({
-          ...compileRouteLoader(definition.loader, modules, options, revision),
+          ...remapActionExpressions(loader.action, expressionOffset),
           routeLoader: true,
           loaderResultState: state,
         });
       }
       return {
       id: routeId(definition),
-      ...(definition.parentRoute && (definition.parentRoute.moduleId !== root!.component.moduleId || definition.parentRoute.name !== root!.component.name)
-        ? { parentId: routeId(definitions.find((candidate) => candidate.component.moduleId === definition.parentRoute!.moduleId && candidate.component.name === definition.parentRoute!.name) ?? definition) }
+      ...(parent && parent !== root
+        ? { parentId: routeId(parent) }
         : {}),
       path: definition.path,
       graph,
@@ -290,7 +315,41 @@ function compileRouteLoader(
   const action = (result.ir as any).actions[0];
   if (!action) throw new Error(`Route loader in ${loader.moduleId} did not lower to an action.`);
   validateRouteLoaderAction(action, loader.moduleId);
-  return action;
+  return {
+    action,
+    constants: (result.ir as any).constants,
+    expressions: (result.ir as any).expressions,
+  };
+}
+
+function remapActionExpressions(action: any, offset: number) {
+  const expression = (value: number | undefined) =>
+    value === undefined ? value : value + offset;
+  return {
+    ...action,
+    instructions: action.instructions.map((instruction: any) => {
+      if (instruction.op === 'evaluate')
+        return { ...instruction, expression: expression(instruction.expression) };
+      if (instruction.op === 'return' && instruction.value !== undefined)
+        return { ...instruction, value: expression(instruction.value) };
+      if (instruction.op === 'capabilityRequest')
+        return {
+          ...instruction,
+          request: {
+            ...instruction.request,
+            url: expression(instruction.request.url),
+            ...(instruction.request.body === undefined
+              ? {}
+              : { body: expression(instruction.request.body) }),
+            headers: (instruction.request.headers ?? []).map((header: any) => ({
+              ...header,
+              value: expression(header.value),
+            })),
+          },
+        };
+      return instruction;
+    }),
+  };
 }
 
 /** Router policy is intentionally stricter than the generic typed action VM. */

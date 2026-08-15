@@ -2883,7 +2883,7 @@ function lowerActionStatements(
       {
         kind: 'capability-request',
         capability: 'network.fetch',
-        request: { ...fetch, decode: decode?.kind ?? 'empty' },
+        request: { ...fetch, decode: decode?.kind ?? (fetch.method === 'DELETE' ? 'empty' : 'json') },
         continuationId: `c${state.eventCounter + 1}`,
         successResultName: resultName,
         failureErrorName: 'error',
@@ -3063,7 +3063,7 @@ function lowerAwaitedHelperCall(
       {
         kind: 'capability-request',
         capability: 'network.fetch',
-        request: { ...fetch, decode: decode?.kind ?? 'empty', requireOk: true },
+        request: { ...fetch, decode: decode?.kind ?? (fetch.method === 'DELETE' ? 'empty' : 'json'), requireOk: true },
         continuationId: `c${state.eventCounter + 1}`,
         successResultName: resultName,
         failureErrorName: 'error',
