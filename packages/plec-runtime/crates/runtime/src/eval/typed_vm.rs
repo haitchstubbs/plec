@@ -54,6 +54,12 @@ pub(crate) fn typed_eval_frame(
             TypedExpressionInstruction::LoadFrame { slot } => {
                 stack.push(frame.get(*slot).cloned().unwrap_or(RuntimeValue::Null))
             }
+            TypedExpressionInstruction::LoadHost { host } => {
+                let value = app.host_slots.get(*host).and_then(|slot| {
+                    (slot.kind == "cookie").then(|| slot.name.and_then(|name| app.strings.get(name)).and_then(|name| app.host_inputs.get(name)).cloned()).flatten()
+                }).unwrap_or(RuntimeValue::Null);
+                stack.push(value)
+            }
             TypedExpressionInstruction::Field { field } => {
                 let object = stack
                     .pop()
