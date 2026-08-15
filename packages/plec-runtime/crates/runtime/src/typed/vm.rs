@@ -8,6 +8,31 @@ use crate::typed::cookie::*;
 use crate::schema::typed::TypedCapabilityRequest;
 use crate::dom::platform::document;
 
+#[derive(Clone)]
+pub(crate) struct TypedActionFrame {
+    pub(crate) action: usize,
+    pub(crate) pc: usize,
+    pub(crate) stack: Vec<RuntimeValue>,
+    pub(crate) frame: Vec<RuntimeValue>,
+    pub(crate) event: Vec<RuntimeValue>,
+    pub(crate) row: Option<HashMap<String, RuntimeValue>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct TypedCallerContinuation {
+    pub(crate) frame: TypedActionFrame,
+    pub(crate) success_pc: usize,
+    pub(crate) failure_pc: usize,
+    pub(crate) result_slot: usize,
+    pub(crate) error_slot: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct TypedContinuationStack {
+    pub(crate) current: TypedActionFrame,
+    pub(crate) callers: Vec<TypedCallerContinuation>,
+}
+
 impl TypedRuntime {
     pub(crate) fn execute_action(
         &mut self,
@@ -56,20 +81,38 @@ impl TypedRuntime {
     pub(crate) fn execute_action_at(
         &mut self,
         action: usize,
-        mut pc: usize,
+        pc: usize,
         frame: Vec<RuntimeValue>,
         event: &[RuntimeValue],
         row: Option<HashMap<String, RuntimeValue>>,
         native_event: Option<&Event>,
         metrics: &mut UpdateMetrics,
     ) -> Result<(), JsValue> {
+        self.execute_continuation(TypedContinuationStack {
+            current: TypedActionFrame { action, pc, stack: Vec::new(), frame, event: event.to_vec(), row },
+            callers: Vec::new(),
+        }, native_event, metrics)
+    }
+
+    pub(crate) fn execute_continuation(
+        &mut self,
+        mut continuation: TypedContinuationStack,
+        native_event: Option<&Event>,
+        metrics: &mut UpdateMetrics,
+    ) -> Result<(), JsValue> {
+        'run: loop {
+        let action = continuation.current.action;
+        let mut pc = continuation.current.pc;
+        let frame = continuation.current.frame.clone();
+        let event = continuation.current.event.clone();
+        let row = continuation.current.row.clone();
         let program = self
             .app
             .actions
             .get(action)
             .cloned()
             .ok_or_else(|| JsValue::from_str("action handle out of range"))?;
-        let mut stack = Vec::new();
+        let mut stack = continuation.current.stack.clone();
         while let Some(instruction) = program.instructions.get(pc).cloned() {
             match instruction {
                 TypedActionInstruction::Evaluate { expression } => stack.push(typed_eval_frame(
@@ -79,7 +122,7 @@ impl TypedRuntime {
                     row.as_ref(),
                     0,
                     &frame,
-                    event,
+                    &event,
                 )?),
                 TypedActionInstruction::StoreState { state } => {
                     let value = stack
@@ -118,10 +161,10 @@ impl TypedRuntime {
                 TypedActionInstruction::Call {
                     action: target,
                     arguments,
-                    success_pc: _,
-                    failure_pc: _,
-                    result_slot: _,
-                    error_slot: _,
+                    success_pc,
+                    failure_pc,
+                    result_slot,
+                    error_slot,
                 } => {
                     let target_program = self
                         .app
@@ -143,18 +186,21 @@ impl TypedRuntime {
                             row.as_ref(),
                             0,
                             &frame,
-                            event,
+                            &event,
                         )?;
                     }
-                    self.execute_action_at(
-                        target,
-                        0,
-                        child,
-                        event,
-                        row.clone(),
-                        native_event,
-                        metrics,
-                    )?;
+                    match (success_pc, failure_pc, result_slot, error_slot) {
+                        (Some(success_pc), Some(failure_pc), Some(result_slot), Some(error_slot)) => {
+                            continuation.callers.push(TypedCallerContinuation {
+                                frame: TypedActionFrame { action, pc: pc + 1, stack: stack.clone(), frame: frame.clone(), event: event.clone(), row: row.clone() },
+                                success_pc, failure_pc, result_slot, error_slot,
+                            });
+                            continuation.current = TypedActionFrame { action: target, pc: 0, stack: Vec::new(), frame: child, event: event.clone(), row: row.clone() };
+                            continue 'run;
+                        }
+                        (None, None, None, None) => self.execute_action_at(target, 0, child, &event, row.clone(), native_event, metrics)?,
+                        _ => return Err(JsValue::from_str("partial action call continuation")),
+                    }
                 }
                 TypedActionInstruction::CollectionMutation {
                     input,
@@ -169,7 +215,7 @@ impl TypedRuntime {
                         row.as_ref(),
                         0,
                         &frame,
-                        event,
+                        &event,
                     )?);
                     let value = value
                         .map(|program| {
@@ -180,7 +226,7 @@ impl TypedRuntime {
                                 row.as_ref(),
                                 0,
                                 &frame,
-                                event,
+                                &event,
                             )
                         })
                         .transpose()?;
@@ -196,11 +242,12 @@ impl TypedRuntime {
                 } => {
                     if let TypedCapabilityRequest::Cookie(request) = request {
                         let name = self.app.strings.get(request.name).cloned().ok_or_else(|| JsValue::from_str("cookie name handle out of range"))?;
-                        let value = request.value.map(|expression| typed_eval_frame(&self.app, expression, &self.states, row.as_ref(), 0, &frame, event).map(|value| typed_value_string(&value))).transpose()?;
+                        let value = request.value.map(|expression| typed_eval_frame(&self.app, expression, &self.states, row.as_ref(), 0, &frame, &event).map(|value| typed_value_string(&value))).transpose()?;
                         let operation = request.operation.clone();
                         // Name is validated here, before control crosses the host boundary.
                         if !self.app.capabilities.iter().any(|entry| entry.kind == "cookie" && entry.name == name && entry.operations.iter().any(|allowed| allowed == &operation)) { return Err(JsValue::from_str("cookie operation is not declared")); }
-                        self.pending_cookies.push(TypedPendingCookie { instance_id: String::new(), request_id: 0, action, success_pc, failure_pc, finally_pc, result_slot, error_slot, frame, event: event.to_vec(), row, request, value, graph_generation: self.graph_generation });
+                        continuation.current = TypedActionFrame { action, pc, stack, frame, event, row };
+                        self.pending_cookies.push(TypedPendingCookie { instance_id: String::new(), request_id: 0, continuation, success_pc, failure_pc, finally_pc, result_slot, error_slot, request, value, graph_generation: self.graph_generation });
                         return Ok(());
                     }
                     #[cfg(not(feature = "fetch"))]
@@ -217,7 +264,7 @@ impl TypedRuntime {
                             row.as_ref(),
                             0,
                             &frame,
-                            event,
+                            &event,
                         )?);
                         if url.is_empty() {
                             return Err(JsValue::from_str("fetch URL is empty"));
@@ -237,7 +284,7 @@ impl TypedRuntime {
                                         row.as_ref(),
                                         0,
                                         &frame,
-                                        event,
+                                        &event,
                                     )?),
                                 ))
                             })
@@ -252,23 +299,21 @@ impl TypedRuntime {
                                     row.as_ref(),
                                     0,
                                     &frame,
-                                    event,
+                                    &event,
                                 )
                                 .and_then(|value| value.json_body())
                             })
                             .transpose()?;
+                        continuation.current = TypedActionFrame { action, pc, stack, frame, event, row };
                         self.pending_fetches.push(TypedPendingFetch {
                             instance_id: String::new(),
-                            action,
+                            continuation,
                             success_pc,
                             failure_pc,
                             finally_pc,
                             finalizers: Vec::new(),
                             result_slot,
                             error_slot,
-                            frame,
-                            event: event.to_vec(),
-                            row,
                             url,
                             method: request.method,
                             headers,
@@ -281,11 +326,40 @@ impl TypedRuntime {
                         return Ok(());
                     }
                 }
-                TypedActionInstruction::Return { outcome: _, value: _ } => return Ok(()),
+                TypedActionInstruction::Return { outcome, value } => {
+                    let value = value.map(|expression| typed_eval_frame(&self.app, expression, &self.states, row.as_ref(), 0, &frame, &event)).transpose()?.unwrap_or(RuntimeValue::Null);
+                    if let Some(caller) = continuation.callers.pop() {
+                        let mut caller_frame = caller.frame;
+                        let (slot, next_pc) = match outcome {
+                            crate::schema::typed::TypedReturnOutcome::Success => (caller.result_slot, caller.success_pc),
+                            crate::schema::typed::TypedReturnOutcome::Failure => (caller.error_slot, caller.failure_pc),
+                        };
+                        if slot >= caller_frame.frame.len() { return Err(JsValue::from_str("caller continuation slot out of range")); }
+                        caller_frame.frame[slot] = value;
+                        let other = if slot == caller.result_slot { caller.error_slot } else { caller.result_slot };
+                        if other >= caller_frame.frame.len() { return Err(JsValue::from_str("caller continuation slot out of range")); }
+                        caller_frame.frame[other] = RuntimeValue::Null;
+                        caller_frame.pc = next_pc;
+                        continuation.current = caller_frame;
+                        continue 'run;
+                    }
+                    return Ok(());
+                }
             }
             pc += 1;
+            continuation.current = TypedActionFrame { action, pc, stack: stack.clone(), frame: frame.clone(), event: event.clone(), row: row.clone() };
         }
-        Ok(())
+        if let Some(caller) = continuation.callers.pop() {
+            let mut caller_frame = caller.frame;
+            if caller.result_slot >= caller_frame.frame.len() || caller.error_slot >= caller_frame.frame.len() { return Err(JsValue::from_str("caller continuation slot out of range")); }
+            caller_frame.frame[caller.result_slot] = RuntimeValue::Null;
+            caller_frame.frame[caller.error_slot] = RuntimeValue::Null;
+            caller_frame.pc = caller.success_pc;
+            continuation.current = caller_frame;
+            continue 'run;
+        }
+        return Ok(());
+        }
     }
 }
 
