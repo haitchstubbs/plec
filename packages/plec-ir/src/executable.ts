@@ -119,7 +119,7 @@ export const ExpressionProgramSchema = z.object({
 });
 export type ExpressionProgram = z.infer<typeof ExpressionProgramSchema>;
 
-export const ActionInstructionSchema = z.discriminatedUnion('op', [
+export const ActionInstructionSchema = z.union([
   z.object({
     op: z.literal('evaluate'),
     expression: ExecutableHandleSchema,
@@ -138,10 +138,19 @@ export const ActionInstructionSchema = z.discriminatedUnion('op', [
     value: ExecutableHandleSchema.optional(),
   }),
   z.object({ op: z.literal('preventDefault') }),
+  z.object({ op: z.literal('storeHostRef'), ref: ExecutableHandleSchema }),
   z.object({
     op: z.literal('call'),
     action: ExecutableHandleSchema,
     arguments: z.array(ExecutableHandleSchema).default([]),
+    successPc: ExecutableHandleSchema.optional(),
+    failurePc: ExecutableHandleSchema.optional(),
+    resultSlot: ExecutableHandleSchema.optional(),
+    errorSlot: ExecutableHandleSchema.optional(),
+  }).superRefine((instruction, context) => {
+    const fields = [instruction.successPc, instruction.failurePc, instruction.resultSlot, instruction.errorSlot];
+    if (fields.some((field) => field !== undefined) && fields.some((field) => field === undefined))
+      context.addIssue({ code: 'custom', message: 'PARTIAL_CALL_CONTINUATION' });
   }),
   z.object({ op: z.literal('jump'), target: ExecutableHandleSchema }),
   z.object({
@@ -165,7 +174,30 @@ export const ActionInstructionSchema = z.discriminatedUnion('op', [
     resultSlot: ExecutableHandleSchema,
     errorSlot: ExecutableHandleSchema,
   }),
-  z.object({ op: z.literal('return') }),
+  z.object({
+    op: z.literal('capabilityRequest'),
+    capability: z.literal('cookie'),
+    request: z.object({
+      operation: z.enum(['get', 'set', 'delete']),
+      name: ExecutableHandleSchema,
+      value: ExecutableHandleSchema.optional(),
+      path: z.string().default('/'),
+      sameSite: z.enum(['lax', 'strict', 'none']).optional(),
+      secure: z.boolean().optional(),
+      expiry: z.enum(['session', 'maxAge']).default('session'),
+      maxAge: z.number().int().nonnegative().optional(),
+    }),
+    successPc: ExecutableHandleSchema,
+    failurePc: ExecutableHandleSchema,
+    finallyPc: ExecutableHandleSchema.optional(),
+    resultSlot: ExecutableHandleSchema,
+    errorSlot: ExecutableHandleSchema,
+  }),
+  z.object({
+    op: z.literal('return'),
+    outcome: z.enum(['success', 'failure']).default('success'),
+    value: ExecutableHandleSchema.optional(),
+  }),
 ]);
 export type ActionInstruction = z.infer<typeof ActionInstructionSchema>;
 
@@ -184,6 +216,15 @@ export const ActionProgramSchema = z
         code: 'custom',
         path: ['loaderResultState'],
         message: 'MISSING_LOADER_RESULT_DESTINATION',
+      });
+    if (
+      program.routeLoader &&
+      program.instructions.some((instruction) => instruction.op === 'storeState')
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['instructions'],
+        message: 'ROUTE_LOADER_FORBIDS_STORE_STATE',
       });
   });
 export type ActionProgram = z.infer<typeof ActionProgramSchema>;
@@ -302,10 +343,25 @@ export const ExecutableApplicationSchema = z.object({
   ),
   hostSlots: z.array(
     z.object({
-      kind: z.enum(['currentYear', 'mediaQuery', 'location']),
+      kind: z.enum(['currentYear', 'mediaQuery', 'location', 'cookie']),
       query: ExecutableHandleSchema.optional(),
+      name: ExecutableHandleSchema.optional(),
     }),
   ),
+  /** Maximum authority requested by this graph. Hosts may grant less. */
+  capabilities: z.array(z.object({
+    kind: z.literal('cookie'),
+    name: z.string().min(1),
+    operations: z.array(z.enum(['getSync', 'get', 'set', 'delete'])).min(1),
+    path: z.string().default('/'),
+    sameSite: z.enum(['lax', 'strict', 'none']).optional(),
+    secure: z.boolean().optional(),
+    expiryModes: z.array(z.enum(['session', 'maxAge'])).min(1),
+  })).default([]),
+  /** Concrete outlets owned by this graph; instance identity stays in WASM. */
+  routeOutlets: z.array(
+    z.object({ id: z.string(), node: ExecutableHandleSchema }),
+  ).default([]),
   dependencyEdges: z
     .array(
       z.object({
@@ -391,6 +447,15 @@ export function validateExecutableApplication(
   app.inputs.forEach((input, index) =>
     check(input.name, 'strings', ['inputs', index, 'name']),
   );
+  const outletIds = new Set<string>();
+  app.routeOutlets.forEach((outlet, index) => {
+    if (outletIds.has(outlet.id))
+      issue(['routeOutlets', index, 'id'], 'DUPLICATE_ROUTE_OUTLET');
+    outletIds.add(outlet.id);
+    check(outlet.node, 'nodes', ['routeOutlets', index, 'node']);
+    if (app.nodes[outlet.node]?.op !== 'element')
+      issue(['routeOutlets', index, 'node'], 'ROUTE_OUTLET_MUST_BE_ELEMENT');
+  });
   app.events.forEach((event, index) => {
     check(event.target, 'nodes', ['events', index, 'target']);
     check(event.type, 'strings', ['events', index, 'type']);
@@ -420,7 +485,8 @@ export function validateExecutableApplication(
         if (instruction.op === 'evaluate') checkExpressionEventSlots(instruction.expression);
         if (instruction.op === 'call') instruction.arguments.forEach(checkExpressionEventSlots);
         if (instruction.op === 'collectionMutation') { checkExpressionEventSlots(instruction.key); if (instruction.value !== undefined) checkExpressionEventSlots(instruction.value); }
-        if (instruction.op === 'capabilityRequest') { checkExpressionEventSlots(instruction.request.url); if (instruction.request.body !== undefined) checkExpressionEventSlots(instruction.request.body); instruction.request.headers.forEach((header) => checkExpressionEventSlots(header.value)); }
+        if (instruction.op === 'capabilityRequest' && instruction.capability === 'fetch') { checkExpressionEventSlots(instruction.request.url); if (instruction.request.body !== undefined) checkExpressionEventSlots(instruction.request.body); instruction.request.headers.forEach((header) => checkExpressionEventSlots(header.value)); }
+        if (instruction.op === 'capabilityRequest' && instruction.capability === 'cookie' && instruction.request.value !== undefined) checkExpressionEventSlots(instruction.request.value);
       });
     }
   });
@@ -550,6 +616,7 @@ export function validateExecutableApplication(
         check(instruction.state, 'stateSlots', [...path, 'state']);
       if ('action' in instruction)
         check(instruction.action, 'actions', [...path, 'action']);
+      if (instruction.op === 'storeHostRef') check(instruction.ref, 'strings', [...path, 'ref']);
       if ('input' in instruction)
         check(instruction.input, 'inputs', [...path, 'input']);
       if (instruction.op === 'collectionMutation') {
@@ -567,13 +634,39 @@ export function validateExecutableApplication(
         instruction.target >= program.instructions.length
       )
         issue([...path, 'target'], 'INVALID_JUMP_TARGET');
+      if (instruction.op === 'call') {
+        instruction.arguments.forEach((argument, argumentIndex) =>
+          check(argument, 'expressions', [...path, 'arguments', argumentIndex]),
+        );
+        for (const [name, pc] of [
+          ['successPc', instruction.successPc],
+          ['failurePc', instruction.failurePc],
+        ] as const)
+          if (pc !== undefined && pc >= program.instructions.length)
+            issue([...path, name], 'INVALID_CONTINUATION_TARGET');
+        for (const [name, slot] of [
+          ['resultSlot', instruction.resultSlot],
+          ['errorSlot', instruction.errorSlot],
+        ] as const)
+          if (slot !== undefined && slot >= program.frameSlots)
+            issue([...path, name], 'FRAME_SLOT_OUT_OF_RANGE');
+      }
+      if (instruction.op === 'return')
+        check(instruction.value, 'expressions', [...path, 'value']);
       if (instruction.op === 'capabilityRequest') {
-        check(instruction.request.url, 'expressions', [...path, 'request', 'url']);
-        check(instruction.request.body, 'expressions', [...path, 'request', 'body']);
-        instruction.request.headers.forEach((header, headerIndex) => {
-          check(header.name, 'strings', [...path, 'request', 'headers', headerIndex, 'name']);
-          check(header.value, 'expressions', [...path, 'request', 'headers', headerIndex, 'value']);
-        });
+        if (instruction.capability === 'fetch') {
+          check(instruction.request.url, 'expressions', [...path, 'request', 'url']);
+          check(instruction.request.body, 'expressions', [...path, 'request', 'body']);
+          instruction.request.headers.forEach((header, headerIndex) => {
+            check(header.name, 'strings', [...path, 'request', 'headers', headerIndex, 'name']);
+            check(header.value, 'expressions', [...path, 'request', 'headers', headerIndex, 'value']);
+          });
+        } else {
+          check(instruction.request.name, 'strings', [...path, 'request', 'name']);
+          check(instruction.request.value, 'expressions', [...path, 'request', 'value']);
+          if (instruction.request.operation === 'set' && instruction.request.value === undefined)
+            issue([...path, 'request', 'value'], 'COOKIE_SET_REQUIRES_VALUE');
+        }
         for (const [name, pc] of [
           ['successPc', instruction.successPc],
           ['failurePc', instruction.failurePc],
