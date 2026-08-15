@@ -209,6 +209,7 @@ export const ActionProgramSchema = z
     /** A route loader writes here directly; no runtime operation rewriting. */
     loaderResultState: ExecutableHandleSchema.optional(),
     routeLoader: z.boolean().default(false),
+    routeRetry: z.boolean().default(false),
   })
   .superRefine((program, context) => {
     if (program.routeLoader && program.loaderResultState === undefined)
@@ -317,10 +318,14 @@ export const ExecutableApplicationSchema = z.object({
     .default([]),
   stateSlots: z.array(
     z.object({
+      /** Optional stable name for router-owned state. */
+      name: ExecutableHandleSchema.optional(),
       initialExpression: ExecutableHandleSchema,
       frameSlot: ExecutableHandleSchema,
     }),
   ),
+  /** Router-owned error destination for an error-phase graph. */
+  routeErrorState: ExecutableHandleSchema.optional(),
   expressions: z.array(ExpressionProgramSchema),
   actions: z.array(ActionProgramSchema),
   loops: z.array(
@@ -525,6 +530,7 @@ export function validateExecutableApplication(
     });
   });
   app.stateSlots.forEach((slot, index) => {
+    check(slot.name, 'strings', ['stateSlots', index, 'name']);
     check(slot.initialExpression, 'expressions', [
       'stateSlots',
       index,
@@ -533,6 +539,7 @@ export function validateExecutableApplication(
     if (slot.frameSlot !== index)
       issue(['stateSlots', index, 'frameSlot'], 'STATE_SLOT_NOT_DENSE');
   });
+  check(app.routeErrorState, 'stateSlots', ['routeErrorState']);
   const expressionReference = (
     instruction: ExpressionInstruction,
     expressionIndex: number,
