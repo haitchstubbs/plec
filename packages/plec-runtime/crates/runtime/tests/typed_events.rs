@@ -326,6 +326,24 @@ fn fetch_artifact(decode: &str, require_ok: bool, nested: bool) -> serde_json::V
     })
 }
 
+fn caller_continuation_artifact() -> serde_json::Value {
+    let mut app = fetch_artifact("text", true, false);
+    app["expressions"].as_array_mut().unwrap().push(serde_json::json!({"instructions":[{"op":"loadFrame","slot":0},{"op":"return"}]}));
+    app["expressions"].as_array_mut().unwrap().push(serde_json::json!({"instructions":[{"op":"loadFrame","slot":1},{"op":"return"}]}));
+    app["actions"] = serde_json::json!([
+        {"frameSlots":2,"instructions":[
+            {"op":"call","action":1,"arguments":[],"successPc":1,"failurePc":4,"resultSlot":0,"errorSlot":1},
+            {"op":"evaluate","expression":12},{"op":"storeState","state":0},{"op":"return"},
+            {"op":"evaluate","expression":13},{"op":"storeState","state":0},{"op":"return"}
+        ]},
+        {"frameSlots":2,"instructions":[
+            {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":2,"finallyPc":null,"resultSlot":0,"errorSlot":1},
+            {"op":"return","outcome":"success","value":12}, {"op":"return","outcome":"failure","value":13}
+        ]}
+    ]);
+    app
+}
+
 fn click_fetch(root: &Element) {
     root.query_selector("button")
         .unwrap()
@@ -796,6 +814,18 @@ async fn typed_fetch_runs_nested_finalizers_inner_to_outer() {
     click_fetch(&root);
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap(), "innerinnerouter");
+    restore_plec_fetch();
+}
+
+#[wasm_bindgen_test(async)]
+async fn suspended_callee_resumes_its_caller_continuation() {
+    set_plec_fetch_queue(r#"[{"body":"resumed"}]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, caller_continuation_artifact(), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    assert_eq!(root.text_content().unwrap(), "resumed");
     restore_plec_fetch();
 }
 
