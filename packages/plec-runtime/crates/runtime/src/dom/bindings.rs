@@ -11,7 +11,17 @@ pub(crate) fn typed_apply_binding(
     index: usize,
 ) -> Result<(), JsValue> {
     let value = typed_eval(app, binding.expression, states, row, index)?;
-    if binding.sink == "text" {
+    typed_apply_value(app, &binding.sink, binding.name, node, value)
+}
+
+pub(crate) fn typed_apply_value(
+    app: &TypedApplication,
+    sink: &str,
+    name: Option<usize>,
+    node: &Node,
+    value: RuntimeValue,
+) -> Result<(), JsValue> {
+    if sink == "text" {
         node.set_text_content(Some(&typed_value_string(&value)));
         return Ok(());
     }
@@ -19,16 +29,15 @@ pub(crate) fn typed_apply_binding(
         .clone()
         .dyn_into()
         .map_err(|_| JsValue::from_str("binding target is not element"))?;
-    let name = binding
-        .name
+    let name = name
         .and_then(|handle| app.strings.get(handle))
         .map(String::as_str)
         .unwrap_or("");
-    if binding.sink == "property" {
+    if sink == "property" {
         js_sys::Reflect::set(
             &element,
             &JsValue::from_str(name),
-            &JsValue::from_str(&typed_value_string(&value)),
+            &serde_wasm_bindgen::to_value(&value)?,
         )
         .map_err(|_| JsValue::from_str("property write failed"))?;
     } else {
