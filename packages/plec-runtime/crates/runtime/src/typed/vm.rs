@@ -466,6 +466,19 @@ impl TypedRuntime {
                     metrics.dom_operations += 1;
                     metrics.bindings_touched += 1;
                 }
+            } else if kind == "propProgram" {
+                if let Some(program) = self.app.prop_programs.get(handle).cloned() {
+                    if let Some(node) = self.nodes.get(&program.target).cloned() {
+                        for write in program.writes {
+                            let value = match write.expression {
+                                Some(expression) => typed_eval(&self.app, expression, &self.states, None, 0)?,
+                                None => write.constant.and_then(|index| self.app.constants.get(index)).cloned().unwrap_or_default(),
+                            };
+                            typed_apply_value(&self.app, &write.kind, Some(write.name), &node, value)?;
+                            metrics.dom_operations += 1;
+                        }
+                    }
+                }
             } else if kind == "loop" {
                 let parent = self.parent_for_loop(handle)?;
                 self.render_loop(handle, &parent)?;
