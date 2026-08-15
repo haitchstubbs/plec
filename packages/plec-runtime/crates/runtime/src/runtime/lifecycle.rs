@@ -7,10 +7,13 @@ pub(crate) use std::{
     rc::Rc,
 };
 pub(crate) use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
+#[cfg(feature = "fetch")]
 pub(crate) use wasm_bindgen_futures::{spawn_local, JsFuture};
+#[cfg(feature = "fetch")]
+pub(crate) use web_sys::{AbortController, Request, RequestInit, Response};
 pub(crate) use web_sys::{
-    AbortController, Comment, Document, Element, Event, EventTarget, HtmlInputElement,
-    KeyboardEvent, MouseEvent, Node, Request, RequestInit, Response,
+    Comment, Document, Element, Event, EventTarget, HtmlInputElement, KeyboardEvent, MouseEvent,
+    Node,
 };
 
 pub(crate) use crate::schema::{
@@ -50,6 +53,7 @@ pub(crate) struct GraphInstance {
     pub(crate) listeners: Vec<Listener>,
     pub(crate) continuation_epoch: u64,
     pub(crate) next_request_id: u64,
+    #[cfg(feature = "fetch")]
     pub(crate) abort_controllers: HashMap<u64, AbortController>,
     pub(crate) active_effects: usize,
     pub(crate) active_listeners: usize,
@@ -63,9 +67,16 @@ pub struct PlecRuntime {
     pub(crate) instances: Rc<RefCell<HashMap<String, GraphInstance>>>,
     pub(crate) router: Rc<RefCell<Option<RouterState>>>,
     pub(crate) router_listeners: Rc<RefCell<Vec<RouterListener>>>,
-    pub(crate) typed: Rc<RefCell<Option<TypedRuntime>>>,
+    /// Typed graph state is instance-owned so a persistent layout never loses
+    /// its DOM, state, listeners, or fetch ownership when a child route moves.
+    pub(crate) typed: Rc<RefCell<HashMap<String, TypedGraphInstance>>>,
+    pub(crate) typed_root: Rc<RefCell<Option<Element>>>,
+    /// Monotonic across typed graph replacements so an old request can never
+    /// match a newly-created graph that happens to start at generation one.
+    pub(crate) typed_generation: Rc<RefCell<u64>>,
     pub(crate) typed_registry: Rc<RefCell<HashMap<String, TypedApplication>>>,
     pub(crate) typed_manifest: Rc<RefCell<Option<RouteManifest>>>,
+    pub(crate) typed_host_inputs: Rc<RefCell<HashMap<String, RuntimeValue>>>,
 }
 
 impl Clone for PlecRuntime {
@@ -76,8 +87,11 @@ impl Clone for PlecRuntime {
             router: Rc::clone(&self.router),
             router_listeners: Rc::clone(&self.router_listeners),
             typed: Rc::clone(&self.typed),
+            typed_root: Rc::clone(&self.typed_root),
+            typed_generation: Rc::clone(&self.typed_generation),
             typed_registry: Rc::clone(&self.typed_registry),
             typed_manifest: Rc::clone(&self.typed_manifest),
+            typed_host_inputs: Rc::clone(&self.typed_host_inputs),
         }
     }
 }
@@ -88,7 +102,21 @@ impl PlecRuntime {
         let value: Value = serde_wasm_bindgen::from_value(ir.clone()).map_err(error)?;
         if value.get("version").and_then(Value::as_str) == Some("0.9") {
             let app: TypedApplication = serde_json::from_value(value).map_err(error)?;
-            *self.typed.borrow_mut() = Some(TypedRuntime::new(app)?);
+            let mut typed = TypedRuntime::new(app)?;
+            typed.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+            typed.graph_generation = self.next_typed_generation();
+            self.typed.borrow_mut().clear();
+            self.typed.borrow_mut().insert(
+                graph_instance_id(None, "main", None),
+                TypedGraphInstance {
+                    parent_id: None,
+                    outlet_id: "main".into(),
+                    graph_id: "__typed__".into(),
+                    route_id: None,
+                    match_key: None,
+                    runtime: typed,
+                },
+            );
             return Ok(());
         }
         let application: Application = serde_wasm_bindgen::from_value(ir).map_err(error)?;
@@ -101,6 +129,23 @@ impl PlecRuntime {
             .borrow_mut()
             .insert("__legacy__".into(), application);
         Ok(())
+    }
+}
+
+#[wasm_bindgen::prelude::wasm_bindgen]
+impl PlecRuntime {
+    pub fn set_host_inputs(&self, values: JsValue) -> Result<(), JsValue> {
+        let values: HashMap<String, RuntimeValue> = serde_wasm_bindgen::from_value(values).map_err(error)?;
+        *self.typed_host_inputs.borrow_mut() = values;
+        Ok(())
+    }
+}
+
+impl PlecRuntime {
+    pub(crate) fn next_typed_generation(&self) -> u64 {
+        let mut generation = self.typed_generation.borrow_mut();
+        *generation = generation.saturating_add(1);
+        *generation
     }
 }
 
@@ -135,21 +180,19 @@ impl PlecRuntime {
     pub fn start(&self, root: Element, manifest: JsValue) -> Result<(), JsValue> {
         let manifest: RouteManifest = serde_wasm_bindgen::from_value(manifest).map_err(error)?;
         if manifest.version == Some(3) {
-            if !self
-                .typed_registry
-                .borrow()
-                .contains_key(&manifest.root_graph_id)
-            {
-                return Err(JsValue::from_str("typed root graph is not registered"));
-            }
+            self.validate_typed_manifest(&manifest)?;
             *self.typed_manifest.borrow_mut() = Some(manifest);
-            return self.navigate_typed_route(
-                &window()?
-                    .location()
-                    .pathname()
-                    .unwrap_or_else(|_| "/".into()),
-                root,
+            *self.typed_root.borrow_mut() = Some(root.clone());
+            self.dispose_router_listeners();
+            self.install_router_listeners()?;
+            let location = window()?.location();
+            let href = format!(
+                "{}{}{}",
+                location.pathname().unwrap_or_else(|_| "/".into()),
+                location.search().unwrap_or_default(),
+                location.hash().unwrap_or_default(),
             );
+            return self.navigate_typed_route(&href, root, true, false);
         }
         self.dispose_router_listeners();
         let root_instance_id = graph_instance_id(None, "main", None);
@@ -182,12 +225,11 @@ impl PlecRuntime {
     pub fn navigate(&self, href: String, replace: bool) -> Result<(), JsValue> {
         if self.typed_manifest.borrow().is_some() {
             let root = self
-                .typed
+                .typed_root
                 .borrow()
-                .as_ref()
-                .and_then(|typed| typed.root.clone())
+                .clone()
                 .ok_or_else(|| JsValue::from_str("typed router has not started"))?;
-            return self.navigate_typed_route(&href, root);
+            return self.navigate_typed_route(&href, root, replace, true);
         }
         self.navigate_internal(&href, replace)
     }
@@ -349,12 +391,12 @@ impl PlecRuntime {
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn dispose(&self) -> Result<(), JsValue> {
-        if let Some(mut typed) = self.typed.borrow_mut().take() {
-            typed.clear_listeners();
-            if let Some(root) = typed.root {
-                root.set_inner_html("");
-            }
+        for (_, mut instance) in self.typed.borrow_mut().drain() {
+            instance.runtime.invalidate_fetches();
+            instance.runtime.clear_listeners();
+            if let Some(root) = instance.runtime.root { root.set_inner_html(""); }
         }
+        if let Some(root) = self.typed_root.borrow_mut().take() { root.set_inner_html(""); }
         self.dispose_router_listeners();
         *self.router.borrow_mut() = None;
         *self.typed_manifest.borrow_mut() = None;
@@ -399,6 +441,7 @@ impl PlecRuntime {
                 listeners: Vec::new(),
                 continuation_epoch: 0,
                 next_request_id: 0,
+                #[cfg(feature = "fetch")]
                 abort_controllers: HashMap::new(),
                 active_effects: 0,
                 active_listeners: 0,
@@ -431,6 +474,7 @@ impl PlecRuntime {
             .expect("instance checked above");
         drop(instances);
         instance.continuation_epoch = instance.continuation_epoch.saturating_add(1);
+        #[cfg(feature = "fetch")]
         for (_, controller) in instance.abort_controllers.drain() {
             controller.abort();
         }
@@ -556,6 +600,7 @@ impl PlecRuntime {
                 listeners: Vec::new(),
                 continuation_epoch: 1,
                 next_request_id: 0,
+                #[cfg(feature = "fetch")]
                 abort_controllers: HashMap::new(),
                 active_effects: 0,
                 active_listeners: 0,
