@@ -723,6 +723,16 @@ impl TypedRuntime {
                 metrics.bindings_touched += 1;
             }
         }
+        for program in &self.app.prop_programs {
+            let Some(node) = nodes.get(&program.target) else { continue };
+            for write in &program.writes {
+                let value = match write.expression {
+                    Some(expression) => typed_eval(&self.app, expression, &self.states, row, 0)?,
+                    None => write.constant.and_then(|index| self.app.constants.get(index)).cloned().unwrap_or_default(),
+                };
+                typed_apply_value(&self.app, &write.kind, Some(write.name), node, value)?;
+            }
+        }
         Ok(())
     }
 }
@@ -1175,6 +1185,16 @@ impl TypedRuntime {
         for binding in self.app.bindings.clone() {
             if let Some(node) = self.nodes.get(&binding.target) {
                 typed_apply_binding(&self.app, &binding, node, &self.states, None, 0)?;
+            }
+        }
+        for program in self.app.prop_programs.clone() {
+            let Some(node) = self.nodes.get(&program.target) else { continue };
+            for write in program.writes {
+                let value = match write.expression {
+                    Some(expression) => typed_eval(&self.app, expression, &self.states, None, 0)?,
+                    None => write.constant.and_then(|index| self.app.constants.get(index)).cloned().unwrap_or_default(),
+                };
+                typed_apply_value(&self.app, &write.kind, Some(write.name), node, value)?;
             }
         }
         Ok(())
