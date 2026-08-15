@@ -344,6 +344,34 @@ fn caller_continuation_artifact() -> serde_json::Value {
     app
 }
 
+fn route_error_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version":"0.9", "rootNode":0,
+        "strings":["div", "button", "click", "message", "Retry", "error", "status", "body"],
+        "constants":[null, "Retry"],
+        "nodes":[
+            {"op":"element","tag":0,"children":[1,2,3,4]},
+            {"op":"text","text":0,"parent":0},
+            {"op":"text","text":1,"parent":0},
+            {"op":"text","text":2,"parent":0},
+            {"op":"element","tag":1,"parent":0,"children":[5]},
+            {"op":"text","text":3,"parent":4}
+        ],
+        "texts":[{"binding":0},{"binding":1},{"binding":2},{"value":"Retry"}],
+        "bindings":[{"target":1,"sink":"text","expression":0},{"target":2,"sink":"text","expression":1},{"target":3,"sink":"text","expression":2}],
+        "events":[{"target":4,"type":2,"action":0,"fields":[]}],
+        "stateSlots":[{"name":5,"initialExpression":1,"frameSlot":0}],
+        "routeErrorState":0,
+        "expressions":[
+            {"instructions":[{"op":"loadState","state":0},{"op":"field","field":3},{"op":"return"}]},
+            {"instructions":[{"op":"loadState","state":0},{"op":"field","field":6},{"op":"return"}]},
+            {"instructions":[{"op":"loadState","state":0},{"op":"field","field":7},{"op":"return"}]},
+            {"instructions":[{"op":"constant","constant":0},{"op":"return"}]}
+        ],
+        "actions":[{"routeRetry":true,"instructions":[{"op":"return"}]}]
+    })
+}
+
 fn click_fetch(root: &Element) {
     root.query_selector("button")
         .unwrap()
@@ -896,6 +924,10 @@ async fn typed_route_loader_writes_its_declared_result_state() {
         {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":1,"finallyPc":null,"resultSlot":1,"errorSlot":2},
         {"op":"return"}
     ]);
+    route["actions"][0]["instructions"] = serde_json::json!([
+        {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":1,"finallyPc":null,"resultSlot":1,"errorSlot":2},
+        {"op":"return"}
+    ]);
     runtime.register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
     runtime.register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
     let manifest = js_sys::JSON::parse(
@@ -906,6 +938,36 @@ async fn typed_route_loader_writes_its_declared_result_state() {
         }).to_string(),
     ).unwrap();
     runtime.start(root.clone(), manifest).unwrap();
+    settle_fetch().await;
+    assert_eq!(root.text_content().unwrap_or_default(), "loaded");
+    restore_plec_fetch();
+}
+
+#[wasm_bindgen_test(async)]
+async fn typed_route_error_receives_fetch_failure_and_retry_reloads() {
+    set_plec_fetch_queue(r#"[{"status":418,"statusText":"Teapot","body":"short and stout"},{"body":"loaded"}]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    let mut route = fetch_artifact("text", true, false);
+    route["routeOutlets"] = serde_json::json!([{"id":"main","node":0}]);
+    route["actions"][0]["routeLoader"] = serde_json::json!(true);
+    route["actions"][0]["loaderResultState"] = serde_json::json!(0);
+    route["actions"][0]["instructions"] = serde_json::json!([
+        {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":1,"finallyPc":null,"resultSlot":1,"errorSlot":2},
+        {"op":"return"}
+    ]);
+    runtime.register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
+    runtime.register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
+    runtime.register_graph("error".into(), serde_wasm_bindgen::to_value(&route_error_artifact()).unwrap()).unwrap();
+    let manifest = js_sys::JSON::parse(&serde_json::json!({
+        "version":3,"rootGraphId":"root","routes":[
+            {"id":"page","path":"*","graphId":"page","errorGraphId":"error","outletId":"main","loaderAction":0}
+        ]
+    }).to_string()).unwrap();
+    runtime.start(root.clone(), manifest).unwrap();
+    settle_fetch().await;
+    assert_eq!(root.text_content().unwrap_or_default(), "request failed (418)418short and stoutRetry");
+    click_fetch(&root);
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap_or_default(), "loaded");
     restore_plec_fetch();
