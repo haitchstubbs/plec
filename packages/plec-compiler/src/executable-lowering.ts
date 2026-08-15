@@ -393,6 +393,7 @@ export function lowerCompilerFacts(
   }));
   const stateSlots = (ir.localStates ?? []).map(
     (slot: any, index: number) => ({
+      name: string(slot.name),
       initialExpression:
         expressions.push(
           program(slot.initialExpression ?? {
@@ -549,6 +550,7 @@ export function lowerCompilerFacts(
       instructions: action.instructions.map(actionInstruction),
       frameSlots: action.frameSlots,
       parameterSlots: action.parameterSlots,
+      ...(action.routeRetry ? { routeRetry: true } : {}),
     };
   });
   for (const event of ir.events ?? []) {
@@ -686,6 +688,7 @@ export function lowerCompilerFacts(
     events,
     actions,
     stateSlots,
+    ...(ir.routeErrorState === undefined ? {} : { routeErrorState: ir.routeErrorState }),
     expressions,
     loops,
     rootNode,
@@ -757,6 +760,7 @@ export interface ExecutableApplicationFacts {
   propPrograms?: ExecutableApplication['propPrograms'];
   inputs?: ExecutableApplication['inputs'];
   stateSlots?: ExecutableApplication['stateSlots'];
+  routeErrorState?: ExecutableApplication['routeErrorState'];
   expressions?: ExecutableApplication['expressions'];
   actions?: ExecutableApplication['actions'];
   loops?: ExecutableApplication['loops'];
@@ -787,6 +791,7 @@ export function lowerExecutableApplication(
     propPrograms: facts.propPrograms ?? [],
     inputs: facts.inputs ?? [],
     stateSlots: facts.stateSlots ?? [],
+    ...(facts.routeErrorState === undefined ? {} : { routeErrorState: facts.routeErrorState }),
     expressions: facts.expressions ?? [],
     actions: facts.actions ?? [],
     loops: facts.loops ?? [],
