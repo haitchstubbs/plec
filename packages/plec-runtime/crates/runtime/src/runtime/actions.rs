@@ -120,6 +120,7 @@ impl PlecRuntime {
                     {
                         return Err(JsValue::from_str("unsupported capability"));
                     }
+                    #[cfg(feature = "fetch")]
                     self.start_fetch(
                         instance_id,
                         app.clone(),
@@ -127,6 +128,8 @@ impl PlecRuntime {
                         event.clone(),
                         continuation_scope.cloned().unwrap_or_default(),
                     )?;
+                    #[cfg(not(feature = "fetch"))]
+                    return Err(JsValue::from_str("fetch capability is disabled"));
                 }
                 Some("invoke-action-ref") => {
                     let id = operation
@@ -161,6 +164,7 @@ impl PlecRuntime {
 }
 
 impl PlecRuntime {
+    #[cfg(feature = "fetch")]
     pub(crate) fn start_fetch(
         &self,
         instance_id: &str,
@@ -266,6 +270,7 @@ impl PlecRuntime {
 }
 
 impl PlecRuntime {
+    #[cfg(feature = "fetch")]
     pub(crate) fn complete_fetch(
         &self,
         instance_id: &str,
