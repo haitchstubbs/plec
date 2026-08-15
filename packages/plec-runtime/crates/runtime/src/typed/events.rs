@@ -275,6 +275,13 @@ impl PlecRuntime {
         if !owner_is_live {
             return Ok(());
         }
+        let route_retry = self.typed.borrow().get(instance_id)
+            .and_then(|typed| typed.runtime.app.actions.get(action))
+            .map(|action| action.route_retry)
+            .unwrap_or(false);
+        if route_retry {
+            return self.retry_typed_route(instance_id);
+        }
         let (pending, cookies) = {
             let mut typed = self.typed.borrow_mut();
             let mut metrics = UpdateMetrics::default();
