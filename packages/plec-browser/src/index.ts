@@ -412,6 +412,7 @@ export async function mountPlecApplication(
 export async function startPlecRouter(
   options: PlecRouterMountOptions,
 ): Promise<PlecRouterController> {
+  markPlecTiming('plec:mount-start');
   const manifestResponse = await fetch(
     options.manifestUrl ?? '/route-manifest.json',
   );
@@ -474,6 +475,7 @@ export async function startPlecRouter(
   };
   window.addEventListener('plec:cookie-request', onCookieRequest);
   runtime.start(options.root, manifest);
+  markPlecTiming('plec:mount-end');
   return { dispose: () => { window.removeEventListener('plec:cookie-request', onCookieRequest); runtime.dispose(); } };
 }
 

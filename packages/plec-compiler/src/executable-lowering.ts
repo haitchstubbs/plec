@@ -267,9 +267,9 @@ export function lowerCompilerFacts(
       frameSlots: frame.slots?.size ?? 0,
     };
   };
-  const expressions: any[] = [];
-  for (const entry of ir.expressions ?? [])
-    expressions.push(program(entry.expression));
+  const expressions: any[] = new Array((ir.expressions ?? []).length);
+  for (const [index, entry] of (ir.expressions ?? []).entries())
+    expressions[index] = program(entry.expression);
   const expression = (
     value: any,
     frame: Parameters<typeof program>[1] = {},
@@ -645,6 +645,14 @@ export function lowerCompilerFacts(
     visit(expression);
     return [...fields];
   };
+  for (const [index, binding] of (ir.bindings ?? []).entries())
+    for (const [state, slot] of (ir.localStates ?? []).map((state: any, slot: number) => [state, slot] as const))
+      if (expressionUsesState(binding.expressionId, state.name))
+        dependencyEdges.push({ source: { kind: 'state', handle: slot }, target: { kind: 'binding', handle: index } });
+  for (const [index, prop] of (ir.propPrograms ?? []).entries())
+    for (const [state, slot] of (ir.localStates ?? []).map((state: any, slot: number) => [state, slot] as const))
+      if ((prop.writes ?? []).some((write: any) => expressionUsesState(write.expressionId, state.name)))
+        dependencyEdges.push({ source: { kind: 'state', handle: slot }, target: { kind: 'propProgram', handle: index } });
   for (const [index, binding] of (ir.bindings ?? []).entries())
     for (const field of rowFields(binding.expressionId, binding.loopId))
       dependencyEdges.push({
