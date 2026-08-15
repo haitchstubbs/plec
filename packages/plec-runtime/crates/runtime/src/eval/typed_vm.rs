@@ -65,13 +65,12 @@ pub(crate) fn typed_eval_frame(
                     .pop()
                     .ok_or_else(|| JsValue::from_str("expression stack underflow: field"))?;
                 let field = app.strings.get(*field).map(String::as_str).unwrap_or("");
-                stack.push(
-                    object
-                        .record()
-                        .and_then(|value| value.get(field))
-                        .cloned()
-                        .unwrap_or(RuntimeValue::Null),
-                );
+                stack.push(match object {
+                    RuntimeValue::Record(value) => value.get(field).cloned().unwrap_or(RuntimeValue::Null),
+                    RuntimeValue::Array(value) if field == "length" => RuntimeValue::Number(value.len() as f64),
+                    RuntimeValue::String(value) if field == "length" => RuntimeValue::Number(value.chars().count() as f64),
+                    _ => RuntimeValue::Null,
+                });
             }
             TypedExpressionInstruction::Filter { predicate, .. }
             | TypedExpressionInstruction::Map {
@@ -98,22 +97,50 @@ pub(crate) fn typed_eval_frame(
                 }
                 let mut parts = (0..*count).filter_map(|_| stack.pop()).collect::<Vec<_>>();
                 parts.reverse();
-                let result = match kind.as_str() {
-                    "trim" => typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
+                let value = match kind.as_str() {
+                    "trim" => RuntimeValue::String(typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
                         .trim()
-                        .to_owned(),
-                    "lower" => typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
-                        .to_lowercase(),
-                    "upper" => typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
-                        .to_uppercase(),
-                    "includes" => typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
+                        .to_owned()),
+                    "lower" => RuntimeValue::String(typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
+                        .to_lowercase()),
+                    "upper" => RuntimeValue::String(typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
+                        .to_uppercase()),
+                    "includes" => RuntimeValue::Bool(typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
                         .contains(&typed_value_string(
                             parts.get(1).unwrap_or(&RuntimeValue::Null),
-                        ))
-                        .to_string(),
-                    _ => parts.iter().map(typed_value_string).collect::<String>(),
+                        ))),
+                    _ => RuntimeValue::String(parts.iter().map(typed_value_string).collect::<String>()),
                 };
-                stack.push(RuntimeValue::String(result));
+                stack.push(value);
+            }
+            TypedExpressionInstruction::MakeArray { count, spreads } => {
+                if stack.len() < *count {
+                    return Err(JsValue::from_str("expression stack underflow: makeArray"));
+                }
+                let mut values = (0..*count).filter_map(|_| stack.pop()).collect::<Vec<_>>();
+                values.reverse();
+                let mut output = Vec::new();
+                for (index, value) in values.into_iter().enumerate() {
+                    if spreads.get(index).copied().unwrap_or(false) {
+                        output.extend(value.array().unwrap_or(&[]).iter().cloned());
+                    } else {
+                        output.push(value);
+                    }
+                }
+                stack.push(RuntimeValue::Array(output));
+            }
+            TypedExpressionInstruction::MakeRecord { fields } => {
+                if stack.len() < fields.len() {
+                    return Err(JsValue::from_str("expression stack underflow: makeRecord"));
+                }
+                let mut values = (0..fields.len()).filter_map(|_| stack.pop()).collect::<Vec<_>>();
+                values.reverse();
+                let record = fields
+                    .iter()
+                    .zip(values)
+                    .filter_map(|(field, value)| app.strings.get(*field).cloned().map(|field| (field, value)))
+                    .collect();
+                stack.push(RuntimeValue::Record(record));
             }
             TypedExpressionInstruction::Binary { kind } => {
                 let right = stack
@@ -223,5 +250,35 @@ pub(crate) fn typed_value_string(value: &RuntimeValue) -> String {
         RuntimeValue::Array(_) | RuntimeValue::Record(_) => {
             serde_json::to_string(value).unwrap_or_default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn make_array_flattens_only_marked_spreads() {
+        let app = serde_json::from_value(serde_json::json!({
+            "version": "0.9", "rootNode": 0, "strings": ["div"],
+            "constants": [["first", "second"], "third"],
+            "nodes": [{"op": "element", "tag": 0}],
+            "expressions": [{"instructions": [
+                {"op": "constant", "constant": 0},
+                {"op": "constant", "constant": 1},
+                {"op": "makeArray", "count": 2, "spreads": [true, false]},
+                {"op": "return"}
+            ]}]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            typed_eval(&app, 0, &[], None, 0).unwrap(),
+            RuntimeValue::Array(vec![
+                RuntimeValue::String("first".into()),
+                RuntimeValue::String("second".into()),
+                RuntimeValue::String("third".into()),
+            ]),
+        );
     }
 }

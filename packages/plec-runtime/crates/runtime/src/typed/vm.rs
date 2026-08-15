@@ -456,7 +456,13 @@ impl TypedRuntime {
                     .then(|| (edge.target.kind.clone(), edge.target.handle))
             })
             .collect::<Vec<_>>();
+        for (_, handle) in targets.iter().filter(|(kind, _)| kind == "conditional") {
+            self.reconcile_static_conditional(*handle, metrics)?;
+        }
         for (kind, handle) in targets {
+            if kind == "conditional" {
+                continue;
+            }
             if kind == "binding" {
                 if let (Some(binding), Some(node)) = (
                     self.app.bindings.get(handle).cloned(),
@@ -482,8 +488,6 @@ impl TypedRuntime {
             } else if kind == "loop" {
                 let parent = self.parent_for_loop(handle)?;
                 self.render_loop(handle, &parent)?;
-            } else if kind == "conditional" {
-                self.reconcile_static_conditional(handle, metrics)?;
             }
         }
         Ok(())

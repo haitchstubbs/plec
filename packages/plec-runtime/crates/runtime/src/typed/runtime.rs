@@ -949,12 +949,13 @@ impl TypedRuntime {
             key.clone(),
             TypedRow {
                 root,
-                values,
+                values: values.clone(),
                 nodes,
                 conditionals,
                 generation,
             },
         );
+        self.update_typed_row(loop_index, &key, values, metrics)?;
         self.queue_row_listeners(loop_index, &key);
         let row = self.loops.get(&loop_index).unwrap().rows.get(&key).unwrap();
         let row_owner = TypedListenerOwner::Row {
@@ -1017,7 +1018,11 @@ impl TypedRuntime {
         row.values = values;
         let bindings = self.app.bindings.clone();
         for binding in bindings {
-            if let Some(node) = row.nodes.get(&binding.target) {
+            if let Some(node) = row
+                .nodes
+                .get(&binding.target)
+                .or_else(|| row.conditionals.values().find_map(|region| region.nodes.get(&binding.target)))
+            {
                 typed_apply_binding(
                     &self.app,
                     &binding,

@@ -205,10 +205,12 @@ export function lowerCompilerFacts(
         return;
       }
       if (value.kind === 'array') {
-        for (const item of value.items ?? []) emit(item.value ?? item);
+        const items = value.items ?? [];
+        for (const item of items) emit(item.value ?? item);
         instructions.push({
           op: 'makeArray',
-          count: (value.items ?? []).length,
+          count: items.length,
+          spreads: items.map((item: any) => item.kind === 'spread'),
         });
         return;
       }
@@ -296,6 +298,10 @@ export function lowerCompilerFacts(
     });
     nodes.push({ op: 'text', text: textIndex, parent: null });
   }
+  for (const conditional of ir.conditionals ?? []) {
+    nodeIndex.set(conditional.id, nodes.length);
+    nodes.push({ op: 'conditional', test: 0, parent: null, consequent: 0 });
+  }
   const loops = (ir.loops ?? []).map((loop: any, loopIndex: number) => {
     nodeIndex.set(loop.id, nodes.length);
     nodes.push({ op: 'loop', loop: loopIndex, parent: null });
@@ -353,6 +359,29 @@ export function lowerCompilerFacts(
   for (const text of ir.texts ?? [])
     nodes[nodeIndex.get(text.id)!].parent =
       nodeIndex.get(text.parentId) ?? null;
+  for (const loop of ir.loops ?? [])
+    nodes[nodeIndex.get(loop.id)!].parent =
+      nodeIndex.get(loop.parentId) ?? null;
+  for (const conditional of ir.conditionals ?? []) {
+    const node = nodes[nodeIndex.get(conditional.id)!];
+    node.parent = conditional.parentId
+      ? (nodeIndex.get(conditional.parentId) ?? null)
+      : null;
+    node.test = required(
+      expressionById.get(conditional.expressionId),
+      `conditional ${conditional.id} expression ${conditional.expressionId}`,
+    );
+    node.consequent = required(
+      nodeIndex.get(conditional.consequent[0]),
+      `conditional ${conditional.id} consequent`,
+    );
+    const alternate = conditional.alternate[0];
+    if (alternate)
+      node.alternate = required(
+        nodeIndex.get(alternate),
+        `conditional ${conditional.id} alternate`,
+      );
+  }
   const bindings = (ir.bindings ?? []).map((binding: any) => ({
     target: required(
       nodeIndex.get(binding.targetId),
@@ -653,6 +682,13 @@ export function lowerCompilerFacts(
     for (const [state, slot] of (ir.localStates ?? []).map((state: any, slot: number) => [state, slot] as const))
       if ((prop.writes ?? []).some((write: any) => expressionUsesState(write.expressionId, state.name)))
         dependencyEdges.push({ source: { kind: 'state', handle: slot }, target: { kind: 'propProgram', handle: index } });
+  for (const conditional of ir.conditionals ?? [])
+    for (const [state, slot] of (ir.localStates ?? []).map((state: any, slot: number) => [state, slot] as const))
+      if (expressionUsesState(conditional.expressionId, state.name))
+        dependencyEdges.push({
+          source: { kind: 'state', handle: slot },
+          target: { kind: 'conditional', handle: nodeIndex.get(conditional.id)! },
+        });
   for (const [index, binding] of (ir.bindings ?? []).entries())
     for (const field of rowFields(binding.expressionId, binding.loopId))
       dependencyEdges.push({
