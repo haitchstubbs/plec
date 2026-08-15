@@ -23,6 +23,7 @@ pub struct TypedApplication {
     pub inputs: Vec<TypedInput>,
     #[serde(default)]
     pub state_slots: Vec<TypedStateSlot>,
+    pub route_error_state: Option<usize>,
     #[serde(default)]
     pub expressions: Vec<TypedProgram>,
     #[serde(default)]
@@ -84,6 +85,8 @@ pub struct TypedAction {
     pub loader_result_state: Option<usize>,
     #[serde(default)]
     pub route_loader: bool,
+    #[serde(default)]
+    pub route_retry: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -239,6 +242,7 @@ pub struct TypedInput {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TypedStateSlot {
+    pub name: Option<usize>,
     pub initial_expression: usize,
     pub frame_slot: usize,
 }
@@ -505,6 +509,12 @@ impl TypedApplication {
             if state.initial_expression >= self.expressions.len() {
                 return Err("state expression handle out of range");
             }
+            if state.name.map(|name| name >= self.strings.len()).unwrap_or(false) {
+                return Err("state name handle out of range");
+            }
+        }
+        if self.route_error_state.map(|state| state >= self.state_slots.len()).unwrap_or(false) {
+            return Err("route error state handle out of range");
         }
         for event in &self.events {
             let frame_slots = self
