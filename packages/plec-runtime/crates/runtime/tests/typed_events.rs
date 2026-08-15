@@ -8,6 +8,33 @@ use web_sys::{Element, Event};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+let originalFetch;
+let fetchQueue = [];
+let aborts = 0;
+export function setPlecFetchQueue(specs) {
+  originalFetch ??= window.fetch;
+  fetchQueue = JSON.parse(specs);
+  aborts = 0;
+  window.fetch = (_request) => {
+    const spec = fetchQueue.shift();
+    if (spec.reject) return Promise.reject(Object.assign(new Error(spec.reject), { name: spec.name || 'TypeError' }));
+    if (spec.pending) return new Promise((_resolve, reject) => _request.signal.addEventListener('abort', () => { aborts++; reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }));
+    return Promise.resolve(new Response(spec.body ?? '', { status: spec.status ?? 200, statusText: spec.statusText ?? '', headers: spec.headers ?? {} }));
+  };
+}
+export function restorePlecFetch() { if (originalFetch) window.fetch = originalFetch; fetchQueue = []; }
+export function plecFetchAborts() { return aborts; }
+"#)]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = setPlecFetchQueue)]
+    fn set_plec_fetch_queue(specs: &str);
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = restorePlecFetch)]
+    fn restore_plec_fetch();
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = plecFetchAborts)]
+    fn plec_fetch_aborts() -> u32;
+}
+
 fn mount_root() -> Element {
     web_sys::window()
         .unwrap()
@@ -229,6 +256,90 @@ fn async_row_action_artifact() -> serde_json::Value {
         {"source":{"kind":"state","handle":1},"target":{"kind":"binding","handle":2}}
     ]);
     app
+}
+
+/// One static button and three observable slots: branch result, inner finally,
+/// and outer finally. Keeping this artifact small makes fetch behavior visible
+/// without adding a test-only runtime API.
+fn fetch_artifact(decode: &str, require_ok: bool, nested: bool) -> serde_json::Value {
+    let failure_pc = if nested { 5 } else { 4 };
+    let finally_pc = if nested { 11 } else { 7 };
+    let mut instructions = vec![serde_json::json!({
+        "op":"capabilityRequest", "capability":"fetch",
+        "request":{"url":7,"method":"GET","decode":decode,"requireOk":require_ok},
+        "successPc":1,"failurePc":failure_pc,"finallyPc":finally_pc,"resultSlot":1,"errorSlot":2
+    })];
+    if nested {
+        instructions.push(serde_json::json!({
+            "op":"capabilityRequest", "capability":"fetch",
+            "request":{"url":7,"method":"GET","decode":"text"},
+            "successPc":2,"failurePc":failure_pc,"finallyPc":8,"resultSlot":1,"errorSlot":2
+        }));
+    } else {
+        instructions.push(serde_json::json!({"op":"evaluate","expression":8}));
+        instructions.push(serde_json::json!({"op":"storeState","state":0}));
+        instructions.push(serde_json::json!({"op":"return"}));
+    }
+    if nested {
+        instructions.extend([
+            serde_json::json!({"op":"evaluate","expression":8}),
+            serde_json::json!({"op":"storeState","state":0}),
+            serde_json::json!({"op":"return"}),
+        ]);
+    }
+    instructions.extend([
+        serde_json::json!({"op":"evaluate","expression":9}),
+        serde_json::json!({"op":"storeState","state":0}),
+        serde_json::json!({"op":"return"}),
+        serde_json::json!({"op":"evaluate","expression":10}),
+        serde_json::json!({"op":"storeState","state":1}),
+        serde_json::json!({"op":"return"}),
+        serde_json::json!({"op":"evaluate","expression":11}),
+        serde_json::json!({"op":"storeState","state":2}),
+        serde_json::json!({"op":"return"}),
+    ]);
+    serde_json::json!({
+        "version":"0.9", "rootNode":0,
+        "strings":["div","button","click"],
+        "constants":[null,"url","success","failure","inner","outer"],
+        "nodes":[
+            {"op":"element","tag":0,"children":[1,2,3,4]},
+            {"op":"element","tag":1,"parent":0,"children":[]},
+            {"op":"text","text":0,"parent":0}, {"op":"text","text":1,"parent":0}, {"op":"text","text":2,"parent":0}
+        ],
+        "texts":[{"binding":0},{"binding":1},{"binding":2}],
+        "bindings":[
+            {"target":2,"sink":"text","expression":1}, {"target":3,"sink":"text","expression":2}, {"target":4,"sink":"text","expression":3}
+        ],
+        "events":[{"target":1,"type":2,"action":0,"fields":[]}],
+        "stateSlots":[{"initialExpression":0,"frameSlot":0},{"initialExpression":0,"frameSlot":0},{"initialExpression":0,"frameSlot":0}],
+        "expressions":[
+            {"instructions":[{"op":"constant","constant":0},{"op":"return"}]},
+            {"instructions":[{"op":"loadState","state":0},{"op":"return"}]}, {"instructions":[{"op":"loadState","state":1},{"op":"return"}]}, {"instructions":[{"op":"loadState","state":2},{"op":"return"}]},
+            {"instructions":[{"op":"constant","constant":1},{"op":"return"}]}, {"instructions":[{"op":"constant","constant":2},{"op":"return"}]}, {"instructions":[{"op":"constant","constant":3},{"op":"return"}]}, {"instructions":[{"op":"constant","constant":1},{"op":"return"}]},
+            {"instructions":[{"op":"loadFrame","slot":1},{"op":"return"}]}, {"instructions":[{"op":"loadFrame","slot":2},{"op":"return"}]}, {"instructions":[{"op":"constant","constant":4},{"op":"return"}]}, {"instructions":[{"op":"constant","constant":5},{"op":"return"}]}
+        ],
+        "actions":[{"frameSlots":3,"instructions":instructions}],
+        "dependencyEdges":[
+            {"source":{"kind":"state","handle":0},"target":{"kind":"binding","handle":0}}, {"source":{"kind":"state","handle":1},"target":{"kind":"binding","handle":1}}, {"source":{"kind":"state","handle":2},"target":{"kind":"binding","handle":2}}
+        ]
+    })
+}
+
+fn click_fetch(root: &Element) {
+    root.query_selector("button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+}
+
+async fn settle_fetch() {
+    for _ in 0..5 {
+        browser_tick().await;
+    }
 }
 
 async fn browser_tick() {
@@ -586,4 +697,186 @@ async fn row_event_frame_survives_nested_call_and_fetch_continuation() {
         browser_tick().await;
     }
     assert_eq!(root.text_content().unwrap(), "retained rowclick");
+}
+
+#[wasm_bindgen_test(async)]
+async fn disposing_a_typed_graph_aborts_and_discards_its_fetch() {
+    set_plec_fetch_queue(r#"[{"pending":true}]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, async_row_action_artifact(), &root);
+    initialize_rows(
+        &runtime,
+        serde_json::json!([{"id":"row", "title":"retained row"}]),
+    );
+    root.query_selector("button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    runtime.dispose().unwrap();
+    for _ in 0..2 {
+        browser_tick().await;
+    }
+    assert_eq!(plec_fetch_aborts(), 1);
+    assert_eq!(root.text_content().unwrap_or_default(), "");
+    restore_plec_fetch();
+}
+
+#[wasm_bindgen_test(async)]
+async fn typed_fetch_decodes_json_text_and_empty_responses() {
+    for (decode, spec, expected) in [
+        (
+            "json",
+            r#"[{"body":"{\"ok\":true}","headers":{"content-type":"application/json"}}]"#,
+            r#"{"ok":true}inner"#,
+        ),
+        ("text", r#"[{"body":"plain"}]"#, "plaininner"),
+        ("empty", r#"[{"body":"ignored"}]"#, "inner"),
+    ] {
+        set_plec_fetch_queue(spec);
+        let runtime = PlecRuntime::new();
+        let root = mount_root();
+        load_and_mount(&runtime, fetch_artifact(decode, true, false), &root);
+        click_fetch(&root);
+        settle_fetch().await;
+        assert_eq!(root.text_content().unwrap(), expected);
+        restore_plec_fetch();
+    }
+}
+
+#[wasm_bindgen_test(async)]
+async fn typed_fetch_routes_http_decode_network_and_abort_failures() {
+    for (spec, expected) in [
+        (
+            r#"[{"status":400,"statusText":"Bad","body":"{\"reason\":\"no\"}","headers":{"content-type":"application/problem+json; charset=utf-8"}}]"#,
+            "\"kind\":\"http\"",
+        ),
+        (
+            r#"[{"body":"not json","headers":{"content-type":"application/json"}}]"#,
+            "\"kind\":\"decode\"",
+        ),
+        (r#"[{"reject":"offline"}]"#, "\"kind\":\"network\""),
+        (
+            r#"[{"reject":"aborted","name":"AbortError"}]"#,
+            "\"kind\":\"abort\"",
+        ),
+    ] {
+        set_plec_fetch_queue(spec);
+        let runtime = PlecRuntime::new();
+        let root = mount_root();
+        load_and_mount(&runtime, fetch_artifact("json", true, false), &root);
+        click_fetch(&root);
+        settle_fetch().await;
+        let output = root.text_content().unwrap();
+        assert!(output.contains(expected), "{output}");
+        assert!(output.contains("\"url\":\"url\""), "{output}");
+        assert!(output.ends_with("inner"), "{output}");
+        restore_plec_fetch();
+    }
+
+    set_plec_fetch_queue(r#"[{"status":418,"body":"teapot"}]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, fetch_artifact("text", false, false), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    assert_eq!(root.text_content().unwrap(), "teapotinner");
+    restore_plec_fetch();
+}
+
+#[wasm_bindgen_test(async)]
+async fn typed_fetch_runs_nested_finalizers_inner_to_outer() {
+    set_plec_fetch_queue(r#"[{"body":"outer"},{"body":"inner"}]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, fetch_artifact("text", true, true), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    assert_eq!(root.text_content().unwrap(), "innerinnerouter");
+    restore_plec_fetch();
+}
+
+#[wasm_bindgen_test(async)]
+async fn remount_and_typed_route_replacement_abort_stale_fetches() {
+    set_plec_fetch_queue(r#"[{"pending":true}]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, fetch_artifact("text", true, false), &root);
+    click_fetch(&root);
+    runtime.mount(root.clone()).unwrap();
+    settle_fetch().await;
+    assert_eq!(plec_fetch_aborts(), 1);
+    assert_eq!(root.text_content().unwrap_or_default(), "");
+    restore_plec_fetch();
+
+    set_plec_fetch_queue(r#"[{"pending":true}]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    let mut route_root = fetch_artifact("text", true, false);
+    route_root["routeOutlets"] = serde_json::json!([{"id":"main","node":0}]);
+    route_root["actions"][0]["routeLoader"] = serde_json::json!(true);
+    route_root["actions"][0]["loaderResultState"] = serde_json::json!(0);
+    route_root["actions"][0]["instructions"] = serde_json::json!([
+        {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":1,"finallyPc":null,"resultSlot":1,"errorSlot":2},
+        {"op":"return"}
+    ]);
+    runtime
+        .register_graph(
+            "a".into(),
+            serde_wasm_bindgen::to_value(&route_root).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "b".into(),
+            serde_wasm_bindgen::to_value(&fetch_artifact("text", true, false)).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        &serde_json::json!({
+            "version":3,"rootGraphId":"a","routes":[
+                {"id":"loading","path":"*","graphId":"a","outletId":"main","loaderAction":0},
+                {"id":"next","path":"/next","graphId":"b","outletId":"main"}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    runtime.start(root.clone(), manifest).unwrap();
+    runtime.navigate("/next".into(), false).unwrap();
+    settle_fetch().await;
+    assert_eq!(plec_fetch_aborts(), 1);
+    assert_eq!(root.text_content().unwrap_or_default(), "");
+    restore_plec_fetch();
+}
+
+#[wasm_bindgen_test(async)]
+async fn typed_route_loader_writes_its_declared_result_state() {
+    set_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    let mut route = fetch_artifact("text", true, false);
+    route["routeOutlets"] = serde_json::json!([{"id":"main","node":0}]);
+    route["actions"][0]["routeLoader"] = serde_json::json!(true);
+    route["actions"][0]["loaderResultState"] = serde_json::json!(0);
+    route["actions"][0]["instructions"] = serde_json::json!([
+        {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":1,"finallyPc":null,"resultSlot":1,"errorSlot":2},
+        {"op":"return"}
+    ]);
+    runtime.register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
+    runtime.register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
+    let manifest = js_sys::JSON::parse(
+        &serde_json::json!({
+            "version":3,"rootGraphId":"root","routes":[
+                {"id":"page","path":"*","graphId":"page","outletId":"main","loaderAction":0}
+            ]
+        }).to_string(),
+    ).unwrap();
+    runtime.start(root.clone(), manifest).unwrap();
+    settle_fetch().await;
+    assert_eq!(root.text_content().unwrap_or_default(), "loaded");
+    restore_plec_fetch();
 }
