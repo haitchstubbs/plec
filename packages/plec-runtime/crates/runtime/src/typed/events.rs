@@ -86,20 +86,14 @@ impl TypedListenerOwner {
 
 impl PlecRuntime {
     pub(crate) fn install_typed_event_listeners(&self) -> Result<(), JsValue> {
-        let candidates = self
-            .typed
-            .borrow_mut()
-            .as_mut()
-            .ok_or_else(|| JsValue::from_str("typed application missing"))?
-            .listener_requests
-            .drain(..)
-            .collect::<Vec<_>>();
-        for request in candidates {
+        let candidates = self.typed.borrow_mut().iter_mut().map(|(id, instance)| (
+            id.clone(), instance.runtime.listener_requests.drain(..).collect::<Vec<_>>()
+        )).collect::<Vec<_>>();
+        for (instance_id, request) in candidates.into_iter().flat_map(|(id, requests)| requests.into_iter().map(move |request| (id.clone(), request))) {
             let bindings = self
                 .typed
                 .borrow()
-                .as_ref()
-                .unwrap()
+                .get(&instance_id).unwrap().runtime
                 .app
                 .events
                 .iter()
@@ -137,8 +131,7 @@ impl PlecRuntime {
                 let event_type = self
                     .typed
                     .borrow()
-                    .as_ref()
-                    .unwrap()
+                    .get(&instance_id).unwrap().runtime
                     .app
                     .strings
                     .get(binding.event_type)
@@ -147,8 +140,7 @@ impl PlecRuntime {
                 if self
                     .typed
                     .borrow()
-                    .as_ref()
-                    .unwrap()
+                    .get(&instance_id).unwrap().runtime
                     .listeners
                     .iter()
                     .any(|entry| {
@@ -164,12 +156,13 @@ impl PlecRuntime {
                     continue;
                 }
                 let runtime = self.clone();
+                let captured_instance_id = instance_id.clone();
                 let fields = binding.fields.clone();
                 let action = binding.action;
                 let captured_owner = owner.clone();
                 let callback = Closure::wrap(Box::new(move |event: Event| {
                     if let Err(error) =
-                        runtime.dispatch_typed_event(action, captured_owner.clone(), &fields, event)
+                        runtime.dispatch_typed_event(&captured_instance_id, action, captured_owner.clone(), &fields, event)
                     {
                         web_sys::console::error_1(&error);
                     }
@@ -180,8 +173,7 @@ impl PlecRuntime {
                 )?;
                 self.typed
                     .borrow_mut()
-                    .as_mut()
-                    .unwrap()
+                    .get_mut(&instance_id).unwrap().runtime
                     .listeners
                     .push(TypedListener {
                         listener: Listener {
@@ -205,6 +197,7 @@ impl PlecRuntime {
 impl PlecRuntime {
     pub(crate) fn dispatch_typed_event(
         &self,
+        instance_id: &str,
         action: usize,
         owner: TypedListenerOwner,
         fields: &[TypedEventField],
@@ -216,10 +209,9 @@ impl PlecRuntime {
             .and_then(|value| value.dyn_into::<Element>().ok());
         let values = {
             let typed = self.typed.borrow();
-            let app = &typed
-                .as_ref()
+            let app = &typed.get(instance_id)
                 .ok_or_else(|| JsValue::from_str("typed application missing"))?
-                .app;
+                .runtime.app;
             fields
                 .iter()
                 .map(|field| {
@@ -238,9 +230,8 @@ impl PlecRuntime {
         };
         let row = if let Some((loop_index, key, generation)) = owner.row_identity() {
             let typed = self.typed.borrow();
-            let Some(row) = typed
-                .as_ref()
-                .and_then(|typed| typed.loops.get(&loop_index))
+            let Some(row) = typed.get(instance_id)
+                .and_then(|typed| typed.runtime.loops.get(&loop_index))
                 .and_then(|rows| rows.rows.get(key))
             else {
                 return Ok(());
@@ -254,7 +245,7 @@ impl PlecRuntime {
         };
         let owner_is_live = {
             let typed = self.typed.borrow();
-            let typed = typed.as_ref().unwrap();
+            let typed = &typed.get(instance_id).unwrap().runtime;
             owner.is_live_with(
                 &|loop_index, row_key, generation| {
                     typed
@@ -284,22 +275,25 @@ impl PlecRuntime {
         if !owner_is_live {
             return Ok(());
         }
-        let pending = {
+        let (pending, cookies) = {
             let mut typed = self.typed.borrow_mut();
             let mut metrics = UpdateMetrics::default();
-            typed.as_mut().unwrap().execute_action_with_frame(
+            typed.get_mut(instance_id).unwrap().runtime.execute_action_with_frame(
                 action,
                 &values,
                 row,
                 Some(&event),
                 &mut metrics,
             )?;
-            typed.as_mut().unwrap().take_pending_fetches()
+            let runtime = &mut typed.get_mut(instance_id).unwrap().runtime;
+            (runtime.take_pending_fetches(), runtime.take_pending_cookies())
         };
         #[cfg(feature = "fetch")]
-        for request in pending {
+        for mut request in pending {
+            request.instance_id = instance_id.into();
             self.start_typed_fetch(request)?;
         }
+        for mut request in cookies { request.instance_id = instance_id.into(); self.start_typed_cookie(request)?; }
         #[cfg(not(feature = "fetch"))]
         if !pending.is_empty() {
             return Err(JsValue::from_str("fetch capability is disabled"));
