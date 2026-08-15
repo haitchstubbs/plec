@@ -181,6 +181,7 @@ interface LegacyApplicationFacts {
     eventFields: string[];
     frameSlots: number;
     parameterSlots: number[];
+    routeRetry?: boolean;
     instructions: Array<any>;
   }>;
   contexts: Array<{
@@ -229,6 +230,10 @@ export interface CompileOptions {
   applicationRevision?: string;
   modules?: Array<{ id: string; source: string }>;
   islandComponents?: string[];
+  /** Router-owned callback available only while compiling an error graph. */
+  routeRetryProp?: string;
+  /** Router-owned failure record available only while compiling an error graph. */
+  routeErrorProp?: string;
 }
 
 export interface CompileResult {
@@ -236,6 +241,7 @@ export interface CompileResult {
   diagnostics: CompilerDiagnostic[];
   /** Compiler-only route metadata. It is deliberately not emitted in IR. */
   loaderResultState?: number;
+  routeErrorState?: number;
 }
 
 class CompileFailure extends Error {
@@ -280,8 +286,11 @@ interface CompilerState {
   >;
   stateSetters: Map<string, string>;
   loaderResultState?: number;
+  routeErrorState?: number;
   routerLinkBindings: Set<string>;
   islandComponents: Set<string>;
+  routeRetryProp?: string;
+  routeErrorProp?: string;
   componentStack: string[];
   functionStack: string[];
   activeLoopId?: string;
@@ -328,6 +337,8 @@ export function compile(
     stateSetters: new Map(),
     routerLinkBindings: new Set(),
     islandComponents: new Set(options.islandComponents ?? []),
+    routeRetryProp: options.routeRetryProp,
+    routeErrorProp: options.routeErrorProp,
     componentStack: [],
     functionStack: [],
     activeModuleId: options.moduleId ?? '<entry>',
@@ -414,6 +425,13 @@ export function compile(
     populateFunctionLocals(rootDefinition.body, state.expressionScope);
   if (options.rootComponent)
     state.componentStack.push(options.rootComponent);
+  if (state.routeErrorProp) {
+    const slotId = `s${state.ir.localStates.length + 1}`;
+    state.ir.localStates.push({ id: slotId, name: state.routeErrorProp, initialValue: 'null', initialExpression: { kind: 'literal', value: null }, values: [] });
+    state.routeErrorState = state.ir.localStates.length - 1;
+    (state.ir as any).routeErrorState = state.routeErrorState;
+    state.expressionScope[state.routeErrorProp] = { type: 'Identifier', value: state.routeErrorProp };
+  }
   const rootId = lowerJsxNode(rootJsx, null, state);
   if (options.rootComponent) state.componentStack.pop();
   if (
@@ -449,6 +467,9 @@ export function compile(
     ...(state.loaderResultState === undefined
       ? {}
       : { loaderResultState: state.loaderResultState }),
+    ...(state.routeErrorState === undefined
+      ? {}
+      : { routeErrorState: state.routeErrorState }),
   };
 }
 
@@ -2560,6 +2581,14 @@ function lowerEvent(
 ): void {
   let handler = unwrapExpression(expression);
   const handlerName = getNodeName(handler);
+  if (handlerName && handlerName === state.routeRetryProp) {
+    const eventId = `ev${state.eventCounter + 1}`;
+    const actionId = `a${state.eventCounter + 1}`;
+    state.eventCounter += 1;
+    state.ir.events.push({ id: eventId, type: reactEventName(name), targetId, actionId, args: [] });
+    state.ir.actionFacts.push({ id: actionId, parameters: [{ name: 'event', type: 'event' }], eventFields: [], frameSlots: 0, parameterSlots: [], routeRetry: true, instructions: [{ op: 'return' }] });
+    return;
+  }
   if (handlerName && state.expressionScope[handlerName])
     handler = unwrapExpression(state.expressionScope[handlerName]);
   const body = unwrapExpression(handler?.body);
@@ -2629,6 +2658,9 @@ function buildTypedActionFact(
   const diagnosticStart = state.diagnostics.length;
   const loaderContext = loaderContextParameters(handler, state);
   const sourceOperations = lowerActionOperations(handler, state) as any[];
+  const routeRetry = sourceOperations.some(
+    (operation) => operation?.kind === 'route-retry',
+  );
   const eventFields = actionEventFields(sourceOperations);
   const eventSlots = new Map(eventFields.map((field, index) => [field, index]));
   const slots = new Map<string, number>();
@@ -2656,6 +2688,7 @@ function buildTypedActionFact(
           instructions.push({ op: 'storeState', stateSlotId: operation.stateSlotId });
           break;
         case 'prevent-default': instructions.push({ op: 'preventDefault' }); break;
+        case 'route-retry': break;
         case 'store-host-ref': instructions.push({ op: 'storeHostRef', refId: operation.refId }); break;
         case 'return':
           instructions.push({ op: 'return', outcome: operation.outcome ?? 'success', ...(operation.value ? { value: operation.value, eventSlots, slots } : {}) });
@@ -2744,6 +2777,7 @@ function buildTypedActionFact(
     eventFields,
     frameSlots: nextSlot,
     parameterSlots: loaderContext ? [0, 1] : [],
+    ...(routeRetry ? { routeRetry: true } : {}),
     instructions,
   };
 }
@@ -2789,6 +2823,8 @@ function lowerActionOperations(
   state: CompilerState,
 ): unknown[] {
   const handlerName = getNodeName(handler);
+  if (handlerName && handlerName === state.routeRetryProp)
+    return [{ kind: 'route-retry' }];
   if (handlerName && state.expressionScope[handlerName])
     handler = state.expressionScope[handlerName];
   let body = unwrapExpression(handler?.body);
@@ -3188,6 +3224,8 @@ function lowerActionExpression(
     )
       return lowerActionOperations(target, state);
   }
+  if (bareName && bareName === state.routeRetryProp)
+    return [{ kind: 'route-retry' }];
   if (expression?.type !== 'CallExpression') {
     if (expression?.type === 'AssignmentExpression' && getNodeName(expression.left?.object) && getNodeName(expression.left?.property) === 'current' && getNodeName(expression.right?.object) === 'document' && getNodeName(expression.right?.property) === 'activeElement')
       return [{ kind: 'store-host-ref', refId: getNodeName(expression.left.object) }];
