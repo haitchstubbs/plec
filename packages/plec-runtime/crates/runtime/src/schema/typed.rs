@@ -304,6 +304,8 @@ pub enum TypedExpressionInstruction {
     },
     MakeArray {
         count: usize,
+        #[serde(default)]
+        spreads: Vec<bool>,
     },
     MakeRecord {
         fields: Vec<usize>,

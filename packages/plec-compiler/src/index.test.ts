@@ -9,6 +9,20 @@ describe('compile executable application', () => {
     expect(result.ir.events[0]).toMatchObject({ action: 0, fields: expect.any(Array) });
     expect(result.ir.actions[0]?.instructions.some((instruction: any) => instruction.op === 'storeState')).toBe(true);
   });
+
+  it('preserves array spreads in typed action expressions', () => {
+    const result = compile(
+      `function App() { const [items, setItems] = useState([]); return <button onClick={() => setItems((current) => [...current, 'next'])} /> }`,
+      { mode: 'strict' },
+    );
+    const expression = result.ir.actions[0]?.instructions
+      .filter((instruction: any) => instruction.op === 'evaluate')
+      .map((instruction: any) => result.ir.expressions[instruction.expression])
+      .find((entry) => entry.instructions.some((instruction: any) => instruction.op === 'makeArray'));
+    expect(expression?.instructions).toContainEqual({
+      op: 'makeArray', count: 2, spreads: [true, false],
+    });
+  });
   it('emits deterministic dense 0.9 tables for static and bound text', () => {
     const source = `function Hello({ name }) { return <div title={name}>Hello {name}</div> }`;
     const first = compile(source, { mode: 'strict' });
@@ -59,6 +73,21 @@ describe('compile executable application', () => {
     expect(result.ir.nodes.some((node) => node.op === 'loop')).toBe(
       true,
     );
+  });
+
+  it('keeps a conditional loop parent and its state dependency typed', () => {
+    const result = compile(
+      `function App() { const [items, setItems] = useState([]); return <main>{items.length ? <ul>{items.map((item) => <li key={item.id}>{item.id}</li>)}</ul> : <p>Empty</p>}</main> }`,
+      { mode: 'strict' },
+    );
+    const conditional = result.ir.nodes.findIndex((node) => node.op === 'conditional');
+    const loop = result.ir.nodes.findIndex((node) => node.op === 'loop');
+    expect(conditional).toBeGreaterThanOrEqual(0);
+    expect(result.ir.nodes[loop]).toMatchObject({ parent: expect.any(Number) });
+    expect(result.ir.dependencyEdges).toContainEqual({
+      source: { kind: 'state', handle: 0 },
+      target: { kind: 'conditional', handle: conditional },
+    });
   });
 
   it('compiles local derived keyed loops with slot and row-field edges', () => {
@@ -172,7 +201,7 @@ describe('compile executable application', () => {
     }`, { mode: 'lenient' });
     const requests = result.ir.actions.flatMap((action: any) => action.instructions)
       .filter((instruction: any) => instruction.op === 'capabilityRequest');
-    expect(requests.map((request: any) => request.request.decode)).toEqual(['text', 'empty']);
+    expect(requests.map((request: any) => request.request.decode)).toEqual(['text', 'json']);
   });
 
   it('reserves loader params and location frame slots while leaving signal runtime-owned', () => {

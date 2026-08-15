@@ -81,6 +81,7 @@ export const ExpressionInstructionSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('makeArray'),
     count: z.number().int().min(0),
+    spreads: z.array(z.boolean()).optional(),
   }),
   z.object({
     op: z.literal('makeRecord'),
