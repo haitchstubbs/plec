@@ -6,7 +6,7 @@ use crate::runtime::state::*;
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn initialize_input(&self, input_id: String, rows: JsValue) -> Result<JsValue, JsValue> {
-        if self.typed.borrow().is_some() {
+        if !self.typed.borrow().is_empty() {
             return self.initialize_typed_input(&input_id, rows);
         }
         let instance_id = self.legacy_instance_id()?;
