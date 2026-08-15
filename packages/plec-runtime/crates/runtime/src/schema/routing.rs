@@ -19,6 +19,10 @@ pub struct RouteManifestEntry {
     pub parent_id: Option<String>,
     pub path: String,
     pub graph_id: String,
+    #[serde(default)]
+    pub pending_graph_id: Option<String>,
+    #[serde(default)]
+    pub error_graph_id: Option<String>,
     pub outlet_id: String,
     #[serde(default)]
     pub loader: Option<Action>,
