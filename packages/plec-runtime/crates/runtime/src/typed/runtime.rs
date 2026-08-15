@@ -1,7 +1,10 @@
 use crate::dom::{bindings::*, platform::*};
 use crate::eval::typed_vm::*;
 use crate::runtime::lifecycle::*;
-use crate::typed::{events::*, fetch::*};
+use crate::typed::events::*;
+use crate::typed::cookie::*;
+#[cfg(feature = "fetch")]
+use crate::typed::fetch::*;
 
 #[derive(Default)]
 pub(crate) struct TypedLoopRows {
@@ -49,7 +52,28 @@ pub(crate) struct TypedRuntime {
     pub(crate) listeners: Vec<TypedListener>,
     pub(crate) listener_requests: Vec<TypedListenerRequest>,
     pub(crate) next_generation: u64,
+    pub(crate) graph_generation: u64,
+    pub(crate) host_inputs: HashMap<String, RuntimeValue>,
+    pub(crate) host_refs: HashMap<String, Node>,
+    pub(crate) pending_cookies: Vec<TypedPendingCookie>,
+    pub(crate) next_cookie_id: u64,
+    #[cfg(feature = "fetch")]
     pub(crate) pending_fetches: Vec<TypedPendingFetch>,
+    #[cfg(feature = "fetch")]
+    pub(crate) next_fetch_id: u64,
+    #[cfg(feature = "fetch")]
+    pub(crate) abort_controllers: HashMap<u64, AbortController>,
+}
+
+/** Mutable typed graph ownership. Definitions live in `typed_registry`; this
+ * record exists only for one mounted route position. */
+pub(crate) struct TypedGraphInstance {
+    pub(crate) parent_id: Option<String>,
+    pub(crate) outlet_id: String,
+    pub(crate) graph_id: String,
+    pub(crate) route_id: Option<String>,
+    pub(crate) match_key: Option<String>,
+    pub(crate) runtime: TypedRuntime,
 }
 
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -61,9 +85,12 @@ impl PlecRuntime {
             instances: Rc::new(RefCell::new(HashMap::new())),
             router: Rc::new(RefCell::new(None)),
             router_listeners: Rc::new(RefCell::new(Vec::new())),
-            typed: Rc::new(RefCell::new(None)),
+            typed: Rc::new(RefCell::new(HashMap::new())),
+            typed_root: Rc::new(RefCell::new(None)),
+            typed_generation: Rc::new(RefCell::new(0)),
             typed_registry: Rc::new(RefCell::new(HashMap::new())),
             typed_manifest: Rc::new(RefCell::new(None)),
+            typed_host_inputs: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 }
@@ -71,7 +98,7 @@ impl PlecRuntime {
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn mount(&self, root: Element) -> Result<JsValue, JsValue> {
-        if self.typed.borrow().is_some() {
+        if !self.typed.borrow().is_empty() {
             return self.mount_typed(root);
         }
         let instance_id = graph_instance_id(None, "main", None);
@@ -92,7 +119,7 @@ impl PlecRuntime {
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn apply_delta(&self, delta: JsValue) -> Result<JsValue, JsValue> {
-        if self.typed.borrow().is_some() {
+        if !self.typed.borrow().is_empty() {
             return self.apply_typed_delta(delta);
         }
         let instance_id = self.legacy_instance_id()?;
@@ -102,11 +129,13 @@ impl PlecRuntime {
 
 impl PlecRuntime {
     pub(crate) fn mount_typed(&self, root: Element) -> Result<JsValue, JsValue> {
+        let id = graph_instance_id(None, "main", None);
         let metrics = {
             let mut typed = self.typed.borrow_mut();
             typed
-                .as_mut()
+                .get_mut(&id)
                 .ok_or_else(|| JsValue::from_str("typed application missing"))?
+                .runtime
                 .mount(root)?
         };
         self.install_typed_event_listeners()?;
@@ -121,13 +150,14 @@ impl PlecRuntime {
         rows: JsValue,
     ) -> Result<JsValue, JsValue> {
         let rows: Vec<Value> = serde_wasm_bindgen::from_value(rows).map_err(error)?;
+        let id = graph_instance_id(None, "main", None);
         let metrics = {
             let mut typed = self.typed.borrow_mut();
             let typed = typed
-                .as_mut()
+                .get_mut(&id)
                 .ok_or_else(|| JsValue::from_str("typed application missing"))?;
             let mut metrics = UpdateMetrics::default();
-            typed.reconcile_input(input_id, rows, &mut metrics)?;
+            typed.runtime.reconcile_input(input_id, rows, &mut metrics)?;
             metrics
         };
         self.install_typed_event_listeners()?;
@@ -138,13 +168,14 @@ impl PlecRuntime {
 impl PlecRuntime {
     pub(crate) fn apply_typed_delta(&self, delta: JsValue) -> Result<JsValue, JsValue> {
         let delta: Delta = serde_wasm_bindgen::from_value(delta).map_err(error)?;
+        let id = graph_instance_id(None, "main", None);
         let metrics = {
             let mut typed = self.typed.borrow_mut();
             let typed = typed
-                .as_mut()
+                .get_mut(&id)
                 .ok_or_else(|| JsValue::from_str("typed application missing"))?;
             let mut metrics = UpdateMetrics::default();
-            typed.apply_delta(delta, &mut metrics)?;
+            typed.runtime.apply_delta(delta, &mut metrics)?;
             metrics
         };
         self.install_typed_event_listeners()?;
@@ -153,6 +184,12 @@ impl PlecRuntime {
 }
 
 impl TypedRuntime {
+    pub(crate) fn set_host_inputs(&mut self, inputs: HashMap<String, RuntimeValue>) -> Result<(), JsValue> {
+        self.host_inputs = inputs;
+        self.app.host_inputs = self.host_inputs.clone();
+        self.states = self.app.state_slots.iter().map(|slot| typed_eval(&self.app, slot.initial_expression, &[], None, 0)).collect::<Result<Vec<_>, _>>()?;
+        Ok(())
+    }
     pub(crate) fn new(app: TypedApplication) -> Result<Self, JsValue> {
         app.validate()?;
         let mut states = Vec::new();
@@ -170,13 +207,31 @@ impl TypedRuntime {
             listeners: Vec::new(),
             listener_requests: Vec::new(),
             next_generation: 1,
+            graph_generation: 1,
+            host_inputs: HashMap::new(),
+            host_refs: HashMap::new(),
+            pending_cookies: Vec::new(),
+            next_cookie_id: 0,
+            #[cfg(feature = "fetch")]
             pending_fetches: Vec::new(),
+            #[cfg(feature = "fetch")]
+            next_fetch_id: 0,
+            #[cfg(feature = "fetch")]
+            abort_controllers: HashMap::new(),
         })
+    }
+}
+
+#[cfg(not(feature = "fetch"))]
+impl TypedRuntime {
+    pub(crate) fn take_pending_fetches(&mut self) -> Vec<()> {
+        Vec::new()
     }
 }
 
 impl TypedRuntime {
     pub(crate) fn mount(&mut self, root: Element) -> Result<MountMetrics, JsValue> {
+        self.invalidate_fetches();
         self.clear_listeners();
         root.set_inner_html("");
         self.nodes.clear();
@@ -209,6 +264,21 @@ impl TypedRuntime {
             dom_operations: 1,
             ..Default::default()
         })
+    }
+}
+
+impl TypedRuntime {
+    /// Invalidation happens before aborting so graph disposal is silent: a
+    /// rejected browser promise can never resume stale action code.
+    pub(crate) fn invalidate_fetches(&mut self) {
+        self.graph_generation = self.graph_generation.saturating_add(1);
+        #[cfg(feature = "fetch")]
+        {
+            self.pending_fetches.clear();
+            for (_, controller) in self.abort_controllers.drain() {
+                controller.abort();
+            }
+        }
     }
 }
 
