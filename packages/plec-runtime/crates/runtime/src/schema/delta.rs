@@ -105,8 +105,27 @@ impl RuntimeValue {
     }
 
     pub fn json_body(&self) -> Result<String, wasm_bindgen::JsValue> {
-        serde_json::to_string(self)
-            .map_err(|error| wasm_bindgen::JsValue::from_str(&error.to_string()))
+        fn write(value: &RuntimeValue, output: &mut String) -> Result<(), wasm_bindgen::JsValue> {
+            match value {
+                RuntimeValue::Null => output.push_str("null"),
+                RuntimeValue::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
+                RuntimeValue::Number(value) if value.is_finite() => output.push_str(&value.to_string()),
+                RuntimeValue::Number(_) => return Err(wasm_bindgen::JsValue::from_str("JSON cannot encode a non-finite number")),
+                RuntimeValue::String(value) => {
+                    output.push('"');
+                    for character in value.chars() {
+                        match character { '"' => output.push_str("\\\""), '\\' => output.push_str("\\\\"), '\n' => output.push_str("\\n"), '\r' => output.push_str("\\r"), '\t' => output.push_str("\\t"), character if character <= '\u{1f}' => output.push_str(&format!("\\u{:04x}", character as u32)), character => output.push(character) }
+                    }
+                    output.push('"');
+                }
+                RuntimeValue::Array(values) => { output.push('['); for (index, value) in values.iter().enumerate() { if index > 0 { output.push(','); } write(value, output)?; } output.push(']'); }
+                RuntimeValue::Record(values) => { output.push('{'); for (index, (key, value)) in values.iter().enumerate() { if index > 0 { output.push(','); } write(&RuntimeValue::String(key.clone()), output)?; output.push(':'); write(value, output)?; } output.push('}'); }
+            }
+            Ok(())
+        }
+        let mut output = String::new();
+        write(self, &mut output)?;
+        Ok(output)
     }
 }
 
