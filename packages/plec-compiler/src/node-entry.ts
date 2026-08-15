@@ -21,6 +21,8 @@ export interface CompiledSourceEntry {
   result: ReturnType<typeof compile>;
 }
 export interface CompiledRouteGraph {
+  id: string;
+  parentId?: string;
   path: string;
   graph: ReturnType<typeof compileComponentGraph>['graph'];
   pendingGraph?: ReturnType<typeof compileComponentGraph>['graph'];
@@ -189,13 +191,10 @@ export async function compileRouteEntry(
   const routeNames = routeTreeBindings(router!.source);
   if (!routeNames.length)
     throw new Error('Route entry does not contain rootRoute.addChildren([...]).');
-  const definitions = routeNames.map((name) => {
-    const moduleId = routerImports.get(name);
-    const module = moduleId && byId.get(moduleId);
-    if (!module) throw new Error(`Route binding ${name} has no available source module.`);
-    return parseRouteDefinition(module!, byId);
-  });
-  const root = definitions.shift();
+  const definitions = modules
+    .filter((module) => /\bcreate(?:Root)?Route\s*\(/.test(module.source))
+    .map((module) => parseRouteDefinition(module, byId));
+  const root = definitions.find((definition) => !definition.parentRoute);
   if (!root) throw new Error('Route entry does not declare a root route.');
   const compileGraph = (component: RouteComponent) => {
     const source = byId.get(component.moduleId);
@@ -206,17 +205,19 @@ export async function compileRouteEntry(
       moduleId: source.id,
       modules,
       applicationRevision: revision,
-    }).graph;
+    });
   };
+  const rootGraph = compileGraph(root!.component);
   return {
     modules,
     revision,
-    rootGraph: compileGraph(root!.component),
-    routes: definitions.map((definition) => {
-      const graph = compileGraph(definition.component);
+    rootGraph: rootGraph.graph,
+    routes: definitions.filter((definition) => definition !== root).map((definition) => {
+      const compiled = compileGraph(definition.component);
+      const graph = compiled.graph;
       let loaderAction: number | undefined;
       if (definition.loader) {
-        const state = findLoaderStateSlot(definition.component, graph, byId);
+        const state = compiled.loaderResultState;
         if (state === undefined)
           throw new Error(`Route loader in ${definition.component.moduleId} has no typed loader state.`);
         loaderAction = graph.actions.length;
@@ -227,60 +228,31 @@ export async function compileRouteEntry(
         });
       }
       return {
+      id: routeId(definition),
+      ...(definition.parentRoute && (definition.parentRoute.moduleId !== root!.component.moduleId || definition.parentRoute.name !== root!.component.name)
+        ? { parentId: routeId(definitions.find((candidate) => candidate.component.moduleId === definition.parentRoute!.moduleId && candidate.component.name === definition.parentRoute!.name) ?? definition) }
+        : {}),
       path: definition.path,
       graph,
       ...(definition.pendingComponent
-        ? { pendingGraph: compileGraph(definition.pendingComponent) }
+        ? { pendingGraph: compileGraph(definition.pendingComponent).graph }
         : {}),
       ...(definition.errorComponent
-        ? { errorGraph: compileGraph(definition.errorComponent) }
+        ? { errorGraph: compileGraph(definition.errorComponent).graph }
         : {}),
       ...(loaderAction === undefined ? {} : { loaderAction }),
-      outletId: 'main',
+      outletId: definition.outletId ?? 'main',
     };
     }),
   };
-}
-
-function findLoaderStateSlot(
-  component: RouteComponent,
-  graph: ReturnType<typeof compileComponentGraph>['graph'],
-  modules: Map<string, SourceGraphModule>,
-): number | undefined {
-  const source = modules.get(component.moduleId)?.source;
-  if (!source) return undefined;
-  const ast: any = parseSync(source, { syntax: 'typescript', tsx: true, target: 'es2022' });
-  let loaderName: string | undefined;
-  let stateName: string | undefined;
-  const stateNames: string[] = [];
-  const visit = (value: any): void => {
-    if (!value || typeof value !== 'object') return;
-    if (value.type === 'VariableDeclarator') {
-      const call = value.init;
-      if (call?.type === 'CallExpression' && call.callee?.property?.value === 'useLoaderData')
-        loaderName = getPatternName(value.id);
-      if (call?.type === 'CallExpression' && call.callee?.value === 'useState') {
-        const argument = call.arguments?.[0]?.expression ?? call.arguments?.[0];
-        if (getNodeName(argument) === loaderName)
-          stateName = getPatternName(value.id?.elements?.[0]);
-        const name = getPatternName(value.id?.elements?.[0]);
-        if (name) stateNames.push(name);
-      }
-    }
-    for (const child of Object.values(value)) {
-      if (Array.isArray(child)) child.forEach(visit);
-      else visit(child);
-    }
-  };
-  visit(ast);
-  const slot = stateNames.indexOf(stateName ?? '');
-  return slot >= 0 && slot < graph.stateSlots.length ? slot : undefined;
 }
 
 type RouteComponent = { moduleId: string; name: string };
 type RouteDefinition = {
   path: string;
   component: RouteComponent;
+  parentRoute?: RouteComponent;
+  outletId?: string;
   pendingComponent?: RouteComponent;
   errorComponent?: RouteComponent;
   loader?: { source: string; moduleId: string };
@@ -305,11 +277,13 @@ function compileRouteLoader(
   const action = (result.ir as any).actions[0];
   if (!action) throw new Error(`Route loader in ${loader.moduleId} did not lower to an action.`);
   validateRouteLoaderAction(action, loader.moduleId);
-  return { ...action, parameterSlots: [] };
+  return action;
 }
 
 /** Router policy is intentionally stricter than the generic typed action VM. */
 export function validateRouteLoaderAction(action: any, moduleId = 'route loader') {
+  if ((action.instructions ?? []).some((instruction: any) => instruction.op === 'storeState'))
+    throw new Error(`Route loader in ${moduleId} must use loaderResultState instead of storeState.`);
   const requests = (action.instructions ?? []).filter(
     (instruction: any) => instruction.op === 'capabilityRequest' && instruction.capability === 'fetch',
   );
@@ -327,6 +301,11 @@ export function validateRouteLoaderAction(action: any, moduleId = 'route loader'
     (request.finallyPc !== undefined && (!Number.isInteger(request.finallyPc) || request.finallyPc < 0 || request.finallyPc >= length))
   )
     throw new Error(`Route loader in ${moduleId} has invalid terminal fetch continuations.`);
+  if (
+    action.parameterSlots?.length &&
+    (action.parameterSlots.length !== 2 || action.parameterSlots[0] !== 0 || action.parameterSlots[1] !== 1)
+  )
+    throw new Error(`Route loader in ${moduleId} has invalid loader context slots.`);
 }
 
 function importBindings(module: SourceGraphModule): Map<string, string> {
@@ -407,15 +386,22 @@ function parseRouteDefinition(
   if (!resolved) throw new Error(`Route module ${module.id} has no component export.`);
   if (!byId.has(resolved.moduleId))
     throw new Error(`Component source is unavailable: ${resolved.moduleId}#${resolved.name}.`);
+  const parentValue = property('getParentRoute')?.body?.value ?? property('getParentRoute')?.body?.expression?.value;
   return {
     path: property('path')?.value ?? '',
     component: resolved,
+    ...(parentValue ? { parentRoute: { moduleId: imports.get(parentValue) ?? module.id, name: parentValue } } : {}),
+    ...(typeof property('outletId')?.value === 'string' ? { outletId: property('outletId').value } : {}),
     pendingComponent: component('pendingComponent'),
     errorComponent: component('errorComponent'),
     ...(property('loader')?.span
       ? { loader: { source: module.source.slice(property('loader').span.start - 1, property('loader').span.end - 1), moduleId: module.id } }
       : {}),
   };
+}
+
+function routeId(definition: RouteDefinition) {
+  return `${definition.component.moduleId}#${definition.component.name}`;
 }
 
 function logicalModuleId(from: string, specifier: string): string {
