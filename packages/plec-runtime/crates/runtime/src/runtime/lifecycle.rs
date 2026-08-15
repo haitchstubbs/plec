@@ -114,6 +114,8 @@ impl PlecRuntime {
                     graph_id: "__typed__".into(),
                     route_id: None,
                     match_key: None,
+                    route_state: None,
+                    loader_runtime: None,
                     runtime: typed,
                 },
             );
