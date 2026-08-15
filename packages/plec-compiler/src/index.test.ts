@@ -43,6 +43,13 @@ describe('compile executable application', () => {
     ).toBe(true);
   });
 
+  it('declares cookie authority and separates sync input from async writes', () => {
+    const result = compile(`import { cookie, useState } from 'plec'; function App() { const [open, setOpen] = useState(cookie.getSync('sidebar') === 'open'); return <button onClick={() => { void cookie.set('sidebar', open ? 'closed' : 'open', { path: '/', maxAge: 1 }); setOpen(!open); }} /> }`, { mode: 'strict' });
+    expect(result.ir.hostSlots).toEqual([{ kind: 'cookie', name: expect.any(Number) }]);
+    expect(result.ir.capabilities).toEqual([{ kind: 'cookie', name: 'sidebar', operations: ['getSync', 'set'], path: '/', expiryModes: ['session', 'maxAge'] }]);
+    expect(result.ir.actions[0]?.instructions[0]).toMatchObject({ op: 'capabilityRequest', capability: 'cookie' });
+  });
+
   it('keeps a mapped collection as a typed loop table entry', () => {
     const result = compile(
       `function App({ todos }) { return <ul>{todos.map((todo) => <li key={todo.id}>{todo.title}</li>)}</ul> }`,
@@ -155,6 +162,30 @@ describe('compile executable application', () => {
     expect(request.failurePc).toBeGreaterThan(request.successPc);
     expect(request.finallyPc).toBeGreaterThan(request.failurePc);
     expect(action.frameSlots).toBe(2);
+  });
+
+  it('selects typed fetch decoders from the response method', () => {
+    const result = compile(`function App() {
+      async function text() { const response = await fetch('/text'); const value = await response.text(); }
+      async function empty() { await fetch('/empty'); }
+      return <div><button onClick={text} /><button onClick={empty} /></div>;
+    }`, { mode: 'lenient' });
+    const requests = result.ir.actions.flatMap((action: any) => action.instructions)
+      .filter((instruction: any) => instruction.op === 'capabilityRequest');
+    expect(requests.map((request: any) => request.request.decode)).toEqual(['text', 'empty']);
+  });
+
+  it('reserves loader params and location frame slots while leaving signal runtime-owned', () => {
+    const result = compile(`function App() {
+      async function load({ params, location, signal }) {
+        await fetch('/api/' + params.id + location.search, { signal });
+      }
+      return <button onClick={load} />;
+    }`, { mode: 'strict' });
+    const action = result.ir.actions[0]!;
+    expect(action).toMatchObject({ parameterSlots: [0, 1] });
+    expect(action.frameSlots).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(action.instructions)).not.toContain('signal');
   });
 
   it('continues to reject unsupported source in strict mode', () => {

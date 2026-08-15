@@ -59,7 +59,9 @@ export function lowerCompilerFacts(
     );
     if (existing >= 0) return existing;
     hostSlots.push(
-      value.name === 'media-query'
+      value.name === 'cookie'
+        ? { kind: 'cookie', name: string(value.query) }
+        : value.name === 'media-query'
         ? { kind: 'mediaQuery', query: string(value.query) }
         : {
             kind:
@@ -393,11 +395,8 @@ export function lowerCompilerFacts(
     (slot: any, index: number) => ({
       initialExpression:
         expressions.push(
-          program({
+          program(slot.initialExpression ?? {
             kind: 'literal',
-            // `undefined` is a valid scalar initial value in authored Plec
-            // code but is not JSON text. It crosses the executable boundary
-            // as JSON null.
             value: parseInitialValue(slot.initialValue),
           }),
         ) - 1,
@@ -443,12 +442,21 @@ export function lowerCompilerFacts(
         case 'preventDefault':
         case 'jump':
         case 'jumpIfFalse':
-        case 'return':
           return {
             ...instruction,
             eventSlots: undefined,
             slots: undefined,
           };
+        case 'return':
+          return {
+            op: 'return',
+            outcome: instruction.outcome ?? 'success',
+            ...(instruction.value
+              ? { value: expression(instruction.value, frame) }
+              : {}),
+          };
+        case 'storeHostRef':
+          return { op: 'storeHostRef', ref: string(instruction.refId) };
         case 'call':
           return {
             op: 'call',
@@ -459,6 +467,10 @@ export function lowerCompilerFacts(
             arguments: (instruction.arguments ?? []).map((value: any) =>
               expression(value, frame),
             ),
+            successPc: instruction.successPc,
+            failurePc: instruction.failurePc,
+            resultSlot: instruction.resultSlot,
+            errorSlot: instruction.errorSlot,
           };
         case 'collectionMutation': {
           const input = (ir.inputs ?? []).findIndex(
@@ -493,6 +505,13 @@ export function lowerCompilerFacts(
         }
         case 'capabilityRequest': {
           const request = instruction.request ?? {};
+          if (instruction.capability === 'cookie') return {
+            op: 'capabilityRequest', capability: 'cookie',
+            request: { ...request, name: string(request.name), ...(request.value ? { value: expression(request.value, frame) } : {}) },
+            successPc: instruction.successPc, failurePc: instruction.failurePc,
+            ...(instruction.finallyPc === undefined ? {} : { finallyPc: instruction.finallyPc }),
+            resultSlot: instruction.resultSlot, errorSlot: instruction.errorSlot,
+          };
           return {
             op: 'capabilityRequest',
             capability: 'fetch',
@@ -533,6 +552,8 @@ export function lowerCompilerFacts(
     };
   });
   for (const event of ir.events ?? []) {
+    // Typed-router link interception is runtime-owned; it is not an action.
+    if (event.navigate) continue;
     const actionIndex: number = required(
       actionById.get(event.actionId),
       `event ${event.id} action ${event.actionId}`,
@@ -643,6 +664,18 @@ export function lowerCompilerFacts(
           },
           target: { kind: 'propProgram', handle: index },
         });
+  const capabilities = new Map<string, any>();
+  for (const slot of hostSlots) if (slot.kind === 'cookie') {
+    const name = strings[slot.name]!;
+    capabilities.set(name, { kind: 'cookie', name, operations: ['getSync'], path: '/', expiryModes: ['session'] });
+  }
+  for (const action of actions) for (const instruction of action.instructions) if (instruction.op === 'capabilityRequest' && instruction.capability === 'cookie') {
+    const name = strings[instruction.request.name]!; const current = capabilities.get(name) ?? { kind: 'cookie', name, operations: [], path: instruction.request.path, ...(instruction.request.sameSite ? { sameSite: instruction.request.sameSite } : {}), ...(instruction.request.secure === undefined ? {} : { secure: instruction.request.secure }), expiryModes: [] };
+    const operation = instruction.request.operation;
+    if (!current.operations.includes(operation)) current.operations.push(operation);
+    if (!current.expiryModes.includes(instruction.request.expiry)) current.expiryModes.push(instruction.request.expiry);
+    capabilities.set(name, current);
+  }
   return lowerExecutableApplication({
     strings,
     constants,
@@ -661,6 +694,11 @@ export function lowerCompilerFacts(
       kind: input.shape.kind,
     })),
     hostSlots,
+    capabilities: [...capabilities.values()],
+    routeOutlets: (ir.layout?.routeOutlets ?? []).map((outlet: any) => ({
+      id: outlet.id,
+      node: required(nodeIndex.get(outlet.elementId), `route outlet ${outlet.id}`),
+    })),
     dependencyEdges,
   });
 
@@ -724,6 +762,8 @@ export interface ExecutableApplicationFacts {
   loops?: ExecutableApplication['loops'];
   contexts?: ExecutableApplication['contexts'];
   hostSlots?: ExecutableApplication['hostSlots'];
+  capabilities?: ExecutableApplication['capabilities'];
+  routeOutlets?: ExecutableApplication['routeOutlets'];
   dependencyEdges?: ExecutableApplication['dependencyEdges'];
   rootNode?: number;
 }
@@ -752,6 +792,8 @@ export function lowerExecutableApplication(
     loops: facts.loops ?? [],
     contexts: facts.contexts ?? [],
     hostSlots: facts.hostSlots ?? [],
+    capabilities: facts.capabilities ?? [],
+    routeOutlets: facts.routeOutlets ?? [],
     dependencyEdges: facts.dependencyEdges ?? [],
   });
 }
