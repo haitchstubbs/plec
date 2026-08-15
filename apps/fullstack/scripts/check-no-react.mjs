@@ -50,12 +50,19 @@ for (const file of (
     invalidImports.push(path.relative(appDir, file));
 }
 
-if (reactDependencies.length || invalidImports.length) {
+const client = await readFile(path.join(appDir, 'src', 'client.tsx'), 'utf8');
+const invalidClientBoundary =
+  !client.includes('startPlecRouter(') ||
+  /from\s+['"]\.\/routes|\bfetch\s*\(|\/api\//.test(client);
+
+if (reactDependencies.length || invalidImports.length || invalidClientBoundary) {
   const violations = [
     reactDependencies.length &&
       `React dependencies: ${reactDependencies.join(', ')}`,
     invalidImports.length &&
       `React imports: ${invalidImports.join(', ')}`,
+    invalidClientBoundary &&
+      'Browser entry must only bootstrap the Plec runtime with artifact URLs',
   ]
     .filter(Boolean)
     .join('; ');
