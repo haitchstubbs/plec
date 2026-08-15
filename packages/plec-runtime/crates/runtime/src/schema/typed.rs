@@ -18,6 +18,8 @@ pub struct TypedApplication {
     #[serde(default)]
     pub bindings: Vec<TypedBinding>,
     #[serde(default)]
+    pub prop_programs: Vec<TypedPropProgram>,
+    #[serde(default)]
     pub events: Vec<TypedEvent>,
     #[serde(default)]
     pub inputs: Vec<TypedInput>,
@@ -231,6 +233,20 @@ pub struct TypedBinding {
     pub sink: String,
     pub name: Option<usize>,
     pub expression: usize,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct TypedPropProgram {
+    pub target: usize,
+    pub writes: Vec<TypedPropWrite>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct TypedPropWrite {
+    pub name: usize,
+    pub kind: String,
+    pub constant: Option<usize>,
+    pub expression: Option<usize>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -466,7 +482,7 @@ fn subtree_contains(nodes: &[TypedNode], root: usize, target: usize) -> bool {
     if root == target {
         return true;
     }
-    match nodes.get(root) {
+    (match nodes.get(root) {
         Some(TypedNode::Element { children, .. }) => children
             .iter()
             .any(|child| subtree_contains(nodes, *child, target)),
@@ -481,7 +497,14 @@ fn subtree_contains(nodes: &[TypedNode], root: usize, target: usize) -> bool {
                     .unwrap_or(false)
         }
         _ => false,
-    }
+    }) || matches!(
+        nodes.get(target),
+        Some(TypedNode::Element { parent: Some(parent), .. }
+          | TypedNode::Text { parent: Some(parent), .. }
+          | TypedNode::Conditional { parent: Some(parent), .. }
+          | TypedNode::Loop { parent: Some(parent), .. })
+          if subtree_contains(nodes, root, *parent)
+    )
 }
 
 impl TypedApplication {
