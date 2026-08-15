@@ -40,13 +40,23 @@ impl PlecRuntime {
             let Some(href) = anchor.get_attribute("href") else {
                 return;
             };
-            if !href.starts_with('/') || href.starts_with("//") {
+            if href.starts_with("//") {
                 return;
             }
+            let href = if href.starts_with('/') || href.starts_with('?') || href.starts_with('#') {
+                href
+            } else if let Ok(origin) = window().and_then(|window| window.location().origin()) {
+                let Some(path) = href.strip_prefix(&origin) else { return };
+                path.to_string()
+            } else {
+                return;
+            };
             event.prevent_default();
             unsafe {
                 if let Some(runtime) = runtime.as_ref() {
-                    let _ = runtime.navigate_internal(&href, false);
+                    if let Some(root) = runtime.typed_root.borrow().clone() {
+                        let _ = runtime.navigate_typed_route(&href, root, false, true);
+                    } else { let _ = runtime.navigate_internal(&href, false); }
                 }
             }
         }) as Box<dyn FnMut(Event)>);
@@ -61,10 +71,13 @@ impl PlecRuntime {
         let runtime: *const PlecRuntime = self;
         let popstate = Closure::wrap(Box::new(move |_event: Event| unsafe {
             if let Some(runtime) = runtime.as_ref() {
-                if let Ok(location) =
-                    window().and_then(|window| window.location().pathname().map_err(|error| error))
-                {
-                    let _ = runtime.navigate_internal(&location, true);
+                if let Ok(location) = window().and_then(|window| {
+                    let location = window.location();
+                    Ok(format!("{}{}{}", location.pathname()?, location.search()?, location.hash()?))
+                }) {
+                    if let Some(root) = runtime.typed_root.borrow().clone() {
+                        let _ = runtime.navigate_typed_route(&location, root, false, false);
+                    } else { let _ = runtime.navigate_internal(&location, true); }
                 }
             }
         }) as Box<dyn FnMut(Event)>);
