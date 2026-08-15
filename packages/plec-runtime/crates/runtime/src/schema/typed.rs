@@ -92,10 +92,15 @@ pub enum TypedActionInstruction {
     CapabilityRequest {
         capability: String,
         request: TypedFetchRequest,
+        #[serde(rename = "successPc")]
         success_pc: usize,
+        #[serde(rename = "failurePc")]
         failure_pc: usize,
+        #[serde(rename = "finallyPc")]
         finally_pc: Option<usize>,
+        #[serde(rename = "resultSlot")]
         result_slot: usize,
+        #[serde(rename = "errorSlot")]
         error_slot: usize,
     },
     Return,
@@ -170,6 +175,7 @@ pub struct TypedInput {
 }
 
 #[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TypedStateSlot {
     pub initial_expression: usize,
     pub frame_slot: usize,
@@ -442,6 +448,9 @@ impl TypedApplication {
                 frame_slots,
             )
             .map_err(JsValue::from_str)?;
+            if !matches!(self.nodes.get(event.target), Some(TypedNode::Element { .. })) {
+                return Err(JsValue::from_str("event target must be an element"));
+            }
             if event.fields.iter().any(|field| {
                 self.strings
                     .get(field.name)
@@ -671,4 +680,15 @@ mod tests {
         assert!(!supported_event_field("notAnEventField"));
         assert!(subtree_contains(&app.nodes, app.root_node, event.target));
     }
+
+    #[test]
+    fn typed_decoder_rejects_event_target_that_is_not_an_element_or_out_of_range_slot() {
+        let mut app = typed_action_artifact(serde_json::json!({"op":"return"}), "collection");
+        app.nodes.push(TypedNode::Text { text: 0, parent: None });
+        app.actions[0].frame_slots = 1;
+        app.events.push(TypedEvent { target: 1, event_type: 0, action: 0, fields: vec![], r#loop: None });
+        assert!(!matches!(app.nodes.get(app.events[0].target), Some(TypedNode::Element { .. })));
+        assert!(validate_typed_event_contract(&TypedEvent { target: 0, event_type: 0, action: 0, fields: vec![TypedEventField { name: 0, slot: 1 }], r#loop: None }, 1, 1, 1, 0, 1).is_err());
+    }
+
 }

@@ -29,84 +29,52 @@ pub(crate) enum TypedListenerOwner {
     },
 }
 
+impl TypedListenerOwner {
+    /// Returns the keyed row that owns this listener, including listeners
+    /// mounted inside a row-local conditional region.
+    pub(crate) fn row_identity(&self) -> Option<(usize, &str, u64)> {
+        match self {
+            Self::Row { loop_index, row_key, generation } => {
+                Some((*loop_index, row_key, *generation))
+            }
+            Self::Conditional { row: Some(row), .. } => row.row_identity(),
+            Self::Static | Self::Conditional { row: None, .. } => None,
+        }
+    }
+
+    pub(crate) fn belongs_to_row(&self, loop_index: usize, row_key: &str, generation: u64) -> bool {
+        self.row_identity()
+            .map(|(owner_loop, owner_key, owner_generation)| {
+                owner_loop == loop_index && owner_key == row_key && owner_generation == generation
+            })
+            .unwrap_or(false)
+    }
+}
+
 impl PlecRuntime {
     pub(crate) fn install_typed_event_listeners(&self) -> Result<(), JsValue> {
-        let candidates = {
-            let typed = self.typed.borrow();
-            let typed = typed
-                .as_ref()
-                .ok_or_else(|| JsValue::from_str("typed application missing"))?;
-            let mut result = Vec::new();
-            let conditional_nodes = typed
-                .conditionals
-                .values()
-                .flat_map(|region| region.nodes.values())
-                .cloned()
-                .collect::<Vec<_>>();
-            for binding in &typed.app.events {
-                if let Some(node) = typed.nodes.get(&binding.target) {
-                    if !conditional_nodes
-                        .iter()
-                        .any(|candidate| candidate.is_same_node(Some(node)))
-                    {
-                        result.push((binding.clone(), node.clone(), None, None, 0));
-                    }
-                }
-                if let Some(loop_index) = binding.r#loop {
-                    if let Some(rows) = typed.loops.get(&loop_index) {
-                        for (key, row) in &rows.rows {
-                            if let Some(node) = row.nodes.get(&binding.target) {
-                                result.push((
-                                    binding.clone(),
-                                    node.clone(),
-                                    Some(loop_index),
-                                    Some(key.clone()),
-                                    row.generation,
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-            // Conditional branch nodes deliberately do not live in the global
-            // node map once their branch is replaced.
-            for (_conditional, region) in &typed.conditionals {
-                for binding in &typed.app.events {
-                    if let Some(node) = region.nodes.get(&binding.target) {
-                        result.push((binding.clone(), node.clone(), None, None, 0));
-                    }
-                }
-            }
-            result
-        };
-        for (binding, node, loop_index, row_key, generation) in candidates {
-            let owner = loop_index
-                .map(|loop_index| TypedListenerOwner::Row {
-                    loop_index,
-                    row_key: row_key.clone().unwrap_or_default(),
-                    generation,
-                })
-                .unwrap_or_else(|| {
-                    let typed = self.typed.borrow();
-                    typed
-                        .as_ref()
-                        .unwrap()
-                        .conditionals
-                        .iter()
-                        .find(|(_, region)| {
-                            region
-                                .nodes
-                                .get(&binding.target)
-                                .map(|candidate| candidate.is_same_node(Some(&node)))
-                                .unwrap_or(false)
-                        })
-                        .map(|(conditional, region)| TypedListenerOwner::Conditional {
-                            conditional: *conditional,
-                            generation: region.generation,
-                            row: None,
-                        })
-                        .unwrap_or(TypedListenerOwner::Static)
-                });
+        let candidates = self.typed.borrow_mut().as_mut()
+            .ok_or_else(|| JsValue::from_str("typed application missing"))?
+            .listener_requests.drain(..).collect::<Vec<_>>();
+        for request in candidates {
+            let bindings = self.typed.borrow().as_ref().unwrap().app.events.iter()
+                // A target may deliberately carry more than one declared
+                // listener (for example click and keydown).  Requests are for
+                // concrete DOM nodes, not for a single event definition.
+                .filter(|binding| binding.target == request.target)
+                .cloned().collect::<Vec<_>>();
+            if bindings.is_empty() { continue; }
+            for binding in bindings {
+            let node = request.node.clone();
+            let owner = request.owner.clone();
+            let (loop_index, row_key, generation) = match &owner {
+                TypedListenerOwner::Row { loop_index, row_key, generation } => (Some(*loop_index), Some(row_key.clone()), *generation),
+                TypedListenerOwner::Conditional { row: Some(row), .. } => match row.as_ref() {
+                    TypedListenerOwner::Row { loop_index, row_key, generation } => (Some(*loop_index), Some(row_key.clone()), *generation),
+                    _ => (None, None, 0),
+                },
+                _ => (None, None, 0),
+            };
             let element = node
                 .dyn_into::<Element>()
                 .map_err(|_| JsValue::from_str("event target is not an element"))?;
@@ -142,14 +110,11 @@ impl PlecRuntime {
             let runtime = self.clone();
             let fields = binding.fields.clone();
             let action = binding.action;
-            let captured_loop = loop_index;
-            let captured_key = row_key.clone();
+            let captured_owner = owner.clone();
             let callback = Closure::wrap(Box::new(move |event: Event| {
                 if let Err(error) = runtime.dispatch_typed_event(
                     action,
-                    captured_loop,
-                    captured_key.clone(),
-                    generation,
+                    captured_owner.clone(),
                     &fields,
                     event,
                 ) {
@@ -176,6 +141,7 @@ impl PlecRuntime {
                     generation,
                     owner,
                 });
+            }
         }
         Ok(())
     }
@@ -185,9 +151,7 @@ impl PlecRuntime {
     pub(crate) fn dispatch_typed_event(
         &self,
         action: usize,
-        loop_index: Option<usize>,
-        row_key: Option<String>,
-        generation: u64,
+        owner: TypedListenerOwner,
         fields: &[TypedEventField],
         event: Event,
     ) -> Result<(), JsValue> {
@@ -217,12 +181,12 @@ impl PlecRuntime {
                 })
                 .collect::<Result<Vec<_>, JsValue>>()?
         };
-        let row = if let (Some(loop_index), Some(key)) = (loop_index, row_key) {
+        let row = if let Some((loop_index, key, generation)) = owner.row_identity() {
             let typed = self.typed.borrow();
             let Some(row) = typed
                 .as_ref()
                 .and_then(|typed| typed.loops.get(&loop_index))
-                .and_then(|rows| rows.rows.get(&key))
+                .and_then(|rows| rows.rows.get(key))
             else {
                 return Ok(());
             };
@@ -233,6 +197,16 @@ impl PlecRuntime {
         } else {
             None
         };
+        let owner_is_live = {
+            let typed = self.typed.borrow(); let typed = typed.as_ref().unwrap();
+            match &owner {
+                TypedListenerOwner::Static => true,
+                TypedListenerOwner::Row { loop_index, row_key, generation } => typed.loops.get(loop_index).and_then(|rows| rows.rows.get(row_key)).map(|row| row.generation == *generation).unwrap_or(false),
+                TypedListenerOwner::Conditional { conditional, generation, row: None } => typed.conditionals.get(conditional).map(|region| region.generation == *generation).unwrap_or(false),
+                TypedListenerOwner::Conditional { conditional, generation, row: Some(row) } => match row.as_ref() { TypedListenerOwner::Row { loop_index, row_key, .. } => typed.loops.get(loop_index).and_then(|rows| rows.rows.get(row_key)).and_then(|entry| entry.conditionals.get(conditional)).map(|region| region.generation == *generation).unwrap_or(false), _ => false },
+            }
+        };
+        if !owner_is_live { return Ok(()); }
         let pending = {
             let mut typed = self.typed.borrow_mut();
             let mut metrics = UpdateMetrics::default();

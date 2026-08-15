@@ -42,3 +42,6 @@ packages/lucide-plec/src/icons/
 
 # Temporary files
 .tmp
+
+# Chrome Drivers
+.tools/chromedriver-151
