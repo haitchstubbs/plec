@@ -7,6 +7,7 @@
     "build": "yarn check:no-react && node scripts/build.mjs",
     "bench:navigation": "node scripts/bench-navigation.mjs",
     "bench:navigation:smoke": "node scripts/bench-navigation-smoke.mjs",
+    "test:acceptance": "yarn --cwd ../.. exec turbo run build --filter=@wasm-runtime/fullstack && node scripts/acceptance-todos.mjs",
     "test": "yarn check:no-react && vitest run",
     "typecheck": "yarn check:no-react && yarn --cwd ../.. exec tsc -p apps/fullstack/tsconfig.json --noEmit",
     "check:no-react": "node scripts/check-no-react.mjs",
