@@ -238,7 +238,20 @@ export async function compileRouteEntry(
         ? { pendingGraph: compileGraph(definition.pendingComponent).graph }
         : {}),
       ...(definition.errorComponent
-        ? { errorGraph: compileGraph(definition.errorComponent).graph }
+        ? {
+            errorGraph: compileComponentGraph(
+              byId.get(definition.errorComponent.moduleId)!.source,
+              {
+                mode: options.mode ?? 'strict',
+                rootComponent: definition.errorComponent.name,
+                moduleId: definition.errorComponent.moduleId,
+                modules,
+                applicationRevision: revision,
+                routeRetryProp: 'retry',
+                routeErrorProp: 'error',
+              },
+            ).graph,
+          }
         : {}),
       ...(loaderAction === undefined ? {} : { loaderAction }),
       outletId: definition.outletId ?? 'main',

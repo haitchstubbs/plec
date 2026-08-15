@@ -84,4 +84,31 @@ describe('Slice 3 route cutover', () => {
     expect(result.loaderResultState).toBe(0);
     expect(result.graph.constants).toContain(null);
   });
+
+  it('lowers the router-owned error retry callback', () => {
+    const result = compileComponentGraph(
+      `export function ErrorView({ retry }: { retry?: () => void }) { return <button onClick={retry}>Retry</button>; }`,
+      { rootComponent: 'ErrorView', mode: 'strict', routeRetryProp: 'retry' },
+    );
+    expect(result.diagnostics).toEqual([]);
+    expect(result.graph.actions[0]).toMatchObject({ routeRetry: true });
+  });
+
+  it('gives error components a named failure state without claiming ordinary actions', () => {
+    const result = compileComponentGraph(
+      `import { useState } from 'plec';
+       export function ErrorView({ error, retry }: { error: { message: string }; retry?: () => void }) {
+         const [count, setCount] = useState(0);
+         return <div>{error.message}<button onClick={retry}>Retry</button><button onClick={() => setCount(count + 1)}>{count}</button></div>;
+       }`,
+      { rootComponent: 'ErrorView', mode: 'strict', routeRetryProp: 'retry', routeErrorProp: 'error' },
+    );
+    expect(result.graph.routeErrorState).toBe(1);
+    expect(result.graph.strings[result.graph.stateSlots[1]!.name!]).toBe('error');
+    expect(result.graph.expressions.some((program) => program.instructions.some(
+      (instruction) => instruction.op === 'loadState' && instruction.state === 1,
+    ))).toBe(true);
+    expect(result.graph.actions.filter((action) => action.routeRetry)).toHaveLength(1);
+    expect(result.graph.actions.some((action) => !action.routeRetry)).toBe(true);
+  });
 });
