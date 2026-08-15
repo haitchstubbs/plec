@@ -253,7 +253,7 @@ pub struct TypedProgram {
 }
 
 #[derive(Clone, Deserialize)]
-#[serde(tag = "op", rename_all = "camelCase")]
+#[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TypedExpressionInstruction {
     Constant {
         constant: usize,
