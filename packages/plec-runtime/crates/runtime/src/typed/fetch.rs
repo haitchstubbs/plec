@@ -198,6 +198,12 @@ impl PlecRuntime {
         pending: TypedPendingFetch,
         result: Result<RuntimeValue, RuntimeValue>,
     ) -> Result<(), JsValue> {
+        let route_loader = self.typed.borrow().get(&pending.instance_id).and_then(|instance| {
+            instance.loader_runtime.as_ref().unwrap_or(&instance.runtime).app.actions.get(pending.continuation.current.action).map(|action| action.route_loader)
+        }).unwrap_or(false);
+        if route_loader {
+            return self.complete_typed_route_loader(pending, result);
+        }
         let instance_id = pending.instance_id.clone();
         let more = {
             let mut typed = self.typed.borrow_mut();
@@ -277,6 +283,39 @@ impl PlecRuntime {
             self.start_typed_fetch(request)?;
         }
         self.install_typed_event_listeners()?;
+        Ok(())
+    }
+
+    fn complete_typed_route_loader(
+        &self,
+        pending: TypedPendingFetch,
+        result: Result<RuntimeValue, RuntimeValue>,
+    ) -> Result<(), JsValue> {
+        let instance_id = pending.instance_id.clone();
+        match result {
+            Err(error) => {
+                if self.typed.borrow().contains_key(&instance_id) {
+                    self.show_typed_route_error(&instance_id, error)?;
+                    self.install_typed_event_listeners()?;
+                }
+            }
+            Ok(value) => {
+                let restore = {
+                    let mut typed = self.typed.borrow_mut();
+                    let instance = match typed.get_mut(&instance_id) { Some(instance) => instance, None => return Ok(()) };
+                    let runtime = instance.loader_runtime.as_mut().unwrap_or(&mut instance.runtime);
+                    if runtime.graph_generation != pending.graph_generation { return Ok(()); }
+                    runtime.abort_controllers.remove(&pending.request_id);
+                    let state = runtime.app.actions.get(pending.continuation.current.action).and_then(|action| action.loader_result_state).ok_or_else(|| JsValue::from_str("typed route loader result state missing"))?;
+                    if state >= runtime.states.len() { return Err(JsValue::from_str("loader state handle out of range")); }
+                    runtime.states[state] = value;
+                    runtime.refresh_state(state, &mut UpdateMetrics::default())?;
+                    instance.loader_runtime.is_some()
+                };
+                if restore { self.restore_typed_route_normal(&instance_id)?; }
+                self.install_typed_event_listeners()?;
+            }
+        }
         Ok(())
     }
 }
