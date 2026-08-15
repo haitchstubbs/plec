@@ -206,6 +206,8 @@ export interface CompiledRuntimeController {
 }
 
 interface WasmRuntimeInstance {
+  set_host_inputs(values: Record<string, unknown>): void;
+  complete_cookie_request(instanceId: string, requestId: number, value: unknown, failure?: string): void;
   load_application(ir: unknown): void;
   adopt(root: Element): RuntimeMountMetrics | null;
   mount(root: Element): RuntimeMountMetrics;
@@ -230,6 +232,8 @@ export interface PlecRouterMountOptions {
   graphUrl?: (graphId: string) => string;
   runtimeJsUrl?: string;
   runtimeWasmUrl?: string;
+  /** Host authority may be a stricter subset than graph-declared authority. */
+  cookiePolicy?: Record<string, { operations: Array<'getSync' | 'get' | 'set' | 'delete'>; path?: string }>;
 }
 export interface PlecRouterController {
   dispose(): void;
@@ -437,21 +441,46 @@ export async function startPlecRouter(
     module_or_path: options.runtimeWasmUrl ?? DEFAULT_RUNTIME_WASM_URL,
   });
   const runtime = new runtimeModule.PlecRuntime();
-  await Promise.all(
+  const graphs = await Promise.all(
     [...graphIds].map(async (graphId) => {
       const response = await fetch(graphUrl(graphId));
       if (!response.ok)
         throw new Error(
           `Failed to load graph ${graphId}: ${response.status}`,
         );
-      runtime.register_graph(
-        graphId,
-        validateExecutableApplication(await response.json()),
-      );
+      return validateExecutableApplication(await response.json());
     }),
   );
+  const cookieNames = graphs.flatMap((graph: any) => (graph.capabilities ?? []).filter((capability: any) => capability.kind === 'cookie' && capability.operations.includes('getSync')).map((capability: any) => capability.name));
+  runtime.set_host_inputs(Object.fromEntries([...new Set(cookieNames)].map((name) => [name, readCookie(name)])));
+  graphs.forEach((graph: any, index) => runtime.register_graph([...graphIds][index]!, graph));
+  const onCookieRequest = (event: Event) => {
+    const request = (event as CustomEvent<any>).detail;
+    try {
+      const allowed = options.cookiePolicy?.[request.name];
+      const operation = request.operation === 'get' ? 'get' : request.operation;
+      if (allowed && !allowed.operations.includes(operation)) throw new Error('cookie operation denied by host policy');
+      if (allowed?.path && allowed.path !== request.path) throw new Error('cookie path denied by host policy');
+      if (request.operation === 'get') runtime.complete_cookie_request(request.instanceId, request.requestId, readCookie(request.name));
+      else {
+        const attributes = [`path=${request.path}`];
+        if (request.expiry === 'maxAge') attributes.push(`max-age=${request.maxAge ?? 0}`);
+        if (request.sameSite) attributes.push(`samesite=${request.sameSite}`);
+        if (request.secure) attributes.push('secure');
+        document.cookie = `${encodeURIComponent(request.name)}=${encodeURIComponent(request.operation === 'delete' ? '' : request.value ?? '')}; ${attributes.join('; ')}`;
+        runtime.complete_cookie_request(request.instanceId, request.requestId, null);
+      }
+    } catch (error) { runtime.complete_cookie_request(request.instanceId, request.requestId, null, error instanceof Error ? error.message : String(error)); }
+  };
+  window.addEventListener('plec:cookie-request', onCookieRequest);
   runtime.start(options.root, manifest);
-  return { dispose: () => runtime.dispose() };
+  return { dispose: () => { window.removeEventListener('plec:cookie-request', onCookieRequest); runtime.dispose(); } };
+}
+
+function readCookie(name: string): string | null {
+  const prefix = `${encodeURIComponent(name)}=`;
+  const part = document.cookie.split(/;\s*/).find((entry) => entry.startsWith(prefix));
+  return part ? decodeURIComponent(part.slice(prefix.length)) : null;
 }
 
 function applyStaticHostBindings(

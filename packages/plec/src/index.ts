@@ -13,6 +13,7 @@ import {
   useNavigate,
 } from './routes/router';
 import { useLocation } from './routes/use-location';
+import { cookie } from './cookie';
 
 export {
   Fragment,
@@ -23,6 +24,7 @@ export {
   useRef,
   useEffect,
   useLocation,
+  cookie,
   useNavigate,
   createRootRoute,
   createRoute,
@@ -40,6 +42,7 @@ export const Plec = {
   useRef,
   useEffect,
   useLocation,
+  cookie,
   useNavigate,
   createRootRoute,
   createRoute,
