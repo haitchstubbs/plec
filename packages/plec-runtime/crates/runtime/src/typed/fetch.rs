@@ -101,7 +101,7 @@ impl PlecRuntime {
             let typed = typed
                 .get_mut(&pending.instance_id)
                 .ok_or_else(|| JsValue::from_str("typed application missing"))?;
-            let typed = &mut typed.runtime;
+            let typed = typed.loader_runtime.as_mut().unwrap_or(&mut typed.runtime);
             if typed.graph_generation != pending.graph_generation {
                 return Ok(());
             }
@@ -309,7 +309,6 @@ impl PlecRuntime {
                     let state = runtime.app.actions.get(pending.continuation.current.action).and_then(|action| action.loader_result_state).ok_or_else(|| JsValue::from_str("typed route loader result state missing"))?;
                     if state >= runtime.states.len() { return Err(JsValue::from_str("loader state handle out of range")); }
                     runtime.states[state] = value;
-                    runtime.refresh_state(state, &mut UpdateMetrics::default())?;
                     instance.loader_runtime.is_some()
                 };
                 if restore { self.restore_typed_route_normal(&instance_id)?; }
