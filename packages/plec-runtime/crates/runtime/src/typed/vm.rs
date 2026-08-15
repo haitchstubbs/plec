@@ -457,7 +457,17 @@ impl TypedRuntime {
             })
             .collect::<Vec<_>>();
         for (_, handle) in targets.iter().filter(|(kind, _)| kind == "conditional") {
-            self.reconcile_static_conditional(*handle, metrics)?;
+            if self.conditionals.contains_key(handle) {
+                self.reconcile_static_conditional(*handle, metrics)?;
+            }
+            let rows = self.loops.iter().flat_map(|(loop_index, rows)| {
+                rows.rows.keys().cloned().map(move |key| (*loop_index, key))
+            }).collect::<Vec<_>>();
+            for (loop_index, key) in rows {
+                if let Some(values) = self.loops.get(&loop_index).and_then(|rows| rows.rows.get(&key)).map(|row| row.values.clone()) {
+                    self.update_typed_row(loop_index, &key, values, Some(state), metrics)?;
+                }
+            }
         }
         for (kind, handle) in targets {
             if kind == "conditional" {

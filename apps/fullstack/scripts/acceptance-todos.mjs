@@ -182,11 +182,15 @@ async function todoActions(browser) {
     await page.getByText('The Todo API rejected this change.', { exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: 'Add todo' }).isDisabled(), false, 'finally should clear pending');
     assert.equal(await title.inputValue(), 'Rejected todo');
-    let row = page.locator('li').filter({ hasText: 'Acceptance todo' });
+    const rowKey = await page
+      .locator('li')
+      .filter({ hasText: 'Acceptance todo' })
+      .getAttribute('data-runtime-row-key');
+    let row = page.locator(`[data-runtime-row-key="${rowKey}"]`);
     await row.locator('input').check();
     await row.locator('input').waitFor();
     await row.locator('button', { hasText: 'Edit' }).click();
-    const rename = row.locator('input');
+    const rename = row.locator('input:not([type="checkbox"])');
     await rename.fill('Renamed acceptance todo');
     await rename.press('Enter');
     await page.getByText('Renamed acceptance todo').waitFor();

@@ -891,7 +891,7 @@ impl TypedRuntime {
                 .map(|row| row.values.clone());
             if let Some(previous) = existing {
                 if previous != values {
-                    self.update_typed_row(loop_index, &key, values, metrics)?;
+                    self.update_typed_row(loop_index, &key, values, None, metrics)?;
                 }
             } else {
                 self.insert_typed_row(loop_index, parent, key.clone(), values, position, metrics)?;
@@ -955,7 +955,7 @@ impl TypedRuntime {
                 generation,
             },
         );
-        self.update_typed_row(loop_index, &key, values, metrics)?;
+        self.update_typed_row(loop_index, &key, values, None, metrics)?;
         self.queue_row_listeners(loop_index, &key);
         let row = self.loops.get(&loop_index).unwrap().rows.get(&key).unwrap();
         let row_owner = TypedListenerOwner::Row {
@@ -993,6 +993,7 @@ impl TypedRuntime {
         loop_index: usize,
         key: &str,
         values: HashMap<String, RuntimeValue>,
+        changed_state: Option<usize>,
         metrics: &mut UpdateMetrics,
     ) -> Result<(), JsValue> {
         let template = self.app.loops[loop_index].row_template;
@@ -1018,6 +1019,11 @@ impl TypedRuntime {
         row.values = values;
         let bindings = self.app.bindings.clone();
         for binding in bindings {
+            if let Some(state) = changed_state {
+                if !self.app.expressions[binding.expression].instructions.iter().any(|instruction| matches!(instruction, TypedExpressionInstruction::LoadState { state: dependency } if *dependency == state)) {
+                    continue;
+                }
+            }
             if let Some(node) = row
                 .nodes
                 .get(&binding.target)
@@ -1033,6 +1039,22 @@ impl TypedRuntime {
                 )?;
                 metrics.dom_operations += 1;
                 metrics.bindings_touched += 1;
+            }
+        }
+        for program in self.app.prop_programs.clone() {
+            if let Some(node) = row.nodes.get(&program.target) {
+                for write in program.writes {
+                    if let Some(state) = changed_state {
+                        if write.expression.is_some_and(|expression| !self.app.expressions[expression].instructions.iter().any(|instruction| matches!(instruction, TypedExpressionInstruction::LoadState { state: dependency } if *dependency == state))) {
+                            continue;
+                        }
+                    }
+                    let value = match write.expression {
+                        Some(expression) => typed_eval(&self.app, expression, &self.states, Some(&row.values), 0)?,
+                        None => write.constant.and_then(|index| self.app.constants.get(index)).cloned().unwrap_or_default(),
+                    };
+                    typed_apply_value(&self.app, &write.kind, Some(write.name), node, value)?;
+                }
             }
         }
         Ok(())

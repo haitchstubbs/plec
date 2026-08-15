@@ -821,7 +821,7 @@ function lowerJsxElement(
         const bindingId = nextBindingId(state);
         state.ir.bindings.push({
           id: bindingId,
-          kind: 'attribute',
+          kind: isDomProperty(name) ? 'property' : 'attribute',
           targetId: elementId,
           attributeName: name,
           expression: serializeExpression(expression, state),
@@ -1713,6 +1713,19 @@ function lowerJsxElementWithScope(
   }
 
   state.ir.elements.push(element);
+  const staticWrites = element.attributes.filter((attribute) =>
+    attribute.staticValue !== undefined,
+  );
+  if (staticWrites.length)
+    state.ir.propPrograms.push({
+      id: `p${state.ir.propPrograms.length + 1}`,
+      targetId: elementId,
+      writes: staticWrites.map((attribute) => ({
+        name: attribute.name,
+        staticValue: attribute.staticValue,
+        kind: isDomProperty(attribute.name) ? 'property' : 'attribute',
+      })),
+    });
 
   for (const child of [
     ...getSpreadChildren(node.opening?.attributes ?? [], state),
@@ -3053,6 +3066,11 @@ function lowerAwaitedHelperCall(
       getStatements(tryStatement.handler?.body),
       state,
     );
+    const rejected = rejectedResponseMessage(tryStatement);
+    if (rejected)
+      for (const operation of failure as any[])
+        if (operation.kind === 'set-state')
+          operation.value = { kind: 'literal', value: rejected };
     state.expressionScope = failurePrevious;
     const finallyOperations = lowerActionStatements(
       getStatements(tryStatement.finalizer),
@@ -3076,6 +3094,19 @@ function lowerAwaitedHelperCall(
     state.expressionScope = previousScope;
     state.activeModuleId = previousModule;
   }
+}
+
+function rejectedResponseMessage(tryStatement: any): string | undefined {
+  for (const statement of getStatements(tryStatement.block)) {
+    const thrown = statement.type === 'IfStatement'
+      ? unwrapExpression(statement.consequent?.argument)
+      : undefined;
+    const argument = thrown?.type === 'NewExpression'
+      ? unwrapExpression(thrown.arguments?.[0]?.expression ?? thrown.arguments?.[0])
+      : undefined;
+    if (argument?.type === 'StringLiteral') return argument.value;
+  }
+  return undefined;
 }
 
 function responseDecodeBinding(
