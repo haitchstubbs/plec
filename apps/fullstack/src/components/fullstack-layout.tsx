@@ -8,18 +8,19 @@ import {
   useLocation,
   Outlet,
   Link,
+  cookie,
 } from 'plec';
 
 export function FullstackLayout() {
   const [collapsed, setCollapsed] = useState(
-    document.cookie.includes('sidebar_state=false'),
+    cookie.getSync('sidebar_state') === 'false',
   );
   const [mobileOpen, setMobileOpen] = useState(false);
   const panelRef = useRef<HTMLElement | null>(null);
   const previousFocus = useRef<Element | null>(null);
   const location = useLocation();
   const setSidebarCollapsed = (next: boolean) => {
-    document.cookie = `sidebar_state=${!next}; path=/; max-age=604800`;
+    void cookie.set('sidebar_state', next ? 'false' : 'true', { path: '/', maxAge: 604800 });
     setCollapsed(next);
   };
   const closeMobile = () => setMobileOpen(false);

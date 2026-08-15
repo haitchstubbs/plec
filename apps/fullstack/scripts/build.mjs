@@ -70,6 +70,8 @@ const routeManifest = {
   revision: compiledRoutes.revision,
   rootGraphId: compiledRoutes.rootGraph.graphId,
   routes: compiledRoutes.routes.map((route) => ({
+    id: route.id,
+    parentId: route.parentId,
     path: route.path,
     graphId: route.graph.graphId,
     pendingGraphId: route.pendingGraph?.graphId,

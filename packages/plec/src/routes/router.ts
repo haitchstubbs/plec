@@ -17,6 +17,8 @@ export type PendingMode = 'replace' | 'retain';
 
 export type RouteOptions<TData = unknown> = {
   path?: string;
+  /** Child graphs mount here in the matching parent graph. */
+  outletId?: string;
   component: PlecComponent;
   loader?: (context: LoaderContext) => TData | Promise<TData>;
   pendingComponent?: PlecComponent;
