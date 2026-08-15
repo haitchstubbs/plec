@@ -31,6 +31,29 @@ pub struct TypedApplication {
     pub loops: Vec<TypedLoop>,
     #[serde(default)]
     pub dependency_edges: Vec<TypedDependencyEdge>,
+    #[serde(default)]
+    pub route_outlets: Vec<TypedRouteOutlet>,
+    #[serde(default)]
+    pub host_slots: Vec<TypedHostSlot>,
+    #[serde(default)]
+    pub capabilities: Vec<TypedCookieCapability>,
+    #[serde(skip)]
+    pub host_inputs: HashMap<String, RuntimeValue>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypedHostSlot { pub kind: String, pub query: Option<usize>, pub name: Option<usize> }
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypedCookieCapability { pub kind: String, pub name: String, pub operations: Vec<String>, #[serde(default = "default_cookie_path")] pub path: String, pub same_site: Option<String>, pub secure: Option<bool>, pub expiry_modes: Vec<String> }
+fn default_cookie_path() -> String { "/".into() }
+
+#[derive(Clone, Deserialize)]
+pub struct TypedRouteOutlet {
+    pub id: String,
+    pub node: usize,
 }
 
 #[derive(Clone, Deserialize)]
@@ -79,10 +102,19 @@ pub enum TypedActionInstruction {
         value: Option<usize>,
     },
     PreventDefault,
+    StoreHostRef { r#ref: usize },
     Call {
         action: usize,
         #[serde(default)]
         arguments: Vec<usize>,
+        #[serde(rename = "successPc")]
+        success_pc: Option<usize>,
+        #[serde(rename = "failurePc")]
+        failure_pc: Option<usize>,
+        #[serde(rename = "resultSlot")]
+        result_slot: Option<usize>,
+        #[serde(rename = "errorSlot")]
+        error_slot: Option<usize>,
     },
     Jump {
         target: usize,
@@ -91,8 +123,8 @@ pub enum TypedActionInstruction {
         target: usize,
     },
     CapabilityRequest {
-        capability: String,
-        request: TypedFetchRequest,
+        #[serde(flatten)]
+        request: TypedCapabilityRequest,
         #[serde(rename = "successPc")]
         success_pc: usize,
         #[serde(rename = "failurePc")]
@@ -104,8 +136,21 @@ pub enum TypedActionInstruction {
         #[serde(rename = "errorSlot")]
         error_slot: usize,
     },
-    Return,
+    Return {
+        #[serde(default)]
+        outcome: TypedReturnOutcome,
+        value: Option<usize>,
+    },
 }
+
+#[derive(Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum TypedReturnOutcome { Success, Failure }
+impl Default for TypedReturnOutcome { fn default() -> Self { Self::Success } }
+
+#[derive(Clone, Deserialize)]
+#[serde(tag = "capability", content = "request", rename_all = "camelCase")]
+pub enum TypedCapabilityRequest { Fetch(TypedFetchRequest), Cookie(TypedCookieRequest) }
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,6 +170,22 @@ pub struct TypedFetchHeader {
     pub name: usize,
     pub value: usize,
 }
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypedCookieRequest {
+    pub operation: String,
+    pub name: usize,
+    pub value: Option<usize>,
+    #[serde(default = "default_cookie_path")]
+    pub path: String,
+    pub same_site: Option<String>,
+    pub secure: Option<bool>,
+    #[serde(default = "default_cookie_expiry")]
+    pub expiry: String,
+    pub max_age: Option<i64>,
+}
+fn default_cookie_expiry() -> String { "session".into() }
 
 fn default_true() -> bool {
     true
@@ -205,6 +266,7 @@ pub enum TypedExpressionInstruction {
     LoadFrame {
         slot: usize,
     },
+    LoadHost { host: usize },
     Field {
         field: usize,
     },
@@ -431,6 +493,14 @@ impl TypedApplication {
         if self.root_node >= self.nodes.len() {
             return Err("root node handle out of range");
         }
+        let mut outlets = HashSet::new();
+        for outlet in &self.route_outlets {
+            if !outlets.insert(&outlet.id)
+                || !matches!(self.nodes.get(outlet.node), Some(TypedNode::Element { .. }))
+            {
+                return Err("invalid typed route outlet");
+            }
+        }
         for state in &self.state_slots {
             if state.initial_expression >= self.expressions.len() {
                 return Err("state expression handle out of range");
@@ -484,6 +554,10 @@ impl TypedApplication {
             }
         }
         for action in &self.actions {
+            #[cfg(not(feature = "fetch"))]
+            if action.instructions.iter().any(|instruction| matches!(instruction, TypedActionInstruction::CapabilityRequest { request: TypedCapabilityRequest::Fetch(_), .. })) {
+                return Err("fetch capability is disabled");
+            }
             let input_kinds = self
                 .inputs
                 .iter()
@@ -502,15 +576,21 @@ impl TypedApplication {
                     {
                         return Err("action state handle out of range")
                     }
-                    TypedActionInstruction::Call { action, arguments } => {
+                    TypedActionInstruction::Call { action: callee, arguments, success_pc, failure_pc, result_slot, error_slot } => {
                         let target = self
                             .actions
-                            .get(*action)
+                            .get(*callee)
                             .ok_or("action handle out of range")?;
-                        if arguments.len() != target.parameter_slots.len()
+                        let continuation_fields = [success_pc.is_some(), failure_pc.is_some(), result_slot.is_some(), error_slot.is_some()];
+                        if continuation_fields.iter().any(|present| *present) && continuation_fields.iter().any(|present| !*present)
+                            || arguments.len() != target.parameter_slots.len()
                             || arguments
                                 .iter()
                                 .any(|expression| *expression >= self.expressions.len())
+                            || success_pc.map(|pc| pc >= action.instructions.len()).unwrap_or(false)
+                            || failure_pc.map(|pc| pc >= action.instructions.len()).unwrap_or(false)
+                            || result_slot.map(|slot| slot >= action.frame_slots).unwrap_or(false)
+                            || error_slot.map(|slot| slot >= action.frame_slots).unwrap_or(false)
                         {
                             return Err("invalid action call");
                         }
@@ -529,15 +609,8 @@ impl TypedApplication {
                         result_slot,
                         error_slot,
                         ..
-                    } if request.url >= self.expressions.len()
-                        || request
-                            .body
-                            .map(|body| body >= self.expressions.len())
-                            .unwrap_or(false)
-                        || request.headers.iter().any(|header| {
-                            header.name >= self.strings.len()
-                                || header.value >= self.expressions.len()
-                        })
+                    } if matches!(request, TypedCapabilityRequest::Fetch(request) if request.url >= self.expressions.len() || request.body.map(|body| body >= self.expressions.len()).unwrap_or(false) || request.headers.iter().any(|header| header.name >= self.strings.len() || header.value >= self.expressions.len()))
+                        || matches!(request, TypedCapabilityRequest::Cookie(request) if request.name >= self.strings.len() || request.value.map(|value| value >= self.expressions.len()).unwrap_or(false) || !["get", "set", "delete"].contains(&request.operation.as_str()) || (request.operation == "set" && request.value.is_none()) || (request.expiry == "maxAge" && request.max_age.is_none()))
                         || *success_pc >= action.instructions.len()
                         || *failure_pc >= action.instructions.len()
                         || finally_pc
@@ -548,6 +621,12 @@ impl TypedApplication {
                     {
                         return Err("invalid action continuation")
                     }
+                    TypedActionInstruction::StoreHostRef { r#ref } if *r#ref >= self.strings.len() => {
+                        return Err("host ref string handle out of range")
+                    }
+                    TypedActionInstruction::Return { value: Some(value), .. } if *value >= self.expressions.len() => {
+                        return Err("action return expression handle out of range")
+                    }
                     _ => {}
                 }
             }
@@ -555,6 +634,23 @@ impl TypedApplication {
                 if state >= self.state_slots.len() {
                     return Err("loader result state handle out of range");
                 }
+            }
+            if action.route_loader
+                && (action.loader_result_state.is_none()
+                    || action.instructions.iter().any(|instruction| matches!(instruction, TypedActionInstruction::StoreState { .. })))
+            {
+                return Err("route loader must write only its loader result state".into());
+            }
+            if action.route_loader
+                && !action.parameter_slots.is_empty()
+                && action.parameter_slots != [0, 1]
+            {
+                return Err("route loader context slots must be [0, 1]".into());
+            }
+        }
+        for program in &self.expressions {
+            if program.instructions.iter().any(|instruction| matches!(instruction, TypedExpressionInstruction::LoadHost { host } if *host >= self.host_slots.len())) {
+                return Err("host input handle out of range");
             }
         }
         Ok(())
@@ -630,6 +726,16 @@ mod tests {
         .contains("forbids a value"));
     }
 
+    #[cfg(not(feature = "fetch"))]
+    #[test]
+    fn core_rejects_typed_fetch_capabilities() {
+        let app = typed_action_artifact(
+            serde_json::json!({"op":"capabilityRequest","capability":"fetch","request":{"url":0,"method":"GET","decode":"empty"},"successPc":0,"failurePc":0,"resultSlot":0,"errorSlot":0}),
+            "scalar",
+        );
+        assert_eq!(app.validate_contract(), Err("fetch capability is disabled"));
+    }
+
     #[test]
     fn typed_decoder_rejects_duplicate_parameter_slots() {
         let mut app = typed_action_artifact(serde_json::json!({"op":"return"}), "collection");
@@ -642,6 +748,14 @@ mod tests {
         )
         .unwrap_err()
         .contains("duplicate"));
+    }
+
+    #[test]
+    fn typed_decoder_rejects_partial_call_continuations() {
+        let mut app = typed_action_artifact(serde_json::json!({"op":"call","action":0,"arguments":[]}), "collection");
+        assert!(app.validate_contract().is_ok());
+        app.actions[0].instructions[0] = serde_json::from_value(serde_json::json!({"op":"call","action":0,"arguments":[],"successPc":0})).unwrap();
+        assert_eq!(app.validate_contract(), Err("invalid action call"));
     }
 
     #[test]
