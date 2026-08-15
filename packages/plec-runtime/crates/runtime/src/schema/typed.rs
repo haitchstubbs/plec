@@ -51,6 +51,7 @@ pub struct TypedEventField {
 }
 
 #[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TypedAction {
     pub instructions: Vec<TypedActionInstruction>,
     #[serde(default)]
@@ -420,17 +421,19 @@ fn subtree_contains(nodes: &[TypedNode], root: usize, target: usize) -> bool {
 impl TypedApplication {
     /// Validates untrusted executable IR before it reaches the typed runtime.
     pub(crate) fn validate(&self) -> Result<(), JsValue> {
+        self.validate_contract().map_err(JsValue::from_str)
+    }
+
+    fn validate_contract(&self) -> Result<(), &'static str> {
         if self.version != "0.9" {
-            return Err(JsValue::from_str(
-                "unsupported executable application version",
-            ));
+            return Err("unsupported executable application version");
         }
         if self.root_node >= self.nodes.len() {
-            return Err(JsValue::from_str("root node handle out of range"));
+            return Err("root node handle out of range");
         }
         for state in &self.state_slots {
             if state.initial_expression >= self.expressions.len() {
-                return Err(JsValue::from_str("state expression handle out of range"));
+                return Err("state expression handle out of range");
             }
         }
         for event in &self.events {
@@ -446,10 +449,12 @@ impl TypedApplication {
                 self.actions.len(),
                 self.loops.len(),
                 frame_slots,
-            )
-            .map_err(JsValue::from_str)?;
-            if !matches!(self.nodes.get(event.target), Some(TypedNode::Element { .. })) {
-                return Err(JsValue::from_str("event target must be an element"));
+            )?;
+            if !matches!(
+                self.nodes.get(event.target),
+                Some(TypedNode::Element { .. })
+            ) {
+                return Err("event target must be an element");
             }
             if event.fields.iter().any(|field| {
                 self.strings
@@ -458,7 +463,7 @@ impl TypedApplication {
                     .map(|name| !supported_event_field(name))
                     .unwrap_or(true)
             }) {
-                return Err(JsValue::from_str("unsupported typed event field"));
+                return Err("unsupported typed event field");
             }
             let in_any_loop = self
                 .loops
@@ -472,13 +477,9 @@ impl TypedApplication {
                         event.target,
                     ) =>
                 {
-                    return Err(JsValue::from_str(
-                        "event target is outside its loop template",
-                    ))
+                    return Err("event target is outside its loop template")
                 }
-                None if in_any_loop => {
-                    return Err(JsValue::from_str("loop event is missing loop ownership"))
-                }
+                None if in_any_loop => return Err("loop event is missing loop ownership"),
                 _ => {}
             }
         }
@@ -488,38 +489,37 @@ impl TypedApplication {
                 .iter()
                 .map(|input| input.kind.clone())
                 .collect::<Vec<_>>();
-            validate_typed_action_contract(action, self.expressions.len(), &input_kinds)
-                .map_err(JsValue::from_str)?;
+            validate_typed_action_contract(action, self.expressions.len(), &input_kinds)?;
             for instruction in &action.instructions {
                 match instruction {
                     TypedActionInstruction::Evaluate { expression }
                         if *expression >= self.expressions.len() =>
                     {
-                        return Err(JsValue::from_str("action expression handle out of range"))
+                        return Err("action expression handle out of range")
                     }
                     TypedActionInstruction::StoreState { state }
                         if *state >= self.state_slots.len() =>
                     {
-                        return Err(JsValue::from_str("action state handle out of range"))
+                        return Err("action state handle out of range")
                     }
                     TypedActionInstruction::Call { action, arguments } => {
                         let target = self
                             .actions
                             .get(*action)
-                            .ok_or_else(|| JsValue::from_str("action handle out of range"))?;
+                            .ok_or("action handle out of range")?;
                         if arguments.len() != target.parameter_slots.len()
                             || arguments
                                 .iter()
                                 .any(|expression| *expression >= self.expressions.len())
                         {
-                            return Err(JsValue::from_str("invalid action call"));
+                            return Err("invalid action call");
                         }
                     }
                     TypedActionInstruction::Jump { target }
                     | TypedActionInstruction::JumpIfFalse { target }
                         if *target >= action.instructions.len() =>
                     {
-                        return Err(JsValue::from_str("action jump target out of range"))
+                        return Err("action jump target out of range")
                     }
                     TypedActionInstruction::CapabilityRequest {
                         request,
@@ -546,14 +546,14 @@ impl TypedApplication {
                         || *result_slot >= action.frame_slots
                         || *error_slot >= action.frame_slots =>
                     {
-                        return Err(JsValue::from_str("invalid action continuation"))
+                        return Err("invalid action continuation")
                     }
                     _ => {}
                 }
             }
             if let Some(state) = action.loader_result_state {
                 if state >= self.state_slots.len() {
-                    return Err(JsValue::from_str("loader result state handle out of range"));
+                    return Err("loader result state handle out of range");
                 }
             }
         }
@@ -574,6 +574,20 @@ mod tests {
             "inputs": [{"name": 0, "kind": input_kind}],
             "expressions": [{"instructions": []}],
             "actions": [{"instructions": [instruction]}]
+        }))
+        .unwrap()
+    }
+
+    fn event_application(event: Value, nodes: Value, loops: Value) -> TypedApplication {
+        serde_json::from_value(serde_json::json!({
+            "version": "0.9",
+            "rootNode": 0,
+            "strings": ["div", "click", "value", "unsupported"],
+            "nodes": nodes,
+            "expressions": [{"instructions": []}],
+            "actions": [{"frameSlots": 1, "instructions": [{"op": "return"}]}],
+            "loops": loops,
+            "events": [event]
         }))
         .unwrap()
     }
@@ -668,27 +682,52 @@ mod tests {
     }
 
     #[test]
-    fn typed_decoder_rejects_unsupported_event_fields_and_wrong_loop_ownership() {
-        let app = typed_action_artifact(serde_json::json!({"op":"return"}), "collection");
-        let event = TypedEvent {
-            target: 0,
-            event_type: 0,
-            action: 0,
-            fields: vec![TypedEventField { name: 0, slot: 0 }],
-            r#loop: None,
-        };
-        assert!(!supported_event_field("notAnEventField"));
-        assert!(subtree_contains(&app.nodes, app.root_node, event.target));
+    fn typed_application_validation_rejects_bad_event_handles_and_fields() {
+        let nodes = serde_json::json!([{"op":"element","tag":0,"children":[]}]);
+        for event in [
+            serde_json::json!({"target":1,"type":1,"action":0,"fields":[]}),
+            serde_json::json!({"target":0,"type":1,"action":1,"fields":[]}),
+            serde_json::json!({"target":0,"type":1,"action":0,"loop":0,"fields":[]}),
+            serde_json::json!({"target":0,"type":1,"action":0,"fields":[{"name":3,"slot":0}]}),
+            serde_json::json!({"target":0,"type":1,"action":0,"fields":[{"name":2,"slot":0},{"name":2,"slot":0}]}),
+            serde_json::json!({"target":0,"type":1,"action":0,"fields":[{"name":2,"slot":1}]}),
+        ] {
+            assert!(
+                event_application(event, nodes.clone(), serde_json::json!([]))
+                    .validate_contract()
+                    .is_err()
+            );
+        }
     }
 
     #[test]
-    fn typed_decoder_rejects_event_target_that_is_not_an_element_or_out_of_range_slot() {
-        let mut app = typed_action_artifact(serde_json::json!({"op":"return"}), "collection");
-        app.nodes.push(TypedNode::Text { text: 0, parent: None });
-        app.actions[0].frame_slots = 1;
-        app.events.push(TypedEvent { target: 1, event_type: 0, action: 0, fields: vec![], r#loop: None });
-        assert!(!matches!(app.nodes.get(app.events[0].target), Some(TypedNode::Element { .. })));
-        assert!(validate_typed_event_contract(&TypedEvent { target: 0, event_type: 0, action: 0, fields: vec![TypedEventField { name: 0, slot: 1 }], r#loop: None }, 1, 1, 1, 0, 1).is_err());
-    }
+    fn typed_application_validation_rejects_non_element_and_invalid_loop_ownership() {
+        let non_element = event_application(
+            serde_json::json!({"target":1,"type":1,"action":0,"fields":[]}),
+            serde_json::json!([{"op":"element","tag":0,"children":[1]},{"op":"text","text":0,"parent":0}]),
+            serde_json::json!([]),
+        );
+        assert!(non_element.validate_contract().is_err());
 
+        let loop_def = serde_json::json!([{
+            "sourceExpression":0,"keyExpression":0,"itemSlot":0,"rowTemplate":2,"input":null
+        }]);
+        let nodes = serde_json::json!([
+            {"op":"element","tag":0,"children":[1,2]},
+            {"op":"element","tag":0,"parent":0,"children":[]},
+            {"op":"element","tag":0,"parent":0,"children":[]}
+        ]);
+        let outside_template = event_application(
+            serde_json::json!({"target":1,"type":1,"action":0,"loop":0,"fields":[]}),
+            nodes.clone(),
+            loop_def.clone(),
+        );
+        assert!(outside_template.validate_contract().is_err());
+        let missing_loop = event_application(
+            serde_json::json!({"target":2,"type":1,"action":0,"fields":[]}),
+            nodes,
+            loop_def,
+        );
+        assert!(missing_loop.validate_contract().is_err());
+    }
 }
