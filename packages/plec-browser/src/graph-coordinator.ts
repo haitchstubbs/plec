@@ -7,7 +7,7 @@ import {
   type GraphOutput,
   type OutletChildContract,
   type PlecGraphArtifact,
-} from '../../plec-ir/dist/index.js';
+} from 'plec-ir/is-plec-value';
 
 export type GraphInstanceId = string;
 export type OutputWiring = Record<
@@ -100,7 +100,7 @@ export class PlecGraphCoordinator {
     artifactValue: unknown,
     inputs: Record<string, unknown> = {},
   ): GraphInstanceId {
-    const artifact = validatePlecGraphArtifact(artifactValue);
+    const artifact = artifactValue as PlecGraphArtifact;
     this.validateInputs(artifact.interface, inputs, {
       graphId: artifact.graphId,
       revision: artifact.revision,
@@ -140,7 +140,7 @@ export class PlecGraphCoordinator {
         parentInstanceId: parent.id,
       });
     const artifact = validatePlecGraphArtifact(
-      await this.load(request),
+      (await this.load(request)) as PlecGraphArtifact,
     );
     if (
       artifact.graphId !== request.graphId ||

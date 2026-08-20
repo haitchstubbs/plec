@@ -1,0 +1,14 @@
+[package]
+name = "plec-compiler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+plec-parser = { path = "../plec-parser" }
+plec-sema = { path = "../plec-sema" }
+swc_common.workspace = true
+swc_ecma_ast.workspace = true
+swc_ecma_visit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

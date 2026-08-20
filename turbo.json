@@ -11,11 +11,11 @@
     },
     "plec-runtime#build": {
       "dependsOn": ["^build"],
-      "outputs": []
+      "outputs": ["dist/**"]
     },
     "@wasm-runtime/fullstack#build": {
       "cache": false,
-      "dependsOn": ["^build"],
+      "dependsOn": ["plec-runtime#build"],
       "outputs": ["dist/**"]
     },
     "test": {

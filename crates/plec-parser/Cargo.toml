@@ -1,0 +1,9 @@
+[package]
+name = "plec-parser"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+swc_common.workspace = true
+swc_ecma_ast.workspace = true
+swc_ecma_parser.workspace = true

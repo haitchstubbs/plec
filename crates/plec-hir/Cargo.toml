@@ -1,0 +1,4 @@
+[package]
+name = "plec-hir"
+version.workspace = true
+edition.workspace = true

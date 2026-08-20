@@ -40,6 +40,9 @@ use crate::typed::runtime::*;
 pub(crate) struct GraphInstance {
     pub(crate) parent_id: Option<String>,
     pub(crate) outlet_id: String,
+    // tell rust analyer to ignore
+
+    //
     pub(crate) key: Option<String>,
     pub(crate) graph_id: Option<String>,
     // These resources are deliberately owned by the topology instance rather
@@ -137,7 +140,8 @@ impl PlecRuntime {
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn set_host_inputs(&self, values: JsValue) -> Result<(), JsValue> {
-        let values: HashMap<String, RuntimeValue> = serde_wasm_bindgen::from_value(values).map_err(error)?;
+        let values: HashMap<String, RuntimeValue> =
+            serde_wasm_bindgen::from_value(values).map_err(error)?;
         *self.typed_host_inputs.borrow_mut() = values;
         Ok(())
     }
@@ -396,9 +400,13 @@ impl PlecRuntime {
         for (_, mut instance) in self.typed.borrow_mut().drain() {
             instance.runtime.invalidate_fetches();
             instance.runtime.clear_listeners();
-            if let Some(root) = instance.runtime.root { root.set_inner_html(""); }
+            if let Some(root) = instance.runtime.root {
+                root.set_inner_html("");
+            }
         }
-        if let Some(root) = self.typed_root.borrow_mut().take() { root.set_inner_html(""); }
+        if let Some(root) = self.typed_root.borrow_mut().take() {
+            root.set_inner_html("");
+        }
         self.dispose_router_listeners();
         *self.router.borrow_mut() = None;
         *self.typed_manifest.borrow_mut() = None;

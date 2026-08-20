@@ -86,23 +86,44 @@ impl TypedListenerOwner {
 
 impl PlecRuntime {
     pub(crate) fn install_typed_event_listeners(&self) -> Result<(), JsValue> {
-        let candidates = self.typed.borrow_mut().iter_mut().map(|(id, instance)| (
-            id.clone(), instance.runtime.listener_requests.drain(..).collect::<Vec<_>>()
-        )).collect::<Vec<_>>();
-        for (instance_id, request) in candidates.into_iter().flat_map(|(id, requests)| requests.into_iter().map(move |request| (id.clone(), request))) {
-            let bindings = self
-                .typed
-                .borrow()
-                .get(&instance_id).unwrap().runtime
-                .app
-                .events
-                .iter()
-                // A target may deliberately carry more than one declared
-                // listener (for example click and keydown).  Requests are for
-                // concrete DOM nodes, not for a single event definition.
-                .filter(|binding| binding.target == request.target)
-                .cloned()
-                .collect::<Vec<_>>();
+        let Ok(mut typed) = self.typed.try_borrow_mut() else {
+            return Ok(());
+        };
+        let candidates = typed
+            .iter_mut()
+            .map(|(id, instance)| {
+                (
+                    id.clone(),
+                    instance
+                        .runtime
+                        .listener_requests
+                        .drain(..)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        drop(typed);
+        for (instance_id, request) in candidates.into_iter().flat_map(|(id, requests)| {
+            requests
+                .into_iter()
+                .map(move |request| (id.clone(), request))
+        }) {
+            let bindings = {
+                let typed = self.typed.borrow();
+                typed
+                    .get(&instance_id)
+                    .unwrap()
+                    .runtime
+                    .app
+                    .events
+                    .iter()
+                    // A target may deliberately carry more than one declared
+                    // listener (for example click and keydown).  Requests are for
+                    // concrete DOM nodes, not for a single event definition.
+                    .filter(|binding| binding.target == request.target)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
             if bindings.is_empty() {
                 continue;
             }
@@ -128,31 +149,37 @@ impl PlecRuntime {
                 let element = node
                     .dyn_into::<Element>()
                     .map_err(|_| JsValue::from_str("event target is not an element"))?;
-                let event_type = self
-                    .typed
-                    .borrow()
-                    .get(&instance_id).unwrap().runtime
-                    .app
-                    .strings
-                    .get(binding.event_type)
-                    .cloned()
-                    .ok_or_else(|| JsValue::from_str("event type handle out of range"))?;
-                if self
-                    .typed
-                    .borrow()
-                    .get(&instance_id).unwrap().runtime
-                    .listeners
-                    .iter()
-                    .any(|entry| {
-                        entry.target == binding.target
-                            && entry.action == binding.action
-                            && entry.loop_index == loop_index
-                            && entry.row_key == row_key
-                            && entry.generation == generation
-                            && entry.listener.event_type == event_type
-                            && entry.owner == owner
-                    })
-                {
+                let event_type = {
+                    let typed = self.typed.borrow();
+                    typed
+                        .get(&instance_id)
+                        .unwrap()
+                        .runtime
+                        .app
+                        .strings
+                        .get(binding.event_type)
+                        .cloned()
+                        .ok_or_else(|| JsValue::from_str("event type handle out of range"))?
+                };
+                let installed = {
+                    let typed = self.typed.borrow();
+                    typed
+                        .get(&instance_id)
+                        .unwrap()
+                        .runtime
+                        .listeners
+                        .iter()
+                        .any(|entry| {
+                            entry.target == binding.target
+                                && entry.action == binding.action
+                                && entry.loop_index == loop_index
+                                && entry.row_key == row_key
+                                && entry.generation == generation
+                                && entry.listener.event_type == event_type
+                                && entry.owner == owner
+                        })
+                };
+                if installed {
                     continue;
                 }
                 let runtime = self.clone();
@@ -161,9 +188,13 @@ impl PlecRuntime {
                 let action = binding.action;
                 let captured_owner = owner.clone();
                 let callback = Closure::wrap(Box::new(move |event: Event| {
-                    if let Err(error) =
-                        runtime.dispatch_typed_event(&captured_instance_id, action, captured_owner.clone(), &fields, event)
-                    {
+                    if let Err(error) = runtime.dispatch_typed_event(
+                        &captured_instance_id,
+                        action,
+                        captured_owner.clone(),
+                        &fields,
+                        event,
+                    ) {
                         web_sys::console::error_1(&error);
                     }
                 }) as Box<dyn FnMut(Event)>);
@@ -173,7 +204,9 @@ impl PlecRuntime {
                 )?;
                 self.typed
                     .borrow_mut()
-                    .get_mut(&instance_id).unwrap().runtime
+                    .get_mut(&instance_id)
+                    .unwrap()
+                    .runtime
                     .listeners
                     .push(TypedListener {
                         listener: Listener {
@@ -208,10 +241,14 @@ impl PlecRuntime {
             .or_else(|| event.target())
             .and_then(|value| value.dyn_into::<Element>().ok());
         let values = {
-            let typed = self.typed.borrow();
-            let app = &typed.get(instance_id)
+            let Ok(typed) = self.typed.try_borrow() else {
+                return Ok(());
+            };
+            let app = &typed
+                .get(instance_id)
                 .ok_or_else(|| JsValue::from_str("typed application missing"))?
-                .runtime.app;
+                .runtime
+                .app;
             fields
                 .iter()
                 .map(|field| {
@@ -229,8 +266,11 @@ impl PlecRuntime {
                 .collect::<Result<Vec<_>, JsValue>>()?
         };
         let row = if let Some((loop_index, key, generation)) = owner.row_identity() {
-            let typed = self.typed.borrow();
-            let Some(row) = typed.get(instance_id)
+            let Ok(typed) = self.typed.try_borrow() else {
+                return Ok(());
+            };
+            let Some(row) = typed
+                .get(instance_id)
                 .and_then(|typed| typed.runtime.loops.get(&loop_index))
                 .and_then(|rows| rows.rows.get(key))
             else {
@@ -244,7 +284,9 @@ impl PlecRuntime {
             None
         };
         let owner_is_live = {
-            let typed = self.typed.borrow();
+            let Ok(typed) = self.typed.try_borrow() else {
+                return Ok(());
+            };
             let typed = &typed.get(instance_id).unwrap().runtime;
             owner.is_live_with(
                 &|loop_index, row_key, generation| {
@@ -275,37 +317,66 @@ impl PlecRuntime {
         if !owner_is_live {
             return Ok(());
         }
-        let route_retry = self.typed.borrow().get(instance_id)
-            .and_then(|typed| typed.runtime.app.actions.get(action))
-            .map(|action| action.route_retry)
+        let route_retry = self
+            .typed
+            .try_borrow()
+            .ok()
+            .and_then(|typed| {
+                typed
+                    .get(instance_id)
+                    .and_then(|typed| typed.runtime.app.actions.get(action))
+                    .map(|action| action.route_retry)
+            })
             .unwrap_or(false);
         if route_retry {
             return self.retry_typed_route(instance_id);
         }
         let (pending, cookies) = {
-            let mut typed = self.typed.borrow_mut();
+            let Ok(mut typed) = self.typed.try_borrow_mut() else {
+                return Ok(());
+            };
             let mut metrics = UpdateMetrics::default();
-            typed.get_mut(instance_id).unwrap().runtime.execute_action_with_frame(
-                action,
-                &values,
-                row,
-                Some(&event),
-                &mut metrics,
-            )?;
+            typed
+                .get_mut(instance_id)
+                .unwrap()
+                .runtime
+                .execute_action_with_frame(action, &values, row, Some(&event), &mut metrics)?;
             let runtime = &mut typed.get_mut(instance_id).unwrap().runtime;
-            (runtime.take_pending_fetches(), runtime.take_pending_cookies())
+            (
+                runtime.take_pending_fetches(),
+                runtime.take_pending_cookies(),
+            )
         };
+        let has_pending_fetch = !pending.is_empty();
         #[cfg(feature = "fetch")]
         for mut request in pending {
             request.instance_id = instance_id.into();
+            request.graph_generation = self
+                .typed
+                .borrow()
+                .get(instance_id)
+                .unwrap()
+                .runtime
+                .graph_generation;
             self.start_typed_fetch(request)?;
         }
-        for mut request in cookies { request.instance_id = instance_id.into(); self.start_typed_cookie(request)?; }
+        for mut request in cookies {
+            request.instance_id = instance_id.into();
+            self.start_typed_cookie(request)?;
+        }
         #[cfg(not(feature = "fetch"))]
         if !pending.is_empty() {
             return Err(JsValue::from_str("fetch capability is disabled"));
         }
-        self.install_typed_event_listeners()?;
+        let install_listeners = self
+            .typed
+            .borrow()
+            .get(instance_id)
+            .map(|typed| !typed.runtime.listener_requests.is_empty())
+            .unwrap_or(false);
+        if install_listeners && !has_pending_fetch && event.type_() != "keydown" {
+            self.install_typed_event_listeners()?;
+        }
         Ok(())
     }
 }

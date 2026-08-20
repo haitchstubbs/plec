@@ -101,10 +101,9 @@ impl PlecRuntime {
             let typed = typed
                 .get_mut(&pending.instance_id)
                 .ok_or_else(|| JsValue::from_str("typed application missing"))?;
-            let typed = typed.loader_runtime.as_mut().unwrap_or(&mut typed.runtime);
-            if typed.graph_generation != pending.graph_generation {
+            let Some(typed) = typed.runtime_for_generation_mut(pending.graph_generation) else {
                 return Ok(());
-            }
+            };
             typed.next_fetch_id += 1;
             pending.request_id = typed.next_fetch_id;
             typed
@@ -134,7 +133,27 @@ impl PlecRuntime {
                         Err(http_failure(response, &pending.url).await)
                     }
                     Ok(response) => match pending.decode.as_str() {
-                        "empty" => Ok(RuntimeValue::Null),
+                        "empty" => match response.text() {
+                            Ok(body) => JsFuture::from(body)
+                                .await
+                                .map(|_| RuntimeValue::Null)
+                                .map_err(|error| {
+                                    failure(
+                                        "decode",
+                                        error
+                                            .as_string()
+                                            .unwrap_or_else(|| "response body drain failed".into()),
+                                        &pending.url,
+                                    )
+                                }),
+                            Err(error) => Err(failure(
+                                "decode",
+                                error
+                                    .as_string()
+                                    .unwrap_or_else(|| "response body unavailable".into()),
+                                &pending.url,
+                            )),
+                        },
                         "text" => match response.text() {
                             Ok(body) => JsFuture::from(body)
                                 .await
@@ -188,7 +207,9 @@ impl PlecRuntime {
                 },
                 Err(error) => Err(js_failure(error, &pending.url)),
             };
-            let _ = runtime.complete_typed_fetch(pending, result);
+            if let Err(error) = runtime.complete_typed_fetch(pending, result) {
+                web_sys::console::error_1(&error);
+            }
         });
         Ok(())
     }
@@ -198,9 +219,19 @@ impl PlecRuntime {
         pending: TypedPendingFetch,
         result: Result<RuntimeValue, RuntimeValue>,
     ) -> Result<(), JsValue> {
-        let route_loader = self.typed.borrow().get(&pending.instance_id).and_then(|instance| {
-            instance.loader_runtime.as_ref().unwrap_or(&instance.runtime).app.actions.get(pending.continuation.current.action).map(|action| action.route_loader)
-        }).unwrap_or(false);
+        let route_loader = self
+            .typed
+            .borrow()
+            .get(&pending.instance_id)
+            .and_then(|instance| {
+                instance
+                    .runtime_for_generation(pending.graph_generation)?
+                    .app
+                    .actions
+                    .get(pending.continuation.current.action)
+                    .map(|action| action.route_loader)
+            })
+            .unwrap_or(false);
         if route_loader {
             return self.complete_typed_route_loader(pending, result);
         }
@@ -210,8 +241,10 @@ impl PlecRuntime {
             let Some(typed) = typed.get_mut(&pending.instance_id) else {
                 return Ok(());
             };
-            let typed = &mut typed.runtime;
-            if typed.root.is_none() || typed.graph_generation != pending.graph_generation {
+            let Some(typed) = typed.runtime_for_generation_mut(pending.graph_generation) else {
+                return Ok(());
+            };
+            if typed.root.is_none() {
                 return Ok(());
             }
             typed.abort_controllers.remove(&pending.request_id);
@@ -223,12 +256,17 @@ impl PlecRuntime {
                         return Err(JsValue::from_str("result frame slot out of range"));
                     }
                     frame[pending.result_slot] = value.clone();
-                    if let Some(state) = typed.app.actions.get(continuation.current.action).and_then(|action| {
-                        action
-                            .route_loader
-                            .then_some(action.loader_result_state)
-                            .flatten()
-                    }) {
+                    if let Some(state) = typed
+                        .app
+                        .actions
+                        .get(continuation.current.action)
+                        .and_then(|action| {
+                            action
+                                .route_loader
+                                .then_some(action.loader_result_state)
+                                .flatten()
+                        })
+                    {
                         if state >= typed.states.len() {
                             return Err(JsValue::from_str("loader state handle out of range"));
                         }
@@ -302,16 +340,33 @@ impl PlecRuntime {
             Ok(value) => {
                 let restore = {
                     let mut typed = self.typed.borrow_mut();
-                    let instance = match typed.get_mut(&instance_id) { Some(instance) => instance, None => return Ok(()) };
-                    let runtime = instance.loader_runtime.as_mut().unwrap_or(&mut instance.runtime);
-                    if runtime.graph_generation != pending.graph_generation { return Ok(()); }
+                    let instance = match typed.get_mut(&instance_id) {
+                        Some(instance) => instance,
+                        None => return Ok(()),
+                    };
+                    let Some(runtime) =
+                        instance.runtime_for_generation_mut(pending.graph_generation)
+                    else {
+                        return Ok(());
+                    };
                     runtime.abort_controllers.remove(&pending.request_id);
-                    let state = runtime.app.actions.get(pending.continuation.current.action).and_then(|action| action.loader_result_state).ok_or_else(|| JsValue::from_str("typed route loader result state missing"))?;
-                    if state >= runtime.states.len() { return Err(JsValue::from_str("loader state handle out of range")); }
+                    let state = runtime
+                        .app
+                        .actions
+                        .get(pending.continuation.current.action)
+                        .and_then(|action| action.loader_result_state)
+                        .ok_or_else(|| {
+                            JsValue::from_str("typed route loader result state missing")
+                        })?;
+                    if state >= runtime.states.len() {
+                        return Err(JsValue::from_str("loader state handle out of range"));
+                    }
                     runtime.states[state] = value;
                     instance.loader_runtime.is_some()
                 };
-                if restore { self.restore_typed_route_normal(&instance_id)?; }
+                if restore {
+                    self.restore_typed_route_normal(&instance_id)?;
+                }
                 self.install_typed_event_listeners()?;
             }
         }

@@ -26,16 +26,24 @@ async function assertArtifacts() {
     await readFile(path.join(publicDir, 'route-manifest.json'), 'utf8'),
   );
   const todos = manifest.routes.find((route) => route.path === 'todos');
-  assert.ok(Number.isInteger(todos?.loaderAction), 'todos needs a typed loader action');
+  assert.ok(
+    Number.isInteger(todos?.loaderAction),
+    'todos needs a typed loader action',
+  );
   const graphIds = new Set([
     manifest.rootGraphId,
     ...manifest.routes.flatMap((route) =>
-      [route.graphId, route.pendingGraphId, route.errorGraphId].filter(Boolean),
+      [route.graphId, route.pendingGraphId, route.errorGraphId].filter(
+        Boolean,
+      ),
     ),
   ]);
   for (const id of graphIds) {
     const graph = JSON.parse(
-      await readFile(path.join(publicDir, 'graphs', `${id}.json`), 'utf8'),
+      await readFile(
+        path.join(publicDir, 'graphs', `${id}.json`),
+        'utf8',
+      ),
     );
     assert.equal(graph.version, '0.9', `${id} is not a typed graph`);
   }
@@ -57,7 +65,10 @@ function watch(page) {
   });
   return () => {
     assert.deepEqual(errors, [], errors.join('\n'));
-    assert.ok(graphs.size > 0, 'the browser did not fetch graph artifacts');
+    assert.ok(
+      graphs.size > 0,
+      'the browser did not fetch graph artifacts',
+    );
   };
 }
 
@@ -66,7 +77,9 @@ async function forwardTodoRequest(route) {
   const contentType = request.headers()['content-type'];
   const response = await fetch(request.url(), {
     method: request.method(),
-    ...(contentType ? { headers: { 'content-type': contentType } } : {}),
+    ...(contentType
+      ? { headers: { 'content-type': contentType } }
+      : {}),
     ...(request.postData() ? { body: request.postData() } : {}),
   });
   await route.fulfill({
@@ -80,7 +93,9 @@ async function forwardTodoRequest(route) {
 
 async function waitForMount(page) {
   await page.waitForFunction(
-    () => window.__plecPerformance?.snapshot().marks['plec:mount-end'] !== undefined,
+    () =>
+      window.__plecPerformance?.snapshot().marks['plec:mount-end'] !==
+      undefined,
   );
 }
 
@@ -97,7 +112,9 @@ async function loaderPendingThenSuccess(browser) {
     await forwardTodoRequest(route);
   });
   try {
-    await page.goto(`${origin}/todos`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${origin}/todos`, {
+      waitUntil: 'domcontentloaded',
+    });
     await page.getByText('Loading todos…', { exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Todos' }).waitFor();
     await waitForMount(page);
@@ -119,8 +136,12 @@ async function loaderErrorThenRetry(browser) {
     } else await forwardTodoRequest(route);
   });
   try {
-    await page.goto(`${origin}/todos`, { waitUntil: 'domcontentloaded' });
-    await page.getByText('Could not load todos.', { exact: true }).waitFor();
+    await page.goto(`${origin}/todos`, {
+      waitUntil: 'domcontentloaded',
+    });
+    await page
+      .getByText('Could not load todos.', { exact: true })
+      .waitFor();
     await page.getByRole('button', { name: 'Try again' }).click();
     await page.getByRole('heading', { name: 'Todos' }).waitFor();
     done();
@@ -133,54 +154,83 @@ async function todoActions(browser) {
   const context = await browser.newContext();
   const page = await context.newPage();
   const done = watch(page);
+
   try {
-    await page.route('**/api/todos', forwardTodoRequest);
-    await page.goto(`${origin}/todos`, { waitUntil: 'domcontentloaded' });
+    await page.route(
+      (url) => /^\/api\/todos(?:\/[^/]+)?$/.test(url.pathname),
+      forwardTodoRequest,
+    );
+    await page.goto(`${origin}/todos`, {
+      waitUntil: 'domcontentloaded',
+    });
     await page.getByRole('heading', { name: 'Todos' }).waitFor();
 
     const search = page.locator('#todo-search');
     await search.fill('missing');
-    await page.getByText('Try the Plec Todo API').waitFor({ state: 'detached' });
+    await page
+      .getByText('Try the Plec Todo API')
+      .waitFor({ state: 'detached' });
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.getByRole('heading', { name: 'Todos' }).waitFor();
 
     let post = 'delay';
-    await page.route('**/api/todos', async (route) => {
-      if (route.request().method() === 'POST' && post === 'delay') {
-        post = 'done';
-        const response = await fetch(route.request().url(), {
-          method: route.request().method(),
-          headers: { 'content-type': route.request().headers()['content-type'] },
-          body: route.request().postData(),
-        });
-        await sleep(250);
-        await route.fulfill({
-          status: response.status,
-          contentType: response.headers.get('content-type') ?? undefined,
-          body: await response.text(),
-        });
-      } else if (route.request().method() === 'POST' && post === 'reject') {
-        post = 'done';
-        await route.fulfill({
-          status: 500,
-          contentType: 'application/json',
-          body: '{}',
-        });
-      } else await forwardTodoRequest(route);
-    });
+    await page.route(
+      (url) => url.pathname === '/api/todos',
+      async (route) => {
+        if (route.request().method() === 'POST' && post === 'delay') {
+          post = 'done';
+          const response = await fetch(route.request().url(), {
+            method: route.request().method(),
+            headers: {
+              'content-type': route.request().headers()['content-type'],
+            },
+            body: route.request().postData(),
+          });
+          await sleep(250);
+          await route.fulfill({
+            status: response.status,
+            contentType:
+              response.headers.get('content-type') ?? undefined,
+            body: await response.text(),
+          });
+        } else if (
+          route.request().method() === 'POST' &&
+          post === 'reject'
+        ) {
+          post = 'done';
+          await route.fulfill({
+            status: 500,
+            contentType: 'application/json',
+            body: '{}',
+          });
+        } else {
+          await forwardTodoRequest(route);
+        }
+      },
+    );
     const title = page.locator('#todo-new-title');
     await title.fill('Acceptance todo');
     await page.getByRole('button', { name: 'Add todo' }).click();
     const adding = page.getByRole('button', { name: 'Adding…' });
     await adding.waitFor();
-    assert.equal(await adding.isDisabled(), true, 'create should be pending');
+    assert.equal(
+      await adding.isDisabled(),
+      true,
+      'create should be pending',
+    );
     await page.getByText('Acceptance todo').waitFor();
 
     post = 'reject';
     await title.fill('Rejected todo');
     await page.getByRole('button', { name: 'Add todo' }).click();
-    await page.getByText('The Todo API rejected this change.', { exact: true }).waitFor();
-    assert.equal(await page.getByRole('button', { name: 'Add todo' }).isDisabled(), false, 'finally should clear pending');
+    await page
+      .getByText('The Todo API rejected this change.', { exact: true })
+      .waitFor();
+    assert.equal(
+      await page.getByRole('button', { name: 'Add todo' }).isDisabled(),
+      false,
+      'finally should clear pending',
+    );
     assert.equal(await title.inputValue(), 'Rejected todo');
     const rowKey = await page
       .locator('li')
@@ -194,7 +244,9 @@ async function todoActions(browser) {
     await rename.fill('Renamed acceptance todo');
     await rename.press('Enter');
     await page.getByText('Renamed acceptance todo').waitFor();
-    row = page.locator('li').filter({ hasText: 'Renamed acceptance todo' });
+    row = page
+      .locator('li')
+      .filter({ hasText: 'Renamed acceptance todo' });
     await row.locator('button', { hasText: 'Delete' }).click();
     await row.waitFor({ state: 'detached' });
     done();
@@ -221,7 +273,9 @@ async function main() {
     await loaderPendingThenSuccess(browser);
     await loaderErrorThenRetry(browser);
     await todoActions(browser);
-    console.log(`[plec-acceptance] passed with ${graphIds.size} typed graphs`);
+    console.log(
+      `[plec-acceptance] passed with ${graphIds.size} typed graphs`,
+    );
   } finally {
     await browser.close();
   }

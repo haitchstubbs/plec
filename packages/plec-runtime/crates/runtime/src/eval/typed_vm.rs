@@ -1,3 +1,4 @@
+use crate::dom::platform::window;
 use crate::runtime::lifecycle::*;
 
 pub(crate) fn typed_eval(
@@ -55,9 +56,80 @@ pub(crate) fn typed_eval_frame(
                 stack.push(frame.get(*slot).cloned().unwrap_or(RuntimeValue::Null))
             }
             TypedExpressionInstruction::LoadHost { host } => {
-                let value = app.host_slots.get(*host).and_then(|slot| {
-                    (slot.kind == "cookie").then(|| slot.name.and_then(|name| app.strings.get(name)).and_then(|name| app.host_inputs.get(name)).cloned()).flatten()
-                }).unwrap_or(RuntimeValue::Null);
+                let value = app
+                    .host_slots
+                    .get(*host)
+                    .and_then(|slot| match slot.kind.as_str() {
+                        "cookie" => slot
+                            .name
+                            .and_then(|name| app.strings.get(name))
+                            .and_then(|name| app.host_inputs.get(name))
+                            .cloned(),
+                        "location" => app
+                            .host_inputs
+                            .get("location.pathname")
+                            .cloned()
+                            .map(|pathname| {
+                                RuntimeValue::Record(HashMap::from([(
+                                    "location".into(),
+                                    RuntimeValue::Record(HashMap::from([
+                                        ("pathname".into(), pathname),
+                                        (
+                                            "search".into(),
+                                            app.host_inputs
+                                                .get("location.search")
+                                                .cloned()
+                                                .unwrap_or_default(),
+                                        ),
+                                        (
+                                            "hash".into(),
+                                            app.host_inputs
+                                                .get("location.hash")
+                                                .cloned()
+                                                .unwrap_or_default(),
+                                        ),
+                                    ])),
+                                )]))
+                            })
+                            .or_else(|| {
+                                window().ok().and_then(|window| {
+                                    let location = window.location();
+                                    Some(RuntimeValue::Record(HashMap::from([(
+                                        "location".into(),
+                                        RuntimeValue::Record(HashMap::from([
+                                            (
+                                                "pathname".into(),
+                                                RuntimeValue::String(location.pathname().ok()?),
+                                            ),
+                                            (
+                                                "search".into(),
+                                                RuntimeValue::String(location.search().ok()?),
+                                            ),
+                                            (
+                                                "hash".into(),
+                                                RuntimeValue::String(location.hash().ok()?),
+                                            ),
+                                        ])),
+                                    )])))
+                                })
+                            }),
+                        "mediaQuery" => slot
+                            .query
+                            .and_then(|query| app.strings.get(query))
+                            .and_then(|query| {
+                                window().ok()?.match_media(query).ok()?.map(|media| {
+                                    RuntimeValue::Record(HashMap::from([(
+                                        "matches".into(),
+                                        RuntimeValue::Bool(media.matches()),
+                                    )]))
+                                })
+                            }),
+                        "currentYear" => Some(RuntimeValue::Number(
+                            js_sys::Date::new_0().get_full_year() as f64,
+                        )),
+                        _ => None,
+                    })
+                    .unwrap_or(RuntimeValue::Null);
                 stack.push(value)
             }
             TypedExpressionInstruction::Field { field } => {
@@ -66,9 +138,15 @@ pub(crate) fn typed_eval_frame(
                     .ok_or_else(|| JsValue::from_str("expression stack underflow: field"))?;
                 let field = app.strings.get(*field).map(String::as_str).unwrap_or("");
                 stack.push(match object {
-                    RuntimeValue::Record(value) => value.get(field).cloned().unwrap_or(RuntimeValue::Null),
-                    RuntimeValue::Array(value) if field == "length" => RuntimeValue::Number(value.len() as f64),
-                    RuntimeValue::String(value) if field == "length" => RuntimeValue::Number(value.chars().count() as f64),
+                    RuntimeValue::Record(value) => {
+                        value.get(field).cloned().unwrap_or(RuntimeValue::Null)
+                    }
+                    RuntimeValue::Array(value) if field == "length" => {
+                        RuntimeValue::Number(value.len() as f64)
+                    }
+                    RuntimeValue::String(value) if field == "length" => {
+                        RuntimeValue::Number(value.chars().count() as f64)
+                    }
                     _ => RuntimeValue::Null,
                 });
             }
@@ -106,18 +184,33 @@ pub(crate) fn typed_eval_frame(
                 let mut parts = (0..*count).filter_map(|_| stack.pop()).collect::<Vec<_>>();
                 parts.reverse();
                 let value = match kind.as_str() {
-                    "trim" => RuntimeValue::String(typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
-                        .trim()
-                        .to_owned()),
-                    "lower" => RuntimeValue::String(typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
-                        .to_lowercase()),
-                    "upper" => RuntimeValue::String(typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
-                        .to_uppercase()),
-                    "includes" => RuntimeValue::Bool(typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
-                        .contains(&typed_value_string(
-                            parts.get(1).unwrap_or(&RuntimeValue::Null),
-                        ))),
-                    _ => RuntimeValue::String(parts.iter().map(typed_value_string).collect::<String>()),
+                    "trim" => RuntimeValue::String(
+                        typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
+                            .trim()
+                            .to_owned(),
+                    ),
+                    "lower" => RuntimeValue::String(
+                        typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
+                            .to_lowercase(),
+                    ),
+                    "upper" => RuntimeValue::String(
+                        typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null))
+                            .to_uppercase(),
+                    ),
+                    "encodeUriComponent" => RuntimeValue::String(
+                        js_sys::encode_uri_component(&typed_value_string(
+                            parts.first().unwrap_or(&RuntimeValue::Null),
+                        ))
+                        .into(),
+                    ),
+                    "includes" => RuntimeValue::Bool(
+                        typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null)).contains(
+                            &typed_value_string(parts.get(1).unwrap_or(&RuntimeValue::Null)),
+                        ),
+                    ),
+                    _ => RuntimeValue::String(
+                        parts.iter().map(typed_value_string).collect::<String>(),
+                    ),
                 };
                 stack.push(value);
             }
@@ -141,12 +234,16 @@ pub(crate) fn typed_eval_frame(
                 if stack.len() < fields.len() {
                     return Err(JsValue::from_str("expression stack underflow: makeRecord"));
                 }
-                let mut values = (0..fields.len()).filter_map(|_| stack.pop()).collect::<Vec<_>>();
+                let mut values = (0..fields.len())
+                    .filter_map(|_| stack.pop())
+                    .collect::<Vec<_>>();
                 values.reverse();
                 let record = fields
                     .iter()
                     .zip(values)
-                    .filter_map(|(field, value)| app.strings.get(*field).cloned().map(|field| (field, value)))
+                    .filter_map(|(field, value)| {
+                        app.strings.get(*field).cloned().map(|field| (field, value))
+                    })
                     .collect();
                 stack.push(RuntimeValue::Record(record));
             }

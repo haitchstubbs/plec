@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "dev": "turbo run dev --parallel",
+    "dev:wasm": "yarn workspace plec-runtime dev:wasm",
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "yarn format:check",

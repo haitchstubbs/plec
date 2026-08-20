@@ -2,6 +2,29 @@ import { describe, expect, it } from 'vitest';
 import { lowerCompilerFacts, lowerExecutableApplication } from './executable-lowering.ts';
 
 describe('executable lowering seam', () => {
+  it('does not add a receiver for global string intrinsics', () => {
+    const application = lowerCompilerFacts({
+      rootElementId: 'root',
+      elements: [{ id: 'root', tag: 'div', childIds: [] }],
+      expressions: [{
+        id: 'url',
+        expression: {
+          kind: 'template',
+          parts: ['/api/todos/', {
+            kind: 'intrinsic', name: 'encodeURIComponent',
+            args: [{ kind: 'literal', value: 'welcome' }],
+          }, ''],
+        },
+      }],
+    });
+    expect(application.expressions[0]?.instructions).toMatchObject([
+      { op: 'constant' }, { op: 'constant' },
+      { op: 'string', kind: 'encodeUriComponent', count: 1 },
+      { op: 'constant' }, { op: 'string', kind: 'concat', count: 3 },
+      { op: 'return' },
+    ]);
+  });
+
   it('assigns stable table handles from compiler fact order without reading 0.8 IR', () => {
     const facts = {
       strings: ['div'],

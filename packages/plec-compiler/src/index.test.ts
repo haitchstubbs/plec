@@ -1,7 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { compile } from './index.ts';
+import { compile, compileComponentGraph } from './index.ts';
 
 describe('compile executable application', () => {
+  it('writes static router link attributes', () => {
+    const result = compile(
+      `import { Link } from '@tanstack/react-router'; function App() { return <Link to="/about" className="nav">About</Link> }`,
+      { mode: 'strict' },
+    );
+    expect(result.ir.propPrograms).toContainEqual(
+      expect.objectContaining({
+        writes: expect.arrayContaining([
+          expect.objectContaining({ name: result.ir.strings.indexOf('href') }),
+          expect.objectContaining({ name: result.ir.strings.indexOf('className') }),
+        ]),
+      }),
+    );
+  });
+
   it('lowers event state updates into numeric action and event tables', () => {
     const result = compile(`function App() { const [title, setTitle] = useState(''); return <input value={title} onInput={(event) => setTitle(event.currentTarget.value)} /> }`, { mode: 'strict' });
     expect(result.ir.events).toHaveLength(1);
@@ -62,6 +77,16 @@ describe('compile executable application', () => {
     expect(result.ir.hostSlots).toEqual([{ kind: 'cookie', name: expect.any(Number) }]);
     expect(result.ir.capabilities).toEqual([{ kind: 'cookie', name: 'sidebar', operations: ['getSync', 'set'], path: '/', expiryModes: ['session', 'maxAge'] }]);
     expect(result.ir.actions[0]?.instructions[0]).toMatchObject({ op: 'capabilityRequest', capability: 'cookie' });
+  });
+
+  it('keeps component graph cookie authority', () => {
+    const graph = compileComponentGraph(
+      `import { cookie } from 'plec'; function App() { return <button onClick={() => cookie.set('sidebar', 'closed')} /> }`,
+      { mode: 'strict' },
+    ).graph;
+    expect(graph.capabilities).toEqual([
+      expect.objectContaining({ name: 'sidebar', operations: ['set'] }),
+    ]);
   });
 
   it('keeps a mapped collection as a typed loop table entry', () => {
@@ -191,6 +216,58 @@ describe('compile executable application', () => {
     expect(request.failurePc).toBeGreaterThan(request.successPc);
     expect(request.finallyPc).toBeGreaterThan(request.failurePc);
     expect(action.frameSlots).toBe(2);
+  });
+
+  it('binds a decoded fetch result after a request helper guard', () => {
+    const result = compile(`function App() {
+      const [todos, setTodos] = useState([]);
+      async function request(action) {
+        try {
+          const response = await action();
+          if (!response.ok) throw new Error('failed');
+          return response;
+        } catch { return undefined; }
+      }
+      async function save() {
+        const response = await request(() => fetch('/api/save'));
+        if (!response) return;
+        const todo = await response.json();
+        setTodos((items) => items.map((item) => item.id === todo.id ? todo : item));
+      }
+      return <div><button onClick={save} /><ul>{todos.map((todo) => <li key={todo.id}>{todo.title}</li>)}</ul></div>;
+    }`, { mode: 'strict' });
+    const action: any = result.ir.actions[0];
+    const request = action.instructions.findIndex(
+      (instruction: any) => instruction.op === 'capabilityRequest',
+    );
+    const update = action.instructions
+      .slice(request + 1)
+      .find((instruction: any) => instruction.op === 'evaluate');
+    const expression: any = result.ir.expressions[update.expression];
+    const mapper: any = result.ir.expressions[
+      expression.instructions.find((instruction: any) => instruction.op === 'map').mapper
+    ];
+    expect(mapper.instructions.filter((instruction: any) => instruction.op === 'loadFrame')).toHaveLength(2);
+  });
+
+  it('keeps a successful empty fetch continuation after a response guard', () => {
+    const result = compile(`function App() {
+      const [todos, setTodos] = useState([]);
+      async function request(action) {
+        try { const response = await action(); if (!response.ok) throw new Error('failed'); return response; }
+        catch { return undefined; }
+      }
+      async function remove() {
+        const response = await request(() => fetch('/api/todos/a', { method: 'DELETE' }));
+        if (response) setTodos((items) => items.filter((item) => item.id !== 'a'));
+      }
+      return <button onClick={remove} />;
+    }`, { mode: 'strict' });
+    const action: any = result.ir.actions[0];
+    const request = action.instructions.find(
+      (instruction: any) => instruction.op === 'capabilityRequest',
+    );
+    expect(action.instructions[request.successPc + 1]).toMatchObject({ op: 'storeState' });
   });
 
   it('keeps an HTTP rejection message when the catch variable shadows state', () => {

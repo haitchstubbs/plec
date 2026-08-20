@@ -1,5 +1,6 @@
 import { parseSync } from '@swc/core';
-import type { ExecutableApplication } from 'plec-ir';
+import { trace, clearTrace } from './trace.js';
+import type { ExecutableApplication } from 'plec-ir/executable';
 
 export {
   lowerExecutableApplication,
@@ -234,6 +235,8 @@ export interface CompileOptions {
   routeRetryProp?: string;
   /** Router-owned failure record available only while compiling an error graph. */
   routeErrorProp?: string;
+  /** Internal: skip trace clearing for nested compilations. */
+  isNestedCompile?: boolean;
 }
 
 export interface CompileResult {
@@ -306,6 +309,14 @@ export function compile(
   source: string,
   options: CompileOptions = {},
 ): CompileResult {
+  // Only clear trace on first compile, not for subsequent compilations
+  // This allows accumulating traces across multiple route compilations
+  const traceValue = process.env.PLEC_TRACE_LOWERING ?? '';
+  const traceFilter = traceValue.includes('=') ? traceValue.split('=')[1] : undefined;
+  if (traceValue && !options.isNestedCompile) {
+    clearTrace(traceFilter);
+  }
+
   const mode = options.mode ?? 'lenient';
   const moduleAst: any = parseSync(source, {
     syntax: 'typescript',
@@ -427,10 +438,19 @@ export function compile(
     state.componentStack.push(options.rootComponent);
   if (state.routeErrorProp) {
     const slotId = `s${state.ir.localStates.length + 1}`;
-    state.ir.localStates.push({ id: slotId, name: state.routeErrorProp, initialValue: 'null', initialExpression: { kind: 'literal', value: null }, values: [] });
+    state.ir.localStates.push({
+      id: slotId,
+      name: state.routeErrorProp,
+      initialValue: 'null',
+      initialExpression: { kind: 'literal', value: null },
+      values: [],
+    });
     state.routeErrorState = state.ir.localStates.length - 1;
     (state.ir as any).routeErrorState = state.routeErrorState;
-    state.expressionScope[state.routeErrorProp] = { type: 'Identifier', value: state.routeErrorProp };
+    state.expressionScope[state.routeErrorProp] = {
+      type: 'Identifier',
+      value: state.routeErrorProp,
+    };
   }
   const rootId = lowerJsxNode(rootJsx, null, state);
   if (options.rootComponent) state.componentStack.pop();
@@ -506,7 +526,6 @@ export function compileComponentGraph(
       componentId,
       componentName,
       moduleId,
-      capabilities: [],
     },
   };
 }
@@ -669,6 +688,16 @@ function lowerJsxElement(
 ): LowerResult {
   const tag = node.opening?.name;
   const tagName = getJsxName(tag);
+
+  if (tagName) {
+    trace({
+      stage: 'jsx-element-enter',
+      symbol: tagName,
+      file: state.activeModuleId,
+      output: { isComponent: isComponentName(tagName) || tagName.includes('.') },
+    });
+  }
+
   if (tagName && (isComponentName(tagName) || tagName.includes('.'))) {
     return lowerComponentElement(node, parentId, state);
   }
@@ -1713,8 +1742,8 @@ function lowerJsxElementWithScope(
   }
 
   state.ir.elements.push(element);
-  const staticWrites = element.attributes.filter((attribute) =>
-    attribute.staticValue !== undefined,
+  const staticWrites = element.attributes.filter(
+    (attribute) => attribute.staticValue !== undefined,
   );
   if (staticWrites.length)
     state.ir.propPrograms.push({
@@ -1946,23 +1975,83 @@ function lowerComponentElement(
   literalScope: Record<string, unknown> = {},
 ): LowerResult {
   const name = getJsxName(node.opening?.name)!;
-  if (name === 'Outlet') return lowerRouteOutlet(node, parentId, state);
-  if (state.routerLinkBindings.has(name))
+  trace({
+    stage: 'component-element-enter',
+    symbol: name,
+    file: state.activeModuleId,
+    input: `<${name}>`,
+  });
+
+  if (name === 'Outlet') {
+    trace({ stage: 'outlet-detected', symbol: name, output: { handledAs: 'Outlet' } });
+    return lowerRouteOutlet(node, parentId, state);
+  }
+  if (state.routerLinkBindings.has(name)) {
+    trace({ stage: 'router-link-detected', symbol: name, output: { handledAs: 'RouterLink' } });
     return lowerRouterLink(node, parentId, state);
-  if (name.endsWith('.Provider'))
+  }
+  if (name.endsWith('.Provider')) {
+    trace({ stage: 'context-provider-detected', symbol: name, output: { handledAs: 'ContextProvider' } });
     return lowerContextProvider(node, parentId, state);
+  }
   // These are the demo's stable UI atom names. Resolve them before ordinary
   // local-component expansion so their Base UI implementation never leaks
   // into the emitted graph, even when module resolution supplied the source.
   // A source-graph component has a different module ID from its importer;
   // treat those familiar atom exports as DOM adapters. A same-module function
   // named Checkbox remains an ordinary component (used by the Toggle tests).
-  const component =
+  let component =
     getLocalComponent(name, state) ??
     getAliasedComponent(name, state) ??
     getScopedComponent(name, state);
+
+  if (component) {
+    trace({
+      stage: 'component-resolved',
+      symbol: name,
+      file: component.moduleId,
+      output: { resolved: 'local-component', moduleId: component.moduleId },
+    });
+  } else {
+    trace({
+      stage: 'component-not-resolved',
+      symbol: name,
+      file: state.activeModuleId,
+      reason: 'No local/aliased/scoped component found',
+    });
+  }
+
+  if (!component) {
+    // Check if name is in expressionScope (could be a component prop)
+    const scopeValue = state.expressionScope[name];
+    if (scopeValue) {
+      const potentialComponentName = getNodeName(unwrapExpression(scopeValue));
+      if (potentialComponentName) {
+        component =
+          getLocalComponent(potentialComponentName, state) ??
+          getAliasedComponent(potentialComponentName, state) ??
+          getScopedComponent(potentialComponentName, state);
+        if (component) {
+          trace({
+            stage: 'component-prop-resolved',
+            symbol: potentialComponentName,
+            file: component.moduleId,
+            output: { propName: name, resolvedTo: potentialComponentName },
+          });
+        }
+      }
+    }
+  }
+
   if (!component) {
     const svg = lowerSourceSvgFactoryElement(node, parentId, state);
+    trace({
+      stage: 'component-fallback-svg',
+      symbol: name,
+      output: svg === SKIP
+        ? { reason: 'SVG factory did not handle element', returned: 'SKIP' }
+        : { reason: 'SVG factory handled element', returned: svg }
+    });
     if (svg !== SKIP) return svg;
   }
   const external = getExternalSymbol(name, state);
@@ -2223,68 +2312,175 @@ function lowerSourceSvgFactoryElement(
   state: CompilerState,
 ): LowerResult {
   const name = getJsxName(node.opening?.name);
-  if (!name || name.includes('.')) return SKIP;
-  const source = sourceExpression(name, state.activeModuleId, state);
-  const init = unwrapExpression(source?.expression);
-  if (
-    init?.type !== 'CallExpression' ||
-    getNodeName(init.callee) !== 'createIcon'
-  )
+  if (!name || name.includes('.')) {
+    trace({
+      stage: 'svg-factory-rejected',
+      symbol: name,
+      reason: 'No name or name contains dot (scoped component)',
+    });
     return SKIP;
+  }
+
+  trace({
+    stage: 'svg-factory-lookup',
+    symbol: name,
+    file: state.activeModuleId,
+  });
+
+  const source = sourceExpression(name, state.activeModuleId, state);
+  if (!source) {
+    trace({
+      stage: 'svg-factory-source-not-found',
+      symbol: name,
+      file: state.activeModuleId,
+      reason: 'sourceExpression returned undefined',
+    });
+    return SKIP;
+  }
+
+  trace({
+    stage: 'svg-factory-source-found',
+    symbol: name,
+    file: source.moduleId,
+    output: { moduleId: source.moduleId },
+  });
+
+  const init = unwrapExpression(source.expression);
+  if (init?.type !== 'CallExpression') {
+    trace({
+      stage: 'svg-factory-not-call-expression',
+      symbol: name,
+      file: source.moduleId,
+      reason: `Initializer type is ${init?.type}, not CallExpression`,
+    });
+    return SKIP;
+  }
+
+  const callee = getNodeName(init.callee);
+  trace({
+    stage: 'svg-factory-callee',
+    symbol: name,
+    file: source.moduleId,
+    output: { callee },
+  });
+
+  if (callee !== 'createIcon') {
+    trace({
+      stage: 'svg-factory-not-createIcon',
+      symbol: name,
+      file: source.moduleId,
+      reason: `Callee is ${callee}, not createIcon`,
+    });
+    return SKIP;
+  }
+
   const definitionReference =
     init.arguments?.[0]?.expression ?? init.arguments?.[0];
-  const definition = getNodeName(definitionReference)
-    ? sourceExpression(
-        getNodeName(definitionReference)!,
-        source!.moduleId,
-        state,
-      )?.expression
-    : definitionReference;
-  const values = evaluateExpression(definition, state, {});
-  if (!Array.isArray(values)) return SKIP;
+  // Unwrap TypeScript expressions like `as any`
+  const unwrappedDefinition = unwrapExpression(definitionReference);
+  const definitionName = getNodeName(unwrappedDefinition);
 
-  const elementId = nextElementId(state);
-  const element: ElementNode = {
-    id: elementId,
-    tag: 'svg',
+  trace({
+    stage: 'svg-factory-definition-ref',
+    symbol: name,
+    file: source.moduleId,
+    output: { definitionName, definitionType: unwrappedDefinition?.type },
+  });
+
+  let definition = unwrappedDefinition;
+  // If the definition is a named reference, try to resolve it
+  if (definitionName) {
+    // First try sourceExpression for exported/imported values
+    const sourceResult = sourceExpression(definitionName, source!.moduleId, state);
+    if (sourceResult?.expression) {
+      definition = sourceResult.expression;
+      trace({
+        stage: 'svg-factory-definition-resolved',
+        symbol: name,
+        file: source.moduleId,
+        output: { resolvedVia: 'sourceExpression', resolvedModuleId: sourceResult.moduleId },
+      });
+    } else {
+      // Fall back to module expressions for local variables (e.g., const WorkflowNode = [...])
+      const moduleExpr = state.moduleExpressions.get(source!.moduleId)?.[definitionName];
+      if (moduleExpr) {
+        definition = moduleExpr;
+        trace({
+          stage: 'svg-factory-definition-resolved',
+          symbol: name,
+          file: source.moduleId,
+          output: { resolvedVia: 'moduleExpressions', resolvedModuleId: source!.moduleId },
+        });
+      } else {
+        trace({
+          stage: 'svg-factory-definition-not-found',
+          symbol: name,
+          file: source.moduleId,
+          reason: `Definition ${definitionName} not found via sourceExpression or moduleExpressions`,
+        });
+      }
+    }
+  }
+
+  const values = evaluateExpression(definition, state, {});
+  if (!Array.isArray(values)) {
+    trace({
+      stage: 'svg-factory-definition-not-array',
+      symbol: name,
+      file: source.moduleId,
+      reason: `evaluateExpression returned ${typeof values}, not array`,
+    });
+    return SKIP;
+  }
+
+  trace({
+    stage: 'svg-factory-definition-array',
+    symbol: name,
+    file: source.moduleId,
+    output: { arrayLength: values.length },
+  });
+
+  // Emit SVG island instead of serializing SVG elements
+  const placeholderNodeId = nextElementId(state);
+  const islandIndex = state.ir.islands.length + 1;
+  state.ir.elements.push({
+    id: placeholderNodeId,
+    tag: 'span',
     parentId,
     attributes: [
-      { name: 'viewBox', staticValue: '0 0 24 24' },
-      { name: 'fill', staticValue: 'none' },
-      { name: 'stroke', staticValue: 'currentColor' },
-      { name: 'strokeWidth', staticValue: '2' },
-      { name: 'strokeLinecap', staticValue: 'round' },
-      { name: 'strokeLinejoin', staticValue: 'round' },
-      { name: 'focusable', staticValue: 'false' },
-      { name: 'aria-hidden', staticValue: 'true' },
+      { name: 'data-runtime-island', staticValue: name },
+      { name: 'style', staticValue: 'display: contents' },
     ],
     children: [],
-  };
-  lowerSvgCallerAttributes(
-    node.opening?.attributes ?? [],
-    element,
-    state,
-  );
-  state.ir.elements.push(element);
-  for (const value of values) {
-    if (!Array.isArray(value) || typeof value[0] !== 'string') continue;
-    const childId = nextElementId(state);
-    const child: ElementNode = {
-      id: childId,
-      tag: value[0],
-      parentId: elementId,
-      attributes: Object.entries(
-        value[1] && typeof value[1] === 'object' ? value[1] : {},
-      ).map(([attributeName, attributeValue]) => ({
-        name: attributeName,
-        staticValue: literalToString(attributeValue),
-      })),
-      children: [],
-    };
-    state.ir.elements.push(child);
-    element.children.push(childId);
-  }
-  return elementId;
+  });
+
+  // Collect caller props (className, size, color, etc.)
+  const callerProps = collectCallerProps(node, state);
+
+  state.ir.islands.push({
+    islandInstanceId: `i${islandIndex}`,
+    componentId: name,
+    placeholderNodeId,
+    moduleId: source!.moduleId,
+    exportName: name,
+    props: {
+      ...callerProps,
+      iconId: name,
+    },
+  });
+
+  trace({
+    stage: 'svg-island-emitted',
+    symbol: name,
+    file: source!.moduleId,
+    output: {
+      islandInstanceId: `i${islandIndex}`,
+      placeholderNodeId,
+      propsKeys: Object.keys(callerProps),
+    },
+  });
+
+  return placeholderNodeId;
 }
 
 function sourceExpression(
@@ -2293,22 +2489,61 @@ function sourceExpression(
   state: CompilerState,
   resolving = new Set<string>(),
 ): { moduleId: string; expression: any } | undefined {
-  if (resolving.has(name)) return undefined;
+  if (resolving.has(name)) {
+    trace({
+      stage: 'source-expression-circular',
+      symbol: name,
+      file: moduleId,
+      reason: 'Circular reference detected',
+    });
+    return undefined;
+  }
   resolving.add(name);
   const imported = state.importSymbols.get(`${moduleId}::${name}`);
+  if (imported) {
+    trace({
+      stage: 'source-expression-imported',
+      symbol: name,
+      file: moduleId,
+      output: { importModuleId: imported.moduleId, exportName: imported.exportName },
+    });
+  } else {
+    trace({
+      stage: 'source-expression-local',
+      symbol: name,
+      file: moduleId,
+      output: { reason: 'No import symbol, treating as local' },
+    });
+  }
   const resolved = imported
     ? resolveExport(imported.moduleId, imported.exportName, state)
     : { moduleId, exportName: name };
   const expression = state.moduleExpressions.get(resolved.moduleId)?.[
     resolved.exportName
   ];
-  if (expression) return { moduleId: resolved.moduleId, expression };
+  if (expression) {
+    trace({
+      stage: 'source-expression-found',
+      symbol: name,
+      file: resolved.moduleId,
+      output: { foundIn: 'moduleExpressions', moduleId: resolved.moduleId, exportName: resolved.exportName },
+    });
+    return { moduleId: resolved.moduleId, expression };
+  }
   const alias = getNodeName(
     unwrapExpression(
       state.expressionScope[name]?.expression ??
         state.expressionScope[name],
     ),
   );
+  if (alias) {
+    trace({
+      stage: 'source-expression-alias',
+      symbol: name,
+      file: moduleId,
+      output: { alias, reason: 'Following alias reference' },
+    });
+  }
   return alias
     ? sourceExpression(alias, moduleId, state, resolving)
     : undefined;
@@ -2579,6 +2814,19 @@ function lowerRouterLink(
       staticValue: baseClass,
     });
   state.ir.elements.push(element);
+  const writes = element.attributes
+    .filter((attribute) => attribute.staticValue !== undefined)
+    .map((attribute) => ({
+      name: attribute.name,
+      staticValue: attribute.staticValue,
+      kind: 'attribute' as const,
+    }));
+  if (writes.length)
+    state.ir.propPrograms.push({
+      id: `p${state.ir.propPrograms.length + 1}`,
+      targetId: elementId,
+      writes,
+    });
   for (const child of node.children ?? []) {
     const lowered = lowerJsxNode(child, elementId, state);
     if (lowered !== SKIP) element.children.push(lowered);
@@ -2598,8 +2846,22 @@ function lowerEvent(
     const eventId = `ev${state.eventCounter + 1}`;
     const actionId = `a${state.eventCounter + 1}`;
     state.eventCounter += 1;
-    state.ir.events.push({ id: eventId, type: reactEventName(name), targetId, actionId, args: [] });
-    state.ir.actionFacts.push({ id: actionId, parameters: [{ name: 'event', type: 'event' }], eventFields: [], frameSlots: 0, parameterSlots: [], routeRetry: true, instructions: [{ op: 'return' }] });
+    state.ir.events.push({
+      id: eventId,
+      type: reactEventName(name),
+      targetId,
+      actionId,
+      args: [],
+    });
+    state.ir.actionFacts.push({
+      id: actionId,
+      parameters: [{ name: 'event', type: 'event' }],
+      eventFields: [],
+      frameSlots: 0,
+      parameterSlots: [],
+      routeRetry: true,
+      instructions: [{ op: 'return' }],
+    });
     return;
   }
   if (handlerName && state.expressionScope[handlerName])
@@ -2621,7 +2883,11 @@ function lowerEvent(
       );
       return;
     }
-    const actionFact = buildTypedActionFact(declaredActionId, handler, state);
+    const actionFact = buildTypedActionFact(
+      declaredActionId,
+      handler,
+      state,
+    );
     if (!actionFact) return;
     state.eventCounter += 1;
     state.ir.events.push({
@@ -2639,7 +2905,11 @@ function lowerEvent(
   let field: string | undefined;
   if (change?.type === 'ObjectExpression')
     field = getNodeName(change.properties?.[0]?.key);
-  const actionFact = buildTypedActionFact(declaredActionId, handler, state);
+  const actionFact = buildTypedActionFact(
+    declaredActionId,
+    handler,
+    state,
+  );
   if (!actionFact) return;
   state.eventCounter += 1;
   state.ir.events.push({
@@ -2670,12 +2940,17 @@ function buildTypedActionFact(
 ) {
   const diagnosticStart = state.diagnostics.length;
   const loaderContext = loaderContextParameters(handler, state);
-  const sourceOperations = lowerActionOperations(handler, state) as any[];
+  const sourceOperations = lowerActionOperations(
+    handler,
+    state,
+  ) as any[];
   const routeRetry = sourceOperations.some(
     (operation) => operation?.kind === 'route-retry',
   );
   const eventFields = actionEventFields(sourceOperations);
-  const eventSlots = new Map(eventFields.map((field, index) => [field, index]));
+  const eventSlots = new Map(
+    eventFields.map((field, index) => [field, index]),
+  );
   const slots = new Map<string, number>();
   // Event values are ordinary initialized action-frame slots; locally
   // allocated continuation slots therefore begin after them.
@@ -2697,28 +2972,68 @@ function buildTypedActionFact(
     for (const operation of operations ?? []) {
       switch (operation?.kind) {
         case 'set-state':
-          instructions.push({ op: 'evaluate', expression: operation.value, eventSlots, slots });
-          instructions.push({ op: 'storeState', stateSlotId: operation.stateSlotId });
+          instructions.push({
+            op: 'evaluate',
+            expression: operation.value,
+            eventSlots,
+            slots,
+          });
+          instructions.push({
+            op: 'storeState',
+            stateSlotId: operation.stateSlotId,
+          });
           break;
-        case 'prevent-default': instructions.push({ op: 'preventDefault' }); break;
-        case 'route-retry': break;
-        case 'store-host-ref': instructions.push({ op: 'storeHostRef', refId: operation.refId }); break;
+        case 'prevent-default':
+          instructions.push({ op: 'preventDefault' });
+          break;
+        case 'route-retry':
+          break;
+        case 'store-host-ref':
+          instructions.push({
+            op: 'storeHostRef',
+            refId: operation.refId,
+          });
+          break;
         case 'return':
-          instructions.push({ op: 'return', outcome: operation.outcome ?? 'success', ...(operation.value ? { value: operation.value, eventSlots, slots } : {}) });
+          instructions.push({
+            op: 'return',
+            outcome: operation.outcome ?? 'success',
+            ...(operation.value
+              ? { value: operation.value, eventSlots, slots }
+              : {}),
+          });
           break;
         case 'invoke-action-ref':
           instructions.push({
-            op: 'call', actionId: operation.actionId, arguments: operation.parameters ?? [],
+            op: 'call',
+            actionId: operation.actionId,
+            arguments: operation.parameters ?? [],
             resultSlot: slot(`__call_result_${instructions.length}`),
             errorSlot: slot(`__call_error_${instructions.length}`),
-            successPc: 0, failurePc: 0, eventSlots, slots,
+            successPc: 0,
+            failurePc: 0,
+            eventSlots,
+            slots,
           });
           break;
         case 'collection':
-          instructions.push({ op: 'collectionMutation', inputId: operation.inputId, kind: operation.operation, key: operation.key, value: operation.value, eventSlots, slots });
+          instructions.push({
+            op: 'collectionMutation',
+            inputId: operation.inputId,
+            kind: operation.operation,
+            key: operation.key,
+            value: operation.value,
+            eventSlots,
+            slots,
+          });
           break;
         case 'if': {
-          instructions.push({ op: 'evaluate', expression: operation.test, eventSlots, slots });
+          instructions.push({
+            op: 'evaluate',
+            expression: operation.test,
+            eventSlots,
+            slots,
+          });
           const branch = instructions.length;
           instructions.push({ op: 'jumpIfFalse', target: 0 });
           emit(operation.consequent);
@@ -2730,16 +3045,32 @@ function buildTypedActionFact(
           break;
         }
         case 'capability-request': {
-          if (!['network.fetch', 'cookie'].includes(operation.capability)) {
-            reportUnsupported(state, 'UNSUPPORTED_ACTION_CAPABILITY', `Capability ${operation.capability} is not supported.`);
+          if (
+            !['network.fetch', 'cookie'].includes(operation.capability)
+          ) {
+            reportUnsupported(
+              state,
+              'UNSUPPORTED_ACTION_CAPABILITY',
+              `Capability ${operation.capability} is not supported.`,
+            );
             break;
           }
-          const resultSlot = slot(operation.successResultName ?? 'result');
+          const resultSlot = slot(
+            operation.successResultName ?? 'result',
+          );
           const errorSlot = slot(operation.failureErrorName ?? 'error');
           const request: any = {
-            op: 'capabilityRequest', capability: operation.capability === 'cookie' ? 'cookie' : 'fetch', request: operation.request,
-            successPc: 0, failurePc: 0, finallyPc: undefined, resultSlot, errorSlot,
-            eventSlots, slots,
+            op: 'capabilityRequest',
+            capability:
+              operation.capability === 'cookie' ? 'cookie' : 'fetch',
+            request: operation.request,
+            successPc: 0,
+            failurePc: 0,
+            finallyPc: undefined,
+            resultSlot,
+            errorSlot,
+            eventSlots,
+            slots,
           };
           instructions.push(request);
           request.successPc = instructions.length;
@@ -2755,12 +3086,18 @@ function buildTypedActionFact(
             emit(operation.finally);
           }
           instructions.push({ op: 'return' });
-          instructions[successDone].target = request.finallyPc ?? instructions.length - 1;
-          instructions[failureDone].target = request.finallyPc ?? instructions.length - 1;
+          instructions[successDone].target =
+            request.finallyPc ?? instructions.length - 1;
+          instructions[failureDone].target =
+            request.finallyPc ?? instructions.length - 1;
           break;
         }
         default:
-          reportUnsupported(state, 'UNSUPPORTED_ACTION_OPERATION', `Action operation ${String(operation?.kind ?? 'unknown')} is not supported.`);
+          reportUnsupported(
+            state,
+            'UNSUPPORTED_ACTION_OPERATION',
+            `Action operation ${String(operation?.kind ?? 'unknown')} is not supported.`,
+          );
       }
     }
   };
@@ -2772,11 +3109,20 @@ function buildTypedActionFact(
     instructions.push({ op: 'return' });
   for (let index = 0; index < instructions.length; index += 1)
     if (instructions[index].op === 'call') {
-      instructions[index].successPc = Math.min(index + 1, instructions.length - 1);
-      instructions[index].failurePc = Math.min(index + 1, instructions.length - 1);
+      instructions[index].successPc = Math.min(
+        index + 1,
+        instructions.length - 1,
+      );
+      instructions[index].failurePc = Math.min(
+        index + 1,
+        instructions.length - 1,
+      );
     }
   for (const instruction of instructions)
-    if ((instruction.op === 'jump' || instruction.op === 'jumpIfFalse') && instruction.target >= instructions.length)
+    if (
+      (instruction.op === 'jump' || instruction.op === 'jumpIfFalse') &&
+      instruction.target >= instructions.length
+    )
       instruction.target = instructions.length - 1;
   if (state.diagnostics.length !== diagnosticStart) return undefined;
   return {
@@ -2800,15 +3146,18 @@ function buildTypedActionFact(
  * two declarative values the typed VM can consume. */
 function loaderContextParameters(handler: any, state: CompilerState) {
   const name = getNodeName(handler);
-  const resolved = name ? unwrapExpression(state.expressionScope[name]) : handler;
+  const resolved = name
+    ? unwrapExpression(state.expressionScope[name])
+    : handler;
   const functionDefinition = name
     ? state.functions.get(componentKey(state.activeModuleId, name))
     : undefined;
   handler = (resolved ?? handler)?.function ?? resolved ?? handler;
-  const parameter = functionDefinition?.params?.[0]?.pat
-    ?? functionDefinition?.params?.[0]
-    ?? handler?.params?.[0]?.pat
-    ?? handler?.params?.[0];
+  const parameter =
+    functionDefinition?.params?.[0]?.pat ??
+    functionDefinition?.params?.[0] ??
+    handler?.params?.[0]?.pat ??
+    handler?.params?.[0];
   if (parameter?.type !== 'ObjectPattern') return false;
   return (parameter.properties ?? []).some((property: any) => {
     const key = getNodeName(property.key);
@@ -2820,12 +3169,37 @@ function actionEventFields(operations: any[]): string[] {
   const fields = new Set<string>();
   const visit = (value: any): void => {
     if (!value || typeof value !== 'object') return;
-    const field = value.kind === 'member' && value.object?.kind === 'identifier' && value.object.name === 'event'
-      ? value.property
-      : value.kind === 'member' && value.object?.kind === 'member' && value.object.object?.kind === 'identifier' && value.object.object.name === 'event' && value.object.property === 'currentTarget'
-        ? value.property : undefined;
-    if (field && ['value', 'checked', 'key', 'rowKey', 'button', 'metaKey', 'ctrlKey', 'shiftKey', 'altKey', 'type'].includes(field)) fields.add(field);
-    Object.values(value).forEach((child: any) => Array.isArray(child) ? child.forEach(visit) : visit(child));
+    const field =
+      value.kind === 'member' &&
+      value.object?.kind === 'identifier' &&
+      value.object.name === 'event'
+        ? value.property
+        : value.kind === 'member' &&
+            value.object?.kind === 'member' &&
+            value.object.object?.kind === 'identifier' &&
+            value.object.object.name === 'event' &&
+            value.object.property === 'currentTarget'
+          ? value.property
+          : undefined;
+    if (
+      field &&
+      [
+        'value',
+        'checked',
+        'key',
+        'rowKey',
+        'button',
+        'metaKey',
+        'ctrlKey',
+        'shiftKey',
+        'altKey',
+        'type',
+      ].includes(field)
+    )
+      fields.add(field);
+    Object.values(value).forEach((child: any) =>
+      Array.isArray(child) ? child.forEach(visit) : visit(child),
+    );
   };
   visit(operations);
   return [...fields];
@@ -2844,7 +3218,11 @@ function lowerActionOperations(
   const name = getNodeName(handler);
   if (!body && name) body = getLocalFunction(name, state)?.body;
   if (!body && !handler) {
-    reportUnsupported(state, 'UNSUPPORTED_ACTION', 'Action handler must be statically resolvable.');
+    reportUnsupported(
+      state,
+      'UNSUPPORTED_ACTION',
+      'Action handler must be statically resolvable.',
+    );
     return [];
   }
   return body?.type === 'BlockStatement'
@@ -2890,17 +3268,31 @@ function lowerActionStatements(
       decodeIndex >= 0
         ? responseDecodeBinding(rest[decodeIndex], binding)
         : undefined;
-    const remaining = decode ? rest.slice(decodeIndex + 1) : rest;
+    const remaining = decode
+      ? rest.slice(decodeIndex + 1)
+      : successfulResponseStatements(rest, binding);
     const resultName = decode?.name ?? binding ?? 'result';
+    const previousScope = state.expressionScope;
+    state.expressionScope = {
+      ...previousScope,
+      [resultName]: { type: 'Identifier', value: resultName },
+    };
+    const success = lowerActionStatements(remaining, state);
+    state.expressionScope = previousScope;
     return [
       {
         kind: 'capability-request',
         capability: 'network.fetch',
-        request: { ...fetch, decode: decode?.kind ?? (fetch.method === 'DELETE' ? 'empty' : 'json') },
+        request: {
+          ...fetch,
+          decode:
+            decode?.kind ??
+            (fetch.method === 'DELETE' ? 'empty' : 'json'),
+        },
         continuationId: `c${state.eventCounter + 1}`,
         successResultName: resultName,
         failureErrorName: 'error',
-        success: lowerActionStatements(remaining, state),
+        success,
         failure: [],
         finally: [],
       },
@@ -2908,7 +3300,13 @@ function lowerActionStatements(
   }
   const cookie = awaited && cookieOperation(awaited, state);
   if (cookie)
-    return [{ ...cookie, successResultName: binding ?? 'result', success: lowerActionStatements(rest, state) }];
+    return [
+      {
+        ...cookie,
+        successResultName: binding ?? 'result',
+        success: lowerActionStatements(rest, state),
+      },
+    ];
   if (awaited) {
     const lowered = lowerAwaitedHelperCall(
       awaited,
@@ -2940,15 +3338,29 @@ function lowerActionStatements(
     ];
   if (statement.type === 'ThrowStatement') {
     const thrown = unwrapExpression(statement.argument);
-    const value = thrown?.type === 'NewExpression'
-      ? lowerExpression(thrown.arguments?.[0]?.expression ?? thrown.arguments?.[0], state)
-      : lowerExpression(statement.argument, state);
+    const value =
+      thrown?.type === 'NewExpression'
+        ? lowerExpression(
+            thrown.arguments?.[0]?.expression ?? thrown.arguments?.[0],
+            state,
+          )
+        : lowerExpression(statement.argument, state);
     return [{ kind: 'return', outcome: 'failure', value }];
   }
   if (statement.type === 'ExpressionStatement') {
-    const cookie = cookieOperation(unwrapExpression(statement.expression?.type === 'UnaryExpression' && statement.expression.operator === 'void' ? statement.expression.argument : statement.expression), state);
+    const cookie = cookieOperation(
+      unwrapExpression(
+        statement.expression?.type === 'UnaryExpression' &&
+          statement.expression.operator === 'void'
+          ? statement.expression.argument
+          : statement.expression,
+      ),
+      state,
+    );
     if (cookie)
-      return [{ ...cookie, success: lowerActionStatements(rest, state) }];
+      return [
+        { ...cookie, success: lowerActionStatements(rest, state) },
+      ];
   }
   const current = (() => {
     if (statement.type === 'ExpressionStatement')
@@ -2978,7 +3390,11 @@ function lowerActionStatements(
         },
       ];
     }
-    reportUnsupported(state, 'UNSUPPORTED_ACTION_STATEMENT', `Unsupported action statement ${statement.type}.`);
+    reportUnsupported(
+      state,
+      'UNSUPPORTED_ACTION_STATEMENT',
+      `Unsupported action statement ${statement.type}.`,
+    );
     return [];
   })();
   return [...current, ...lowerActionStatements(rest, state)];
@@ -3045,8 +3461,16 @@ function lowerAwaitedHelperCall(
       statements.slice(0, tryIndex),
       state,
     );
-    const decode = responseDecodeBinding(rest[0], binding);
-    const remaining = decode ? rest.slice(1) : rest;
+    const decodeIndex = rest.findIndex((statement: any) =>
+      responseDecodeBinding(statement, binding),
+    );
+    const decode =
+      decodeIndex >= 0
+        ? responseDecodeBinding(rest[decodeIndex], binding)
+        : undefined;
+    const remaining = decode
+      ? rest.slice(decodeIndex + 1)
+      : successfulResponseStatements(rest, binding);
     const resultName = decode?.name ?? binding ?? 'result';
     const successPrevious = state.expressionScope;
     state.expressionScope = {
@@ -3081,7 +3505,13 @@ function lowerAwaitedHelperCall(
       {
         kind: 'capability-request',
         capability: 'network.fetch',
-        request: { ...fetch, decode: decode?.kind ?? (fetch.method === 'DELETE' ? 'empty' : 'json'), requireOk: true },
+        request: {
+          ...fetch,
+          decode:
+            decode?.kind ??
+            (fetch.method === 'DELETE' ? 'empty' : 'json'),
+          requireOk: true,
+        },
         continuationId: `c${state.eventCounter + 1}`,
         successResultName: resultName,
         failureErrorName: 'error',
@@ -3096,14 +3526,20 @@ function lowerAwaitedHelperCall(
   }
 }
 
-function rejectedResponseMessage(tryStatement: any): string | undefined {
+function rejectedResponseMessage(
+  tryStatement: any,
+): string | undefined {
   for (const statement of getStatements(tryStatement.block)) {
-    const thrown = statement.type === 'IfStatement'
-      ? unwrapExpression(statement.consequent?.argument)
-      : undefined;
-    const argument = thrown?.type === 'NewExpression'
-      ? unwrapExpression(thrown.arguments?.[0]?.expression ?? thrown.arguments?.[0])
-      : undefined;
+    const thrown =
+      statement.type === 'IfStatement'
+        ? unwrapExpression(statement.consequent?.argument)
+        : undefined;
+    const argument =
+      thrown?.type === 'NewExpression'
+        ? unwrapExpression(
+            thrown.arguments?.[0]?.expression ?? thrown.arguments?.[0],
+          )
+        : undefined;
     if (argument?.type === 'StringLiteral') return argument.value;
   }
   return undefined;
@@ -3123,9 +3559,15 @@ function responseDecodeBinding(
     statement?.type === 'ReturnStatement' &&
     returnedAwaited?.type === 'CallExpression' &&
     getNodeName(returnedAwaited.callee.object) === responseName &&
-    ['json', 'text'].includes(getNodeName(returnedAwaited.callee.property) ?? '')
+    ['json', 'text'].includes(
+      getNodeName(returnedAwaited.callee.property) ?? '',
+    )
   )
-    return { name: '__loader_result', kind: getNodeName(returnedAwaited.callee.property) as 'json' | 'text' };
+    return {
+      name: '__loader_result',
+      kind: getNodeName(returnedAwaited.callee.property) as
+        'json' | 'text',
+    };
   if (
     !responseName ||
     !['VariableDeclaration', 'VarDecl'].includes(statement?.type)
@@ -3140,13 +3582,39 @@ function responseDecodeBinding(
   if (
     awaited?.type === 'CallExpression' &&
     getNodeName(awaited.callee.object) === responseName &&
-    ['json', 'text'].includes(getNodeName(awaited.callee.property) ?? '')
+    ['json', 'text'].includes(
+      getNodeName(awaited.callee.property) ?? '',
+    )
   )
     return {
       name: getPatternName(declaration.id)!,
       kind: getNodeName(awaited.callee.property) as 'json' | 'text',
     };
   return undefined;
+}
+
+function successfulResponseStatements(
+  statements: any[],
+  responseName: string | undefined,
+): any[] {
+  const guard = statements[0];
+  if (!responseName || guard?.type !== 'IfStatement') return statements;
+  const test = unwrapExpression(guard.test);
+  const branch =
+    getNodeName(test) === responseName
+      ? guard.consequent
+      : test?.type === 'UnaryExpression' &&
+          test.operator === '!' &&
+          getNodeName(test.argument) === responseName
+        ? guard.alternate
+        : undefined;
+  if (!branch) return statements;
+  return [
+    ...(branch.type === 'BlockStatement'
+      ? getStatements(branch)
+      : [branch]),
+    ...statements.slice(1),
+  ];
 }
 
 function fetchRequest(
@@ -3258,11 +3726,35 @@ function lowerActionExpression(
   if (bareName && bareName === state.routeRetryProp)
     return [{ kind: 'route-retry' }];
   if (expression?.type !== 'CallExpression') {
-    if (expression?.type === 'AssignmentExpression' && getNodeName(expression.left?.object) && getNodeName(expression.left?.property) === 'current' && getNodeName(expression.right?.object) === 'document' && getNodeName(expression.right?.property) === 'activeElement')
-      return [{ kind: 'store-host-ref', refId: getNodeName(expression.left.object) }];
-    if (expression?.type === 'AssignmentExpression' && getNodeName(expression.left?.object) === 'document' && getNodeName(expression.left?.property) === 'cookie')
-      reportUnsupported(state, 'UNSUPPORTED_DOCUMENT_COOKIE', 'Use cookie.set or cookie.delete; document.cookie assignment is not safely compilable.');
-    else reportUnsupported(state, 'UNSUPPORTED_ACTION_EXPRESSION', 'Action expression must be a supported call, conditional, or callback.');
+    if (
+      expression?.type === 'AssignmentExpression' &&
+      getNodeName(expression.left?.object) &&
+      getNodeName(expression.left?.property) === 'current' &&
+      getNodeName(expression.right?.object) === 'document' &&
+      getNodeName(expression.right?.property) === 'activeElement'
+    )
+      return [
+        {
+          kind: 'store-host-ref',
+          refId: getNodeName(expression.left.object),
+        },
+      ];
+    if (
+      expression?.type === 'AssignmentExpression' &&
+      getNodeName(expression.left?.object) === 'document' &&
+      getNodeName(expression.left?.property) === 'cookie'
+    )
+      reportUnsupported(
+        state,
+        'UNSUPPORTED_DOCUMENT_COOKIE',
+        'Use cookie.set or cookie.delete; document.cookie assignment is not safely compilable.',
+      );
+    else
+      reportUnsupported(
+        state,
+        'UNSUPPORTED_ACTION_EXPRESSION',
+        'Action expression must be a supported call, conditional, or callback.',
+      );
     return [];
   }
   let callee = getNodeName(expression.callee);
@@ -3321,7 +3813,11 @@ function lowerActionExpression(
   )
     return [{ kind: 'prevent-default' }];
   if (!callee) {
-    reportUnsupported(state, 'UNSUPPORTED_ACTION_CALL', 'Action call target must be a static identifier.');
+    reportUnsupported(
+      state,
+      'UNSUPPORTED_ACTION_CALL',
+      'Action call target must be a static identifier.',
+    );
     return [];
   }
   const local = getLocalFunction(callee, state);
@@ -3368,32 +3864,94 @@ function lowerActionExpression(
 /** Functional state setters remain a pure value transform in the action IR.
  * Binding the callback parameter to the current state expression is enough
  * for array map/filter/append transforms and avoids serializing a closure. */
-function cookieOperation(expression: any, state: CompilerState): any | undefined {
-  if (expression?.callee?.type !== 'MemberExpression' || getNodeName(expression.callee.object) !== 'cookie') return undefined;
+function cookieOperation(
+  expression: any,
+  state: CompilerState,
+): any | undefined {
+  if (
+    expression?.callee?.type !== 'MemberExpression' ||
+    getNodeName(expression.callee.object) !== 'cookie'
+  )
+    return undefined;
   const operation = getNodeName(expression.callee.property);
-  if (!['get', 'set', 'delete'].includes(operation ?? '')) return undefined;
-  const argument = (index: number) => expression.arguments?.[index]?.expression ?? expression.arguments?.[index];
+  if (!['get', 'set', 'delete'].includes(operation ?? ''))
+    return undefined;
+  const argument = (index: number) =>
+    expression.arguments?.[index]?.expression ??
+    expression.arguments?.[index];
   const name = argument(0);
   if (name?.type !== 'StringLiteral') {
-    reportUnsupported(state, 'UNSUPPORTED_COOKIE_NAME', `cookie.${operation} requires a static cookie name.`);
+    reportUnsupported(
+      state,
+      'UNSUPPORTED_COOKIE_NAME',
+      `cookie.${operation} requires a static cookie name.`,
+    );
     return undefined;
   }
-  const options = unwrapExpression(argument(operation === 'set' ? 2 : 1));
-  const option = (key: string) => objectPropertyValue((options?.properties ?? []).find((item: any) => objectPropertyName(item) === key));
-  const path = option('path'); const sameSite = option('sameSite'); const secure = option('secure'); const maxAge = option('maxAge');
-  if ((path && path.type !== 'StringLiteral') || (sameSite && sameSite.type !== 'StringLiteral') || (secure && secure.type !== 'BooleanLiteral') || (maxAge && maxAge.type !== 'NumericLiteral')) {
-    reportUnsupported(state, 'UNSUPPORTED_COOKIE_OPTIONS', 'cookie options must be static path, sameSite, secure, and maxAge values.');
+  const options = unwrapExpression(
+    argument(operation === 'set' ? 2 : 1),
+  );
+  const option = (key: string) =>
+    objectPropertyValue(
+      (options?.properties ?? []).find(
+        (item: any) => objectPropertyName(item) === key,
+      ),
+    );
+  const path = option('path');
+  const sameSite = option('sameSite');
+  const secure = option('secure');
+  const maxAge = option('maxAge');
+  if (
+    (path && path.type !== 'StringLiteral') ||
+    (sameSite && sameSite.type !== 'StringLiteral') ||
+    (secure && secure.type !== 'BooleanLiteral') ||
+    (maxAge && maxAge.type !== 'NumericLiteral')
+  ) {
+    reportUnsupported(
+      state,
+      'UNSUPPORTED_COOKIE_OPTIONS',
+      'cookie options must be static path, sameSite, secure, and maxAge values.',
+    );
     return undefined;
   }
   if (sameSite && !['lax', 'strict', 'none'].includes(sameSite.value)) {
-    reportUnsupported(state, 'UNSUPPORTED_COOKIE_OPTIONS', 'cookie.sameSite must be lax, strict, or none.');
+    reportUnsupported(
+      state,
+      'UNSUPPORTED_COOKIE_OPTIONS',
+      'cookie.sameSite must be lax, strict, or none.',
+    );
     return undefined;
   }
   if (operation === 'set' && !argument(1)) {
-    reportUnsupported(state, 'UNSUPPORTED_COOKIE_VALUE', 'cookie.set requires a value.');
+    reportUnsupported(
+      state,
+      'UNSUPPORTED_COOKIE_VALUE',
+      'cookie.set requires a value.',
+    );
     return undefined;
   }
-  return { kind: 'capability-request', capability: 'cookie', request: { operation, name: name.value, ...(operation === 'set' ? { value: lowerExpression(argument(1), state) } : {}), path: path?.value ?? '/', ...(sameSite ? { sameSite: sameSite.value } : {}), ...(secure ? { secure: secure.value } : {}), expiry: maxAge ? 'maxAge' : 'session', ...(maxAge ? { maxAge: maxAge.value } : {}) }, continuationId: `c${state.eventCounter + 1}`, successResultName: 'result', failureErrorName: 'error', success: [], failure: [], finally: [] };
+  return {
+    kind: 'capability-request',
+    capability: 'cookie',
+    request: {
+      operation,
+      name: name.value,
+      ...(operation === 'set'
+        ? { value: lowerExpression(argument(1), state) }
+        : {}),
+      path: path?.value ?? '/',
+      ...(sameSite ? { sameSite: sameSite.value } : {}),
+      ...(secure ? { secure: secure.value } : {}),
+      expiry: maxAge ? 'maxAge' : 'session',
+      ...(maxAge ? { maxAge: maxAge.value } : {}),
+    },
+    continuationId: `c${state.eventCounter + 1}`,
+    successResultName: 'result',
+    failureErrorName: 'error',
+    success: [],
+    failure: [],
+    finally: [],
+  };
 }
 
 function lowerStateSetterValue(
@@ -3882,8 +4440,15 @@ function evaluateExpression(
   }
 
   if (node.type === 'MemberExpression') {
-    if (getNodeName(node.object) === 'document' && getNodeName(node.property) === 'cookie') {
-      reportUnsupported(state, 'UNSUPPORTED_DOCUMENT_COOKIE', 'Use cookie.getSync/get/set/delete; document.cookie parsing is not safely compilable.');
+    if (
+      getNodeName(node.object) === 'document' &&
+      getNodeName(node.property) === 'cookie'
+    ) {
+      reportUnsupported(
+        state,
+        'UNSUPPORTED_DOCUMENT_COOKIE',
+        'Use cookie.getSync/get/set/delete; document.cookie parsing is not safely compilable.',
+      );
       return { kind: 'literal', value: null };
     }
     const objectValue = evaluateExpression(
@@ -4332,13 +4897,18 @@ function collectModuleFacts(body: any, state: CompilerState): void {
           const slotId = `s${state.ir.localStates.length + 1}`;
           const initial =
             init.arguments?.[0]?.expression ?? init.arguments?.[0];
-          const loaderResultState = isLoaderDataExpression(initial, state);
+          const loaderResultState = isLoaderDataExpression(
+            initial,
+            state,
+          );
           state.ir.localStates.push({
             id: slotId,
             name: valueName,
             // A loader owns this value until its typed result arrives. Null is
             // the only general initial value without executing user code.
-            initialValue: loaderResultState ? 'null' : serializeInitialState(initial, state),
+            initialValue: loaderResultState
+              ? 'null'
+              : serializeInitialState(initial, state),
             initialExpression: loaderResultState
               ? { kind: 'literal', value: null }
               : lowerExpression(initial, state),
@@ -4382,7 +4952,8 @@ function isLoaderDataExpression(
   if (!name || seen.has(name)) return false;
   const resolved = state.expressionScope[name];
   return Boolean(
-    resolved && isLoaderDataExpression(resolved, state, new Set([...seen, name])),
+    resolved &&
+    isLoaderDataExpression(resolved, state, new Set([...seen, name])),
   );
 }
 
@@ -4555,6 +5126,19 @@ function collectComponents(
         const name = getPatternName(declaration.id);
         const init = declaration.init;
         const implementation = unwrapComponentFactory(init);
+
+        if (init?.type === 'CallExpression') {
+          trace({
+            stage: 'component-factory-init',
+            symbol: name,
+            file: moduleId,
+            output: {
+              callee: getNodeName(init.callee) ?? init.callee?.type,
+              hasImplementation: !!implementation,
+            },
+          });
+        }
+
         if (name && implementation) {
           const definition = {
             name,
@@ -4563,11 +5147,18 @@ function collectComponents(
             moduleId,
           };
           state.functions.set(componentKey(moduleId, name), definition);
-          if (isComponentName(name))
+          if (isComponentName(name)) {
             state.components.set(
               componentKey(moduleId, name),
               definition,
             );
+            trace({
+              stage: 'component-registered',
+              symbol: name,
+              file: moduleId,
+              output: { registeredAs: 'component' },
+            });
+          }
         }
       }
   }
@@ -4614,6 +5205,19 @@ function collectExports(
           moduleId: resolveModuleId(moduleId, source),
           exportName: exported,
         });
+      continue;
+    }
+    // Handle `export const X = ...` (ExportNamedDeclaration with declaration)
+    if (
+      statement.type === 'ExportNamedDeclaration' &&
+      statement.declaration &&
+      !statement.specifiers?.length
+    ) {
+      const declaration = statement.declaration;
+      const name =
+        getNodeName(declaration?.identifier ?? declaration?.id) ??
+        getPatternName(declaration?.declarations?.[0]?.id);
+      if (name) entries.set(name, { moduleId, exportName: name });
       continue;
     }
     if (
@@ -4672,13 +5276,17 @@ function collectModuleExpressions(
   const expressions: Record<string, any> = {};
   for (const original of getStatements(moduleAst)) {
     const statement = original.declaration ?? original.decl ?? original;
+    const unwrapped =
+      statement.type === 'ExportNamedDeclaration'
+        ? statement.declaration ?? statement
+        : statement;
     if (
-      statement.type !== 'VariableDeclaration' &&
-      statement.type !== 'VarDecl'
+      unwrapped.type !== 'VariableDeclaration' &&
+      unwrapped.type !== 'VarDecl'
     )
       continue;
-    for (const declaration of statement.declarations ??
-      statement.decls ??
+    for (const declaration of unwrapped.declarations ??
+      unwrapped.decls ??
       []) {
       const name = getPatternName(declaration.id);
       if (name && declaration.init)
@@ -5689,7 +6297,11 @@ function lowerExpression(
   ) {
     const name = node.arguments?.[0]?.expression ?? node.arguments?.[0];
     if (name?.type !== 'StringLiteral') {
-      reportUnsupported(state, 'UNSUPPORTED_COOKIE_NAME', 'cookie.getSync requires a static cookie name.');
+      reportUnsupported(
+        state,
+        'UNSUPPORTED_COOKIE_NAME',
+        'cookie.getSync requires a static cookie name.',
+      );
       return { kind: 'literal', value: null };
     }
     return { kind: 'host', name: 'cookie', query: name.value };

@@ -13,6 +13,18 @@
     "./runtime": {
       "types": "./dist/runtime.d.ts",
       "default": "./dist/runtime.js"
+    },
+    "./executable": {
+      "types": "./dist/executable.d.ts",
+      "default": "./dist/executable.js"
+    },
+    "./validate-route-manifest": {
+      "types": "./dist/validate-route-manifest.d.ts",
+      "default": "./dist/validate-route-manifest.js"
+    },
+    "./is-plec-value": {
+      "types": "./dist/is-plec-value.d.ts",
+      "default": "./dist/is-plec-value.js"
     }
   },
   "files": [

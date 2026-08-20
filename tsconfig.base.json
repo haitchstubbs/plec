@@ -29,7 +29,6 @@
         "./packages/lucide-plec/src/icons/*"
       ],
       "plec": ["./packages/plec/src/index.ts"],
-      "plec/jsx-runtime": ["./packages/plec/src/jsx-runtime.ts"],
       "plec/client/effects/development-memory-hud": [
         "./packages/plec/src/client/effects/development-memory-hud.ts"
       ]
