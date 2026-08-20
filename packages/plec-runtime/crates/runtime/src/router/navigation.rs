@@ -81,6 +81,25 @@ impl PlecRuntime {
                 link.remove_attribute("aria-current")?;
             }
         }
+        let location = window()?.location();
+        let location = [
+            (
+                "location.pathname",
+                RuntimeValue::String(location.pathname()?),
+            ),
+            ("location.search", RuntimeValue::String(location.search()?)),
+            ("location.hash", RuntimeValue::String(location.hash()?)),
+        ];
+        for instance in self.typed.borrow_mut().values_mut() {
+            for (name, value) in &location {
+                instance
+                    .runtime
+                    .app
+                    .host_inputs
+                    .insert((*name).into(), value.clone());
+            }
+            instance.runtime.apply_static_bindings()?;
+        }
         Ok(())
     }
 
@@ -454,10 +473,16 @@ impl PlecRuntime {
             for mut request in pending_graph.0 {
                 request.instance_id = id.into();
                 if self.start_typed_fetch(request).is_err() {
-                    self.show_typed_route_error(id, RuntimeValue::Record(HashMap::from([
-                        ("kind".into(), RuntimeValue::String("runtime".into())),
-                        ("message".into(), RuntimeValue::String("route loader failed".into())),
-                    ])))?;
+                    self.show_typed_route_error(
+                        id,
+                        RuntimeValue::Record(HashMap::from([
+                            ("kind".into(), RuntimeValue::String("runtime".into())),
+                            (
+                                "message".into(),
+                                RuntimeValue::String("route loader failed".into()),
+                            ),
+                        ])),
+                    )?;
                     break;
                 }
             }

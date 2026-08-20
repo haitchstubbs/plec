@@ -5,6 +5,7 @@ import {
   writeFile,
   readFile,
   readdir,
+  stat,
 } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -16,14 +17,42 @@ import { promisify } from 'node:util';
 import { build } from 'esbuild';
 import { compileRouteEntry } from 'plec-compiler/node-entry';
 
+const OPTIMIZE = true;
+
 const appDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
 );
+
 const require = createRequire(import.meta.url);
+const repoRoot = path.resolve(appDir, '..', '..');
+
 const distDir = path.join(appDir, 'dist');
 const publicDir = path.join(distDir, 'public');
+const assetsDir = path.join(publicDir, 'assets');
+const graphsDir = path.join(publicDir, 'graphs');
+const runtimeDir = path.join(publicDir, 'runtime');
+
 const compressBrotli = promisify(brotliCompress);
+
+const FORBIDDEN_BROWSER_DEPENDENCIES = [
+  'zod',
+  'typescript',
+  '@swc/core',
+  'plec-compiler',
+];
+
+const BUILD_DEFAULTS = {
+  bundle: true,
+  format: 'esm',
+  minify: OPTIMIZE,
+  treeShaking: true,
+  legalComments: 'none',
+};
+
+//
+// Revision
+//
 
 // Every browser asset and compiled artifact shares this revision. Keeping it
 // content-derived prevents the long-lived dev server from serving an older
@@ -34,37 +63,47 @@ const assetRevision = createHash('sha256')
   .digest('hex')
   .slice(0, 12);
 
-const BUILD_DEFAULTS = {
-  bundle: true,
-  format: 'esm',
-  minify: true,
-  treeShaking: true,
-  legalComments: 'none',
-};
+//
+// Clean
+//
 
 await rm(distDir, { recursive: true, force: true });
-await mkdir(path.join(publicDir, 'assets'), { recursive: true });
-const repoRoot = path.resolve(appDir, '..', '..');
-const compiledRoutes = await compileRouteEntry(path.join(appDir, 'src/router.tsx'), {
-  rootDir: appDir,
-  repoRootDir: repoRoot,
-  mode: 'strict',
-});
-const graphsDir = path.join(publicDir, 'graphs');
-await mkdir(graphsDir, { recursive: true });
+
+await Promise.all([
+  mkdir(assetsDir, { recursive: true }),
+  mkdir(graphsDir, { recursive: true }),
+  mkdir(runtimeDir, { recursive: true }),
+]);
+
+//
+// Compile routes
+//
+
+const compiledRoutes = await compileRouteEntry(
+  path.join(appDir, 'src/router.tsx'),
+  {
+    rootDir: appDir,
+    repoRootDir: repoRoot,
+    mode: 'strict',
+  },
+);
+
 const graphs = [
   compiledRoutes.rootGraph,
-  ...compiledRoutes.routes.flatMap((route) => [
-    route.graph,
-    route.pendingGraph,
-    route.errorGraph,
-  ].filter(Boolean)),
+  ...compiledRoutes.routes.flatMap((route) =>
+    [route.graph, route.pendingGraph, route.errorGraph].filter(Boolean),
+  ),
 ];
-for (const graph of graphs)
-  await writeFile(
-    path.join(graphsDir, `${graph.graphId}.json`),
-    `${JSON.stringify(graph, null, 2)}\n`,
-  );
+
+await Promise.all(
+  graphs.map((graph) =>
+    writeFile(
+      path.join(graphsDir, `${graph.graphId}.json`),
+      `${JSON.stringify(graph, null, 2)}\n`,
+    ),
+  ),
+);
+
 const routeManifest = {
   version: 3,
   revision: compiledRoutes.revision,
@@ -80,49 +119,97 @@ const routeManifest = {
     outletId: route.outletId,
   })),
 };
+
 await writeFile(
   path.join(publicDir, 'route-manifest.json'),
   `${JSON.stringify(routeManifest, null, 2)}\n`,
 );
-// wasm-pack falls back to `cargo install wasm-bindgen` on hosts without a
-// matching prebuilt binary. Keep that temporary install work inside the
-// workspace so locked-down user temp directories do not make an otherwise
-// successful Rust/WASM build fail.
-const wasmTempDir = path.join(repoRoot, '.tmp', 'wasm-pack');
-await mkdir(wasmTempDir, { recursive: true });
-execFileSync(
-  'wasm-pack',
-  [
-    'build',
-    path.join(repoRoot, 'packages/plec-runtime/crates/runtime'),
-    '--target',
-    'web',
-    '--out-dir',
-    path.join(publicDir, 'runtime'),
-    '--out-name',
-    'runtime',
-  ],
-  {
-    cwd: repoRoot,
-    stdio: 'inherit',
-    env: { ...process.env, TMP: wasmTempDir, TEMP: wasmTempDir },
-  },
-);
-await Promise.all(
-  ['runtime.js', 'runtime_bg.wasm'].map((file) =>
-    writeBrotliAsset(path.join(publicDir, 'runtime', file)),
-  ),
+
+//
+// Copy WASM runtime from package
+//
+
+// Copy pre-built WASM artifacts from the plec-runtime package
+const wasmSourceDir = path.join(
+  repoRoot,
+  'packages',
+  'plec-runtime',
+  'dist',
+  'runtime',
 );
 
-await build({
+// Ensure the package has built WASM
+try {
+  await stat(wasmSourceDir);
+} catch {
+  console.error(
+    `WASM artifacts not found at ${wasmSourceDir}. ` +
+      `Run 'yarn workspace plec-runtime build:wasm' first.`
+  );
+  process.exit(1);
+}
+
+// Copy WASM files
+const wasmFiles = ['runtime.js', 'runtime_bg.wasm'];
+for (const file of wasmFiles) {
+  await copyFile(path.join(wasmSourceDir, file), path.join(runtimeDir, file));
+}
+
+// Copy .br files if they exist (from previous optimized builds)
+try {
+  await copyFile(
+    path.join(wasmSourceDir, 'runtime_bg.wasm.br'),
+    path.join(runtimeDir, 'runtime_bg.wasm.br'),
+  );
+  await copyFile(
+    path.join(wasmSourceDir, 'runtime.js.br'),
+    path.join(runtimeDir, 'runtime.js.br'),
+  );
+} catch {
+  // .br files don't exist yet, will be created below
+}
+
+console.log('WASM output:', await readdir(runtimeDir));
+const wasmPath = path.join(runtimeDir, 'runtime_bg.wasm');
+console.log('WASM size:', (await stat(wasmPath)).size);
+
+// Create brotli compressed versions for deployment
+await Promise.all(
+  ['runtime.js', 'runtime_bg.wasm'].map((file) =>
+    writeBrotliAsset(path.join(runtimeDir, file)),
+  ),
+);
+//
+// Build browser client
+//
+
+const browserBuild = await build({
   ...BUILD_DEFAULTS,
   entryPoints: [path.join(appDir, 'src/client.tsx')],
   platform: 'browser',
   target: 'es2022',
   jsx: 'automatic',
   jsxImportSource: 'plec',
-  outfile: path.join(publicDir, 'assets/client.js'),
+  outfile: path.join(assetsDir, 'client.js'),
+  metafile: true,
 });
+
+await writeFile(
+  path.join(distDir, 'client.meta.json'),
+  `${JSON.stringify(browserBuild.metafile, null, 2)}\n`,
+);
+
+assertBrowserBundle(
+  browserBuild.metafile,
+  FORBIDDEN_BROWSER_DEPENDENCIES,
+);
+
+await writeBrotliAsset(path.join(assetsDir, 'client.js'));
+
+//
+// Build server
+//
+
 await build({
   ...BUILD_DEFAULTS,
   entryPoints: [path.join(appDir, 'src/server.ts')],
@@ -132,11 +219,16 @@ await build({
   packages: 'external',
 });
 
+//
+// Tailwind
+//
+
 const tailwindCli = path.join(
   path.dirname(require.resolve('@tailwindcss/cli/package.json')),
   'dist',
   'index.mjs',
 );
+
 execFileSync(
   process.execPath,
   [
@@ -146,38 +238,138 @@ execFileSync(
     '-o',
     'dist/public/assets/styles.css',
   ],
-  { cwd: appDir, stdio: 'inherit' },
+  {
+    cwd: appDir,
+    stdio: 'inherit',
+  },
 );
-await copyFontFiles('@fontsource-variable/outfit');
-await copyFontFiles('@fontsource-variable/raleway');
+
+//
+// Fonts
+//
+
+await Promise.all([
+  copyFontFiles('@fontsource-variable/outfit'),
+  copyFontFiles('@fontsource-variable/raleway'),
+]);
+
+//
+// HTML
+//
+
 await writeFile(
   path.join(publicDir, 'index.html'),
   `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Plec fullstack playground</title><link rel="stylesheet" href="/assets/styles.css?v=${assetRevision}"></head><body><div id="app" aria-live="polite"></div><script type="module" src="/assets/client.js?v=${assetRevision}"></script></body></html>\n`,
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plec fullstack playground</title>
+  <link
+    rel="stylesheet"
+    href="/assets/styles.css?v=${assetRevision}"
+  >
+</head>
+<body>
+  <div id="app" aria-live="polite"></div>
+  <script
+    type="module"
+    src="/assets/client.js?v=${assetRevision}"
+  ></script>
+</body>
+</html>
+`,
 );
 
-/** Tailwind preserves Fontsource's relative `./files/*.woff2` URLs. Publish
- * those files next to styles.css so the CSS remains portable after the build. */
+//
+// Helpers
+//
+
+function assertBrowserBundle(metafile, forbiddenPackages) {
+  const violations = [];
+
+  for (const input of Object.keys(metafile.inputs)) {
+    const normalized = input.replaceAll('\\', '/');
+
+    for (const packageName of forbiddenPackages) {
+      if (matchesPackage(normalized, packageName)) {
+        violations.push({
+          packageName,
+          input,
+        });
+      }
+    }
+  }
+
+  if (violations.length === 0) return;
+
+  const grouped = Map.groupBy(
+    violations,
+    ({ packageName }) => packageName,
+  );
+
+  throw new Error(
+    [
+      '',
+      'Forbidden dependencies leaked into the browser bundle.',
+      '',
+      ...Array.from(grouped, ([packageName, entries]) => [
+        `${packageName}:`,
+        ...entries.map(({ input }) => `  - ${input}`),
+      ]).flat(),
+      '',
+      `Inspect ${path.relative(
+        repoRoot,
+        path.join(distDir, 'client.meta.json'),
+      )} to trace the import path.`,
+      '',
+    ].join('\n'),
+  );
+}
+
+function matchesPackage(input, packageName) {
+  const escaped = packageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  return new RegExp(
+    [
+      `(?:^|/)node_modules/${escaped}(?:/|$)`,
+      `(?:^|/)packages/${escaped}(?:/|$)`,
+    ].join('|'),
+  ).test(input);
+}
+
+/**
+ * Tailwind preserves Fontsource's relative `./files/*.woff2` URLs.
+ * Publish those files next to styles.css so the CSS remains portable.
+ */
 async function copyFontFiles(packageName) {
   const sourceDir = path.join(
     path.dirname(require.resolve(`${packageName}/package.json`)),
     'files',
   );
-  const destinationDir = path.join(publicDir, 'assets', 'files');
+
+  const destinationDir = path.join(assetsDir, 'files');
+
   await mkdir(destinationDir, { recursive: true });
+
   for (const file of await readdir(sourceDir)) {
-    if (file.endsWith('.woff2'))
-      await copyFile(
-        path.join(sourceDir, file),
-        path.join(destinationDir, file),
-      );
+    if (!file.endsWith('.woff2')) continue;
+
+    await copyFile(
+      path.join(sourceDir, file),
+      path.join(destinationDir, file),
+    );
   }
 }
 
 async function writeBrotliAsset(filePath) {
   const source = await readFile(filePath);
+
   const compressed = await compressBrotli(source, {
-    params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
+    params: {
+      [constants.BROTLI_PARAM_QUALITY]: 11,
+    },
   });
+
   await writeFile(`${filePath}.br`, compressed);
 }

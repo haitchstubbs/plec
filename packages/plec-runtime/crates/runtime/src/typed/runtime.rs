@@ -1,8 +1,8 @@
 use crate::dom::{bindings::*, platform::*};
 use crate::eval::typed_vm::*;
 use crate::runtime::lifecycle::*;
-use crate::typed::events::*;
 use crate::typed::cookie::*;
+use crate::typed::events::*;
 #[cfg(feature = "fetch")]
 use crate::typed::fetch::*;
 
@@ -77,6 +77,31 @@ pub(crate) struct TypedGraphInstance {
     /// The normal graph remains alive only while its route loader is pending.
     pub(crate) loader_runtime: Option<TypedRuntime>,
     pub(crate) runtime: TypedRuntime,
+}
+
+impl TypedGraphInstance {
+    pub(crate) fn runtime_for_generation(&self, generation: u64) -> Option<&TypedRuntime> {
+        if self.runtime.graph_generation == generation {
+            Some(&self.runtime)
+        } else {
+            self.loader_runtime
+                .as_ref()
+                .filter(|runtime| runtime.graph_generation == generation)
+        }
+    }
+
+    pub(crate) fn runtime_for_generation_mut(
+        &mut self,
+        generation: u64,
+    ) -> Option<&mut TypedRuntime> {
+        if self.runtime.graph_generation == generation {
+            Some(&mut self.runtime)
+        } else {
+            self.loader_runtime
+                .as_mut()
+                .filter(|runtime| runtime.graph_generation == generation)
+        }
+    }
 }
 
 pub(crate) struct TypedRouteState {
@@ -177,7 +202,9 @@ impl PlecRuntime {
                 .get_mut(&id)
                 .ok_or_else(|| JsValue::from_str("typed application missing"))?;
             let mut metrics = UpdateMetrics::default();
-            typed.runtime.reconcile_input(input_id, rows, &mut metrics)?;
+            typed
+                .runtime
+                .reconcile_input(input_id, rows, &mut metrics)?;
             metrics
         };
         self.install_typed_event_listeners()?;
@@ -205,16 +232,26 @@ impl PlecRuntime {
 
 impl TypedRuntime {
     pub(crate) fn set_route_error(&mut self, error: RuntimeValue) -> Result<(), JsValue> {
-        let state = self.app.route_error_state
+        let state = self
+            .app
+            .route_error_state
             .ok_or_else(|| JsValue::from_str("typed error graph has no route error state"))?;
         self.states[state] = error;
         Ok(())
     }
 
-    pub(crate) fn set_host_inputs(&mut self, inputs: HashMap<String, RuntimeValue>) -> Result<(), JsValue> {
+    pub(crate) fn set_host_inputs(
+        &mut self,
+        inputs: HashMap<String, RuntimeValue>,
+    ) -> Result<(), JsValue> {
         self.host_inputs = inputs;
         self.app.host_inputs = self.host_inputs.clone();
-        self.states = self.app.state_slots.iter().map(|slot| typed_eval(&self.app, slot.initial_expression, &[], None, 0)).collect::<Result<Vec<_>, _>>()?;
+        self.states = self
+            .app
+            .state_slots
+            .iter()
+            .map(|slot| typed_eval(&self.app, slot.initial_expression, &[], None, 0))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(())
     }
     pub(crate) fn new(app: TypedApplication) -> Result<Self, JsValue> {
@@ -361,7 +398,16 @@ impl TypedRuntime {
     }
 
     pub(crate) fn queue_listener(&mut self, target: usize, node: Node, owner: TypedListenerOwner) {
-        if self.app.events.iter().any(|event| event.target == target) {
+        if self.app.events.iter().any(|event| event.target == target)
+            && !self
+                .listeners
+                .iter()
+                .any(|listener| listener.target == target && listener.owner == owner)
+            && !self
+                .listener_requests
+                .iter()
+                .any(|request| request.target == target && request.owner == owner)
+        {
             self.listener_requests.push(TypedListenerRequest {
                 target,
                 node,
@@ -424,12 +470,20 @@ impl TypedRuntime {
             .clone()
         {
             TypedNode::Element { tag, children, .. } => {
-                let element = doc.create_element(
-                    self.app
-                        .strings
-                        .get(tag)
-                        .ok_or_else(|| JsValue::from_str("tag handle out of range"))?,
-                )?;
+                let tag = self
+                    .app
+                    .strings
+                    .get(tag)
+                    .ok_or_else(|| JsValue::from_str("tag handle out of range"))?;
+                let element = if [
+                    "svg", "path", "circle", "rect", "line", "polyline", "polygon", "ellipse", "g",
+                ]
+                .contains(&tag.as_str())
+                {
+                    doc.create_element_ns(Some("http://www.w3.org/2000/svg"), tag)?
+                } else {
+                    doc.create_element(tag)?
+                };
                 element.set_attribute("data-runtime-node", &index.to_string())?;
                 let node: Node = element.into();
                 if let Some(parent) = parent {
@@ -724,11 +778,17 @@ impl TypedRuntime {
             }
         }
         for program in &self.app.prop_programs {
-            let Some(node) = nodes.get(&program.target) else { continue };
+            let Some(node) = nodes.get(&program.target) else {
+                continue;
+            };
             for write in &program.writes {
                 let value = match write.expression {
                     Some(expression) => typed_eval(&self.app, expression, &self.states, row, 0)?,
-                    None => write.constant.and_then(|index| self.app.constants.get(index)).cloned().unwrap_or_default(),
+                    None => write
+                        .constant
+                        .and_then(|index| self.app.constants.get(index))
+                        .cloned()
+                        .unwrap_or_default(),
                 };
                 typed_apply_value(&self.app, &write.kind, Some(write.name), node, value)?;
             }
@@ -1024,11 +1084,11 @@ impl TypedRuntime {
                     continue;
                 }
             }
-            if let Some(node) = row
-                .nodes
-                .get(&binding.target)
-                .or_else(|| row.conditionals.values().find_map(|region| region.nodes.get(&binding.target)))
-            {
+            if let Some(node) = row.nodes.get(&binding.target).or_else(|| {
+                row.conditionals
+                    .values()
+                    .find_map(|region| region.nodes.get(&binding.target))
+            }) {
                 typed_apply_binding(
                     &self.app,
                     &binding,
@@ -1050,8 +1110,14 @@ impl TypedRuntime {
                         }
                     }
                     let value = match write.expression {
-                        Some(expression) => typed_eval(&self.app, expression, &self.states, Some(&row.values), 0)?,
-                        None => write.constant.and_then(|index| self.app.constants.get(index)).cloned().unwrap_or_default(),
+                        Some(expression) => {
+                            typed_eval(&self.app, expression, &self.states, Some(&row.values), 0)?
+                        }
+                        None => write
+                            .constant
+                            .and_then(|index| self.app.constants.get(index))
+                            .cloned()
+                            .unwrap_or_default(),
                     };
                     typed_apply_value(&self.app, &write.kind, Some(write.name), node, value)?;
                 }
@@ -1215,11 +1281,17 @@ impl TypedRuntime {
             }
         }
         for program in self.app.prop_programs.clone() {
-            let Some(node) = self.nodes.get(&program.target) else { continue };
+            let Some(node) = self.nodes.get(&program.target) else {
+                continue;
+            };
             for write in program.writes {
                 let value = match write.expression {
                     Some(expression) => typed_eval(&self.app, expression, &self.states, None, 0)?,
-                    None => write.constant.and_then(|index| self.app.constants.get(index)).cloned().unwrap_or_default(),
+                    None => write
+                        .constant
+                        .and_then(|index| self.app.constants.get(index))
+                        .cloned()
+                        .unwrap_or_default(),
                 };
                 typed_apply_value(&self.app, &write.kind, Some(write.name), node, value)?;
             }

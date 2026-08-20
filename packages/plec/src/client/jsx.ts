@@ -9,6 +9,12 @@ declare global {
   }
 }
 
+export namespace JSX {
+  export interface IntrinsicElements {
+    [elementName: string]: any;
+  }
+}
+
 export interface PlecNode {
   type: string | PlecComponent;
   props: Record<string, unknown>;

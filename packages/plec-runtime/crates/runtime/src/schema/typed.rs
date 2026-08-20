@@ -46,12 +46,27 @@ pub struct TypedApplication {
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TypedHostSlot { pub kind: String, pub query: Option<usize>, pub name: Option<usize> }
+pub struct TypedHostSlot {
+    pub kind: String,
+    pub query: Option<usize>,
+    pub name: Option<usize>,
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TypedCookieCapability { pub kind: String, pub name: String, pub operations: Vec<String>, #[serde(default = "default_cookie_path")] pub path: String, pub same_site: Option<String>, pub secure: Option<bool>, pub expiry_modes: Vec<String> }
-fn default_cookie_path() -> String { "/".into() }
+pub struct TypedCookieCapability {
+    pub kind: String,
+    pub name: String,
+    pub operations: Vec<String>,
+    #[serde(default = "default_cookie_path")]
+    pub path: String,
+    pub same_site: Option<String>,
+    pub secure: Option<bool>,
+    pub expiry_modes: Vec<String>,
+}
+fn default_cookie_path() -> String {
+    "/".into()
+}
 
 #[derive(Clone, Deserialize)]
 pub struct TypedRouteOutlet {
@@ -107,7 +122,9 @@ pub enum TypedActionInstruction {
         value: Option<usize>,
     },
     PreventDefault,
-    StoreHostRef { r#ref: usize },
+    StoreHostRef {
+        r#ref: usize,
+    },
     Call {
         action: usize,
         #[serde(default)]
@@ -150,12 +167,22 @@ pub enum TypedActionInstruction {
 
 #[derive(Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub enum TypedReturnOutcome { Success, Failure }
-impl Default for TypedReturnOutcome { fn default() -> Self { Self::Success } }
+pub enum TypedReturnOutcome {
+    Success,
+    Failure,
+}
+impl Default for TypedReturnOutcome {
+    fn default() -> Self {
+        Self::Success
+    }
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(tag = "capability", content = "request", rename_all = "camelCase")]
-pub enum TypedCapabilityRequest { Fetch(TypedFetchRequest), Cookie(TypedCookieRequest) }
+pub enum TypedCapabilityRequest {
+    Fetch(TypedFetchRequest),
+    Cookie(TypedCookieRequest),
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -190,7 +217,9 @@ pub struct TypedCookieRequest {
     pub expiry: String,
     pub max_age: Option<i64>,
 }
-fn default_cookie_expiry() -> String { "session".into() }
+fn default_cookie_expiry() -> String {
+    "session".into()
+}
 
 fn default_true() -> bool {
     true
@@ -286,7 +315,9 @@ pub enum TypedExpressionInstruction {
     LoadFrame {
         slot: usize,
     },
-    LoadHost { host: usize },
+    LoadHost {
+        host: usize,
+    },
     Field {
         field: usize,
     },
@@ -534,11 +565,19 @@ impl TypedApplication {
             if state.initial_expression >= self.expressions.len() {
                 return Err("state expression handle out of range");
             }
-            if state.name.map(|name| name >= self.strings.len()).unwrap_or(false) {
+            if state
+                .name
+                .map(|name| name >= self.strings.len())
+                .unwrap_or(false)
+            {
                 return Err("state name handle out of range");
             }
         }
-        if self.route_error_state.map(|state| state >= self.state_slots.len()).unwrap_or(false) {
+        if self
+            .route_error_state
+            .map(|state| state >= self.state_slots.len())
+            .unwrap_or(false)
+        {
             return Err("route error state handle out of range");
         }
         for event in &self.events {
@@ -590,7 +629,15 @@ impl TypedApplication {
         }
         for action in &self.actions {
             #[cfg(not(feature = "fetch"))]
-            if action.instructions.iter().any(|instruction| matches!(instruction, TypedActionInstruction::CapabilityRequest { request: TypedCapabilityRequest::Fetch(_), .. })) {
+            if action.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    TypedActionInstruction::CapabilityRequest {
+                        request: TypedCapabilityRequest::Fetch(_),
+                        ..
+                    }
+                )
+            }) {
                 return Err("fetch capability is disabled");
             }
             let input_kinds = self
@@ -611,21 +658,42 @@ impl TypedApplication {
                     {
                         return Err("action state handle out of range")
                     }
-                    TypedActionInstruction::Call { action: callee, arguments, success_pc, failure_pc, result_slot, error_slot } => {
+                    TypedActionInstruction::Call {
+                        action: callee,
+                        arguments,
+                        success_pc,
+                        failure_pc,
+                        result_slot,
+                        error_slot,
+                    } => {
                         let target = self
                             .actions
                             .get(*callee)
                             .ok_or("action handle out of range")?;
-                        let continuation_fields = [success_pc.is_some(), failure_pc.is_some(), result_slot.is_some(), error_slot.is_some()];
-                        if continuation_fields.iter().any(|present| *present) && continuation_fields.iter().any(|present| !*present)
+                        let continuation_fields = [
+                            success_pc.is_some(),
+                            failure_pc.is_some(),
+                            result_slot.is_some(),
+                            error_slot.is_some(),
+                        ];
+                        if continuation_fields.iter().any(|present| *present)
+                            && continuation_fields.iter().any(|present| !*present)
                             || arguments.len() != target.parameter_slots.len()
                             || arguments
                                 .iter()
                                 .any(|expression| *expression >= self.expressions.len())
-                            || success_pc.map(|pc| pc >= action.instructions.len()).unwrap_or(false)
-                            || failure_pc.map(|pc| pc >= action.instructions.len()).unwrap_or(false)
-                            || result_slot.map(|slot| slot >= action.frame_slots).unwrap_or(false)
-                            || error_slot.map(|slot| slot >= action.frame_slots).unwrap_or(false)
+                            || success_pc
+                                .map(|pc| pc >= action.instructions.len())
+                                .unwrap_or(false)
+                            || failure_pc
+                                .map(|pc| pc >= action.instructions.len())
+                                .unwrap_or(false)
+                            || result_slot
+                                .map(|slot| slot >= action.frame_slots)
+                                .unwrap_or(false)
+                            || error_slot
+                                .map(|slot| slot >= action.frame_slots)
+                                .unwrap_or(false)
                         {
                             return Err("invalid action call");
                         }
@@ -656,10 +724,14 @@ impl TypedApplication {
                     {
                         return Err("invalid action continuation")
                     }
-                    TypedActionInstruction::StoreHostRef { r#ref } if *r#ref >= self.strings.len() => {
+                    TypedActionInstruction::StoreHostRef { r#ref }
+                        if *r#ref >= self.strings.len() =>
+                    {
                         return Err("host ref string handle out of range")
                     }
-                    TypedActionInstruction::Return { value: Some(value), .. } if *value >= self.expressions.len() => {
+                    TypedActionInstruction::Return {
+                        value: Some(value), ..
+                    } if *value >= self.expressions.len() => {
                         return Err("action return expression handle out of range")
                     }
                     _ => {}
@@ -672,7 +744,9 @@ impl TypedApplication {
             }
             if action.route_loader
                 && (action.loader_result_state.is_none()
-                    || action.instructions.iter().any(|instruction| matches!(instruction, TypedActionInstruction::StoreState { .. })))
+                    || action.instructions.iter().any(|instruction| {
+                        matches!(instruction, TypedActionInstruction::StoreState { .. })
+                    }))
             {
                 return Err("route loader must write only its loader result state".into());
             }
@@ -787,9 +861,15 @@ mod tests {
 
     #[test]
     fn typed_decoder_rejects_partial_call_continuations() {
-        let mut app = typed_action_artifact(serde_json::json!({"op":"call","action":0,"arguments":[]}), "collection");
+        let mut app = typed_action_artifact(
+            serde_json::json!({"op":"call","action":0,"arguments":[]}),
+            "collection",
+        );
         assert!(app.validate_contract().is_ok());
-        app.actions[0].instructions[0] = serde_json::from_value(serde_json::json!({"op":"call","action":0,"arguments":[],"successPc":0})).unwrap();
+        app.actions[0].instructions[0] = serde_json::from_value(
+            serde_json::json!({"op":"call","action":0,"arguments":[],"successPc":0}),
+        )
+        .unwrap();
         assert_eq!(app.validate_contract(), Err("invalid action call"));
     }
 

@@ -100,8 +100,24 @@ export function AppSidebar({
           <NavLink href="/todos" Icon={ListChecks}>
             Todos
           </NavLink>
+          <NavLink href="#" Icon={TestIcon}>
+            Test
+          </NavLink>
         </nav>
       </aside>
     </div>
   );
 }
+
+const TestIcon = (props: Record<string, unknown>) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    {...props}
+  >
+    <circle cx="12" cy="12" r="10" />
+    <path d="M12 17h.01" />
+  </svg>
+);

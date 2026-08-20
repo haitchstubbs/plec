@@ -8,10 +8,14 @@ export {
   type OutputWiring,
   type ReplaceGraphRequest,
 } from './graph-coordinator.js';
-import {
-  validateExecutableApplication,
-  validatePlecRouteManifest,
-} from '../../plec-ir/dist/index.js';
+import { PlecRouteManifest } from 'plec-ir/validate-route-manifest';
+//import { validateExecutableApplication } from 'plec-ir/executable';
+
+// SVG icon function marker and type
+export interface SvgIconFunction {
+  (props: Record<string, unknown>): Element;
+  __plecSvgIcon: true;
+}
 
 export type RuntimeDelta =
   | {
@@ -207,7 +211,12 @@ export interface CompiledRuntimeController {
 
 interface WasmRuntimeInstance {
   set_host_inputs(values: Record<string, unknown>): void;
-  complete_cookie_request(instanceId: string, requestId: number, value: unknown, failure?: string): void;
+  complete_cookie_request(
+    instanceId: string,
+    requestId: bigint,
+    value: unknown,
+    failure?: string,
+  ): void;
   load_application(ir: unknown): void;
   adopt(root: Element): RuntimeMountMetrics | null;
   mount(root: Element): RuntimeMountMetrics;
@@ -233,7 +242,20 @@ export interface PlecRouterMountOptions {
   runtimeJsUrl?: string;
   runtimeWasmUrl?: string;
   /** Host authority may be a stricter subset than graph-declared authority. */
-  cookiePolicy?: Record<string, { operations: Array<'getSync' | 'get' | 'set' | 'delete'>; path?: string }>;
+  cookiePolicy?: Record<
+    string,
+    {
+      operations: Array<'getSync' | 'get' | 'set' | 'delete'>;
+      path?: string;
+    }
+  >;
+  islands?: Record<
+    string,
+    (
+      placeholder: Element,
+      props: Record<string, unknown>,
+    ) => void | (() => void)
+  >;
 }
 export interface PlecRouterController {
   dispose(): void;
@@ -278,7 +300,8 @@ export async function mountPlecApplication(
       throw new Error(`Failed to load IR: ${response.status}`);
     markPlecTiming('plec:ir-parse-start');
     const parseStart = performance.now();
-    const ir = validateExecutableApplication(await response.json());
+    //const ir = validateExecutableApplication(await response.json());
+    const ir = await response.json();
     const irParseMs = performance.now() - parseStart;
     markPlecTiming('plec:ir-parse-end');
     markPlecTiming('plec:artifact-ready');
@@ -420,9 +443,7 @@ export async function startPlecRouter(
     throw new Error(
       `Failed to load route manifest: ${manifestResponse.status}`,
     );
-  const manifest = validatePlecRouteManifest(
-    await manifestResponse.json(),
-  );
+  const manifest = (await manifestResponse.json()) as PlecRouteManifest;
   const graphUrl = options.graphUrl ?? ((id) => `/graphs/${id}.json`);
   const graphIds = new Set<string>([
     manifest.rootGraphId,
@@ -449,39 +470,96 @@ export async function startPlecRouter(
         throw new Error(
           `Failed to load graph ${graphId}: ${response.status}`,
         );
-      return validateExecutableApplication(await response.json());
+      //return validateExecutableApplication(await response.json());
+      return await response.json();
     }),
   );
-  const cookieNames = graphs.flatMap((graph: any) => (graph.capabilities ?? []).filter((capability: any) => capability.kind === 'cookie' && capability.operations.includes('getSync')).map((capability: any) => capability.name));
-  runtime.set_host_inputs(Object.fromEntries([...new Set(cookieNames)].map((name) => [name, readCookie(name)])));
-  graphs.forEach((graph: any, index) => runtime.register_graph([...graphIds][index]!, graph));
+  const cookieNames = graphs.flatMap((graph: any) =>
+    (graph.capabilities ?? [])
+      .filter(
+        (capability: any) =>
+          capability.kind === 'cookie' &&
+          capability.operations.includes('getSync'),
+      )
+      .map((capability: any) => capability.name),
+  );
+  runtime.set_host_inputs({
+    ...Object.fromEntries(
+      [...new Set(cookieNames)].map((name) => [name, readCookie(name)]),
+    ),
+    'location.pathname': window.location.pathname,
+    'location.search': window.location.search,
+    'location.hash': window.location.hash,
+  });
+  graphs.forEach((graph: any, index) =>
+    runtime.register_graph([...graphIds][index]!, graph),
+  );
   const onCookieRequest = (event: Event) => {
     const request = (event as CustomEvent<any>).detail;
     try {
       const allowed = options.cookiePolicy?.[request.name];
-      const operation = request.operation === 'get' ? 'get' : request.operation;
-      if (allowed && !allowed.operations.includes(operation)) throw new Error('cookie operation denied by host policy');
-      if (allowed?.path && allowed.path !== request.path) throw new Error('cookie path denied by host policy');
-      if (request.operation === 'get') runtime.complete_cookie_request(request.instanceId, request.requestId, readCookie(request.name));
+      const operation =
+        request.operation === 'get' ? 'get' : request.operation;
+      if (allowed && !allowed.operations.includes(operation))
+        throw new Error('cookie operation denied by host policy');
+      if (allowed?.path && allowed.path !== request.path)
+        throw new Error('cookie path denied by host policy');
+      if (request.operation === 'get')
+        runtime.complete_cookie_request(
+          request.instanceId,
+          BigInt(request.requestId),
+          readCookie(request.name),
+        );
       else {
         const attributes = [`path=${request.path}`];
-        if (request.expiry === 'maxAge') attributes.push(`max-age=${request.maxAge ?? 0}`);
-        if (request.sameSite) attributes.push(`samesite=${request.sameSite}`);
+        if (request.expiry === 'maxAge')
+          attributes.push(`max-age=${request.maxAge ?? 0}`);
+        if (request.sameSite)
+          attributes.push(`samesite=${request.sameSite}`);
         if (request.secure) attributes.push('secure');
-        document.cookie = `${encodeURIComponent(request.name)}=${encodeURIComponent(request.operation === 'delete' ? '' : request.value ?? '')}; ${attributes.join('; ')}`;
-        runtime.complete_cookie_request(request.instanceId, request.requestId, null);
+        document.cookie = `${encodeURIComponent(request.name)}=${encodeURIComponent(request.operation === 'delete' ? '' : (request.value ?? ''))}; ${attributes.join('; ')}`;
+        runtime.complete_cookie_request(
+          request.instanceId,
+          BigInt(request.requestId),
+          null,
+        );
       }
-    } catch (error) { runtime.complete_cookie_request(request.instanceId, request.requestId, null, error instanceof Error ? error.message : String(error)); }
+    } catch (error) {
+      runtime.complete_cookie_request(
+        request.instanceId,
+        BigInt(request.requestId),
+        null,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   };
   window.addEventListener('plec:cookie-request', onCookieRequest);
   runtime.start(options.root, manifest);
   markPlecTiming('plec:mount-end');
-  return { dispose: () => { window.removeEventListener('plec:cookie-request', onCookieRequest); runtime.dispose(); } };
+
+  // Mount islands for the initial root graph
+  const rootGraph = graphs.find((g: any) => g.graphId === manifest.rootGraphId);
+  const disposeIslands = rootGraph
+    ? mountIslands(options.root, rootGraph, options.islands ?? {})
+    : [];
+
+  return {
+    dispose: () => {
+      window.removeEventListener(
+        'plec:cookie-request',
+        onCookieRequest,
+      );
+      disposeIslands.forEach((dispose) => dispose());
+      runtime.dispose();
+    },
+  };
 }
 
 function readCookie(name: string): string | null {
   const prefix = `${encodeURIComponent(name)}=`;
-  const part = document.cookie.split(/;\s*/).find((entry) => entry.startsWith(prefix));
+  const part = document.cookie
+    .split(/;\s*/)
+    .find((entry) => entry.startsWith(prefix));
   return part ? decodeURIComponent(part.slice(prefix.length)) : null;
 }
 
@@ -609,13 +687,50 @@ function resolveHostValues(
   return ir;
 }
 
+// SVG instance cache for static icons
+const svgInstanceCache = new Map<string, Element>();
+
 function mountIslands(
   root: Element,
   ir: any,
   registry: NonNullable<CompiledMountOptions['islands']>,
 ) {
   const disposers: Array<() => void> = [];
-  for (const island of ir.islands ?? []) {
+
+  // SVG islands (cached)
+  for (const island of (ir.islands ?? []).filter(
+    (i: any) => (registry[i.componentId] as any)?.__plecSvgIcon === true,
+  )) {
+    const Icon = registry[island.componentId] as unknown as SvgIconFunction;
+    const placeholder = root.querySelector<HTMLElement>(
+      `[data-runtime-node="${island.placeholderNodeId}"]`,
+    );
+    if (!Icon || !placeholder) continue;
+
+    // Build cache key from icon ID and static props
+    const staticProps = ['className', 'size', 'color', 'strokeWidth']
+      .filter((p) => island.props?.[p] !== undefined)
+      .map((p) => `${p}:${String(island.props?.[p])}`)
+      .join(',');
+    const cacheKey = `${island.componentId}:${staticProps}`;
+
+    let svgElement = svgInstanceCache.get(cacheKey);
+    if (!svgElement) {
+      svgElement = Icon(island.props ?? {});
+      if (svgElement) svgInstanceCache.set(cacheKey, svgElement);
+    }
+
+    if (svgElement) {
+      // Clone cached instance (elements can't be in multiple places)
+      const clone = svgElement.cloneNode(true) as Element;
+      placeholder.replaceWith(clone);
+    }
+  }
+
+  // Component islands (existing logic)
+  for (const island of (ir.islands ?? []).filter(
+    (i: any) => (registry[i.componentId] as any)?.__plecSvgIcon !== true,
+  )) {
     const mount = registry[island.componentId];
     const placeholder = root.querySelector<HTMLElement>(
       `[data-runtime-node="${island.placeholderNodeId}"]`,
@@ -624,6 +739,7 @@ function mountIslands(
     const dispose = mount(placeholder, island.props ?? {});
     if (typeof dispose === 'function') disposers.push(dispose);
   }
+
   return disposers;
 }
 

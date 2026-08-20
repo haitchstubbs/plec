@@ -328,8 +328,14 @@ fn fetch_artifact(decode: &str, require_ok: bool, nested: bool) -> serde_json::V
 
 fn caller_continuation_artifact() -> serde_json::Value {
     let mut app = fetch_artifact("text", true, false);
-    app["expressions"].as_array_mut().unwrap().push(serde_json::json!({"instructions":[{"op":"loadFrame","slot":0},{"op":"return"}]}));
-    app["expressions"].as_array_mut().unwrap().push(serde_json::json!({"instructions":[{"op":"loadFrame","slot":1},{"op":"return"}]}));
+    app["expressions"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"instructions":[{"op":"loadFrame","slot":0},{"op":"return"}]}));
+    app["expressions"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"instructions":[{"op":"loadFrame","slot":1},{"op":"return"}]}));
     app["actions"] = serde_json::json!([
         {"frameSlots":2,"instructions":[
             {"op":"call","action":1,"arguments":[],"successPc":1,"failurePc":4,"resultSlot":0,"errorSlot":1},
@@ -928,15 +934,21 @@ async fn typed_route_loader_writes_its_declared_result_state() {
         {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":1,"finallyPc":null,"resultSlot":1,"errorSlot":2},
         {"op":"return"}
     ]);
-    runtime.register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
-    runtime.register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
+    runtime
+        .register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .unwrap();
+    runtime
+        .register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .unwrap();
     let manifest = js_sys::JSON::parse(
         &serde_json::json!({
             "version":3,"rootGraphId":"root","routes":[
                 {"id":"page","path":"*","graphId":"page","outletId":"main","loaderAction":0}
             ]
-        }).to_string(),
-    ).unwrap();
+        })
+        .to_string(),
+    )
+    .unwrap();
     runtime.start(root.clone(), manifest).unwrap();
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap_or_default(), "loaded");
@@ -945,7 +957,9 @@ async fn typed_route_loader_writes_its_declared_result_state() {
 
 #[wasm_bindgen_test(async)]
 async fn typed_route_error_receives_fetch_failure_and_retry_reloads() {
-    set_plec_fetch_queue(r#"[{"status":418,"statusText":"Teapot","body":"short and stout"},{"body":"loaded"}]"#);
+    set_plec_fetch_queue(
+        r#"[{"status":418,"statusText":"Teapot","body":"short and stout"},{"body":"loaded"}]"#,
+    );
     let runtime = PlecRuntime::new();
     let root = mount_root();
     let mut route = fetch_artifact("text", true, false);
@@ -956,9 +970,18 @@ async fn typed_route_error_receives_fetch_failure_and_retry_reloads() {
         {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":1,"finallyPc":null,"resultSlot":1,"errorSlot":2},
         {"op":"return"}
     ]);
-    runtime.register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
-    runtime.register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
-    runtime.register_graph("error".into(), serde_wasm_bindgen::to_value(&route_error_artifact()).unwrap()).unwrap();
+    runtime
+        .register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .unwrap();
+    runtime
+        .register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .unwrap();
+    runtime
+        .register_graph(
+            "error".into(),
+            serde_wasm_bindgen::to_value(&route_error_artifact()).unwrap(),
+        )
+        .unwrap();
     let manifest = js_sys::JSON::parse(&serde_json::json!({
         "version":3,"rootGraphId":"root","routes":[
             {"id":"page","path":"*","graphId":"page","errorGraphId":"error","outletId":"main","loaderAction":0}
@@ -966,7 +989,10 @@ async fn typed_route_error_receives_fetch_failure_and_retry_reloads() {
     }).to_string()).unwrap();
     runtime.start(root.clone(), manifest).unwrap();
     settle_fetch().await;
-    assert_eq!(root.text_content().unwrap_or_default(), "request failed (418)418short and stoutRetry");
+    assert_eq!(
+        root.text_content().unwrap_or_default(),
+        "request failed (418)418short and stoutRetry"
+    );
     click_fetch(&root);
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap_or_default(), "loaded");

@@ -1,16 +1,5 @@
 import { z } from 'zod';
 
-export {
-  EXECUTABLE_APPLICATION_VERSION,
-  ExecutableApplicationSchema,
-  ExecutableHandleSchema,
-  ExecutableValueSchema,
-  validateExecutableApplication,
-  type ExecutableApplication,
-  type ExecutableHandle,
-  type ExecutableValue,
-} from './executable.js';
-
 /** Serializable, row-local expressions.  They are shared by all binding kinds. */
 export const ExpressionSchema: z.ZodType<any> = z.lazy(() =>
   z.discriminatedUnion('kind', [
@@ -50,10 +39,15 @@ export const ExpressionSchema: z.ZodType<any> = z.lazy(() =>
     }),
     z.object({
       kind: z.literal('array'),
-      items: z.array(z.union([
-        ExpressionSchema,
-        z.object({ kind: z.literal('spread'), value: ExpressionSchema }),
-      ])),
+      items: z.array(
+        z.union([
+          ExpressionSchema,
+          z.object({
+            kind: z.literal('spread'),
+            value: ExpressionSchema,
+          }),
+        ]),
+      ),
     }),
     z.object({
       kind: z.literal('object'),
@@ -215,20 +209,34 @@ export const FetchRequestSchema = z.object({
  * in lifecycle/effect operations. */
 export const ActionOperationSchema: z.ZodTypeAny = z.lazy(() =>
   z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('set-state'), stateSlotId: z.string(), value: ExpressionSchema }),
     z.object({
-      kind: z.literal('if'), test: ExpressionSchema,
-      consequent: z.array(ActionOperationSchema), alternate: z.array(ActionOperationSchema),
+      kind: z.literal('set-state'),
+      stateSlotId: z.string(),
+      value: ExpressionSchema,
+    }),
+    z.object({
+      kind: z.literal('if'),
+      test: ExpressionSchema,
+      consequent: z.array(ActionOperationSchema),
+      alternate: z.array(ActionOperationSchema),
     }),
     z.object({ kind: z.literal('prevent-default') }),
-    z.object({ kind: z.literal('return'), value: ExpressionSchema.optional() }),
     z.object({
-      kind: z.literal('collection'), operation: z.enum(['append', 'keyed-replace', 'keyed-remove']),
-      inputId: z.string(), key: ExpressionSchema.optional(), value: ExpressionSchema.optional(),
+      kind: z.literal('return'),
+      value: ExpressionSchema.optional(),
     }),
     z.object({
-      kind: z.literal('capability-request'), capability: z.literal('network.fetch'),
-      request: FetchRequestSchema, continuationId: z.string(),
+      kind: z.literal('collection'),
+      operation: z.enum(['append', 'keyed-replace', 'keyed-remove']),
+      inputId: z.string(),
+      key: ExpressionSchema.optional(),
+      value: ExpressionSchema.optional(),
+    }),
+    z.object({
+      kind: z.literal('capability-request'),
+      capability: z.literal('network.fetch'),
+      request: FetchRequestSchema,
+      continuationId: z.string(),
       /** Names made available only while the matching continuation runs. */
       successResultName: z.string().default('result'),
       failureErrorName: z.string().default('error'),
@@ -239,7 +247,8 @@ export const ActionOperationSchema: z.ZodTypeAny = z.lazy(() =>
     // A graph boundary carries invocation contract only. Captures stay private
     // to the action and graph instance which define them.
     z.object({
-      kind: z.literal('invoke-action-ref'), actionId: z.string(),
+      kind: z.literal('invoke-action-ref'),
+      actionId: z.string(),
       parameters: z.array(ExpressionSchema).default([]),
       result: z.object({ type: z.string() }).optional(),
     }),
@@ -259,7 +268,11 @@ export const CompiledActionSchema = z.object({
   parameters: z.array(ActionParameterSchema).default([]),
   captures: z.array(z.string()).default([]),
   operations: z.array(ActionOperationSchema).default([]),
-  result: z.object({ type: z.enum(['void', 'string', 'boolean', 'number', 'json']) }).default({ type: 'void' }),
+  result: z
+    .object({
+      type: z.enum(['void', 'string', 'boolean', 'number', 'json']),
+    })
+    .default({ type: 'void' }),
 });
 /** A provider is a virtual node: it scopes its value over `children` without
  * producing an extra DOM element. Context ids are declaration identities, not
@@ -542,12 +555,6 @@ export type PlecRouteManifest = z.infer<typeof PlecRouteManifestSchema>;
 
 export function validateComponentGraph(value: unknown): ComponentGraph {
   return ComponentGraphSchema.parse(value);
-}
-
-export function validatePlecRouteManifest(
-  value: unknown,
-): PlecRouteManifest {
-  return PlecRouteManifestSchema.parse(value);
 }
 
 /**

@@ -32,6 +32,10 @@
     "typecheck": "node scripts/generate-icons.mjs && yarn --cwd ../.. exec tsc -p packages/lucide-plec/tsconfig.json --noEmit"
   },
   "dependencies": {
-    "lucide": "^1.31.0"
+    "lucide": "^1.31.0",
+    "plec": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18"
   }
 }

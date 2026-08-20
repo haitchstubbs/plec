@@ -38,13 +38,17 @@ pub(crate) fn typed_apply_value(
             if name == "checked" {
                 let checked = matches!(value, RuntimeValue::Bool(true));
                 input.set_checked(checked);
-                if !checked { element.remove_attribute("checked")?; }
+                if !checked {
+                    element.remove_attribute("checked")?;
+                }
                 return Ok(());
             }
             if name == "disabled" {
                 let disabled = matches!(value, RuntimeValue::Bool(true));
                 input.set_disabled(disabled);
-                if !disabled { element.remove_attribute("disabled")?; }
+                if !disabled {
+                    element.remove_attribute("disabled")?;
+                }
                 return Ok(());
             }
         }

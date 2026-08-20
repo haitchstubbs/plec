@@ -2,7 +2,7 @@ import {
   validateExecutableApplication,
   type ExecutableApplication,
   type ExecutableValue,
-} from 'plec-ir';
+} from 'plec-ir/executable';
 
 type LegacyIr = any;
 
@@ -62,11 +62,11 @@ export function lowerCompilerFacts(
       value.name === 'cookie'
         ? { kind: 'cookie', name: string(value.query) }
         : value.name === 'media-query'
-        ? { kind: 'mediaQuery', query: string(value.query) }
-        : {
-            kind:
-              value.name === 'location' ? 'location' : 'currentYear',
-          },
+          ? { kind: 'mediaQuery', query: string(value.query) }
+          : {
+              kind:
+                value.name === 'location' ? 'location' : 'currentYear',
+            },
     );
     return hostSlots.length - 1;
   };
@@ -101,13 +101,13 @@ export function lowerCompilerFacts(
             op: 'loadState',
             state: stateByName.get(value.name),
           });
-        else if (value.name === frame.item || rowNames.has(value.name))
-          instructions.push({ op: 'loadRowField', field: string('') });
         else if (frame.slots?.has(value.name))
           instructions.push({
             op: 'loadFrame',
             slot: frame.slots.get(value.name),
           });
+        else if (value.name === frame.item || rowNames.has(value.name))
+          instructions.push({ op: 'loadRowField', field: string('') });
         else if (value.name === 'host')
           instructions.push({
             op: 'loadHost',
@@ -224,7 +224,7 @@ export function lowerCompilerFacts(
         return;
       }
       if (value.kind === 'intrinsic' || value.kind === 'method') {
-        emit(value.receiver ?? { kind: 'literal', value: '' });
+        if (value.receiver) emit(value.receiver);
         for (const arg of value.args ?? []) emit(arg);
         const names: Record<string, string> = {
           trim: 'trim',
@@ -302,7 +302,12 @@ export function lowerCompilerFacts(
   }
   for (const conditional of ir.conditionals ?? []) {
     nodeIndex.set(conditional.id, nodes.length);
-    nodes.push({ op: 'conditional', test: 0, parent: null, consequent: 0 });
+    nodes.push({
+      op: 'conditional',
+      test: 0,
+      parent: null,
+      consequent: 0,
+    });
   }
   const loops = (ir.loops ?? []).map((loop: any, loopIndex: number) => {
     nodeIndex.set(loop.id, nodes.length);
@@ -427,10 +432,12 @@ export function lowerCompilerFacts(
       name: string(slot.name),
       initialExpression:
         expressions.push(
-          program(slot.initialExpression ?? {
-            kind: 'literal',
-            value: parseInitialValue(slot.initialValue),
-          }),
+          program(
+            slot.initialExpression ?? {
+              kind: 'literal',
+              value: parseInitialValue(slot.initialValue),
+            },
+          ),
         ) - 1,
       frameSlot: index,
     }),
@@ -537,13 +544,25 @@ export function lowerCompilerFacts(
         }
         case 'capabilityRequest': {
           const request = instruction.request ?? {};
-          if (instruction.capability === 'cookie') return {
-            op: 'capabilityRequest', capability: 'cookie',
-            request: { ...request, name: string(request.name), ...(request.value ? { value: expression(request.value, frame) } : {}) },
-            successPc: instruction.successPc, failurePc: instruction.failurePc,
-            ...(instruction.finallyPc === undefined ? {} : { finallyPc: instruction.finallyPc }),
-            resultSlot: instruction.resultSlot, errorSlot: instruction.errorSlot,
-          };
+          if (instruction.capability === 'cookie')
+            return {
+              op: 'capabilityRequest',
+              capability: 'cookie',
+              request: {
+                ...request,
+                name: string(request.name),
+                ...(request.value
+                  ? { value: expression(request.value, frame) }
+                  : {}),
+              },
+              successPc: instruction.successPc,
+              failurePc: instruction.failurePc,
+              ...(instruction.finallyPc === undefined
+                ? {}
+                : { finallyPc: instruction.finallyPc }),
+              resultSlot: instruction.resultSlot,
+              errorSlot: instruction.errorSlot,
+            };
           return {
             op: 'capabilityRequest',
             capability: 'fetch',
@@ -677,19 +696,38 @@ export function lowerCompilerFacts(
     return [...fields];
   };
   for (const [index, binding] of (ir.bindings ?? []).entries())
-    for (const [state, slot] of (ir.localStates ?? []).map((state: any, slot: number) => [state, slot] as const))
+    for (const [state, slot] of (ir.localStates ?? []).map(
+      (state: any, slot: number) => [state, slot] as const,
+    ))
       if (expressionUsesState(binding.expressionId, state.name))
-        dependencyEdges.push({ source: { kind: 'state', handle: slot }, target: { kind: 'binding', handle: index } });
+        dependencyEdges.push({
+          source: { kind: 'state', handle: slot },
+          target: { kind: 'binding', handle: index },
+        });
   for (const [index, prop] of (ir.propPrograms ?? []).entries())
-    for (const [state, slot] of (ir.localStates ?? []).map((state: any, slot: number) => [state, slot] as const))
-      if ((prop.writes ?? []).some((write: any) => expressionUsesState(write.expressionId, state.name)))
-        dependencyEdges.push({ source: { kind: 'state', handle: slot }, target: { kind: 'propProgram', handle: index } });
+    for (const [state, slot] of (ir.localStates ?? []).map(
+      (state: any, slot: number) => [state, slot] as const,
+    ))
+      if (
+        (prop.writes ?? []).some((write: any) =>
+          expressionUsesState(write.expressionId, state.name),
+        )
+      )
+        dependencyEdges.push({
+          source: { kind: 'state', handle: slot },
+          target: { kind: 'propProgram', handle: index },
+        });
   for (const conditional of ir.conditionals ?? [])
-    for (const [state, slot] of (ir.localStates ?? []).map((state: any, slot: number) => [state, slot] as const))
+    for (const [state, slot] of (ir.localStates ?? []).map(
+      (state: any, slot: number) => [state, slot] as const,
+    ))
       if (expressionUsesState(conditional.expressionId, state.name))
         dependencyEdges.push({
           source: { kind: 'state', handle: slot },
-          target: { kind: 'conditional', handle: nodeIndex.get(conditional.id)! },
+          target: {
+            kind: 'conditional',
+            handle: nodeIndex.get(conditional.id)!,
+          },
         });
   for (const [index, binding] of (ir.bindings ?? []).entries())
     for (const field of rowFields(binding.expressionId, binding.loopId))
@@ -713,17 +751,44 @@ export function lowerCompilerFacts(
           target: { kind: 'propProgram', handle: index },
         });
   const capabilities = new Map<string, any>();
-  for (const slot of hostSlots) if (slot.kind === 'cookie') {
-    const name = strings[slot.name]!;
-    capabilities.set(name, { kind: 'cookie', name, operations: ['getSync'], path: '/', expiryModes: ['session'] });
-  }
-  for (const action of actions) for (const instruction of action.instructions) if (instruction.op === 'capabilityRequest' && instruction.capability === 'cookie') {
-    const name = strings[instruction.request.name]!; const current = capabilities.get(name) ?? { kind: 'cookie', name, operations: [], path: instruction.request.path, ...(instruction.request.sameSite ? { sameSite: instruction.request.sameSite } : {}), ...(instruction.request.secure === undefined ? {} : { secure: instruction.request.secure }), expiryModes: [] };
-    const operation = instruction.request.operation;
-    if (!current.operations.includes(operation)) current.operations.push(operation);
-    if (!current.expiryModes.includes(instruction.request.expiry)) current.expiryModes.push(instruction.request.expiry);
-    capabilities.set(name, current);
-  }
+  for (const slot of hostSlots)
+    if (slot.kind === 'cookie') {
+      const name = strings[slot.name]!;
+      capabilities.set(name, {
+        kind: 'cookie',
+        name,
+        operations: ['getSync'],
+        path: '/',
+        expiryModes: ['session'],
+      });
+    }
+  for (const action of actions)
+    for (const instruction of action.instructions)
+      if (
+        instruction.op === 'capabilityRequest' &&
+        instruction.capability === 'cookie'
+      ) {
+        const name = strings[instruction.request.name]!;
+        const current = capabilities.get(name) ?? {
+          kind: 'cookie',
+          name,
+          operations: [],
+          path: instruction.request.path,
+          ...(instruction.request.sameSite
+            ? { sameSite: instruction.request.sameSite }
+            : {}),
+          ...(instruction.request.secure === undefined
+            ? {}
+            : { secure: instruction.request.secure }),
+          expiryModes: [],
+        };
+        const operation = instruction.request.operation;
+        if (!current.operations.includes(operation))
+          current.operations.push(operation);
+        if (!current.expiryModes.includes(instruction.request.expiry))
+          current.expiryModes.push(instruction.request.expiry);
+        capabilities.set(name, current);
+      }
   return lowerExecutableApplication({
     strings,
     constants,
@@ -734,7 +799,9 @@ export function lowerCompilerFacts(
     events,
     actions,
     stateSlots,
-    ...(ir.routeErrorState === undefined ? {} : { routeErrorState: ir.routeErrorState }),
+    ...(ir.routeErrorState === undefined
+      ? {}
+      : { routeErrorState: ir.routeErrorState }),
     expressions,
     loops,
     rootNode,
@@ -744,10 +811,15 @@ export function lowerCompilerFacts(
     })),
     hostSlots,
     capabilities: [...capabilities.values()],
-    routeOutlets: (ir.layout?.routeOutlets ?? []).map((outlet: any) => ({
-      id: outlet.id,
-      node: required(nodeIndex.get(outlet.elementId), `route outlet ${outlet.id}`),
-    })),
+    routeOutlets: (ir.layout?.routeOutlets ?? []).map(
+      (outlet: any) => ({
+        id: outlet.id,
+        node: required(
+          nodeIndex.get(outlet.elementId),
+          `route outlet ${outlet.id}`,
+        ),
+      }),
+    ),
     dependencyEdges,
   });
 
@@ -837,7 +909,9 @@ export function lowerExecutableApplication(
     propPrograms: facts.propPrograms ?? [],
     inputs: facts.inputs ?? [],
     stateSlots: facts.stateSlots ?? [],
-    ...(facts.routeErrorState === undefined ? {} : { routeErrorState: facts.routeErrorState }),
+    ...(facts.routeErrorState === undefined
+      ? {}
+      : { routeErrorState: facts.routeErrorState }),
     expressions: facts.expressions ?? [],
     actions: facts.actions ?? [],
     loops: facts.loops ?? [],

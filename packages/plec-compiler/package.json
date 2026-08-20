@@ -13,6 +13,10 @@
     "./node-entry": {
       "types": "./dist/node-entry.d.ts",
       "default": "./dist/node-entry.js"
+    },
+    "./trace": {
+      "types": "./dist/trace.d.ts",
+      "default": "./dist/trace.js"
     }
   },
   "files": [

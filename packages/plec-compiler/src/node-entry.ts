@@ -1,6 +1,15 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
+import { getTraces, clearTrace } from './trace.js';
+
+async function dumpTrace() {
+  const traces = getTraces();
+  if (traces.length > 0) {
+    await writeFile('plec-lowering-trace.json', JSON.stringify(traces, null, 2));
+  }
+}
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { parseSync } from '@swc/core';
@@ -137,7 +146,7 @@ export async function compileSourceEntry(
     )
     .digest('hex');
   const source = modules[0]?.source ?? '';
-  return {
+  const result = {
     modules,
     revision,
     result: compile(source, {
@@ -148,6 +157,8 @@ export async function compileSourceEntry(
       applicationRevision: revision,
     }),
   };
+  await dumpTrace();
+  return result;
 }
 
 export async function compileComponentGraphEntry(
@@ -161,7 +172,7 @@ export async function compileComponentGraphEntry(
 ) {
   const sourceEntry = await compileSourceEntry(entry, options);
   const source = sourceEntry.modules[0]?.source ?? '';
-  return {
+  const result = {
     ...sourceEntry,
     result: compileComponentGraph(source, {
       mode: options.mode,
@@ -171,6 +182,8 @@ export async function compileComponentGraphEntry(
       applicationRevision: sourceEntry.revision,
     }),
   };
+  await dumpTrace();
+  return result;
 }
 
 /** Compile the existing Plec route declarations as metadata, then compile the
@@ -180,6 +193,11 @@ export async function compileRouteEntry(
   entry: string,
   options: { rootDir: string; repoRootDir: string; mode?: CompileOptions['mode'] },
 ): Promise<CompiledRouteEntry> {
+  // Clear trace once at start to accumulate all route compilations
+  const traceValue = process.env.PLEC_TRACE_LOWERING ?? '';
+  const traceFilter = traceValue.includes('=') ? traceValue.split('=')[1] : undefined;
+  clearTrace(traceFilter);
+
   const modules = await readSourceGraph(entry, options.rootDir, options.repoRootDir);
   const revision = createHash('sha256')
     .update(modules.map((module) => `${module.id}\n${module.source}`).join('\n'))
@@ -204,11 +222,12 @@ export async function compileRouteEntry(
       rootComponent: component.name,
       moduleId: source.id,
       modules,
+      isNestedCompile: true,
       applicationRevision: revision,
     });
   };
   const rootGraph = compileGraph(root!.component);
-  return {
+  const result = {
     modules,
     revision,
     rootGraph: rootGraph.graph,
@@ -283,6 +302,8 @@ export async function compileRouteEntry(
     };
     }),
   };
+  await dumpTrace();
+  return result;
 }
 
 type RouteComponent = { moduleId: string; name: string };

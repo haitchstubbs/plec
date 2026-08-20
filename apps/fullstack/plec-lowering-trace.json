@@ -1,0 +1,495 @@
+[
+  {
+    "seq": 0,
+    "stage": "component-factory-init",
+    "symbol": "router",
+    "file": "src/router.tsx",
+    "output": {
+      "callee": "createRouter",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 1,
+    "stage": "component-registered",
+    "symbol": "Fragment",
+    "file": "plec/client/jsx.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 2,
+    "stage": "component-registered",
+    "symbol": "RouteView",
+    "file": "plec/routes/render-outlet.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 3,
+    "stage": "component-registered",
+    "symbol": "DefaultError",
+    "file": "plec/routes/render-outlet.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 4,
+    "stage": "component-registered",
+    "symbol": "RouterProvider",
+    "file": "plec/routes/router.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 5,
+    "stage": "component-registered",
+    "symbol": "Outlet",
+    "file": "plec/routes/router.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 6,
+    "stage": "component-registered",
+    "symbol": "Link",
+    "file": "plec/routes/router.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 7,
+    "stage": "component-factory-init",
+    "symbol": "Route",
+    "file": "src/routes/index.tsx",
+    "output": {
+      "callee": "createRootRoute",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 8,
+    "stage": "component-registered",
+    "symbol": "TestIcon",
+    "file": "src/components/app-sidebar.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 9,
+    "stage": "component-factory-init",
+    "symbol": "CircleHelp",
+    "file": "@wasm-runtime/lucide-plec/icons/circle-help",
+    "output": {
+      "callee": "createIcon",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 10,
+    "stage": "component-factory-init",
+    "symbol": "House",
+    "file": "@wasm-runtime/lucide-plec/icons/house",
+    "output": {
+      "callee": "createIcon",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 11,
+    "stage": "component-factory-init",
+    "symbol": "ListChecks",
+    "file": "@wasm-runtime/lucide-plec/icons/list-checks",
+    "output": {
+      "callee": "createIcon",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 12,
+    "stage": "component-factory-init",
+    "symbol": "Workflow",
+    "file": "@wasm-runtime/lucide-plec/icons/workflow",
+    "output": {
+      "callee": "createIcon",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 13,
+    "stage": "component-factory-init",
+    "symbol": "ChevronRight",
+    "file": "@wasm-runtime/lucide-plec/icons/chevron-right",
+    "output": {
+      "callee": "createIcon",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 14,
+    "stage": "component-factory-init",
+    "symbol": "PanelLeft",
+    "file": "@wasm-runtime/lucide-plec/icons/panel-left",
+    "output": {
+      "callee": "createIcon",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 15,
+    "stage": "component-factory-init",
+    "symbol": "iconsAndAliases",
+    "file": "lucide",
+    "output": {
+      "callee": "MemberExpression",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 16,
+    "stage": "component-factory-init",
+    "symbol": "Route",
+    "file": "src/routes/home.route.tsx",
+    "output": {
+      "callee": "createRoute",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 17,
+    "stage": "component-factory-init",
+    "symbol": "Route",
+    "file": "src/routes/about.route.tsx",
+    "output": {
+      "callee": "createRoute",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 18,
+    "stage": "component-factory-init",
+    "symbol": "Route",
+    "file": "src/routes/todos.tsx",
+    "output": {
+      "callee": "createRoute",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 19,
+    "stage": "component-factory-init",
+    "symbol": "Route",
+    "file": "src/routes/not-found.route.tsx",
+    "output": {
+      "callee": "createRoute",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 20,
+    "stage": "jsx-element-enter",
+    "symbol": "PageFrame",
+    "file": "src/routes/todos.tsx",
+    "output": {
+      "isComponent": true
+    }
+  },
+  {
+    "seq": 21,
+    "stage": "component-element-enter",
+    "symbol": "PageFrame",
+    "file": "src/routes/todos.tsx",
+    "input": "<PageFrame>"
+  },
+  {
+    "seq": 22,
+    "stage": "component-resolved",
+    "symbol": "PageFrame",
+    "file": "src/components/page-primitives.tsx",
+    "output": {
+      "resolved": "local-component",
+      "moduleId": "src/components/page-primitives.tsx"
+    }
+  },
+  {
+    "seq": 23,
+    "stage": "jsx-element-enter",
+    "symbol": "main",
+    "file": "src/components/page-primitives.tsx",
+    "output": {
+      "isComponent": false
+    }
+  },
+  {
+    "seq": 24,
+    "stage": "jsx-element-enter",
+    "symbol": "section",
+    "file": "src/components/page-primitives.tsx",
+    "output": {
+      "isComponent": false
+    }
+  },
+  {
+    "seq": 25,
+    "stage": "jsx-element-enter",
+    "symbol": "p",
+    "file": "src/components/page-primitives.tsx",
+    "output": {
+      "isComponent": false
+    }
+  },
+  {
+    "seq": 26,
+    "stage": "jsx-element-enter",
+    "symbol": "button",
+    "file": "src/components/page-primitives.tsx",
+    "output": {
+      "isComponent": false
+    }
+  },
+  {
+    "seq": 27,
+    "stage": "component-factory-init",
+    "symbol": "router",
+    "file": "src/router.tsx",
+    "output": {
+      "callee": "createRouter",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 28,
+    "stage": "component-registered",
+    "symbol": "Fragment",
+    "file": "plec/client/jsx.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 29,
+    "stage": "component-registered",
+    "symbol": "RouteView",
+    "file": "plec/routes/render-outlet.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 30,
+    "stage": "component-registered",
+    "symbol": "DefaultError",
+    "file": "plec/routes/render-outlet.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 31,
+    "stage": "component-registered",
+    "symbol": "RouterProvider",
+    "file": "plec/routes/router.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 32,
+    "stage": "component-registered",
+    "symbol": "Outlet",
+    "file": "plec/routes/router.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 33,
+    "stage": "component-registered",
+    "symbol": "Link",
+    "file": "plec/routes/router.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 34,
+    "stage": "component-factory-init",
+    "symbol": "Route",
+    "file": "src/routes/index.tsx",
+    "output": {
+      "callee": "createRootRoute",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 35,
+    "stage": "component-registered",
+    "symbol": "TestIcon",
+    "file": "src/components/app-sidebar.tsx",
+    "output": {
+      "registeredAs": "component"
+    }
+  },
+  {
+    "seq": 36,
+    "stage": "component-factory-init",
+    "symbol": "CircleHelp",
+    "file": "@wasm-runtime/lucide-plec/icons/circle-help",
+    "output": {
+      "callee": "createIcon",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 37,
+    "stage": "component-factory-init",
+    "symbol": "House",
+    "file": "@wasm-runtime/lucide-plec/icons/house",
+    "output": {
+      "callee": "createIcon",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 38,
+    "stage": "component-factory-init",
+    "symbol": "ListChecks",
+    "file": "@wasm-runtime/lucide-plec/icons/list-checks",
+    "output": {
+      "callee": "createIcon",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 39,
+    "stage": "component-factory-init",
+    "symbol": "Workflow",
+    "file": "@wasm-runtime/lucide-plec/icons/workflow",
+    "output": {
+      "callee": "createIcon",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 40,
+    "stage": "component-factory-init",
+    "symbol": "ChevronRight",
+    "file": "@wasm-runtime/lucide-plec/icons/chevron-right",
+    "output": {
+      "callee": "createIcon",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 41,
+    "stage": "component-factory-init",
+    "symbol": "PanelLeft",
+    "file": "@wasm-runtime/lucide-plec/icons/panel-left",
+    "output": {
+      "callee": "createIcon",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 42,
+    "stage": "component-factory-init",
+    "symbol": "iconsAndAliases",
+    "file": "lucide",
+    "output": {
+      "callee": "MemberExpression",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 43,
+    "stage": "component-factory-init",
+    "symbol": "Route",
+    "file": "src/routes/home.route.tsx",
+    "output": {
+      "callee": "createRoute",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 44,
+    "stage": "component-factory-init",
+    "symbol": "Route",
+    "file": "src/routes/about.route.tsx",
+    "output": {
+      "callee": "createRoute",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 45,
+    "stage": "component-factory-init",
+    "symbol": "Route",
+    "file": "src/routes/todos.tsx",
+    "output": {
+      "callee": "createRoute",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 46,
+    "stage": "component-factory-init",
+    "symbol": "Route",
+    "file": "src/routes/not-found.route.tsx",
+    "output": {
+      "callee": "createRoute",
+      "hasImplementation": false
+    }
+  },
+  {
+    "seq": 47,
+    "stage": "jsx-element-enter",
+    "symbol": "main",
+    "file": "src/routes/not-found.tsx",
+    "output": {
+      "isComponent": false
+    }
+  },
+  {
+    "seq": 48,
+    "stage": "jsx-element-enter",
+    "symbol": "section",
+    "file": "src/routes/not-found.tsx",
+    "output": {
+      "isComponent": false
+    }
+  },
+  {
+    "seq": 49,
+    "stage": "jsx-element-enter",
+    "symbol": "p",
+    "file": "src/routes/not-found.tsx",
+    "output": {
+      "isComponent": false
+    }
+  },
+  {
+    "seq": 50,
+    "stage": "jsx-element-enter",
+    "symbol": "h1",
+    "file": "src/routes/not-found.tsx",
+    "output": {
+      "isComponent": false
+    }
+  },
+  {
+    "seq": 51,
+    "stage": "jsx-element-enter",
+    "symbol": "a",
+    "file": "src/routes/not-found.tsx",
+    "output": {
+      "isComponent": false
+    }
+  }
+]
