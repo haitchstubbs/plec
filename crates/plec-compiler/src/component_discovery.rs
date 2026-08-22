@@ -3,8 +3,8 @@ use plec_sema::{resolve_export, resolve_local_symbol, SemanticGraph, SymbolKind}
 use std::collections::HashMap;
 use swc_common::Span;
 use swc_ecma_ast::{
-    ArrowExpr, ArrowFunctionBody, Callee, Decl, Expr, FnDecl, Function, FunctionBody,
-    JSXElement, JSXFragment, ModuleDecl, ModuleItem, Pat, Stmt, VarDeclarator,
+    ArrowExpr, ArrowFunctionBody, Callee, Decl, Expr, FnDecl, Function, FunctionBody, JSXElement,
+    JSXFragment, ModuleDecl, ModuleItem, Pat, Stmt, VarDeclarator,
 };
 use swc_ecma_visit::{Visit, VisitWith};
 
@@ -34,6 +34,10 @@ pub enum ComponentDiscoveryError {
         module_id: ModuleId,
         name: String,
         reason: String,
+    },
+    ControlFlowReturnUnsupported {
+        module_id: ModuleId,
+        name: String,
     },
 }
 
@@ -73,6 +77,10 @@ impl std::fmt::Display for ComponentDiscoveryError {
             } => write!(
                 f,
                 "Component '{name}' in module '{module_id}' has unsupported shape: {reason}"
+            ),
+            Self::ControlFlowReturnUnsupported { module_id, name } => write!(
+                f,
+                "Component '{name}' in module '{module_id}' returns through statement control flow, which structural HIR does not support"
             ),
         }
     }
@@ -270,13 +278,11 @@ fn is_component_return(returned: ReturnedComponentExpression<'_>) -> bool {
 }
 
 fn function_body_returns_jsx(body: &FunctionBody) -> bool {
-    extract_from_function_body(body)
-        .is_some_and(is_component_return)
+    extract_from_function_body(body).is_some_and(is_component_return)
 }
 
 fn function_like_returns_jsx(function: FunctionLike<'_>) -> bool {
-    returned_from_function_like(function)
-        .is_some_and(is_component_return)
+    returned_from_function_like(function).is_some_and(is_component_return)
 }
 
 #[derive(Clone, Copy)]
@@ -411,31 +417,93 @@ pub fn extract_returned_expression<'a>(
     declaration: &ComponentDeclaration<'a>,
 ) -> Result<ReturnedComponentExpression<'a>, ComponentDiscoveryError> {
     match declaration {
-        ComponentDeclaration::Function(fn_decl) => fn_decl
-            .function
-            .body
-            .as_ref()
-            .and_then(extract_from_function_body)
-            .ok_or_else(|| ComponentDiscoveryError::NoReturnedJsx {
-                module_id: "<unknown>".to_string(),
-                name: fn_decl.ident.sym.to_string(),
-            }),
-        ComponentDeclaration::Arrow { declarator, arrow } => extract_from_arrow_body(arrow)
-            .ok_or_else(|| ComponentDiscoveryError::NoReturnedJsx {
-                module_id: "<unknown>".to_string(),
-                name: get_declarator_name(declarator),
-            }),
+        ComponentDeclaration::Function(fn_decl) => {
+            let module_id = "<unknown>".to_string();
+            let name = fn_decl.ident.sym.to_string();
+            let body = fn_decl.function.body.as_ref().ok_or_else(|| {
+                ComponentDiscoveryError::NoReturnedJsx {
+                    module_id: module_id.clone(),
+                    name: name.clone(),
+                }
+            })?;
+            extract_unconditional_return(body, module_id, name)
+        }
+        ComponentDeclaration::Arrow { declarator, arrow } => match arrow.body.as_ref() {
+            ArrowFunctionBody::Expr(expr) => {
+                find_returned_in_expr(expr.as_ref()).ok_or_else(|| {
+                    ComponentDiscoveryError::NoReturnedJsx {
+                        module_id: "<unknown>".to_string(),
+                        name: get_declarator_name(declarator),
+                    }
+                })
+            }
+            ArrowFunctionBody::FunctionBody(body) => extract_unconditional_return(
+                body,
+                "<unknown>".to_string(),
+                get_declarator_name(declarator),
+            ),
+        },
         ComponentDeclaration::FunctionExpression {
             declarator,
             function,
-        } => function
-            .body
-            .as_ref()
-            .and_then(extract_from_function_body)
-            .ok_or_else(|| ComponentDiscoveryError::NoReturnedJsx {
-                module_id: "<unknown>".to_string(),
-                name: get_declarator_name(declarator),
-            }),
+        } => {
+            let module_id = "<unknown>".to_string();
+            let name = get_declarator_name(declarator);
+            let body =
+                function
+                    .body
+                    .as_ref()
+                    .ok_or_else(|| ComponentDiscoveryError::NoReturnedJsx {
+                        module_id: module_id.clone(),
+                        name: name.clone(),
+                    })?;
+            extract_unconditional_return(body, module_id, name)
+        }
+    }
+}
+
+fn extract_unconditional_return<'a>(
+    body: &'a FunctionBody,
+    module_id: ModuleId,
+    name: String,
+) -> Result<ReturnedComponentExpression<'a>, ComponentDiscoveryError> {
+    let direct_returns = body
+        .stmts
+        .iter()
+        .filter(|stmt| matches!(stmt, Stmt::Return(_)))
+        .count();
+    if direct_returns != 1 || body.stmts.iter().any(stmt_contains_nested_return) {
+        return Err(ComponentDiscoveryError::ControlFlowReturnUnsupported { module_id, name });
+    }
+    body.stmts
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Return(return_stmt) => match return_stmt.arg.as_deref() {
+                Some(expr) => find_returned_in_expr(expr),
+                None => Some(ReturnedComponentExpression::StaticallyAbsent),
+            },
+            _ => None,
+        })
+        .ok_or(ComponentDiscoveryError::NoReturnedJsx { module_id, name })
+}
+
+fn stmt_contains_nested_return(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Return(_) => false,
+        Stmt::Block(block) => block.stmts.iter().any(|statement| {
+            matches!(statement, Stmt::Return(_)) || stmt_contains_nested_return(statement)
+        }),
+        Stmt::If(_)
+        | Stmt::Labeled(_)
+        | Stmt::With(_)
+        | Stmt::While(_)
+        | Stmt::DoWhile(_)
+        | Stmt::For(_)
+        | Stmt::ForIn(_)
+        | Stmt::ForOf(_)
+        | Stmt::Switch(_)
+        | Stmt::Try(_) => true,
+        _ => false,
     }
 }
 
@@ -502,7 +570,12 @@ fn find_returned_in_stmt<'a>(stmt: &'a Stmt) -> Option<ReturnedComponentExpressi
                     .as_ref()
                     .and_then(|handler| find_returned_in_stmts(&handler.body.stmts))
             })
-            .or_else(|| try_stmt.finalizer.as_ref().and_then(|f| find_returned_in_stmts(&f.stmts))),
+            .or_else(|| {
+                try_stmt
+                    .finalizer
+                    .as_ref()
+                    .and_then(|f| find_returned_in_stmts(&f.stmts))
+            }),
 
         // Do not descend into declarations: nested functions have their own return scope.
         _ => None,
@@ -851,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn multiple_structural_returns() {
+    fn rejects_statement_level_control_flow_returns() {
         let (parsed, graph, _) = build_test_graph(vec![(
             "App.tsx",
             r#"
@@ -865,13 +938,9 @@ mod tests {
         )]);
 
         let result = discover_root_component(&parsed, &graph, "App.tsx", Some("App"));
-        assert!(result.is_ok());
-
-        let root = result.unwrap();
-        // Should find the first return with JSX
         assert!(matches!(
-            root.returned,
-            ReturnedComponentExpression::JsxElement(_)
+            result,
+            Err(ComponentDiscoveryError::ControlFlowReturnUnsupported { .. })
         ));
     }
 

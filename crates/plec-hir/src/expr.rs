@@ -1,14 +1,17 @@
-use crate::{ExprId, SourceSpan};
+use crate::{BindingId, ExprId, HirCallableBody, SourceSpan};
 
 /// Callable value representation.
 ///
 /// Distinguishes between named references, inline bodies, and conditional callables.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirCallable {
-    /// Reference to an existing callable (identifier or expression).
-    Reference { expression: ExprId },
+    /// A resolved local callable or callable component parameter.
+    Reference { binding: BindingId },
     /// Inline callable with parameters.
-    Inline { params: Vec<String>, body: ExprId },
+    Inline {
+        parameters: Vec<BindingId>,
+        body: HirCallableBody,
+    },
     /// Conditional callable selection.
     Conditional {
         test: ExprId,
@@ -68,7 +71,7 @@ pub enum HirTemplatePart {
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirExpr {
     Literal(HirValue),
-    Identifier(String),
+    Binding(BindingId),
     Member {
         object: ExprId,
         property: String,

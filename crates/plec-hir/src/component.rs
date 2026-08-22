@@ -1,10 +1,96 @@
-use crate::{ComponentId, HirExprNode, HirNode, NodeId, SourceSpan};
+use crate::{BindingId, ComponentId, ExprId, HirExprNode, HirNode, NodeId, SourceSpan};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirBinding {
+    pub id: BindingId,
+    pub name: String,
+    pub kind: HirBindingKind,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirBindingKind {
+    Parameter { callable: bool },
+    Local,
+    StateValue,
+    StateSetter { state: BindingId },
+    Callable,
+    LoopItem,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirParameter {
+    pub binding: BindingId,
+    pub source: HirParameterSource,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirParameterSource {
+    Direct,
+    Prop { name: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirLocal {
+    pub binding: BindingId,
+    pub initializer: ExprId,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirState {
+    pub value: BindingId,
+    pub setter: BindingId,
+    pub initializer: ExprId,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirCallableDecl {
+    pub binding: BindingId,
+    pub parameters: Vec<BindingId>,
+    pub body: HirCallableBody,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirCallableBody {
+    Expression(ExprId),
+    Block(Vec<HirStmt>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirStmt {
+    Expression {
+        expression: ExprId,
+        span: SourceSpan,
+    },
+    StateUpdate {
+        state: BindingId,
+        value: ExprId,
+        span: SourceSpan,
+    },
+    If {
+        test: ExprId,
+        consequent: Vec<HirStmt>,
+        alternate: Vec<HirStmt>,
+        span: SourceSpan,
+    },
+    Return {
+        value: Option<ExprId>,
+        span: SourceSpan,
+    },
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirComponent {
     pub id: ComponentId,
-    pub module_id: String,
-    pub name: String,
+    pub parameters: Vec<HirParameter>,
+    pub bindings: Vec<HirBinding>,
+    pub locals: Vec<HirLocal>,
+    pub states: Vec<HirState>,
+    pub callables: Vec<HirCallableDecl>,
     pub root_nodes: Vec<NodeId>,
     pub nodes: Vec<HirNode>,
     pub expressions: Vec<HirExprNode>,
@@ -12,16 +98,14 @@ pub struct HirComponent {
 }
 
 impl HirComponent {
-    pub fn new(
-        id: ComponentId,
-        module_id: String,
-        name: String,
-        span: SourceSpan,
-    ) -> Self {
+    pub fn new(id: ComponentId, span: SourceSpan) -> Self {
         Self {
             id,
-            module_id,
-            name,
+            parameters: Vec::new(),
+            bindings: Vec::new(),
+            locals: Vec::new(),
+            states: Vec::new(),
+            callables: Vec::new(),
             root_nodes: Vec::new(),
             nodes: Vec::new(),
             expressions: Vec::new(),
