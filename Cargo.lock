@@ -565,6 +565,7 @@ name = "plec-compiler"
 version = "0.1.0"
 dependencies = [
  "plec-hir",
+ "plec-ir",
  "plec-parser",
  "plec-sema",
  "swc_common",
@@ -576,6 +577,14 @@ dependencies = [
 [[package]]
 name = "plec-hir"
 version = "0.1.0"
+
+[[package]]
+name = "plec-ir"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "plec-parser"
