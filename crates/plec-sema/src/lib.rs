@@ -1,7 +1,10 @@
 use plec_parser::{ExportKind, ImportSpecifier, ParsedModule};
 use std::collections::{HashMap, HashSet};
 use swc_common::Span;
-use swc_ecma_ast::{Decl, Expr, Module, ModuleDecl, ModuleItem, Pat, CallExpr, Callee};
+use swc_ecma_ast::{
+    Callee, CallExpr, Decl, Expr, Function, Lit, Module, ModuleDecl, ModuleItem, Pat,
+    TsFnOrConstructorType, TsType, TsTypeElement,
+};
 
 pub type ModuleId = String;
 
@@ -60,9 +63,16 @@ pub enum ExportSymbolKind {
 pub struct SemanticModule {
     pub id: ModuleId,
     pub locals: HashMap<String, LocalSymbol>,
+    pub component_props: HashMap<String, HashMap<String, ComponentPropKind>>,
     pub imports: HashMap<String, ImportSymbol>,
     pub exports: HashMap<String, ExportSymbol>,
     pub export_all: Vec<ModuleId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentPropKind {
+    Value,
+    Callable,
 }
 
 #[derive(Debug, Clone)]
@@ -96,12 +106,14 @@ pub fn build_semantic_graph(
         let mut semantic = SemanticModule {
             id: parsed.id.clone(),
             locals: HashMap::new(),
+            component_props: HashMap::new(),
             imports: HashMap::new(),
             exports: HashMap::new(),
             export_all: Vec::new(),
         };
 
         collect_local_declarations(&parsed.ast, &mut semantic.locals);
+        collect_component_props(&parsed.ast, &mut semantic.component_props);
 
         for import in &parsed.imports {
             let Some(target_module_id) =
@@ -213,6 +225,111 @@ pub fn build_semantic_graph(
     }
 
     Ok(graph)
+}
+
+fn collect_component_props(
+    ast: &Module,
+    component_props: &mut HashMap<String, HashMap<String, ComponentPropKind>>,
+) {
+    for item in &ast.body {
+        let decl = match item {
+            ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => Some(&export_decl.decl),
+            ModuleItem::Stmt(Stmt::Decl(decl)) => Some(decl),
+            _ => None,
+        };
+        let Some(decl) = decl else { continue };
+
+        match decl {
+            Decl::Fn(fn_decl) => {
+                collect_component_props_from_function(
+                    fn_decl.ident.sym.as_ref(),
+                    &fn_decl.function,
+                    component_props,
+                );
+            }
+            Decl::Var(var_decl) => {
+                for declarator in &var_decl.decls {
+                    let Pat::Ident(ident) = &declarator.name else { continue };
+                    let Some(init) = declarator.init.as_deref() else { continue };
+                    match init {
+                        Expr::Arrow(arrow) => {
+                            if let Some(param) = arrow.params.first() {
+                                collect_component_props_from_pat(
+                                    ident.id.sym.as_ref(),
+                                    param,
+                                    component_props,
+                                );
+                            }
+                        }
+                        Expr::Fn(function) => collect_component_props_from_function(
+                            ident.id.sym.as_ref(),
+                            &function.function,
+                            component_props,
+                        ),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_component_props_from_function(
+    component: &str,
+    function: &Function,
+    component_props: &mut HashMap<String, HashMap<String, ComponentPropKind>>,
+) {
+    if let Some(param) = function.params.first() {
+        collect_component_props_from_pat(component, &param.pat, component_props);
+    }
+}
+
+fn collect_component_props_from_pat(
+    component: &str,
+    pat: &Pat,
+    component_props: &mut HashMap<String, HashMap<String, ComponentPropKind>>,
+) {
+    let Pat::Object(object) = pat else { return };
+    let Some(type_ann) = &object.type_ann else { return };
+    let TsType::TsTypeLit(type_lit) = &*type_ann.type_ann else { return };
+
+    let props = type_lit
+        .members
+        .iter()
+        .filter_map(component_prop_from_type_element)
+        .collect::<HashMap<_, _>>();
+    if !props.is_empty() {
+        component_props.insert(component.to_string(), props);
+    }
+}
+
+fn component_prop_from_type_element(
+    member: &TsTypeElement,
+) -> Option<(String, ComponentPropKind)> {
+    match member {
+        TsTypeElement::TsMethodSignature(method) => {
+            ts_property_name(&method.key).map(|name| (name, ComponentPropKind::Callable))
+        }
+        TsTypeElement::TsPropertySignature(property) => {
+            let kind = match property.type_ann.as_deref().map(|ann| ann.type_ann.as_ref()) {
+                Some(TsType::TsFnOrConstructorType(TsFnOrConstructorType::TsFnType(_))) => {
+                    ComponentPropKind::Callable
+                }
+                _ => ComponentPropKind::Value,
+            };
+            ts_property_name(&property.key).map(|name| (name, kind))
+        }
+        _ => None,
+    }
+}
+
+fn ts_property_name(key: &Expr) -> Option<String> {
+    match key {
+        Expr::Ident(ident) => Some(ident.sym.to_string()),
+        Expr::Lit(Lit::Str(value)) => value.value.as_str().map(str::to_string),
+        _ => None,
+    }
 }
 
 fn collect_decl(decl: &Decl, locals: &mut HashMap<String, LocalSymbol>) {
@@ -595,6 +712,30 @@ mod tests {
         assert_eq!(locals.len(), 1);
         let foo = locals.get("Foo").unwrap();
         assert_eq!(foo.kind, SymbolKind::Class);
+    }
+
+    #[test]
+    fn collects_inline_component_callable_props() {
+        let (graph, _) = build_test_graph(vec![(
+            std::path::Path::new("test.tsx"),
+            r#"
+                function Child({ value, onSave, onChange }: {
+                    value: string;
+                    onSave(): void;
+                    onChange: (next: string) => void;
+                }) {}
+            "#,
+        )]);
+
+        let props = graph
+            .get_module("test.tsx")
+            .unwrap()
+            .component_props
+            .get("Child")
+            .unwrap();
+        assert_eq!(props.get("value"), Some(&ComponentPropKind::Value));
+        assert_eq!(props.get("onSave"), Some(&ComponentPropKind::Callable));
+        assert_eq!(props.get("onChange"), Some(&ComponentPropKind::Callable));
     }
 
     #[test]
