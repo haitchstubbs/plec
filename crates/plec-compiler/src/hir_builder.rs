@@ -1320,6 +1320,18 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
             HirExpr::Template { parts }
         }
 
+        Expr::Array(array) => {
+            let mut items = Vec::new();
+            for item in &array.elems {
+                let item = item.as_ref().ok_or("Array holes are not supported")?;
+                if item.spread.is_some() {
+                    return Err("Array spreads are not supported".to_string());
+                }
+                items.push(lower_expression(&item.expr, ctx)?);
+            }
+            HirExpr::Array(items)
+        }
+
         Expr::Object(obj) => {
             let mut props = Vec::new();
             for prop_or_spread in &obj.props {

@@ -98,6 +98,7 @@ pub enum HirExpr {
     Template {
         parts: Vec<HirTemplatePart>,
     },
+    Array(Vec<ExprId>),
     Object(Vec<(String, ExprId)>),
     Call {
         callee: ExprId,

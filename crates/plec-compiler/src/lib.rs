@@ -1,5 +1,6 @@
 mod component_discovery;
 mod hir_builder;
+mod lowering;
 mod read_source_graph;
 
 pub use component_discovery::{
@@ -7,4 +8,5 @@ pub use component_discovery::{
     ReturnedComponentExpression, RootComponent,
 };
 pub use hir_builder::lower_root_component;
+pub use lowering::{lower_component_to_executable, LoweringError};
 pub use read_source_graph::{read_source_graph, SourceGraph};
