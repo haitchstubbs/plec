@@ -1,6 +1,6 @@
 use plec_parser::{module_dependencies, parse_module, ParsedModule};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -8,6 +8,8 @@ use std::{
 #[derive(Debug)]
 pub struct SourceGraph {
     pub modules: Vec<ParsedModule>,
+    /// Authored import specifier -> canonical source-graph module identity.
+    pub resolved_imports: HashMap<(String, String), String>,
 }
 
 /// Read and parse the complete source graph reachable from an entry module.
@@ -46,6 +48,7 @@ pub fn read_source_graph(
 
     let mut seen = HashSet::new();
     let mut modules = Vec::new();
+    let mut resolved_imports = HashMap::new();
 
     visit_module(
         entry,
@@ -54,9 +57,13 @@ pub fn read_source_graph(
         None,
         &mut seen,
         &mut modules,
+        &mut resolved_imports,
     )?;
 
-    Ok(SourceGraph { modules })
+    Ok(SourceGraph {
+        modules,
+        resolved_imports,
+    })
 }
 
 fn visit_module(
@@ -66,6 +73,7 @@ fn visit_module(
     canonical_id: Option<String>,
     seen: &mut HashSet<PathBuf>,
     modules: &mut Vec<ParsedModule>,
+    resolved_imports: &mut HashMap<(String, String), String>,
 ) -> Result<(), String> {
     let absolute = fs::canonicalize(file_path)
         .map_err(|error| format!("Failed to resolve {}: {error}", file_path.display()))?;
@@ -98,7 +106,20 @@ fn visit_module(
             continue;
         };
 
-        visit_module(&resolved, root_dir, repo_root_dir, None, seen, modules)?;
+        let target_absolute = fs::canonicalize(&resolved)
+            .map_err(|error| format!("Failed to resolve {}: {error}", resolved.display()))?;
+        let target_id = module_id_from_path(&target_absolute, root_dir);
+        resolved_imports.insert((module_id.clone(), specifier.clone()), target_id);
+
+        visit_module(
+            &resolved,
+            root_dir,
+            repo_root_dir,
+            None,
+            seen,
+            modules,
+            resolved_imports,
+        )?;
     }
 
     Ok(())
@@ -290,6 +311,12 @@ mod tests {
         assert_eq!(graph.modules.len(), 2);
         assert_eq!(graph.modules[0].id, "src/App.tsx");
         assert_eq!(graph.modules[1].id, "src/components/Button.tsx");
+        assert_eq!(
+            graph
+                .resolved_imports
+                .get(&("src/App.tsx".to_string(), "./components/Button".to_string(),)),
+            Some(&"src/components/Button.tsx".to_string()),
+        );
     }
 
     #[test]

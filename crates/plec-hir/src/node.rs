@@ -1,19 +1,10 @@
-use crate::{ExprId, HirCallable, NodeId, SourceSpan};
+use crate::{BindingId, ComponentId, ExprId, HirCallable, NodeId, SourceSpan};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirProp {
-    Static {
-        name: String,
-        value: String,
-    },
-    Expression {
-        name: String,
-        value: ExprId,
-    },
-    Callable {
-        name: String,
-        callable: HirCallable,
-    },
+    Static { name: String, value: String },
+    Expression { name: String, value: ExprId },
+    Callable { name: String, callable: HirCallable },
 }
 
 /// DOM event binding on an intrinsic element.
@@ -65,7 +56,9 @@ pub enum HirText {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirComponentCall {
     pub id: NodeId,
-    pub name: String,
+    /// Canonical defining component identity. The call-site span remains on
+    /// this node, so source and target identity are intentionally separate.
+    pub target: ComponentId,
     pub props: Vec<HirProp>,
     pub children: Vec<NodeId>,
     pub span: SourceSpan,
@@ -93,7 +86,7 @@ pub struct HirForEach {
     pub source: ExprId,
     /// Stable identity evaluated in the same lexical scope as `item_param` and `body`.
     pub identity: Option<ExprId>,
-    pub item_param: String,
+    pub item_binding: BindingId,
     pub body: Vec<NodeId>,
     pub span: SourceSpan,
 }

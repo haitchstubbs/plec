@@ -1,25 +1,33 @@
 // IDs
-pub use ids::{ComponentId, ExprId, NodeId};
+pub use ids::{BindingId, ComponentId, ExprId, NodeId};
 
 // Span
 pub use span::SourceSpan;
 
 // Expressions
-pub use expr::{HirCallable, HirExpr, HirExprNode, HirLogicalOp, HirTemplatePart, HirUnaryOp, HirBinaryOp, HirValue};
+pub use expr::{
+    HirBinaryOp, HirCallable, HirExpr, HirExprNode, HirLogicalOp, HirTemplatePart, HirUnaryOp,
+    HirValue,
+};
 
 // Nodes
 pub use node::{
-    HirComponentCall, HirConditional, HirElement, HirEventBinding, HirForEach, HirFragment, HirNode, HirProp, HirText,
+    HirComponentCall, HirConditional, HirElement, HirEventBinding, HirForEach, HirFragment,
+    HirNode, HirProp, HirText,
 };
 
 // Component
 pub use component::HirComponent;
+pub use component::{
+    HirBinding, HirBindingKind, HirCallableBody, HirCallableDecl, HirLocal, HirParameter,
+    HirParameterSource, HirState, HirStmt,
+};
 
-mod ids;
-mod span;
-mod expr;
-mod node;
 mod component;
+mod expr;
+mod ids;
+mod node;
+mod span;
 
 #[cfg(test)]
 mod tests {
@@ -29,14 +37,14 @@ mod tests {
 
     #[test]
     fn constructs_div_with_static_prop_and_expression_text() {
-        let span = SourceSpan::new(0, 100);
+        let span = SourceSpan::new("App.tsx", 0, 100);
 
         // Expressions (indexed by ExprId)
         let expressions = vec![
             HirExprNode::new(
                 ExprId(0),
-                Identifier("user".to_string()),
-                SourceSpan::new(10, 14),
+                Binding(BindingId(0)),
+                SourceSpan::new("App.tsx", 10, 14),
             ),
             HirExprNode::new(
                 ExprId(1),
@@ -44,7 +52,7 @@ mod tests {
                     object: ExprId(0),
                     property: "name".to_string(),
                 },
-                SourceSpan::new(10, 19),
+                SourceSpan::new("App.tsx", 10, 19),
             ),
         ];
 
@@ -53,12 +61,12 @@ mod tests {
             Text(HirText::Static {
                 id: NodeId(0),
                 value: "Hello ".to_string(),
-                span: SourceSpan::new(20, 26),
+                span: SourceSpan::new("App.tsx", 20, 26),
             }),
             Text(HirText::Expression {
                 id: NodeId(1),
                 expression: ExprId(1),
-                span: SourceSpan::new(26, 38),
+                span: SourceSpan::new("App.tsx", 26, 38),
             }),
             Element(HirElement {
                 id: NodeId(2),
@@ -69,18 +77,21 @@ mod tests {
                 }],
                 events: vec![],
                 children: vec![NodeId(0), NodeId(1)],
-                span: SourceSpan::new(0, 50),
+                span: SourceSpan::new("App.tsx", 0, 50),
             }),
         ];
 
         let component = HirComponent {
-            id: ComponentId(0),
-            module_id: "App.tsx".to_string(),
-            name: "App".to_string(),
+            id: ComponentId::new("App.tsx", "App"),
+            parameters: vec![],
+            bindings: vec![],
+            locals: vec![],
+            states: vec![],
+            callables: vec![],
             root_nodes: vec![NodeId(2)],
             nodes,
             expressions,
-            span,
+            span: span.clone(),
         };
 
         // Verify structure
@@ -122,7 +133,7 @@ mod tests {
 
     #[test]
     fn source_span_new_works() {
-        let span = SourceSpan::new(10, 20);
+        let span = SourceSpan::new("test.tsx", 10, 20);
         assert_eq!(span.start, 10);
         assert_eq!(span.end, 20);
     }
@@ -140,20 +151,15 @@ mod tests {
 
     #[test]
     fn hir_component_builder_methods() {
-        let span = SourceSpan::new(0, 100);
-        let component = HirComponent::new(
-            ComponentId(0),
-            "Test.tsx".to_string(),
-            "Test".to_string(),
-            span,
-        )
-        .with_root_node(NodeId(0))
-        .with_node(HirNode::Empty)
-        .with_expression(HirExprNode::new(
-            ExprId(0),
-            HirExpr::Literal(HirValue::Null),
-            span,
-        ));
+        let span = SourceSpan::new("Test.tsx", 0, 100);
+        let component = HirComponent::new(ComponentId::new("Test.tsx", "Test"), span.clone())
+            .with_root_node(NodeId(0))
+            .with_node(HirNode::Empty)
+            .with_expression(HirExprNode::new(
+                ExprId(0),
+                HirExpr::Literal(HirValue::Null),
+                span,
+            ));
 
         assert_eq!(component.root_nodes.len(), 1);
         assert_eq!(component.nodes.len(), 1);
