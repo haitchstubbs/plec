@@ -1,5 +1,22 @@
 use crate::{ExprId, SourceSpan};
 
+/// Callable value representation.
+///
+/// Distinguishes between named references, inline bodies, and conditional callables.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirCallable {
+    /// Reference to an existing callable (identifier or expression).
+    Reference { expression: ExprId },
+    /// Inline callable with parameters.
+    Inline { params: Vec<String>, body: ExprId },
+    /// Conditional callable selection.
+    Conditional {
+        test: ExprId,
+        consequent: Box<HirCallable>,
+        alternate: Box<HirCallable>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirValue {
     Null,
@@ -21,12 +38,18 @@ pub enum HirBinaryOp {
     Subtract,
     Multiply,
     Divide,
+
     Equal,
     NotEqual,
+    StrictEqual,
+    StrictNotEqual,
+
     Greater,
     GreaterEqual,
     Less,
     LessEqual,
+
+    InstanceOf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,6 +95,11 @@ pub enum HirExpr {
     Template {
         parts: Vec<HirTemplatePart>,
     },
+    Object(Vec<(String, ExprId)>),
+    Call {
+        callee: ExprId,
+        args: Vec<ExprId>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,6 +111,10 @@ pub struct HirExprNode {
 
 impl HirExprNode {
     pub fn new(id: ExprId, expression: HirExpr, span: SourceSpan) -> Self {
-        Self { id, expression, span }
+        Self {
+            id,
+            expression,
+            span,
+        }
     }
 }

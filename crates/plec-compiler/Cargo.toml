@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 plec-parser = { path = "../plec-parser" }
 plec-sema = { path = "../plec-sema" }
+plec-hir = { path = "../plec-hir" }
 swc_common.workspace = true
 swc_ecma_ast.workspace = true
 swc_ecma_visit.workspace = true

@@ -5,11 +5,11 @@ pub use ids::{ComponentId, ExprId, NodeId};
 pub use span::SourceSpan;
 
 // Expressions
-pub use expr::{HirExpr, HirExprNode, HirLogicalOp, HirTemplatePart, HirUnaryOp, HirBinaryOp, HirValue};
+pub use expr::{HirCallable, HirExpr, HirExprNode, HirLogicalOp, HirTemplatePart, HirUnaryOp, HirBinaryOp, HirValue};
 
 // Nodes
 pub use node::{
-    HirComponentCall, HirConditional, HirElement, HirFragment, HirNode, HirProp, HirText,
+    HirComponentCall, HirConditional, HirElement, HirEventBinding, HirForEach, HirFragment, HirNode, HirProp, HirText,
 };
 
 // Component
@@ -67,6 +67,7 @@ mod tests {
                     name: "className".to_string(),
                     value: "card".to_string(),
                 }],
+                events: vec![],
                 children: vec![NodeId(0), NodeId(1)],
                 span: SourceSpan::new(0, 50),
             }),
