@@ -50,6 +50,20 @@ const KEYED_COMPONENT_SOURCE: &str = r#"
     }
 "#;
 
+const NESTED_COMPONENT_SOURCE: &str = r#"
+    export function App() {
+        const [title, setTitle] = useState("one");
+        return <main><Child title={title} /><button onClick={() => setTitle("two")} /></main>;
+    }
+    function Child({ title }) {
+        return <section><Grandchild title={title} /></section>;
+    }
+    function Grandchild({ title }) {
+        const [clicks, setClicks] = useState(0);
+        return <div><span>{title}</span><button onClick={() => setClicks(clicks + 1)}>{clicks}</button></div>;
+    }
+"#;
+
 #[test]
 fn rust_counter_artifact_matches_runtime_fixture() {
     assert_fixture("rust-counter.tsx", "Counter", SOURCE, "rust-counter-0.9.json");
@@ -105,6 +119,48 @@ fn rust_keyed_component_artifact_matches_runtime_fixture() {
     assert!(executable.components[1].dependency_edges.iter().any(|edge|
         edge.source.kind == "prop" && edge.target.kind == "binding"
     ));
+    assert_eq!(
+        serde_json::to_value(executable).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+    );
+}
+
+#[test]
+fn rust_nested_component_artifact_matches_runtime_fixture() {
+    let module = parse_module("rust-nested-component.tsx", NESTED_COMPONENT_SOURCE)
+        .expect("source should parse");
+    let modules = vec![module];
+    let semantic_graph = build_semantic_graph(&modules, &Default::default())
+        .expect("semantic graph should build");
+    let root = discover_root_component(
+        &modules,
+        &semantic_graph,
+        "rust-nested-component.tsx",
+        Some("App"),
+    )
+    .expect("App should be discovered");
+    let application = lower_application(&modules, &root, &semantic_graph)
+        .expect("App should lower to HIR");
+    let executable = lower_application_to_executable(&application)
+        .expect("App should lower to component IR");
+    let fixture = fs::read_to_string(format!(
+        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-nested-component-0.10.json",
+        env!("CARGO_MANIFEST_DIR")
+    )).expect("runtime fixture should exist");
+
+    assert_eq!(executable.components.len(), 3);
+    assert!(executable.components[0]
+        .dependency_edges
+        .iter()
+        .any(|edge| edge.source.kind == "state" && edge.target.kind == "component"));
+    assert!(executable.components[1]
+        .dependency_edges
+        .iter()
+        .any(|edge| edge.source.kind == "prop" && edge.target.kind == "component"));
+    assert!(executable.components[2]
+        .dependency_edges
+        .iter()
+        .any(|edge| edge.source.kind == "prop" && edge.target.kind == "binding"));
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
         serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
