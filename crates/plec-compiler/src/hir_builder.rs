@@ -5,7 +5,7 @@ use plec_hir::{
     BindingId, ComponentId, ExprId, HirBinaryOp, HirBinding, HirBindingKind, HirCallable,
     HirCallableBody, HirCallableDecl, HirComponent, HirComponentCall, HirConditional, HirElement,
     HirEventBinding, HirExpr, HirExprNode, HirForEach, HirFragment, HirLocal, HirLogicalOp,
-    HirInput, HirNode, HirParameter, HirParameterSource, HirProp, HirState, HirStmt, HirTemplatePart,
+    HirApplication, HirInput, HirNode, HirParameter, HirParameterSource, HirProp, HirState, HirStmt, HirTemplatePart,
     HirText, HirUnaryOp, HirValue, NodeId, SourceSpan,
 };
 use plec_sema::{resolve_component, ComponentPropKind, SemanticGraph};
@@ -266,6 +266,48 @@ pub fn lower_root_component(
         expressions: ctx.expressions,
         span,
     })
+}
+
+pub fn lower_application(
+    parsed_modules: &[plec_parser::ParsedModule],
+    root: &RootComponent<'_>,
+    semantic_graph: &SemanticGraph,
+) -> Result<HirApplication, String> {
+    fn visit(
+        parsed_modules: &[plec_parser::ParsedModule],
+        root: &RootComponent<'_>,
+        semantic_graph: &SemanticGraph,
+        visiting: &mut Vec<ComponentId>,
+        components: &mut Vec<HirComponent>,
+    ) -> Result<(), String> {
+        let id = ComponentId::new(&root.symbol.module_id, &root.symbol.local_name);
+        if visiting.contains(&id) {
+            return Err(format!("Recursive component '{}' is unsupported", root.symbol.local_name));
+        }
+        if components.iter().any(|component| component.id == id) {
+            return Ok(());
+        }
+        visiting.push(id.clone());
+        let component = lower_root_component(root, semantic_graph)?;
+        let targets = component.nodes.iter().filter_map(|node| match node {
+            HirNode::Component(call) => Some(call.target.clone()),
+            _ => None,
+        }).collect::<Vec<_>>();
+        components.push(component);
+        for target in targets {
+            let child = crate::discover_root_component(
+                parsed_modules, semantic_graph, &target.module_id, Some(&target.local_name),
+            ).map_err(|error| error.to_string())?;
+            visit(parsed_modules, &child, semantic_graph, visiting, components)?;
+        }
+        visiting.pop();
+        Ok(())
+    }
+
+    let root_id = ComponentId::new(&root.symbol.module_id, &root.symbol.local_name);
+    let mut components = Vec::new();
+    visit(parsed_modules, root, semantic_graph, &mut Vec::new(), &mut components)?;
+    Ok(HirApplication { root: root_id, components })
 }
 
 fn lower_component_program(
@@ -2524,5 +2566,28 @@ mod tests {
                 .unwrap_err()
                 .contains("spread children")
         );
+    }
+
+    #[test]
+    fn lowers_reachable_components_and_rejects_cycles() {
+        let modules = vec![parse_module("App.tsx", r#"
+            export function App() { return <Child />; }
+            function Child() { return <div>child</div>; }
+        "#).unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let root = discover_root_component(&modules, &graph, "App.tsx", Some("App")).unwrap();
+        let app = lower_application(&modules, &root, &graph).unwrap();
+        assert_eq!(app.components.len(), 2);
+        assert_eq!(app.root, ComponentId::new("App.tsx", "App"));
+
+        let modules = vec![parse_module("Cycle.tsx", r#"
+            export function App() { return <Child />; }
+            function Child() { return <App />; }
+        "#).unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let root = discover_root_component(&modules, &graph, "Cycle.tsx", Some("App")).unwrap();
+        assert!(lower_application(&modules, &root, &graph)
+            .unwrap_err()
+            .contains("Recursive component 'App'"));
     }
 }
