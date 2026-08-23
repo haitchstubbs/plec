@@ -14,6 +14,7 @@ pub(crate) struct TypedLoopRows {
 
 pub(crate) struct TypedRow {
     pub(crate) root: Node,
+    pub(crate) end: Option<Node>,
     pub(crate) values: HashMap<String, RuntimeValue>,
     pub(crate) nodes: HashMap<usize, Node>,
     /// Concrete, row-owned conditional regions. A branch change must never
@@ -1150,6 +1151,15 @@ impl TypedRuntime {
 }
 
 impl TypedRuntime {
+    fn row_dom_nodes(root: &Node, end: Option<&Node>) -> Vec<Node> {
+        let mut nodes = vec![root.clone()];
+        while end.is_some_and(|end| !nodes.last().unwrap().is_same_node(Some(end))) {
+            let Some(next) = nodes.last().unwrap().next_sibling() else { break; };
+            nodes.push(next);
+        }
+        nodes
+    }
+
     pub(crate) fn reconcile_loop(
         &mut self,
         loop_index: usize,
@@ -1180,8 +1190,10 @@ impl TypedRuntime {
             {
                 self.dispose_region_listeners(loop_index, &key, row.generation);
                 if let Some(parent) = row.root.parent_node() {
-                    parent.remove_child(&row.root)?;
-                    metrics.dom_operations += 1;
+                    for node in Self::row_dom_nodes(&row.root, row.end.as_ref()) {
+                        parent.remove_child(&node)?;
+                        metrics.dom_operations += 1;
+                    }
                 }
             }
         }
@@ -1205,7 +1217,7 @@ impl TypedRuntime {
             .map(|rows| {
                 desired
                     .iter()
-                    .filter_map(|key| rows.rows.get(key).map(|row| row.root.clone()))
+                    .flat_map(|key| rows.rows.get(key).map(|row| Self::row_dom_nodes(&row.root, row.end.as_ref())).unwrap_or_default())
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -1234,16 +1246,18 @@ impl TypedRuntime {
         let root = self.instantiate_node(
             &doc,
             template,
-            None,
+            Some(parent),
             Some(&values),
             index,
             &mut nodes,
             &mut conditionals,
         )?;
+        let end = matches!(self.app.nodes[template], TypedNode::Component { .. })
+            .then(|| root.next_sibling())
+            .flatten();
         if let Ok(element) = root.clone().dyn_into::<Element>() {
             element.set_attribute("data-runtime-row-key", &key)?;
         }
-        parent.append_child(&root)?;
         let _conditional_selections = self.row_conditional_selections(template, &values, index)?;
         let generation = self.next_generation;
         self.next_generation += 1;
@@ -1251,6 +1265,7 @@ impl TypedRuntime {
             key.clone(),
             TypedRow {
                 root,
+                end,
                 values: values.clone(),
                 nodes,
                 conditionals,
