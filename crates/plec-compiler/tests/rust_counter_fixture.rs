@@ -39,6 +39,17 @@ const COMPONENT_SOURCE: &str = r#"
     }
 "#;
 
+const KEYED_COMPONENT_SOURCE: &str = r#"
+    export function Todos() {
+        const todos = useCollection("items");
+        return <ul>{todos.map(todo => <Child key={todo.id} title={todo.title} />)}</ul>;
+    }
+    function Child({ title }) {
+        const [clicks, setClicks] = useState(0);
+        return <li><span>{title}</span><button onClick={() => setClicks(clicks + 1)}>{clicks}</button></li>;
+    }
+"#;
+
 #[test]
 fn rust_counter_artifact_matches_runtime_fixture() {
     assert_fixture("rust-counter.tsx", "Counter", SOURCE, "rust-counter-0.9.json");
@@ -68,6 +79,32 @@ fn rust_component_artifact_matches_runtime_fixture() {
         env!("CARGO_MANIFEST_DIR")
     )).expect("runtime fixture should exist");
 
+    assert_eq!(
+        serde_json::to_value(executable).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+    );
+}
+
+#[test]
+fn rust_keyed_component_artifact_matches_runtime_fixture() {
+    let module = parse_module("rust-keyed-component.tsx", KEYED_COMPONENT_SOURCE).expect("source should parse");
+    let modules = vec![module];
+    let semantic_graph = build_semantic_graph(&modules, &Default::default()).expect("semantic graph should build");
+    let root = discover_root_component(&modules, &semantic_graph, "rust-keyed-component.tsx", Some("Todos"))
+        .expect("Todos should be discovered");
+    let application = lower_application(&modules, &root, &semantic_graph).expect("Todos should lower to HIR");
+    let executable = lower_application_to_executable(&application).expect("Todos should lower to component IR");
+    let fixture = fs::read_to_string(format!(
+        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-keyed-component-0.10.json",
+        env!("CARGO_MANIFEST_DIR")
+    )).expect("runtime fixture should exist");
+
+    assert!(executable.components[0].dependency_edges.iter().any(|edge|
+        edge.source.kind == "rowField" && edge.target.kind == "component"
+    ));
+    assert!(executable.components[1].dependency_edges.iter().any(|edge|
+        edge.source.kind == "prop" && edge.target.kind == "binding"
+    ));
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
         serde_json::from_str::<serde_json::Value>(&fixture).unwrap()

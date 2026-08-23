@@ -71,6 +71,11 @@ fn rust_component_artifact() -> serde_json::Value {
         .expect("Rust component fixture should be valid JSON")
 }
 
+fn rust_keyed_component_artifact() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/rust-keyed-component-0.10.json"))
+        .expect("Rust keyed component fixture should be valid JSON")
+}
+
 /// A minimal external keyed loop whose row button writes the row title to the
 /// static output text. It exercises row-owned listener frames without relying
 /// on any legacy runtime behaviour.
@@ -488,6 +493,41 @@ fn rust_component_fixture_refreshes_child_without_remounting() {
     assert_eq!(next.text_content().unwrap(), "two");
     assert!(span.is_same_node(Some(&next)));
     assert!(text.is_same_node(next.first_child().as_ref()));
+}
+
+#[wasm_bindgen_test]
+fn rust_keyed_component_fixture_retains_rows_and_disposes_removed_child() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, rust_keyed_component_artifact(), &root);
+    apply_delta(&runtime, serde_json::json!({"type":"insert","input_id":"items","row_key":"one","row":{"id":"one","title":"One"},"before_row_key":null}));
+    apply_delta(&runtime, serde_json::json!({"type":"insert","input_id":"items","row_key":"two","row":{"id":"two","title":"Two"},"before_row_key":null}));
+
+    let first = root.query_selector("li").unwrap().unwrap();
+    let first_node: web_sys::Node = first.clone().into();
+    let title = first.query_selector("span").unwrap().unwrap();
+    let title_text = title.first_child().unwrap();
+    let button = first.query_selector("button").unwrap().unwrap();
+
+    apply_delta(&runtime, serde_json::json!({"type":"update","input_id":"items","row_key":"one","changes":{"title":"Updated"}}));
+    assert!(first_node.is_same_node(root.query_selector("li").unwrap().as_ref().map(|node| node.unchecked_ref())));
+    assert!(title.is_same_node(first.query_selector("span").unwrap().as_ref().map(|node| node.unchecked_ref())));
+    assert!(title_text.is_same_node(title.first_child().as_ref()));
+    assert_eq!(title.text_content().unwrap(), "Updated");
+
+    button.clone().dyn_into::<web_sys::EventTarget>().unwrap()
+        .dispatch_event(&Event::new("click").unwrap()).unwrap();
+    assert_eq!(first.text_content().unwrap(), "Updated1");
+
+    apply_delta(&runtime, serde_json::json!({"type":"move","input_id":"items","row_key":"two","before_row_key":"one"}));
+    assert!(first_node.is_same_node(root.query_selector_all("li").unwrap().item(1).as_ref()));
+    assert_eq!(first.text_content().unwrap(), "Updated1");
+
+    apply_delta(&runtime, serde_json::json!({"type":"remove","input_id":"items","row_key":"one"}));
+    assert!(first.parent_node().is_none());
+    button.clone().dyn_into::<web_sys::EventTarget>().unwrap()
+        .dispatch_event(&Event::new("click").unwrap()).unwrap();
+    assert_eq!(root.text_content().unwrap(), "Two0");
 }
 
 #[wasm_bindgen_test]
