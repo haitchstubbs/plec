@@ -8,7 +8,7 @@ Proven: scalar state text update; keyed collection row insert/update/move/remove
 
 ## Ownership
 
-Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/row/conditional lowering, 0.10 component definitions/calls, scalar prop lowering, and parent state->component dependency edges. Runtime component-instance execution remains unowned.
+Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/row/conditional lowering, 0.10 component definitions/calls, scalar prop lowering, and parent state->component dependency edges. Runtime component-instance loading/execution remains unowned.
 TypeScript owns production component expansion, rich actions, router, and TanStack integration/delta production.
 Runtime owns typed artifact validation, state/delta dispatch, keyed-loop reconciliation, conditional lifecycle, direct listener ownership.
 
@@ -26,11 +26,11 @@ Rust lowering executes collection inputs, keyed rows, named row fields/edges, ro
 
 ## Semantic-loss boundaries
 
-Reachable component identity/call props/parameters survive into `HirApplication` and 0.10 IR. Prop expressions retain parent-state dependency edges; runtime can evaluate supplied prop slots. Component instance identity, 0.10 loading, mount/dispose ownership, and child state isolation do not cross executable IR to runtime.
+Reachable component identity/call props/parameters survive into `HirApplication` and 0.10 IR. Prop expressions retain parent-state dependency edges; runtime has `LoadProp` slots but `load_application` never deserializes `TypedComponentApplication`. Component instance identity, 0.10 loading, mount/dispose ownership, and child state isolation do not cross executable IR to runtime.
 
 ## Contract drift
 
-`plec-ir` serializes Rust artifact; runtime separately deserializes typed 0.9 schema. Counter and collection-row fixtures are exact cross-boundary checks. Working tree adds independently maintained 0.10 component schema on both sides; no exact artifact/runtime fixture yet.
+`plec-ir` serializes Rust artifact; runtime separately deserializes typed 0.9 schema. Counter and collection-row fixtures are exact cross-boundary checks. Rust/runtime independently define 0.10 components, but runtime only validates the component schema; public loader has no 0.10 decode branch, so no exact artifact/runtime fixture exists.
 2026-08-23: compiler fixture tests 3/3 pass; WASM suite 15/18 passes, including all Rust artifacts. Three pre-existing typed-event failures: two route-loader output assertions, one row fetch-frame duplicate text assertion.
 
 ## Runtime invariants
