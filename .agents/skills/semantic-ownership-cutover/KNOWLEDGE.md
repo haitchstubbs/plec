@@ -2,7 +2,7 @@
 
 ## Frontier
 
-Rust: TSX parser + semantic graph -> canonical root component -> HIR -> `plec-ir` 0.9 -> JSON -> typed WASM runtime -> DOM.
+Rust: TSX parser + semantic graph -> canonical root component -> reachable `HirApplication` -> per-component HIR -> `plec-ir` 0.9 -> JSON -> typed WASM runtime -> DOM.
 Proven: scalar state text update; keyed collection row insert/update/move/remove and standalone/row-local conditional lifecycle.
 `useCollection("name")` is a named collection HIR input; lowering preserves it as executable input and links its keyed loop.
 
@@ -21,12 +21,12 @@ Standalone conditional: Rust artifact -> WASM state switch; browser fixture prov
 
 ## Capability status
 
-Rust HIR represents `useCollection("name")`, component calls/props, fragments, conditionals, keyed `ForEach`, loop-item bindings, callable parameters.
+Rust HIR represents reachable acyclic component applications, canonical calls/props, `useCollection("name")`, fragments, conditionals, keyed `ForEach`, loop-item bindings, callable parameters.
 Rust lowering executes collection inputs, keyed rows, named row fields/edges, row-owned inline events, standalone/row-local conditionals, scalar state; rejects components, callable parameters/props, generic action expressions.
 
 ## Semantic-loss boundaries
 
-Component call target/props/parameters stop at Rust executable lowering; `HirNode::Component` has no executable IR/runtime node.
+Reachable component identity/call props/parameters survive into `HirApplication`; application-to-executable lowering drops them. `HirNode::Component` has no executable IR/runtime node.
 
 ## Contract drift
 
@@ -46,7 +46,7 @@ Other local graphs are static or state-only; graph artifacts are current local e
 
 ## Source landmarks
 
-Rust lowering: `crates/plec-compiler/src/lowering.rs`; HIR component/input model: `crates/plec-hir/src/{component,node}.rs`; Rust IR: `crates/plec-ir/src/lib.rs`.
+Application discovery: `crates/plec-compiler/src/hir_builder.rs::lower_application`; executable lowering: `crates/plec-compiler/src/lowering.rs`; HIR component/input model: `crates/plec-hir/src/{component,node}.rs`; Rust IR: `crates/plec-ir/src/lib.rs`.
 Rust vertical fixtures: `crates/plec-compiler/tests/rust_counter_fixture.rs`; runtime artifacts: `packages/plec-runtime/crates/runtime/tests/fixtures/rust-*.json`; browser proof: `typed_events.rs`.
 
 ## Candidate clusters
