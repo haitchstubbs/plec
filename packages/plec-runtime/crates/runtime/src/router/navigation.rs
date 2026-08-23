@@ -315,6 +315,8 @@ impl PlecRuntime {
                 match_key,
                 route_state: None,
                 loader_runtime: None,
+                component_call: None,
+                component_start: None,
                 runtime,
             },
         );

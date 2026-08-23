@@ -8,7 +8,7 @@ Proven: scalar state text update; keyed collection row insert/update/move/remove
 
 ## Ownership
 
-Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/row/conditional lowering, 0.10 component definitions/calls, scalar prop lowering, and parent state->component dependency edges. Runtime component-instance loading/execution remains unowned.
+Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/row/conditional lowering, 0.10 component definitions/calls, scalar prop lowering, and parent state->component dependency edges. Runtime owns mounted component-instance identity, prop refresh, named-input fan-out, and orphan disposal; exact Rust-produced component fixture remains unproven.
 TypeScript owns production component expansion, rich actions, router, and TanStack integration/delta production.
 Runtime owns typed artifact validation, state/delta dispatch, keyed-loop reconciliation, conditional lifecycle, direct listener ownership.
 
@@ -22,11 +22,11 @@ Standalone conditional: Rust artifact -> WASM state switch; browser fixture prov
 ## Capability status
 
 Rust HIR represents reachable acyclic component applications, canonical calls/props, `useCollection("name")`, fragments, conditionals, keyed `ForEach`, loop-item bindings, callable parameters.
-Rust lowering executes collection inputs, keyed rows, named row fields/edges, row-owned inline events, standalone/row-local conditionals, scalar state. It lowers static/expression scalar component props and `LoadProp` into 0.10; preserves `prop` and row-field component edges; rejects callable/direct props and JSX children. Runtime loads 0.10, mounts initial recursive component calls at comment anchors, and exposes addressed typed inputs; prop refresh and structural child disposal remain unproven.
+Rust lowering executes collection inputs, keyed rows, named row fields/edges, row-owned inline events, standalone/row-local conditionals, scalar state. It lowers static/expression scalar component props and `LoadProp` into 0.10; preserves `prop` and row-field component edges; rejects callable/direct props and JSX children. Runtime loads 0.10, mounts recursive calls at comment anchors, refreshes prop-dependent sinks, fans named input snapshots/deltas to live instances, and drops detached child instances.
 
 ## Semantic-loss boundaries
 
-Reachable component identity/call props/parameters survive into `HirApplication` and 0.10 IR. Child sinks retain `prop` edges. Runtime now loads component definitions and creates initial child runtimes, but parent delta-to-child prop refresh, canonical keyed instance identity, and recursive structural disposal remain incomplete.
+Reachable component identity/call props/parameters survive into `HirApplication` and 0.10 IR. Child sinks retain `prop` edges. Runtime-local component anchors connect parent call nodes to child instances; state/row refresh re-evaluates props and detached child roots invalidate listeners and runtime state. Keyed identity/browser lifecycle proof remains pending.
 
 ## Contract drift
 
@@ -57,4 +57,4 @@ Rust vertical fixtures: `crates/plec-compiler/tests/rust_counter_fixture.rs`; ru
 
 `Text.binding` is required by runtime typed mounting; Rust emitter now supplies it. Numeric `add` must preserve numbers; runtime VM fixed locally.
 Detached test roots make `Node.is_connected()` false; assert parent removal or root selection instead.
-2026-08-24: 0.10 preserves scalar prop dependency edges and runtime prop reads; schema rejects invalid component targets/props. Recursive mount, event dispatch, prop refresh, and disposal remain absent; not a proven slice.
+2026-08-24: 0.10 preserves scalar prop dependency edges and runtime prop reads; schema rejects invalid component targets/props. Browser manual 0.10 artifact proves parent-state prop refresh updates existing child text node. Full WASM suite remains 16/19: three known route/fetch failures.
