@@ -76,6 +76,11 @@ fn rust_keyed_component_artifact() -> serde_json::Value {
         .expect("Rust keyed component fixture should be valid JSON")
 }
 
+fn rust_nested_component_artifact() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/rust-nested-component-0.10.json"))
+        .expect("Rust nested component fixture should be valid JSON")
+}
+
 /// A minimal external keyed loop whose row button writes the row title to the
 /// static output text. It exercises row-owned listener frames without relying
 /// on any legacy runtime behaviour.
@@ -528,6 +533,47 @@ fn rust_keyed_component_fixture_retains_rows_and_disposes_removed_child() {
     button.clone().dyn_into::<web_sys::EventTarget>().unwrap()
         .dispatch_event(&Event::new("click").unwrap()).unwrap();
     assert_eq!(root.text_content().unwrap(), "Two0");
+}
+
+#[wasm_bindgen_test]
+fn rust_nested_component_fixture_refreshes_grandchild_without_remounting() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, rust_nested_component_artifact(), &root);
+    let section = root.query_selector("section").unwrap().unwrap();
+    let span = root.query_selector("span").unwrap().unwrap();
+    let text = span.first_child().unwrap();
+    let buttons = root.query_selector_all("button").unwrap();
+
+    buttons
+        .item(1)
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    let next_section = root.query_selector("section").unwrap().unwrap();
+    let next_span = root.query_selector("span").unwrap().unwrap();
+    assert_eq!(next_span.text_content().unwrap(), "two");
+    assert!(section.is_same_node(Some(&next_section)));
+    assert!(span.is_same_node(Some(&next_span)));
+    assert!(text.is_same_node(next_span.first_child().as_ref()));
+
+    buttons
+        .item(0)
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(
+        root.query_selector("div")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "two1"
+    );
 }
 
 #[wasm_bindgen_test]
