@@ -488,22 +488,29 @@ impl<'a> Ctx<'a> {
                 if self.active_loop.is_some() {
                     return Err(self.err("components inside keyed loops are not executable yet"));
                 }
+                if !call.children.is_empty() {
+                    return Err(self.err("component children are not executable yet"));
+                }
                 let targets = self.targets.ok_or_else(|| self.err("component calls are not executable in IR 0.9"))?;
                 let (component, parameters) = targets.get(&call.target)
                     .ok_or_else(|| self.err("component target missing from application"))?;
                 let mut supplied = BTreeSet::new();
                 let mut props = Vec::new();
+                let mut dependencies = BTreeSet::new();
                 for prop in call.props {
-                    let (name, expression) = match prop {
+                    let (name, expression, deps) = match prop {
                         HirProp::Static { name, value } => {
                             let constant = self.constant(Value::String(value));
                             let expression = self.app.expressions.len();
                             self.app.expressions.push(ExpressionProgram { instructions: vec![
                                 ExpressionInstruction::Constant { constant }, ExpressionInstruction::Return,
                             ] });
-                            (name, expression)
+                            (name, expression, BTreeSet::new())
                         }
-                        HirProp::Expression { name, value } => (name, self.expression(value, false)?.0),
+                        HirProp::Expression { name, value } => {
+                            let (expression, deps) = self.expression(value, false)?;
+                            (name, expression, deps)
+                        }
                         HirProp::Callable { .. } => return Err(self.err("callable component props are not executable yet")),
                     };
                     if !supplied.insert(name.clone()) {
@@ -512,6 +519,7 @@ impl<'a> Ctx<'a> {
                     if !parameters.contains(&name) {
                         return Err(self.err("unknown component prop"));
                     }
+                    dependencies.extend(deps);
                     props.push(ComponentProp { name: self.string(&name), expression });
                 }
                 if supplied.len() != parameters.len() || parameters.iter().any(|name| !supplied.contains(name)) {
@@ -519,6 +527,7 @@ impl<'a> Ctx<'a> {
                 }
                 let index = self.app.nodes.len();
                 self.app.nodes.push(Node::Component { component: *component, parent, props });
+                self.edges(dependencies, "component", index);
                 Ok(index)
             }
             _ => Err(self.err("node is not executable in the first IR slice")),

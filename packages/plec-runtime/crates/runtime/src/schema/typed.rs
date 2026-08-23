@@ -7,6 +7,7 @@ use wasm_bindgen::JsValue;
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TypedApplication {
+    #[serde(default = "component_version")]
     pub version: String,
     pub root_node: usize,
     pub strings: Vec<String>,
@@ -44,7 +45,11 @@ pub struct TypedApplication {
     pub capabilities: Vec<TypedCookieCapability>,
     #[serde(skip)]
     pub host_inputs: HashMap<String, RuntimeValue>,
+    #[serde(skip)]
+    pub runtime_props: Vec<RuntimeValue>,
 }
+
+fn component_version() -> String { "0.10".into() }
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +57,51 @@ pub struct TypedComponentApplication {
     pub version: String,
     pub root_component: usize,
     pub components: Vec<TypedApplication>,
+}
+
+impl TypedComponentApplication {
+    pub(crate) fn validate(&self) -> Result<(), JsValue> {
+        if self.version != "0.10" || self.root_component >= self.components.len() {
+            return Err(JsValue::from_str("invalid component application"));
+        }
+        for component in &self.components {
+            component.validate()?;
+            let mut parameters = HashSet::new();
+            for parameter in &component.parameters {
+                let Some(name) = component.strings.get(parameter.name) else {
+                    return Err(JsValue::from_str("component parameter handle out of range"));
+                };
+                if !parameters.insert(name) {
+                    return Err(JsValue::from_str("duplicate component parameter"));
+                }
+            }
+            for node in &component.nodes {
+                if let TypedNode::Component { component: target, props, .. } = node {
+                    let Some(target) = self.components.get(*target) else {
+                        return Err(JsValue::from_str("component target out of range"));
+                    };
+                    if props.len() != target.parameters.len() {
+                        return Err(JsValue::from_str("missing component prop"));
+                    }
+                    let mut supplied = HashSet::new();
+                    for prop in props {
+                        let Some(name) = component.strings.get(prop.name) else {
+                            return Err(JsValue::from_str("component prop name out of range"));
+                        };
+                        if prop.expression >= component.expressions.len() || !supplied.insert(name.clone()) {
+                            return Err(JsValue::from_str("invalid component prop"));
+                        }
+                    }
+                    if target.parameters.iter().any(|parameter| {
+                        target.strings.get(parameter.name).map(String::as_str).map(|name| !supplied.contains(name)).unwrap_or(true)
+                    }) {
+                        return Err(JsValue::from_str("missing component prop"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -578,7 +628,7 @@ impl TypedApplication {
     }
 
     fn validate_contract(&self) -> Result<(), &'static str> {
-        if self.version != "0.9" {
+        if self.version != "0.9" && self.version != "0.10" {
             return Err("unsupported executable application version");
         }
         if self.root_node >= self.nodes.len() {

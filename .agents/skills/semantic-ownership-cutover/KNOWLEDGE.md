@@ -8,7 +8,7 @@ Proven: scalar state text update; keyed collection row insert/update/move/remove
 
 ## Ownership
 
-Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/row lowering, and conditional lowering. Working tree adds 0.10 component definitions/calls plus scalar prop lowering; runtime execution remains unowned.
+Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/row/conditional lowering, 0.10 component definitions/calls, scalar prop lowering, and parent state->component dependency edges. Runtime component-instance execution remains unowned.
 TypeScript owns production component expansion, rich actions, router, and TanStack integration/delta production.
 Runtime owns typed artifact validation, state/delta dispatch, keyed-loop reconciliation, conditional lifecycle, direct listener ownership.
 
@@ -22,11 +22,11 @@ Standalone conditional: Rust artifact -> WASM state switch; browser fixture prov
 ## Capability status
 
 Rust HIR represents reachable acyclic component applications, canonical calls/props, `useCollection("name")`, fragments, conditionals, keyed `ForEach`, loop-item bindings, callable parameters.
-Rust lowering executes collection inputs, keyed rows, named row fields/edges, row-owned inline events, standalone/row-local conditionals, scalar state. Working tree lowers static/expression scalar component props and `LoadProp` into 0.10; rejects callable/direct props and calls in keyed loops. Runtime rejects all 0.10 component nodes; `LoadProp` currently evaluates `Null`.
+Rust lowering executes collection inputs, keyed rows, named row fields/edges, row-owned inline events, standalone/row-local conditionals, scalar state. It lowers static/expression scalar component props and `LoadProp` into 0.10; rejects callable/direct props, JSX children, and calls in keyed loops. Runtime schema validates component targets/required props; `LoadProp` reads instance prop slots. Runtime still rejects 0.10 component nodes.
 
 ## Semantic-loss boundaries
 
-Reachable component identity/call props/parameters survive into `HirApplication`. Working tree preserves them in separately versioned 0.10 IR, but runtime neither loads component applications nor evaluates per-instance props. Component instance identity, prop dependencies, mount/dispose ownership, and child state isolation do not cross executable IR to runtime.
+Reachable component identity/call props/parameters survive into `HirApplication` and 0.10 IR. Prop expressions retain parent-state dependency edges; runtime can evaluate supplied prop slots. Component instance identity, 0.10 loading, mount/dispose ownership, and child state isolation do not cross executable IR to runtime.
 
 ## Contract drift
 
@@ -57,4 +57,4 @@ Rust vertical fixtures: `crates/plec-compiler/tests/rust_counter_fixture.rs`; ru
 
 `Text.binding` is required by runtime typed mounting; Rust emitter now supplies it. Numeric `add` must preserve numbers; runtime VM fixed locally.
 Detached test roots make `Node.is_connected()` false; assert parent removal or root selection instead.
-2026-08-24: 0.10 prototype represented component calls/parameters and lowers scalar props, but runtime rejects them and returns `Null` for `LoadProp`; not a proven slice.
+2026-08-24: 0.10 preserves scalar prop dependency edges and runtime prop reads; schema rejects invalid component targets/props. Recursive mount, event dispatch, prop refresh, and disposal remain absent; not a proven slice.
