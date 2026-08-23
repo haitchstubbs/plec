@@ -4,7 +4,7 @@
 
 Rust: TSX parser + semantic graph -> canonical root component -> HIR -> `plec-ir` 0.9 -> JSON -> typed WASM runtime -> DOM.
 Proven: scalar state text update; keyed collection row insert/update/move/remove and standalone/row-local conditional lifecycle.
-Current worktree: `useCollection("name")` HIR input + executable IR input.
+`useCollection("name")` is a named collection HIR input; lowering preserves it as executable input and links its keyed loop.
 
 ## Ownership
 
@@ -26,7 +26,7 @@ Rust lowering executes collection inputs, keyed rows, named row fields/edges, ro
 
 ## Semantic-loss boundaries
 
-Component call target/props/parameters stop at Rust executable lowering.
+Component call target/props/parameters stop at Rust executable lowering; `HirNode::Component` has no executable IR/runtime node.
 
 ## Contract drift
 
@@ -46,12 +46,12 @@ Other local graphs are static or state-only; graph artifacts are current local e
 
 ## Source landmarks
 
-Rust lowering: `crates/plec-compiler/src/lowering.rs`; HIR nodes: `crates/plec-hir/src/node.rs`; Rust IR: `crates/plec-ir/src/lib.rs`.
+Rust lowering: `crates/plec-compiler/src/lowering.rs`; HIR component/input model: `crates/plec-hir/src/{component,node}.rs`; Rust IR: `crates/plec-ir/src/lib.rs`.
 Rust vertical fixtures: `crates/plec-compiler/tests/rust_counter_fixture.rs`; runtime artifacts: `packages/plec-runtime/crates/runtime/tests/fixtures/rust-*.json`; browser proof: `typed_events.rs`.
 
 ## Candidate clusters
 
-1. Component call: canonical target + input/prop slots + parameter binding + cross-instance dependencies + component lifecycle.
+1. Component instance: canonical target + input/prop slots + parameter binding + cross-instance dependencies + instance lifecycle/disposal. Existing typed VM frame/action machinery is reusable, but no component instance ownership exists.
 
 ## Corrections
 

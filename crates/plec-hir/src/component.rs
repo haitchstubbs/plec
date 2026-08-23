@@ -107,6 +107,12 @@ pub struct HirComponent {
     pub span: SourceSpan,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirApplication {
+    pub root: ComponentId,
+    pub components: Vec<HirComponent>,
+}
+
 impl HirComponent {
     pub fn new(id: ComponentId, span: SourceSpan) -> Self {
         Self {
