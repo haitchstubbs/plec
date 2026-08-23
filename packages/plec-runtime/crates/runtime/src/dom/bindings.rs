@@ -1,6 +1,7 @@
 use crate::dom::properties::*;
 use crate::eval::{expression::*, typed_vm::*, value::*};
 use crate::runtime::lifecycle::*;
+use wasm_bindgen::JsCast;
 
 pub(crate) fn typed_apply_binding(
     app: &TypedApplication,
@@ -22,7 +23,12 @@ pub(crate) fn typed_apply_value(
     value: RuntimeValue,
 ) -> Result<(), JsValue> {
     if sink == "text" {
-        node.set_text_content(Some(&typed_value_string(&value)));
+        let value = typed_value_string(&value);
+        if let Some(text) = node.dyn_ref::<web_sys::Text>() {
+            text.set_data(&value);
+        } else {
+            node.set_text_content(Some(&value));
+        }
         return Ok(());
     }
     let element: Element = node

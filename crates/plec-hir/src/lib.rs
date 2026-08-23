@@ -19,7 +19,7 @@ pub use node::{
 // Component
 pub use component::HirComponent;
 pub use component::{
-    HirBinding, HirBindingKind, HirCallableBody, HirCallableDecl, HirLocal, HirParameter,
+    HirBinding, HirBindingKind, HirCallableBody, HirCallableDecl, HirInput, HirLocal, HirParameter,
     HirParameterSource, HirState, HirStmt,
 };
 
@@ -84,6 +84,7 @@ mod tests {
         let component = HirComponent {
             id: ComponentId::new("App.tsx", "App"),
             parameters: vec![],
+            inputs: vec![],
             bindings: vec![],
             locals: vec![],
             states: vec![],

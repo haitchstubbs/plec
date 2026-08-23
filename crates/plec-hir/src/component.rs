@@ -11,11 +11,20 @@ pub struct HirBinding {
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirBindingKind {
     Parameter { callable: bool },
+    Input { kind: String },
     Local,
     StateValue,
     StateSetter { state: BindingId },
     Callable,
     LoopItem,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirInput {
+    pub binding: BindingId,
+    pub name: String,
+    pub kind: String,
+    pub span: SourceSpan,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +96,7 @@ pub enum HirStmt {
 pub struct HirComponent {
     pub id: ComponentId,
     pub parameters: Vec<HirParameter>,
+    pub inputs: Vec<HirInput>,
     pub bindings: Vec<HirBinding>,
     pub locals: Vec<HirLocal>,
     pub states: Vec<HirState>,
@@ -102,6 +112,7 @@ impl HirComponent {
         Self {
             id,
             parameters: Vec::new(),
+            inputs: Vec::new(),
             bindings: Vec::new(),
             locals: Vec::new(),
             states: Vec::new(),

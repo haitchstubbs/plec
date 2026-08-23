@@ -278,11 +278,16 @@ pub(crate) fn typed_eval_frame(
                             left
                         }
                     }
-                    "add" => RuntimeValue::String(format!(
-                        "{}{}",
-                        typed_value_string(&left),
-                        typed_value_string(&right)
-                    )),
+                    "add" => match (left, right) {
+                        (RuntimeValue::Number(left), RuntimeValue::Number(right)) => {
+                            RuntimeValue::Number(left + right)
+                        }
+                        (left, right) => RuntimeValue::String(format!(
+                            "{}{}",
+                            typed_value_string(&left),
+                            typed_value_string(&right)
+                        )),
+                    },
                     _ => RuntimeValue::Null,
                 };
                 stack.push(result);
@@ -385,5 +390,23 @@ mod tests {
                 RuntimeValue::String("third".into()),
             ]),
         );
+    }
+
+    #[test]
+    fn add_preserves_numeric_values() {
+        let app = serde_json::from_value(serde_json::json!({
+            "version": "0.9", "rootNode": 0, "strings": [],
+            "constants": [0.0, 1.0],
+            "nodes": [{"op": "element", "tag": 0}],
+            "expressions": [{"instructions": [
+                {"op": "constant", "constant": 0},
+                {"op": "constant", "constant": 1},
+                {"op": "binary", "kind": "add"},
+                {"op": "return"}
+            ]}]
+        }))
+        .unwrap();
+
+        assert_eq!(typed_eval(&app, 0, &[], None, 0).unwrap(), RuntimeValue::Number(1.0));
     }
 }

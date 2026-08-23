@@ -5,7 +5,7 @@ use plec_hir::{
     HirNode, HirProp, HirStmt, HirText, HirUnaryOp, HirValue, NodeId,
 };
 use plec_ir::{
-    ActionInstruction, ActionProgram, Binding, DependencyEdge, DependencyEndpoint, Event,
+    ActionInstruction, ActionProgram, Binding, DependencyEdge, DependencyEndpoint, Event, Input,
     ExecutableApplication, ExpressionInstruction, ExpressionProgram, Loop, Node, PropProgram,
     PropWrite, StateSlot, Text, Value,
 };
@@ -32,11 +32,20 @@ pub fn lower_component_to_executable(
             frame_slot: slot,
         });
     }
+    for input in &component.inputs {
+        if input.kind != "collection" {
+            return Err(Ctx::new(component).err("input kind is not executable"));
+        }
+        let name = ctx.string(&input.name);
+        let slot = ctx.app.inputs.len();
+        ctx.inputs.insert(input.binding, slot);
+        ctx.app.inputs.push(Input { name, kind: "collection" });
+    }
     for callable in &component.callables {
         if !callable.parameters.is_empty() {
             return Err(ctx.err("callable parameters are not executable yet"));
         }
-        let action = ctx.action(&callable.body)?;
+        let action = ctx.action(&callable.body, false)?;
         ctx.callables.insert(callable.binding, action);
     }
     if component.root_nodes.len() != 1 {
@@ -52,9 +61,11 @@ struct Ctx<'a> {
     strings: HashMap<String, usize>,
     constants: HashMap<String, usize>,
     states: HashMap<BindingId, usize>,
+    inputs: HashMap<BindingId, usize>,
     callables: HashMap<BindingId, usize>,
     locals: HashMap<BindingId, plec_hir::ExprId>,
     active_locals: Vec<BindingId>,
+    active_loop: Option<usize>,
 }
 impl<'a> Ctx<'a> {
     fn new(component: &'a HirComponent) -> Self {
@@ -64,6 +75,7 @@ impl<'a> Ctx<'a> {
             strings: HashMap::new(),
             constants: HashMap::new(),
             states: HashMap::new(),
+            inputs: HashMap::new(),
             callables: HashMap::new(),
             locals: component
                 .locals
@@ -71,6 +83,7 @@ impl<'a> Ctx<'a> {
                 .map(|v| (v.binding, v.initializer))
                 .collect(),
             active_locals: vec![],
+            active_loop: None,
         }
     }
     fn err(&self, message: &str) -> LoweringError {
@@ -163,17 +176,24 @@ impl<'a> Ctx<'a> {
                     self.active_locals.pop();
                 }
                 Some(HirBindingKind::LoopItem) if row => {
-                    code.push(ExpressionInstruction::LoadRowField {
-                        field: self.string(""),
-                    })
+                    return Err(self.err("row item must be accessed through a field"))
                 }
                 _ => return Err(self.err("binding is not executable in this expression")),
             },
             HirExpr::Member { object, property } => {
-                self.emit(object, row, code, deps)?;
-                code.push(ExpressionInstruction::Field {
-                    field: self.string(&property),
-                });
+                if matches!(self.expr(object)?, HirExpr::Binding(binding) if matches!(self.component.bindings[binding.0 as usize].kind, HirBindingKind::LoopItem)) {
+                    if !row {
+                        return Err(self.err("row field used outside a loop"));
+                    }
+                    code.push(ExpressionInstruction::LoadRowField {
+                        field: self.string(&property),
+                    });
+                } else {
+                    self.emit(object, row, code, deps)?;
+                    code.push(ExpressionInstruction::Field {
+                        field: self.string(&property),
+                    });
+                }
             }
             HirExpr::Unary { op, argument } => {
                 self.emit(argument, row, code, deps)?;
@@ -295,6 +315,7 @@ impl<'a> Ctx<'a> {
                         target: index,
                         event_type,
                         action,
+                        r#loop: self.active_loop,
                         fields: vec![],
                     });
                 }
@@ -302,14 +323,20 @@ impl<'a> Ctx<'a> {
             }
             HirNode::Text(HirText::Static { value, .. }) => {
                 let text = self.app.texts.len();
-                self.app.texts.push(Text { value: Some(value) });
+                self.app.texts.push(Text {
+                    value: Some(value),
+                    binding: None,
+                });
                 let index = self.app.nodes.len();
                 self.app.nodes.push(Node::Text { text, parent });
                 Ok(index)
             }
             HirNode::Text(HirText::Expression { expression, .. }) => {
                 let text = self.app.texts.len();
-                self.app.texts.push(Text { value: None });
+                self.app.texts.push(Text {
+                    value: None,
+                    binding: None,
+                });
                 let index = self.app.nodes.len();
                 self.app.nodes.push(Node::Text { text, parent });
                 let (expression, deps) = self.expression(expression, parent.is_some())?;
@@ -320,7 +347,9 @@ impl<'a> Ctx<'a> {
                     name: None,
                     expression,
                 });
+                self.app.texts[text].binding = Some(binding);
                 self.edges(deps, "binding", binding);
+                self.row_edges(expression, "binding", binding);
                 Ok(index)
             }
             HirNode::ForEach(loop_node) => {
@@ -331,15 +360,31 @@ impl<'a> Ctx<'a> {
                 if loop_node.body.len() != 1 {
                     return Err(self.err("ForEach requires one row root"));
                 }
-                let (source, deps) = self.expression(loop_node.source, false)?;
+                let input = match self.expr(loop_node.source)? {
+                    HirExpr::Binding(binding) => self.inputs.get(binding).copied(),
+                    _ => None,
+                };
+                let (source, deps) = if input.is_some() {
+                    let index = self.app.expressions.len();
+                    self.app.expressions.push(ExpressionProgram {
+                        instructions: vec![ExpressionInstruction::MakeArray { count: 0 }, ExpressionInstruction::Return],
+                    });
+                    (index, BTreeSet::new())
+                } else {
+                    self.expression(loop_node.source, false)?
+                };
                 let (key_expression, _) = self.expression(key, true)?;
-                let row_template = self.node(loop_node.body[0], None)?;
                 let loop_index = self.app.loops.len();
+                let previous_loop = self.active_loop.replace(loop_index);
+                let row_template = self.node(loop_node.body[0], None)?;
+                self.active_loop = previous_loop;
                 self.app.loops.push(Loop {
                     source_expression: source,
                     key_expression,
                     item_slot: loop_node.item_binding.0 as usize,
                     row_template,
+                    dependency_slots: deps.iter().copied().collect(),
+                    input,
                 });
                 self.edges(deps, "loop", loop_index);
                 let index = self.app.nodes.len();
@@ -347,6 +392,25 @@ impl<'a> Ctx<'a> {
                     r#loop: loop_index,
                     parent: Some(parent),
                 });
+                Ok(index)
+            }
+            HirNode::Conditional(conditional) => {
+                if conditional.consequent.len() != 1 || conditional.alternate.len() > 1 {
+                    return Err(self.err("conditional branches require at most one node"));
+                }
+                let (test, deps) = self.expression(conditional.test, self.active_loop.is_some())?;
+                let index = self.app.nodes.len();
+                self.app.nodes.push(Node::Conditional {
+                    test,
+                    parent,
+                    consequent: 0,
+                    alternate: None,
+                });
+                let consequent = self.node(conditional.consequent[0], None)?;
+                let alternate = conditional.alternate.first().map(|node| self.node(*node, None)).transpose()?;
+                self.app.nodes[index] = Node::Conditional { test, parent, consequent, alternate };
+                self.edges(deps, "conditional", index);
+                self.row_edges(test, "conditional", index);
                 Ok(index)
             }
             _ => Err(self.err("node is not executable in the first IR slice")),
@@ -366,7 +430,7 @@ impl<'a> Ctx<'a> {
                 });
             }
             HirProp::Expression { name, value } => {
-                let (expression, deps) = self.expression(value, false)?;
+                let (expression, deps) = self.expression(value, self.active_loop.is_some())?;
                 let program = self.prop_program(target);
                 let name = self.string(&name);
                 self.app.prop_programs[program].writes.push(PropWrite {
@@ -376,6 +440,7 @@ impl<'a> Ctx<'a> {
                     expression: Some(expression),
                 });
                 self.edges(deps, "propProgram", program);
+                self.row_edges(expression, "propProgram", program);
             }
             HirProp::Callable { .. } => {
                 return Err(self.err("callable component props are not executable yet"))
@@ -407,9 +472,23 @@ impl<'a> Ctx<'a> {
                 source: DependencyEndpoint {
                     kind: "state",
                     handle: state,
+                    r#loop: None,
                 },
-                target: DependencyEndpoint { kind, handle },
+                target: DependencyEndpoint { kind, handle, r#loop: None },
             })
+        }
+    }
+    fn row_edges(&mut self, expression: usize, kind: &'static str, target_handle: usize) {
+        let Some(loop_index) = self.active_loop else { return };
+        let fields = self.app.expressions[expression].instructions.iter().filter_map(|instruction| match instruction {
+            ExpressionInstruction::LoadRowField { field } => Some(*field),
+            _ => None,
+        }).collect::<BTreeSet<_>>();
+        for field in fields {
+            self.app.dependency_edges.push(DependencyEdge {
+                source: DependencyEndpoint { kind: "rowField", handle: field, r#loop: Some(loop_index) },
+                target: DependencyEndpoint { kind, handle: target_handle, r#loop: None },
+            });
         }
     }
     fn callable(&mut self, callable: &HirCallable) -> Result<usize, LoweringError> {
@@ -419,17 +498,17 @@ impl<'a> Ctx<'a> {
                 .get(binding)
                 .copied()
                 .ok_or_else(|| self.err("event callable is not a zero-parameter local action")),
-            HirCallable::Inline { parameters, body } if parameters.is_empty() => self.action(body),
+            HirCallable::Inline { parameters, body } if parameters.is_empty() => self.action(body, self.active_loop.is_some()),
             _ => Err(self.err("callable is not executable in the first IR slice")),
         }
     }
-    fn action(&mut self, body: &HirCallableBody) -> Result<usize, LoweringError> {
+    fn action(&mut self, body: &HirCallableBody, row: bool) -> Result<usize, LoweringError> {
         let mut code = vec![];
         match body {
-            HirCallableBody::Block(stmts) => self.statements(stmts, &mut code)?,
+            HirCallableBody::Block(stmts) => self.statements(stmts, &mut code, row)?,
             HirCallableBody::Expression(expr) => {
                 let (state, value) = self.setter_call(*expr)?;
-                let (expression, _) = self.expression(value, false)?;
+                let (expression, _) = self.expression(value, row)?;
                 code.push(ActionInstruction::Evaluate { expression });
                 code.push(ActionInstruction::StoreState { state });
             }
@@ -442,7 +521,7 @@ impl<'a> Ctx<'a> {
     fn statements(
         &mut self,
         stmts: &[HirStmt],
-        code: &mut Vec<ActionInstruction>,
+        code: &mut Vec<ActionInstruction>, row: bool,
     ) -> Result<(), LoweringError> {
         for stmt in stmts {
             match stmt {
@@ -451,7 +530,7 @@ impl<'a> Ctx<'a> {
                         .states
                         .get(state)
                         .ok_or_else(|| self.err("state update target missing"))?;
-                    let (expression, _) = self.expression(*value, false)?;
+                    let (expression, _) = self.expression(*value, row)?;
                     code.push(ActionInstruction::Evaluate { expression });
                     code.push(ActionInstruction::StoreState { state });
                 }
@@ -461,15 +540,15 @@ impl<'a> Ctx<'a> {
                     alternate,
                     ..
                 } => {
-                    let (expression, _) = self.expression(*test, false)?;
+                    let (expression, _) = self.expression(*test, row)?;
                     code.push(ActionInstruction::Evaluate { expression });
                     let jump_false = code.len();
                     code.push(ActionInstruction::JumpIfFalse { target: 0 });
-                    self.statements(consequent, code)?;
+                    self.statements(consequent, code, row)?;
                     let jump_end = code.len();
                     code.push(ActionInstruction::Jump { target: 0 });
                     let alternate_start = code.len();
-                    self.statements(alternate, code)?;
+                    self.statements(alternate, code, row)?;
                     let end = code.len();
                     code[jump_false] = ActionInstruction::JumpIfFalse {
                         target: alternate_start,
@@ -574,6 +653,26 @@ mod tests {
             .dependency_edges
             .iter()
             .any(|edge| edge.target.kind == "loop"));
+    }
+
+    #[test]
+    fn lowers_collection_rows_with_conditional_and_row_action() {
+        let app = lower(
+            r#"
+            export function Todos() {
+                const todos = useCollection("items");
+                const [selected, setSelected] = useState("");
+                return <ul>{todos.map(todo => <li key={todo.id}>{todo.title}{todo.done && <button onClick={() => setSelected(todo.title)}>Done</button>}</li>)}</ul>;
+            }
+        "#,
+        );
+        assert_eq!(app.inputs.len(), 1);
+        assert_eq!(app.inputs[0].kind, "collection");
+        assert_eq!(app.loops[0].input, Some(0));
+        assert!(matches!(app.nodes.iter().find(|node| matches!(node, Node::Conditional { .. })), Some(_)));
+        assert!(app.events.iter().any(|event| event.r#loop == Some(0)));
+        assert!(app.dependency_edges.iter().any(|edge| edge.source.kind == "rowField" && edge.target.kind == "binding"));
+        assert!(app.dependency_edges.iter().any(|edge| edge.source.kind == "rowField" && edge.target.kind == "conditional"));
     }
 
     #[test]
