@@ -6,25 +6,44 @@ use std::collections::HashMap;
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Delta {
     Update {
+        #[serde(default)]
+        instance_id: Option<String>,
         input_id: String,
         row_key: String,
         changes: HashMap<String, Value>,
     },
     Insert {
+        #[serde(default)]
+        instance_id: Option<String>,
         input_id: String,
         row_key: String,
         row: HashMap<String, Value>,
         before_row_key: Option<String>,
     },
     Remove {
+        #[serde(default)]
+        instance_id: Option<String>,
         input_id: String,
         row_key: String,
     },
     Move {
+        #[serde(default)]
+        instance_id: Option<String>,
         input_id: String,
         row_key: String,
         before_row_key: Option<String>,
     },
+}
+
+impl Delta {
+    pub fn instance_id(&self) -> Option<&str> {
+        match self {
+            Self::Update { instance_id, .. }
+            | Self::Insert { instance_id, .. }
+            | Self::Remove { instance_id, .. }
+            | Self::Move { instance_id, .. } => instance_id.as_deref(),
+        }
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]

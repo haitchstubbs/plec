@@ -317,6 +317,18 @@ impl PlecRuntime {
         if !owner_is_live {
             return Ok(());
         }
+        // A child component can disappear with its keyed row or conditional
+        // parent. Its callback may still be invoked on a detached test node;
+        // detached component roots are never live execution targets.
+        let component_detached = self.typed.try_borrow().ok().map(|typed| {
+            typed.get(instance_id)
+                .and_then(|instance| instance.runtime.nodes.get(&instance.runtime.app.root_node))
+                .map(|node| !node.is_connected())
+                .unwrap_or(false)
+        }).unwrap_or(false);
+        if component_detached {
+            return Ok(());
+        }
         let route_retry = self
             .typed
             .try_borrow()
