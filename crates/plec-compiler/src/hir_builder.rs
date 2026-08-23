@@ -5,7 +5,7 @@ use plec_hir::{
     BindingId, ComponentId, ExprId, HirBinaryOp, HirBinding, HirBindingKind, HirCallable,
     HirCallableBody, HirCallableDecl, HirComponent, HirComponentCall, HirConditional, HirElement,
     HirEventBinding, HirExpr, HirExprNode, HirForEach, HirFragment, HirLocal, HirLogicalOp,
-    HirNode, HirParameter, HirParameterSource, HirProp, HirState, HirStmt, HirTemplatePart,
+    HirInput, HirNode, HirParameter, HirParameterSource, HirProp, HirState, HirStmt, HirTemplatePart,
     HirText, HirUnaryOp, HirValue, NodeId, SourceSpan,
 };
 use plec_sema::{resolve_component, ComponentPropKind, SemanticGraph};
@@ -131,6 +131,7 @@ struct HirLoweringCtx<'a> {
     nodes: Vec<HirNode>,
     bindings: Vec<HirBinding>,
     parameters: Vec<HirParameter>,
+    inputs: Vec<HirInput>,
     locals: Vec<HirLocal>,
     states: Vec<HirState>,
     callables: Vec<HirCallableDecl>,
@@ -149,6 +150,7 @@ impl<'a> HirLoweringCtx<'a> {
             nodes: Vec::new(),
             bindings: Vec::new(),
             parameters: Vec::new(),
+            inputs: Vec::new(),
             locals: Vec::new(),
             states: Vec::new(),
             callables: Vec::new(),
@@ -254,6 +256,7 @@ pub fn lower_root_component(
     Ok(HirComponent {
         id: ComponentId::new(&root.symbol.module_id, &root.symbol.local_name),
         parameters: ctx.parameters,
+        inputs: ctx.inputs,
         bindings: ctx.bindings,
         locals: ctx.locals,
         states: ctx.states,
@@ -439,6 +442,29 @@ fn lower_component_var(
             ctx,
         ),
         Pat::Ident(ident) => match init {
+            Expr::Call(call)
+                if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useCollection")) =>
+            {
+                if call.args.len() != 1 || call.args[0].spread.is_some() {
+                    return Err("useCollection requires one static name".to_string());
+                }
+                let Expr::Lit(Lit::Str(name)) = call.args[0].expr.as_ref() else {
+                    return Err("useCollection requires one static name".to_string());
+                };
+                let span = source_span_from_swc(ident.id.span, ctx.module_id);
+                let binding = ctx.declare_binding(
+                    ident.id.sym.to_string(),
+                    HirBindingKind::Input { kind: "collection".to_string() },
+                    span.clone(),
+                )?;
+                ctx.inputs.push(HirInput {
+                    binding,
+                    name: name.value.to_string_lossy().into_owned(),
+                    kind: "collection".to_string(),
+                    span,
+                });
+                Ok(())
+            }
             Expr::Arrow(arrow) => {
                 let span = source_span_from_swc(ident.id.span, ctx.module_id);
                 let binding = ctx.declare_binding(

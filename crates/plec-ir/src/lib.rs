@@ -14,6 +14,7 @@ pub struct ExecutableApplication {
     pub bindings: Vec<Binding>,
     pub prop_programs: Vec<PropProgram>,
     pub events: Vec<Event>,
+    pub inputs: Vec<Input>,
     pub state_slots: Vec<StateSlot>,
     pub expressions: Vec<ExpressionProgram>,
     pub actions: Vec<ActionProgram>,
@@ -33,6 +34,7 @@ impl Default for ExecutableApplication {
             bindings: vec![],
             prop_programs: vec![],
             events: vec![],
+            inputs: vec![],
             state_slots: vec![],
             expressions: vec![],
             actions: vec![],
@@ -65,6 +67,12 @@ pub enum Node {
         text: usize,
         parent: Option<usize>,
     },
+    Conditional {
+        test: usize,
+        parent: Option<usize>,
+        consequent: usize,
+        alternate: Option<usize>,
+    },
     Loop {
         r#loop: usize,
         parent: Option<usize>,
@@ -74,6 +82,8 @@ pub enum Node {
 pub struct Text {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding: Option<usize>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Binding {
@@ -104,8 +114,15 @@ pub struct Event {
     #[serde(rename = "type")]
     pub event_type: usize,
     pub action: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r#loop: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub fields: Vec<EventField>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Input {
+    pub name: usize,
+    pub kind: &'static str,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EventField {
@@ -158,6 +175,10 @@ pub struct Loop {
     pub key_expression: usize,
     pub item_slot: usize,
     pub row_template: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub dependency_slots: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<usize>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DependencyEdge {
@@ -168,4 +189,6 @@ pub struct DependencyEdge {
 pub struct DependencyEndpoint {
     pub kind: &'static str,
     pub handle: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r#loop: Option<usize>,
 }

@@ -51,6 +51,21 @@ fn load_and_mount(runtime: &PlecRuntime, artifact: serde_json::Value, root: &Ele
     runtime.mount(root.clone()).unwrap();
 }
 
+fn rust_counter_artifact() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/rust-counter-0.9.json"))
+        .expect("Rust counter fixture should be valid JSON")
+}
+
+fn rust_collection_rows_artifact() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/rust-collection-rows-0.9.json"))
+        .expect("Rust collection fixture should be valid JSON")
+}
+
+fn rust_static_conditional_artifact() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/rust-static-conditional-0.9.json"))
+        .expect("Rust conditional fixture should be valid JSON")
+}
+
 /// A minimal external keyed loop whose row button writes the row title to the
 /// static output text. It exercises row-owned listener frames without relying
 /// on any legacy runtime behaviour.
@@ -424,6 +439,114 @@ fn static_output(root: &Element) -> String {
         .unwrap()
         .text_content()
         .unwrap_or_default()
+}
+
+#[wasm_bindgen_test]
+fn rust_compiler_counter_fixture_mounts_and_updates_one_text_binding() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    runtime
+        .load_application(serde_wasm_bindgen::to_value(&rust_counter_artifact()).unwrap())
+        .unwrap();
+
+    let mount_metrics: serde_json::Value =
+        serde_wasm_bindgen::from_value(runtime.mount(root.clone()).unwrap()).unwrap();
+    assert_eq!(root.text_content().unwrap(), "0");
+    assert_eq!(mount_metrics["bindings"], 1);
+    assert_eq!(mount_metrics["createdTexts"], 1);
+
+    let button = root.query_selector("button").unwrap().unwrap();
+    assert_eq!(button.child_nodes().length(), 1);
+    let text = button.first_child().unwrap();
+    button
+        .clone()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(root.text_content().unwrap(), "1");
+    assert!(text.is_same_node(button.first_child().as_ref()));
+}
+
+#[wasm_bindgen_test]
+fn rust_collection_rows_fixture_reconciles_keyed_rows_and_branch_listener() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, rust_collection_rows_artifact(), &root);
+    apply_delta(&runtime, serde_json::json!({"type":"insert","input_id":"items","row_key":"one","row":{"id":"one","title":"One","done":true},"before_row_key":null}));
+    apply_delta(&runtime, serde_json::json!({"type":"insert","input_id":"items","row_key":"two","row":{"id":"two","title":"Two","done":false},"before_row_key":null}));
+    let first = root.query_selector("li").unwrap().unwrap();
+    let first_node: web_sys::Node = first.clone().into();
+    let title = first.first_child().unwrap();
+    let button = first.query_selector("button").unwrap().unwrap();
+
+    apply_delta(&runtime, serde_json::json!({"type":"update","input_id":"items","row_key":"one","changes":{"title":"Updated"}}));
+    assert!(first_node.is_same_node(root.query_selector("li").unwrap().as_ref().map(|node| node.unchecked_ref())));
+    assert!(title.is_same_node(first.first_child().as_ref()));
+    assert_eq!(first.text_content().unwrap(), "UpdatedDone");
+
+    apply_delta(&runtime, serde_json::json!({"type":"update","input_id":"items","row_key":"one","changes":{"done":false}}));
+    assert!(first.query_selector("button").unwrap().is_none());
+    assert!(!button.is_connected());
+    apply_delta(&runtime, serde_json::json!({"type":"move","input_id":"items","row_key":"two","before_row_key":"one"}));
+    assert!(first_node.is_same_node(root.query_selector_all("li").unwrap().item(1).as_ref()));
+    apply_delta(&runtime, serde_json::json!({"type":"remove","input_id":"items","row_key":"one"}));
+    assert!(!first.is_connected());
+}
+
+#[wasm_bindgen_test]
+fn rust_static_conditional_fixture_replaces_branch_and_disposes_listener() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, rust_static_conditional_artifact(), &root);
+
+    let false_branch = root
+        .query_selector("[data-runtime-node='4']")
+        .unwrap()
+        .unwrap();
+    assert!(root
+        .query_selector("[data-runtime-node='2']")
+        .unwrap()
+        .is_none());
+    false_branch
+        .clone()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+
+    let true_branch = root
+        .query_selector("[data-runtime-node='2']")
+        .unwrap()
+        .unwrap();
+    assert!(false_branch.parent_node().is_none());
+    false_branch
+        .clone()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert!(root
+        .query_selector("[data-runtime-node='2']")
+        .unwrap()
+        .is_some());
+    assert!(root
+        .query_selector("[data-runtime-node='4']")
+        .unwrap()
+        .is_none());
+
+    true_branch
+        .clone()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    let next_false_branch = root
+        .query_selector("[data-runtime-node='4']")
+        .unwrap()
+        .unwrap();
+    assert!(true_branch.parent_node().is_none());
+    assert!(!false_branch.is_same_node(Some(&next_false_branch)));
 }
 
 #[wasm_bindgen_test]
