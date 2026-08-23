@@ -1,7 +1,8 @@
 use std::fs;
 
 use plec_compiler::{
-    discover_root_component, lower_root_component, lower_component_to_executable,
+    discover_root_component, lower_application, lower_application_to_executable,
+    lower_component_to_executable, lower_root_component,
 };
 use plec_parser::parse_module;
 use plec_sema::build_semantic_graph;
@@ -28,6 +29,16 @@ const CONDITIONAL_SOURCE: &str = r#"
     }
 "#;
 
+const COMPONENT_SOURCE: &str = r#"
+    export function App() {
+        const [name, setName] = useState("one");
+        return <div><Child title={name} /><button onClick={() => setName("two")} /></div>;
+    }
+    function Child({ title }) {
+        return <span>{title}</span>;
+    }
+"#;
+
 #[test]
 fn rust_counter_artifact_matches_runtime_fixture() {
     assert_fixture("rust-counter.tsx", "Counter", SOURCE, "rust-counter-0.9.json");
@@ -41,6 +52,26 @@ fn rust_collection_rows_artifact_matches_runtime_fixture() {
 #[test]
 fn rust_static_conditional_artifact_matches_runtime_fixture() {
     assert_fixture("rust-static-conditional.tsx", "Conditional", CONDITIONAL_SOURCE, "rust-static-conditional-0.9.json");
+}
+
+#[test]
+fn rust_component_artifact_matches_runtime_fixture() {
+    let module = parse_module("rust-component.tsx", COMPONENT_SOURCE).expect("source should parse");
+    let modules = vec![module];
+    let semantic_graph = build_semantic_graph(&modules, &Default::default()).expect("semantic graph should build");
+    let root = discover_root_component(&modules, &semantic_graph, "rust-component.tsx", Some("App"))
+        .expect("App should be discovered");
+    let application = lower_application(&modules, &root, &semantic_graph).expect("App should lower to HIR");
+    let executable = lower_application_to_executable(&application).expect("App should lower to component IR");
+    let fixture = fs::read_to_string(format!(
+        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-component-0.10.json",
+        env!("CARGO_MANIFEST_DIR")
+    )).expect("runtime fixture should exist");
+
+    assert_eq!(
+        serde_json::to_value(executable).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+    );
 }
 
 fn assert_fixture(path: &str, component: &str, source: &str, fixture_name: &str) {

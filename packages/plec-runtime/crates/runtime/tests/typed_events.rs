@@ -66,41 +66,9 @@ fn rust_static_conditional_artifact() -> serde_json::Value {
         .expect("Rust conditional fixture should be valid JSON")
 }
 
-fn component_prop_artifact() -> serde_json::Value {
-    serde_json::json!({
-        "version":"0.10", "rootComponent":0,
-        "components":[
-            {
-                "id":"App", "version":"0.10", "rootNode":0,
-                "strings":["div", "button", "click", "title"],
-                "constants":["one", "two"],
-                "nodes":[
-                    {"op":"element","tag":0,"children":[1,2]},
-                    {"op":"component","component":1,"parent":0,"props":[{"name":3,"expression":2}]},
-                    {"op":"element","tag":1,"parent":0,"children":[]}
-                ],
-                "events":[{"target":2,"type":2,"action":0,"fields":[]}],
-                "stateSlots":[{"initialExpression":0,"frameSlot":0}],
-                "expressions":[
-                    {"instructions":[{"op":"constant","constant":0},{"op":"return"}]},
-                    {"instructions":[{"op":"constant","constant":1},{"op":"return"}]},
-                    {"instructions":[{"op":"loadState","state":0},{"op":"return"}]}
-                ],
-                "actions":[{"frameSlots":0,"instructions":[{"op":"evaluate","expression":1},{"op":"storeState","state":0},{"op":"return"}]}],
-                "dependencyEdges":[{"source":{"kind":"state","handle":0},"target":{"kind":"component","handle":1}}]
-            },
-            {
-                "id":"Child", "version":"0.10", "rootNode":0,
-                "strings":["span", "title"],
-                "nodes":[{"op":"element","tag":0,"children":[1]},{"op":"text","text":0,"parent":0}],
-                "texts":[{"binding":0}],
-                "bindings":[{"target":1,"sink":"text","expression":0}],
-                "parameters":[{"name":1}],
-                "expressions":[{"instructions":[{"op":"loadProp","prop":0},{"op":"return"}]}],
-                "dependencyEdges":[{"source":{"kind":"prop","handle":0},"target":{"kind":"binding","handle":0}}]
-            }
-        ]
-    })
+fn rust_component_artifact() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/rust-component-0.10.json"))
+        .expect("Rust component fixture should be valid JSON")
 }
 
 /// A minimal external keyed loop whose row button writes the row title to the
@@ -506,10 +474,10 @@ fn rust_compiler_counter_fixture_mounts_and_updates_one_text_binding() {
 }
 
 #[wasm_bindgen_test]
-fn component_prop_refresh_updates_child_without_remounting() {
+fn rust_component_fixture_refreshes_child_without_remounting() {
     let runtime = PlecRuntime::new();
     let root = mount_root();
-    load_and_mount(&runtime, component_prop_artifact(), &root);
+    load_and_mount(&runtime, rust_component_artifact(), &root);
     let span = root.query_selector("span").unwrap().unwrap();
     let text = span.first_child().unwrap();
     assert_eq!(span.text_content().unwrap(), "one");
