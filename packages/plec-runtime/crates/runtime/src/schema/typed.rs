@@ -25,6 +25,8 @@ pub struct TypedApplication {
     pub inputs: Vec<TypedInput>,
     #[serde(default)]
     pub state_slots: Vec<TypedStateSlot>,
+    #[serde(default)]
+    pub parameters: Vec<TypedComponentParameter>,
     pub route_error_state: Option<usize>,
     #[serde(default)]
     pub expressions: Vec<TypedProgram>,
@@ -42,6 +44,25 @@ pub struct TypedApplication {
     pub capabilities: Vec<TypedCookieCapability>,
     #[serde(skip)]
     pub host_inputs: HashMap<String, RuntimeValue>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypedComponentApplication {
+    pub version: String,
+    pub root_component: usize,
+    pub components: Vec<TypedApplication>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct TypedComponentParameter {
+    pub name: usize,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct TypedComponentProp {
+    pub name: usize,
+    pub expression: usize,
 }
 
 #[derive(Clone, Deserialize)]
@@ -248,6 +269,12 @@ pub enum TypedNode {
         r#loop: usize,
         parent: Option<usize>,
     },
+    Component {
+        component: usize,
+        parent: Option<usize>,
+        #[serde(default)]
+        props: Vec<TypedComponentProp>,
+    },
 }
 
 #[derive(Clone, Deserialize)]
@@ -305,6 +332,9 @@ pub enum TypedExpressionInstruction {
     },
     LoadState {
         state: usize,
+    },
+    LoadProp {
+        prop: usize,
     },
     LoadRowField {
         field: usize,
@@ -535,7 +565,8 @@ fn subtree_contains(nodes: &[TypedNode], root: usize, target: usize) -> bool {
         Some(TypedNode::Element { parent: Some(parent), .. }
           | TypedNode::Text { parent: Some(parent), .. }
           | TypedNode::Conditional { parent: Some(parent), .. }
-          | TypedNode::Loop { parent: Some(parent), .. })
+          | TypedNode::Loop { parent: Some(parent), .. }
+          | TypedNode::Component { parent: Some(parent), .. })
           if subtree_contains(nodes, root, *parent)
     )
 }

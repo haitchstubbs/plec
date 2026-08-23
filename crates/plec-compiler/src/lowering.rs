@@ -1,13 +1,15 @@
 use std::collections::{BTreeSet, HashMap};
 
 use plec_hir::{
-    BindingId, HirBindingKind, HirCallable, HirCallableBody, HirComponent, HirExpr, HirLogicalOp,
-    HirNode, HirProp, HirStmt, HirText, HirUnaryOp, HirValue, NodeId,
+    BindingId, ComponentId, HirApplication, HirBindingKind, HirCallable, HirCallableBody,
+    HirComponent, HirExpr, HirLogicalOp, HirNode, HirProp, HirStmt, HirText, HirUnaryOp,
+    HirValue, NodeId,
 };
 use plec_ir::{
-    ActionInstruction, ActionProgram, Binding, DependencyEdge, DependencyEndpoint, Event, Input,
-    ExecutableApplication, ExpressionInstruction, ExpressionProgram, Loop, Node, PropProgram,
-    PropWrite, StateSlot, Text, Value,
+    ActionInstruction, ActionProgram, Binding, ComponentApplication, ComponentParameter,
+    ComponentProp, DependencyEdge, DependencyEndpoint, Event, ExecutableApplication,
+    ExecutableComponent, ExpressionInstruction, ExpressionProgram, Input, Loop, Node,
+    PropProgram, PropWrite, StateSlot, Text, Value, COMPONENT_VERSION,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,7 +24,64 @@ impl std::error::Error for LoweringError {}
 pub fn lower_component_to_executable(
     component: &HirComponent,
 ) -> Result<ExecutableApplication, LoweringError> {
-    let mut ctx = Ctx::new(component);
+    lower_component(component, None)
+}
+
+pub fn lower_application_to_executable(
+    application: &HirApplication,
+) -> Result<ComponentApplication, LoweringError> {
+    let mut targets = HashMap::new();
+    for (index, component) in application.components.iter().enumerate() {
+        let props = component.parameters.iter().map(|parameter| match &parameter.source {
+            plec_hir::HirParameterSource::Prop { name } => Ok(name.clone()),
+            plec_hir::HirParameterSource::Direct => Err(LoweringError("direct component parameters are not executable".into())),
+        }).collect::<Result<Vec<_>, _>>()?;
+        targets.insert(component.id.clone(), (index, props));
+    }
+    let root_component = *targets.get(&application.root)
+        .map(|(index, _)| index)
+        .ok_or_else(|| LoweringError("application root component missing".into()))?;
+    let components = application.components.iter().map(|component| {
+        let app = lower_component(component, Some(&targets))?;
+        Ok(ExecutableComponent {
+            id: format!("{}#{}", component.id.module_id, component.id.local_name),
+            root_node: app.root_node,
+            strings: app.strings,
+            constants: app.constants,
+            nodes: app.nodes,
+            texts: app.texts,
+            bindings: app.bindings,
+            prop_programs: app.prop_programs,
+            events: app.events,
+            inputs: app.inputs,
+            state_slots: app.state_slots,
+            parameters: app.parameters,
+            expressions: app.expressions,
+            actions: app.actions,
+            loops: app.loops,
+            dependency_edges: app.dependency_edges,
+        })
+    }).collect::<Result<Vec<_>, LoweringError>>()?;
+    Ok(ComponentApplication { version: COMPONENT_VERSION, root_component, components })
+}
+
+fn lower_component(
+    component: &HirComponent,
+    targets: Option<&HashMap<ComponentId, (usize, Vec<String>)>>,
+) -> Result<ExecutableApplication, LoweringError> {
+    let mut ctx = Ctx::new(component, targets);
+    for parameter in &component.parameters {
+        let plec_hir::HirParameterSource::Prop { name } = &parameter.source else {
+            return Err(ctx.err("direct component parameters are not executable"));
+        };
+        if !matches!(component.bindings[parameter.binding.0 as usize].kind, HirBindingKind::Parameter { callable: false }) {
+            return Err(ctx.err("callable component parameters are not executable yet"));
+        }
+        let slot = ctx.app.parameters.len();
+        ctx.props.insert(parameter.binding, slot);
+        let name = ctx.string(name);
+        ctx.app.parameters.push(ComponentParameter { name });
+    }
     for state in &component.states {
         let initial_expression = ctx.expression(state.initializer, false)?.0;
         let slot = ctx.app.state_slots.len();
@@ -34,7 +93,7 @@ pub fn lower_component_to_executable(
     }
     for input in &component.inputs {
         if input.kind != "collection" {
-            return Err(Ctx::new(component).err("input kind is not executable"));
+            return Err(Ctx::new(component, targets).err("input kind is not executable"));
         }
         let name = ctx.string(&input.name);
         let slot = ctx.app.inputs.len();
@@ -63,12 +122,17 @@ struct Ctx<'a> {
     states: HashMap<BindingId, usize>,
     inputs: HashMap<BindingId, usize>,
     callables: HashMap<BindingId, usize>,
+    props: HashMap<BindingId, usize>,
+    targets: Option<&'a HashMap<ComponentId, (usize, Vec<String>)>>,
     locals: HashMap<BindingId, plec_hir::ExprId>,
     active_locals: Vec<BindingId>,
     active_loop: Option<usize>,
 }
 impl<'a> Ctx<'a> {
-    fn new(component: &'a HirComponent) -> Self {
+    fn new(
+        component: &'a HirComponent,
+        targets: Option<&'a HashMap<ComponentId, (usize, Vec<String>)>>,
+    ) -> Self {
         Self {
             component,
             app: ExecutableApplication::default(),
@@ -77,6 +141,8 @@ impl<'a> Ctx<'a> {
             states: HashMap::new(),
             inputs: HashMap::new(),
             callables: HashMap::new(),
+            props: HashMap::new(),
+            targets,
             locals: component
                 .locals
                 .iter()
@@ -162,6 +228,11 @@ impl<'a> Ctx<'a> {
                         .ok_or_else(|| self.err("state used before lowering"))?;
                     deps.insert(state);
                     code.push(ExpressionInstruction::LoadState { state });
+                }
+                Some(HirBindingKind::Parameter { callable: false }) => {
+                    let prop = *self.props.get(&binding)
+                        .ok_or_else(|| self.err("component prop used before lowering"))?;
+                    code.push(ExpressionInstruction::LoadProp { prop });
                 }
                 Some(HirBindingKind::Local) => {
                     if self.active_locals.contains(&binding) {
@@ -413,6 +484,43 @@ impl<'a> Ctx<'a> {
                 self.row_edges(test, "conditional", index);
                 Ok(index)
             }
+            HirNode::Component(call) => {
+                if self.active_loop.is_some() {
+                    return Err(self.err("components inside keyed loops are not executable yet"));
+                }
+                let targets = self.targets.ok_or_else(|| self.err("component calls are not executable in IR 0.9"))?;
+                let (component, parameters) = targets.get(&call.target)
+                    .ok_or_else(|| self.err("component target missing from application"))?;
+                let mut supplied = BTreeSet::new();
+                let mut props = Vec::new();
+                for prop in call.props {
+                    let (name, expression) = match prop {
+                        HirProp::Static { name, value } => {
+                            let constant = self.constant(Value::String(value));
+                            let expression = self.app.expressions.len();
+                            self.app.expressions.push(ExpressionProgram { instructions: vec![
+                                ExpressionInstruction::Constant { constant }, ExpressionInstruction::Return,
+                            ] });
+                            (name, expression)
+                        }
+                        HirProp::Expression { name, value } => (name, self.expression(value, false)?.0),
+                        HirProp::Callable { .. } => return Err(self.err("callable component props are not executable yet")),
+                    };
+                    if !supplied.insert(name.clone()) {
+                        return Err(self.err("duplicate component prop"));
+                    }
+                    if !parameters.contains(&name) {
+                        return Err(self.err("unknown component prop"));
+                    }
+                    props.push(ComponentProp { name: self.string(&name), expression });
+                }
+                if supplied.len() != parameters.len() || parameters.iter().any(|name| !supplied.contains(name)) {
+                    return Err(self.err("missing component prop"));
+                }
+                let index = self.app.nodes.len();
+                self.app.nodes.push(Node::Component { component: *component, parent, props });
+                Ok(index)
+            }
             _ => Err(self.err("node is not executable in the first IR slice")),
         }
     }
@@ -594,7 +702,7 @@ impl<'a> Ctx<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{discover_root_component, lower_root_component};
+    use crate::{discover_root_component, lower_application, lower_root_component};
     use plec_parser::parse_module;
     use plec_sema::build_semantic_graph;
     use std::collections::HashMap;
@@ -692,5 +800,48 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("ForEach requires a key"));
+    }
+
+    #[test]
+    fn lowers_component_application_with_scalar_props() {
+        let modules = vec![parse_module("test.tsx", r#"
+            export function App() {
+                const [name, setName] = useState("Ada");
+                return <main><Child name={name} /></main>;
+            }
+            function Child({ name }) {
+                const [suffix, setSuffix] = useState("!");
+                return <button onClick={() => setSuffix("?")}>{name}{suffix}</button>;
+            }
+        "#).unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let root = discover_root_component(&modules, &graph, "test.tsx", Some("App")).unwrap();
+        let hir = lower_application(&modules, &root, &graph).unwrap();
+        let app = lower_application_to_executable(&hir).unwrap();
+        assert_eq!(app.version, "0.10");
+        assert_eq!(app.components.len(), 2);
+        assert!(app.components[0].nodes.iter().any(|node| matches!(node, Node::Component { component: 1, .. })));
+        assert!(app.components[1].expressions.iter().any(|expression| expression.instructions.iter().any(|instruction| matches!(instruction, ExpressionInstruction::LoadProp { prop: 0 }))));
+    }
+
+    #[test]
+    fn component_application_rejects_missing_props_and_loop_calls() {
+        let modules = vec![parse_module("test.tsx", r#"
+            export function App() { return <Child />; }
+            function Child({ name }) { return <div>{name}</div>; }
+        "#).unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let root = discover_root_component(&modules, &graph, "test.tsx", Some("App")).unwrap();
+        let hir = lower_application(&modules, &root, &graph).unwrap();
+        assert!(lower_application_to_executable(&hir).unwrap_err().to_string().contains("missing component prop"));
+
+        let modules = vec![parse_module("test.tsx", r#"
+            export function App() { const rows = [{ id: "1" }]; return <ul>{rows.map(row => <Child key={row.id} name={row.id} />)}</ul>; }
+            function Child({ name }) { return <li>{name}</li>; }
+        "#).unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let root = discover_root_component(&modules, &graph, "test.tsx", Some("App")).unwrap();
+        let hir = lower_application(&modules, &root, &graph).unwrap();
+        assert!(lower_application_to_executable(&hir).unwrap_err().to_string().contains("components inside keyed loops"));
     }
 }
