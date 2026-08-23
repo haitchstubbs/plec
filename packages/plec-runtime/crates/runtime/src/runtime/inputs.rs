@@ -22,7 +22,28 @@ impl PlecRuntime {
         input_id: String,
         rows: JsValue,
     ) -> Result<JsValue, JsValue> {
+        if self.typed.borrow().contains_key(&instance_id) {
+            return self.initialize_typed_input_for(&instance_id, &input_id, rows);
+        }
         self.initialize_input_for(&instance_id, input_id, rows)
+    }
+}
+
+#[wasm_bindgen::prelude::wasm_bindgen]
+impl PlecRuntime {
+    pub fn list_input_instances(&self, input_id: String) -> Result<JsValue, JsValue> {
+        let ids = self
+            .typed
+            .borrow()
+            .iter()
+            .filter_map(|(id, instance)| {
+                instance.runtime.app.inputs.iter().any(|input| {
+                    instance.runtime.app.strings.get(input.name).map(String::as_str)
+                        == Some(input_id.as_str())
+                }).then(|| id.clone())
+            })
+            .collect::<Vec<_>>();
+        serde_wasm_bindgen::to_value(&ids).map_err(error)
     }
 }
 

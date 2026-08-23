@@ -22,15 +22,15 @@ Standalone conditional: Rust artifact -> WASM state switch; browser fixture prov
 ## Capability status
 
 Rust HIR represents reachable acyclic component applications, canonical calls/props, `useCollection("name")`, fragments, conditionals, keyed `ForEach`, loop-item bindings, callable parameters.
-Rust lowering executes collection inputs, keyed rows, named row fields/edges, row-owned inline events, standalone/row-local conditionals, scalar state. It lowers static/expression scalar component props and `LoadProp` into 0.10; rejects callable/direct props, JSX children, and calls in keyed loops. Runtime schema validates component targets/required props; `LoadProp` reads instance prop slots. Runtime still rejects 0.10 component nodes.
+Rust lowering executes collection inputs, keyed rows, named row fields/edges, row-owned inline events, standalone/row-local conditionals, scalar state. It lowers static/expression scalar component props and `LoadProp` into 0.10; preserves `prop` and row-field component edges; rejects callable/direct props and JSX children. Runtime loads 0.10, mounts initial recursive component calls at comment anchors, and exposes addressed typed inputs; prop refresh and structural child disposal remain unproven.
 
 ## Semantic-loss boundaries
 
-Reachable component identity/call props/parameters survive into `HirApplication` and 0.10 IR. Prop expressions retain parent-state dependency edges; runtime has `LoadProp` slots but `load_application` never deserializes `TypedComponentApplication`. Component instance identity, 0.10 loading, mount/dispose ownership, and child state isolation do not cross executable IR to runtime.
+Reachable component identity/call props/parameters survive into `HirApplication` and 0.10 IR. Child sinks retain `prop` edges. Runtime now loads component definitions and creates initial child runtimes, but parent delta-to-child prop refresh, canonical keyed instance identity, and recursive structural disposal remain incomplete.
 
 ## Contract drift
 
-`plec-ir` serializes Rust artifact; runtime separately deserializes typed 0.9 schema. Counter and collection-row fixtures are exact cross-boundary checks. Rust/runtime independently define 0.10 components, but runtime only validates the component schema; public loader has no 0.10 decode branch, so no exact artifact/runtime fixture exists.
+`plec-ir` serializes Rust artifact; runtime separately deserializes typed 0.9 schema. Counter and collection-row fixtures are exact cross-boundary checks. Rust/runtime independently define 0.10 components; loader now decodes/validates 0.10 and mounts initial child runtimes. No exact Rust 0.10 artifact/browser fixture proves refresh or lifecycle yet.
 2026-08-23: compiler fixture tests 3/3 pass; WASM suite 15/18 passes, including all Rust artifacts. Three pre-existing typed-event failures: two route-loader output assertions, one row fetch-frame duplicate text assertion.
 
 ## Runtime invariants

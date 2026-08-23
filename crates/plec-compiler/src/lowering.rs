@@ -420,6 +420,7 @@ impl<'a> Ctx<'a> {
                 });
                 self.app.texts[text].binding = Some(binding);
                 self.edges(deps, "binding", binding);
+                self.prop_edges(expression, "binding", binding);
                 self.row_edges(expression, "binding", binding);
                 Ok(index)
             }
@@ -458,6 +459,7 @@ impl<'a> Ctx<'a> {
                     input,
                 });
                 self.edges(deps, "loop", loop_index);
+                self.prop_edges(source, "loop", loop_index);
                 let index = self.app.nodes.len();
                 self.app.nodes.push(Node::Loop {
                     r#loop: loop_index,
@@ -481,13 +483,11 @@ impl<'a> Ctx<'a> {
                 let alternate = conditional.alternate.first().map(|node| self.node(*node, None)).transpose()?;
                 self.app.nodes[index] = Node::Conditional { test, parent, consequent, alternate };
                 self.edges(deps, "conditional", index);
+                self.prop_edges(test, "conditional", index);
                 self.row_edges(test, "conditional", index);
                 Ok(index)
             }
             HirNode::Component(call) => {
-                if self.active_loop.is_some() {
-                    return Err(self.err("components inside keyed loops are not executable yet"));
-                }
                 if !call.children.is_empty() {
                     return Err(self.err("component children are not executable yet"));
                 }
@@ -508,7 +508,7 @@ impl<'a> Ctx<'a> {
                             (name, expression, BTreeSet::new())
                         }
                         HirProp::Expression { name, value } => {
-                            let (expression, deps) = self.expression(value, false)?;
+                            let (expression, deps) = self.expression(value, self.active_loop.is_some())?;
                             (name, expression, deps)
                         }
                         HirProp::Callable { .. } => return Err(self.err("callable component props are not executable yet")),
@@ -528,6 +528,14 @@ impl<'a> Ctx<'a> {
                 let index = self.app.nodes.len();
                 self.app.nodes.push(Node::Component { component: *component, parent, props });
                 self.edges(dependencies, "component", index);
+                let expressions = match &self.app.nodes[index] {
+                    Node::Component { props, .. } => props.iter().map(|prop| prop.expression).collect::<Vec<_>>(),
+                    _ => unreachable!(),
+                };
+                for expression in expressions {
+                    self.prop_edges(expression, "component", index);
+                    self.row_edges(expression, "component", index);
+                }
                 Ok(index)
             }
             _ => Err(self.err("node is not executable in the first IR slice")),
@@ -557,6 +565,7 @@ impl<'a> Ctx<'a> {
                     expression: Some(expression),
                 });
                 self.edges(deps, "propProgram", program);
+                self.prop_edges(expression, "propProgram", program);
                 self.row_edges(expression, "propProgram", program);
             }
             HirProp::Callable { .. } => {
@@ -604,6 +613,18 @@ impl<'a> Ctx<'a> {
         for field in fields {
             self.app.dependency_edges.push(DependencyEdge {
                 source: DependencyEndpoint { kind: "rowField", handle: field, r#loop: Some(loop_index) },
+                target: DependencyEndpoint { kind, handle: target_handle, r#loop: None },
+            });
+        }
+    }
+    fn prop_edges(&mut self, expression: usize, kind: &'static str, target_handle: usize) {
+        let props = self.app.expressions[expression].instructions.iter().filter_map(|instruction| match instruction {
+            ExpressionInstruction::LoadProp { prop } => Some(*prop),
+            _ => None,
+        }).collect::<BTreeSet<_>>();
+        for prop in props {
+            self.app.dependency_edges.push(DependencyEdge {
+                source: DependencyEndpoint { kind: "prop", handle: prop, r#loop: None },
                 target: DependencyEndpoint { kind, handle: target_handle, r#loop: None },
             });
         }
@@ -831,10 +852,11 @@ mod tests {
         assert_eq!(app.components.len(), 2);
         assert!(app.components[0].nodes.iter().any(|node| matches!(node, Node::Component { component: 1, .. })));
         assert!(app.components[1].expressions.iter().any(|expression| expression.instructions.iter().any(|instruction| matches!(instruction, ExpressionInstruction::LoadProp { prop: 0 }))));
+        assert!(app.components[1].dependency_edges.iter().any(|edge| edge.source.kind == "prop" && edge.target.kind == "binding"));
     }
 
     #[test]
-    fn component_application_rejects_missing_props_and_loop_calls() {
+    fn component_application_rejects_missing_props_and_preserves_loop_call_edges() {
         let modules = vec![parse_module("test.tsx", r#"
             export function App() { return <Child />; }
             function Child({ name }) { return <div>{name}</div>; }
@@ -851,6 +873,8 @@ mod tests {
         let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
         let root = discover_root_component(&modules, &graph, "test.tsx", Some("App")).unwrap();
         let hir = lower_application(&modules, &root, &graph).unwrap();
-        assert!(lower_application_to_executable(&hir).unwrap_err().to_string().contains("components inside keyed loops"));
+        let app = lower_application_to_executable(&hir).unwrap();
+        assert!(app.components[0].nodes.iter().any(|node| matches!(node, Node::Component { .. })));
+        assert!(app.components[0].dependency_edges.iter().any(|edge| edge.source.kind == "rowField" && edge.target.kind == "component"));
     }
 }

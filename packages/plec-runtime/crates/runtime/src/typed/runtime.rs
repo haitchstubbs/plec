@@ -41,6 +41,15 @@ pub(crate) struct TypedListenerRequest {
     pub(crate) owner: TypedListenerOwner,
 }
 
+pub(crate) struct TypedComponentRequest {
+    pub(crate) call: usize,
+    pub(crate) component: usize,
+    pub(crate) props: HashMap<String, RuntimeValue>,
+    pub(crate) parent: Node,
+    pub(crate) end: Node,
+    pub(crate) key: String,
+}
+
 pub(crate) struct TypedRuntime {
     pub(crate) app: TypedApplication,
     pub(crate) root: Option<Element>,
@@ -51,12 +60,14 @@ pub(crate) struct TypedRuntime {
     pub(crate) conditionals: HashMap<usize, TypedConditionalRegion>,
     pub(crate) listeners: Vec<TypedListener>,
     pub(crate) listener_requests: Vec<TypedListenerRequest>,
+    pub(crate) component_requests: Vec<TypedComponentRequest>,
     pub(crate) next_generation: u64,
     pub(crate) graph_generation: u64,
     pub(crate) host_inputs: HashMap<String, RuntimeValue>,
     pub(crate) host_refs: HashMap<String, Node>,
     pub(crate) pending_cookies: Vec<TypedPendingCookie>,
     pub(crate) next_cookie_id: u64,
+    pub(crate) next_component_instance: u64,
     #[cfg(feature = "fetch")]
     pub(crate) pending_fetches: Vec<TypedPendingFetch>,
     #[cfg(feature = "fetch")]
@@ -136,6 +147,7 @@ impl PlecRuntime {
             typed_registry: Rc::new(RefCell::new(HashMap::new())),
             typed_manifest: Rc::new(RefCell::new(None)),
             typed_host_inputs: Rc::new(RefCell::new(HashMap::new())),
+            typed_components: Rc::new(RefCell::new(None)),
         }
     }
 }
@@ -183,8 +195,47 @@ impl PlecRuntime {
                 .runtime
                 .mount(root)?
         };
+        self.mount_component_requests()?;
         self.install_typed_event_listeners()?;
         serde_wasm_bindgen::to_value(&metrics).map_err(error)
+    }
+}
+
+impl PlecRuntime {
+    pub(crate) fn mount_component_requests(&self) -> Result<(), JsValue> {
+        let definitions = self.typed_components.borrow().clone();
+        let Some(definitions) = definitions else { return Ok(()); };
+        loop {
+            let requests = self.typed.borrow_mut().iter_mut().flat_map(|(id, instance)| {
+                instance.runtime.component_requests.drain(..).map(|request| (id.clone(), request)).collect::<Vec<_>>()
+            }).collect::<Vec<_>>();
+            if requests.is_empty() { return Ok(()); }
+            for (parent_id, request) in requests {
+                let mut app = definitions.components.get(request.component)
+                    .ok_or_else(|| JsValue::from_str("component target out of range"))?
+                    .clone();
+                app.runtime_props = app.parameters.iter().map(|parameter| {
+                    let name = app.strings.get(parameter.name)
+                        .ok_or_else(|| JsValue::from_str("component parameter handle out of range"))?;
+                    Ok(request.props.get(name).cloned().unwrap_or(RuntimeValue::Null))
+                }).collect::<Result<Vec<_>, JsValue>>()?;
+                let mut runtime = TypedRuntime::new(app)?;
+                runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+                runtime.graph_generation = self.next_typed_generation();
+                runtime.mount_before(&request.parent, &request.end)?;
+                let id = format!("{parent_id}/component:{}:{}", request.call, request.key);
+                self.typed.borrow_mut().insert(id.clone(), TypedGraphInstance {
+                    parent_id: Some(parent_id),
+                    outlet_id: format!("component:{}", request.call),
+                    graph_id: format!("component:{}", request.component),
+                    route_id: None,
+                    match_key: None,
+                    route_state: None,
+                    loader_runtime: None,
+                    runtime,
+                });
+            }
+        }
     }
 }
 
@@ -194,12 +245,26 @@ impl PlecRuntime {
         input_id: &str,
         rows: JsValue,
     ) -> Result<JsValue, JsValue> {
-        let rows: Vec<Value> = serde_wasm_bindgen::from_value(rows).map_err(error)?;
+        if self.typed_components.borrow().is_some() {
+            return Err(JsValue::from_str("IR 0.10 input requires instanceId"));
+        }
         let id = graph_instance_id(None, "main", None);
+        self.initialize_typed_input_for(&id, input_id, rows)
+    }
+}
+
+impl PlecRuntime {
+    pub(crate) fn initialize_typed_input_for(
+        &self,
+        id: &str,
+        input_id: &str,
+        rows: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let rows: Vec<Value> = serde_wasm_bindgen::from_value(rows).map_err(error)?;
         let metrics = {
             let mut typed = self.typed.borrow_mut();
             let typed = typed
-                .get_mut(&id)
+                .get_mut(id)
                 .ok_or_else(|| JsValue::from_str("typed application missing"))?;
             let mut metrics = UpdateMetrics::default();
             typed
@@ -207,6 +272,7 @@ impl PlecRuntime {
                 .reconcile_input(input_id, rows, &mut metrics)?;
             metrics
         };
+        self.mount_component_requests()?;
         self.install_typed_event_listeners()?;
         serde_wasm_bindgen::to_value(&metrics).map_err(error)
     }
@@ -215,7 +281,11 @@ impl PlecRuntime {
 impl PlecRuntime {
     pub(crate) fn apply_typed_delta(&self, delta: JsValue) -> Result<JsValue, JsValue> {
         let delta: Delta = serde_wasm_bindgen::from_value(delta).map_err(error)?;
-        let id = graph_instance_id(None, "main", None);
+        let id = match (self.typed_components.borrow().is_some(), delta.instance_id()) {
+            (true, Some(id)) => id.to_owned(),
+            (true, None) => return Err(JsValue::from_str("IR 0.10 delta requires instanceId")),
+            (false, _) => graph_instance_id(None, "main", None),
+        };
         let metrics = {
             let mut typed = self.typed.borrow_mut();
             let typed = typed
@@ -225,6 +295,7 @@ impl PlecRuntime {
             typed.runtime.apply_delta(delta, &mut metrics)?;
             metrics
         };
+        self.mount_component_requests()?;
         self.install_typed_event_listeners()?;
         serde_wasm_bindgen::to_value(&metrics).map_err(error)
     }
@@ -270,12 +341,14 @@ impl TypedRuntime {
             collections: HashMap::new(),
             listeners: Vec::new(),
             listener_requests: Vec::new(),
+            component_requests: Vec::new(),
             next_generation: 1,
             graph_generation: 1,
             host_inputs: HashMap::new(),
             host_refs: HashMap::new(),
             pending_cookies: Vec::new(),
             next_cookie_id: 0,
+            next_component_instance: 0,
             #[cfg(feature = "fetch")]
             pending_fetches: Vec::new(),
             #[cfg(feature = "fetch")]
@@ -328,6 +401,25 @@ impl TypedRuntime {
             dom_operations: 1,
             ..Default::default()
         })
+    }
+}
+
+impl TypedRuntime {
+    pub(crate) fn mount_before(&mut self, parent: &Node, end: &Node) -> Result<(), JsValue> {
+        let doc = document()?;
+        let node = self.instantiate_node(
+            &doc,
+            self.app.root_node,
+            None,
+            None,
+            0,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+        )?;
+        parent.insert_before(&node, Some(end))?;
+        self.apply_static_bindings()?;
+        self.queue_static_listeners();
+        Ok(())
     }
 }
 
@@ -536,7 +628,32 @@ impl TypedRuntime {
                 )?;
                 Ok(marker)
             }
-            TypedNode::Component { .. } => Err(JsValue::from_str("component applications require IR 0.10 loading")),
+            TypedNode::Component { component, props, .. } => {
+                let parent = parent.ok_or_else(|| JsValue::from_str("component parent missing"))?;
+                let start: Node = doc.create_comment(&format!("plec:component:{index}")).into();
+                let end: Node = doc.create_comment(&format!("plec:component-end:{index}")).into();
+                parent.append_child(&start)?;
+                parent.append_child(&end)?;
+                let values = props.into_iter().map(|prop| {
+                    let name = self.app.strings.get(prop.name)
+                        .ok_or_else(|| JsValue::from_str("component prop name out of range"))?
+                        .clone();
+                    let value = typed_eval(&self.app, prop.expression, &self.states, row, row_index)?;
+                    Ok((name, value))
+                }).collect::<Result<HashMap<_, _>, JsValue>>()?;
+                let key = format!("{index}:{}", self.next_component_instance);
+                self.next_component_instance += 1;
+                self.component_requests.push(TypedComponentRequest {
+                    call: index,
+                    component,
+                    props: values,
+                    parent: parent.clone(),
+                    end,
+                    key,
+                });
+                if row.is_some() { local.insert(index, start.clone()); } else { self.nodes.insert(index, start.clone()); }
+                Ok(start)
+            }
             TypedNode::Conditional { test, .. } => {
                 let parent =
                     parent.ok_or_else(|| JsValue::from_str("conditional parent missing"))?;

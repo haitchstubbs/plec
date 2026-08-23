@@ -28,12 +28,14 @@ impl PlecRuntime {
                 input_id,
                 row_key,
                 changes,
+                ..
             } => self.update(instance_id, &input_id, &row_key, changes, &mut metrics)?,
             Delta::Insert {
                 input_id,
                 row_key,
                 row,
                 before_row_key,
+                ..
             } => self.insert(
                 instance_id,
                 &input_id,
@@ -42,13 +44,14 @@ impl PlecRuntime {
                 before_row_key,
                 &mut metrics,
             )?,
-            Delta::Remove { input_id, row_key } => {
+            Delta::Remove { input_id, row_key, .. } => {
                 self.remove(instance_id, &input_id, &row_key, &mut metrics)?
             }
             Delta::Move {
                 input_id,
                 row_key,
                 before_row_key,
+                ..
             } => self.move_row(
                 instance_id,
                 &input_id,

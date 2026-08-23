@@ -24,8 +24,8 @@ pub(crate) use crate::schema::{
     delta::{runtime_from_json, Delta, MountMetrics, RuntimeValue, UpdateMetrics},
     routing::{RouteManifest, RouterState},
     typed::{
-        TypedActionInstruction, TypedApplication, TypedBinding, TypedCollection, TypedEventField,
-        TypedExpressionInstruction, TypedNode,
+        TypedActionInstruction, TypedApplication, TypedBinding, TypedCollection,
+        TypedComponentApplication, TypedEventField, TypedExpressionInstruction, TypedNode,
     },
 };
 
@@ -80,6 +80,8 @@ pub struct PlecRuntime {
     pub(crate) typed_registry: Rc<RefCell<HashMap<String, TypedApplication>>>,
     pub(crate) typed_manifest: Rc<RefCell<Option<RouteManifest>>>,
     pub(crate) typed_host_inputs: Rc<RefCell<HashMap<String, RuntimeValue>>>,
+    /// Immutable component definitions for the currently loaded IR 0.10 application.
+    pub(crate) typed_components: Rc<RefCell<Option<TypedComponentApplication>>>,
 }
 
 impl Clone for PlecRuntime {
@@ -95,6 +97,7 @@ impl Clone for PlecRuntime {
             typed_registry: Rc::clone(&self.typed_registry),
             typed_manifest: Rc::clone(&self.typed_manifest),
             typed_host_inputs: Rc::clone(&self.typed_host_inputs),
+            typed_components: Rc::clone(&self.typed_components),
         }
     }
 }
@@ -108,13 +111,39 @@ impl PlecRuntime {
             let mut typed = TypedRuntime::new(app)?;
             typed.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
             typed.graph_generation = self.next_typed_generation();
-            self.typed.borrow_mut().clear();
+            self.dispose_typed_instances();
+            *self.typed_components.borrow_mut() = None;
             self.typed.borrow_mut().insert(
                 graph_instance_id(None, "main", None),
                 TypedGraphInstance {
                     parent_id: None,
                     outlet_id: "main".into(),
                     graph_id: "__typed__".into(),
+                    route_id: None,
+                    match_key: None,
+                    route_state: None,
+                    loader_runtime: None,
+                    runtime: typed,
+                },
+            );
+            return Ok(());
+        }
+        if value.get("version").and_then(Value::as_str) == Some("0.10") {
+            let application: TypedComponentApplication = serde_json::from_value(value).map_err(error)?;
+            application.validate()?;
+            let mut typed = TypedRuntime::new(
+                application.components[application.root_component].clone(),
+            )?;
+            typed.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+            typed.graph_generation = self.next_typed_generation();
+            self.dispose_typed_instances();
+            *self.typed_components.borrow_mut() = Some(application);
+            self.typed.borrow_mut().insert(
+                graph_instance_id(None, "main", None),
+                TypedGraphInstance {
+                    parent_id: None,
+                    outlet_id: "main".into(),
+                    graph_id: "__typed_component__".into(),
                     route_id: None,
                     match_key: None,
                     route_state: None,
@@ -134,6 +163,15 @@ impl PlecRuntime {
             .borrow_mut()
             .insert("__legacy__".into(), application);
         Ok(())
+    }
+}
+
+impl PlecRuntime {
+    pub(crate) fn dispose_typed_instances(&self) {
+        for (_, mut instance) in self.typed.borrow_mut().drain() {
+            instance.runtime.invalidate_fetches();
+            instance.runtime.clear_listeners();
+        }
     }
 }
 
