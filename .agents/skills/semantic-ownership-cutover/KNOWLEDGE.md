@@ -53,7 +53,7 @@ Rust vertical fixtures: `crates/plec-compiler/tests/rust_counter_fixture.rs`; ru
 
 ## Candidate clusters
 
-1. Keyed component call: row key/frame + per-row child instance identity + row-prop refresh + stale-row child disposal. Do not split key/frame from lifecycle: both determine child instance ownership. Acceptance: Rust source fixture with keyed `Child` rows; update/move retain matching child DOM identity, remove disconnects child and listener, only affected child prop sink mutates.
+1. Keyed component call: row key/frame + per-row child instance identity + row-prop refresh + stale-row child disposal. Lowering already emits `rowField` component edges; runtime stores row-local call anchors, queues row prop refresh, then culls detached child runtimes. Missing only Rust artifact/browser proof. Do not split key/frame from lifecycle. Acceptance: Rust source fixture with keyed `Child` rows; update/move retain matching child DOM identity, remove culls child/listener, only affected child prop sink mutates.
 
 ## Corrections
 
