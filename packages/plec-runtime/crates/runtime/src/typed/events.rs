@@ -323,7 +323,7 @@ impl PlecRuntime {
         let component_detached = self.typed.try_borrow().ok().map(|typed| {
             typed.get(instance_id)
                 .and_then(|instance| instance.runtime.nodes.get(&instance.runtime.app.root_node))
-                .map(|node| !node.is_connected())
+                .map(|node| node.parent_node().is_none())
                 .unwrap_or(false)
         }).unwrap_or(false);
         if component_detached {
@@ -376,6 +376,7 @@ impl PlecRuntime {
             request.instance_id = instance_id.into();
             self.start_typed_cookie(request)?;
         }
+        self.flush_component_work()?;
         #[cfg(not(feature = "fetch"))]
         if !pending.is_empty() {
             return Err(JsValue::from_str("fetch capability is disabled"));

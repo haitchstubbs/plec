@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Delta {
     Update {
@@ -36,6 +36,15 @@ pub enum Delta {
 }
 
 impl Delta {
+    pub fn input_id(&self) -> &str {
+        match self {
+            Self::Update { input_id, .. }
+            | Self::Insert { input_id, .. }
+            | Self::Remove { input_id, .. }
+            | Self::Move { input_id, .. } => input_id,
+        }
+    }
+
     pub fn instance_id(&self) -> Option<&str> {
         match self {
             Self::Update { instance_id, .. }

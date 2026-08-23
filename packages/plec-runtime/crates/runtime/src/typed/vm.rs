@@ -688,6 +688,53 @@ impl TypedRuntime {
                 self.render_loop(handle, &parent)?;
             }
         }
+        // ponytail: scans mounted calls; index component dependency edges if profiles require it.
+        self.queue_static_component_refreshes()?;
+        Ok(())
+    }
+
+    pub(crate) fn refresh_prop(
+        &mut self,
+        prop: usize,
+        metrics: &mut UpdateMetrics,
+    ) -> Result<(), JsValue> {
+        let targets = self.app.dependency_edges.iter().filter_map(|edge| {
+            (edge.source.kind == "prop" && edge.source.handle == prop)
+                .then(|| (edge.target.kind.clone(), edge.target.handle))
+        }).collect::<Vec<_>>();
+        for (_, handle) in targets.iter().filter(|(kind, _)| kind == "conditional") {
+            if self.conditionals.contains_key(handle) {
+                self.reconcile_static_conditional(*handle, metrics)?;
+            }
+        }
+        for (kind, handle) in targets {
+            match kind.as_str() {
+                "binding" => if let (Some(binding), Some(node)) = (
+                    self.app.bindings.get(handle).cloned(),
+                    self.app.bindings.get(handle).and_then(|binding| self.nodes.get(&binding.target)).cloned(),
+                ) {
+                    typed_apply_binding(&self.app, &binding, &node, &self.states, None, 0)?;
+                    metrics.dom_operations += 1;
+                    metrics.bindings_touched += 1;
+                },
+                "propProgram" => if let Some(program) = self.app.prop_programs.get(handle).cloned() {
+                    if let Some(node) = self.nodes.get(&program.target).cloned() {
+                        for write in program.writes {
+                            let value = write.expression.map(|expression| typed_eval(&self.app, expression, &self.states, None, 0))
+                                .transpose()?.or_else(|| write.constant.and_then(|index| self.app.constants.get(index)).cloned()).unwrap_or_default();
+                            typed_apply_value(&self.app, &write.kind, Some(write.name), &node, value)?;
+                            metrics.dom_operations += 1;
+                        }
+                    }
+                },
+                "loop" => {
+                    let parent = self.parent_for_loop(handle)?;
+                    self.render_loop(handle, &parent)?;
+                }
+                _ => {}
+            }
+        }
+        self.queue_static_component_refreshes()?;
         Ok(())
     }
 }

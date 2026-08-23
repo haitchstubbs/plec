@@ -46,8 +46,15 @@ pub(crate) struct TypedComponentRequest {
     pub(crate) component: usize,
     pub(crate) props: HashMap<String, RuntimeValue>,
     pub(crate) parent: Node,
+    pub(crate) start: Node,
     pub(crate) end: Node,
     pub(crate) key: String,
+}
+
+pub(crate) struct TypedComponentRefresh {
+    pub(crate) call: usize,
+    pub(crate) start: Node,
+    pub(crate) props: HashMap<String, RuntimeValue>,
 }
 
 pub(crate) struct TypedRuntime {
@@ -61,6 +68,7 @@ pub(crate) struct TypedRuntime {
     pub(crate) listeners: Vec<TypedListener>,
     pub(crate) listener_requests: Vec<TypedListenerRequest>,
     pub(crate) component_requests: Vec<TypedComponentRequest>,
+    pub(crate) component_refreshes: Vec<TypedComponentRefresh>,
     pub(crate) next_generation: u64,
     pub(crate) graph_generation: u64,
     pub(crate) host_inputs: HashMap<String, RuntimeValue>,
@@ -87,6 +95,8 @@ pub(crate) struct TypedGraphInstance {
     pub(crate) route_state: Option<TypedRouteState>,
     /// The normal graph remains alive only while its route loader is pending.
     pub(crate) loader_runtime: Option<TypedRuntime>,
+    pub(crate) component_call: Option<usize>,
+    pub(crate) component_start: Option<Node>,
     pub(crate) runtime: TypedRuntime,
 }
 
@@ -195,13 +205,72 @@ impl PlecRuntime {
                 .runtime
                 .mount(root)?
         };
-        self.mount_component_requests()?;
+        self.flush_component_work()?;
         self.install_typed_event_listeners()?;
         serde_wasm_bindgen::to_value(&metrics).map_err(error)
     }
 }
 
 impl PlecRuntime {
+    pub(crate) fn flush_component_work(&self) -> Result<(), JsValue> {
+        loop {
+            self.mount_component_requests()?;
+            let refreshes = self.typed.borrow_mut().iter_mut().flat_map(|(parent, instance)| {
+                instance.runtime.component_refreshes.drain(..)
+                    .map(|refresh| (parent.clone(), refresh)).collect::<Vec<_>>()
+            }).collect::<Vec<_>>();
+            if refreshes.is_empty() {
+                self.dispose_orphan_components();
+                return Ok(());
+            }
+            for (parent, refresh) in refreshes {
+                let children = self.typed.borrow().iter().filter_map(|(id, instance)| {
+                    (instance.parent_id.as_deref() == Some(parent.as_str())
+                        && instance.component_call == Some(refresh.call)
+                        && instance.component_start.as_ref().is_some_and(|start| start.is_same_node(Some(&refresh.start))))
+                        .then(|| id.clone())
+                }).collect::<Vec<_>>();
+                for child in children {
+                    let mut typed = self.typed.borrow_mut();
+                    let instance = typed.get_mut(&child).expect("component instance exists");
+                    let values = instance.runtime.app.parameters.iter().map(|parameter| {
+                        let name = instance.runtime.app.strings.get(parameter.name)
+                            .ok_or_else(|| JsValue::from_str("component parameter handle out of range"))?;
+                        Ok(refresh.props.get(name).cloned().unwrap_or(RuntimeValue::Null))
+                    }).collect::<Result<Vec<_>, JsValue>>()?;
+                    let changed = instance.runtime.app.runtime_props != values;
+                    instance.runtime.app.runtime_props = values;
+                    if changed {
+                        let mut metrics = UpdateMetrics::default();
+                        for prop in 0..instance.runtime.app.parameters.len() {
+                            instance.runtime.refresh_prop(prop, &mut metrics)?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn dispose_orphan_components(&self) {
+        loop {
+            let stale = self.typed.borrow().iter().filter_map(|(id, instance)| {
+                instance.parent_id.as_ref().and_then(|_| {
+                    instance.runtime.nodes.get(&instance.runtime.app.root_node)
+                        .filter(|node| node.parent_node().is_none())
+                        .map(|_| id.clone())
+                })
+            }).collect::<Vec<_>>();
+            if stale.is_empty() { return; }
+            let mut typed = self.typed.borrow_mut();
+            for id in stale {
+                if let Some(mut instance) = typed.remove(&id) {
+                    instance.runtime.invalidate_fetches();
+                    instance.runtime.clear_listeners();
+                }
+            }
+        }
+    }
+
     pub(crate) fn mount_component_requests(&self) -> Result<(), JsValue> {
         let definitions = self.typed_components.borrow().clone();
         let Some(definitions) = definitions else { return Ok(()); };
@@ -232,6 +301,8 @@ impl PlecRuntime {
                     match_key: None,
                     route_state: None,
                     loader_runtime: None,
+                    component_call: Some(request.call),
+                    component_start: Some(request.start),
                     runtime,
                 });
             }
@@ -246,7 +317,21 @@ impl PlecRuntime {
         rows: JsValue,
     ) -> Result<JsValue, JsValue> {
         if self.typed_components.borrow().is_some() {
-            return Err(JsValue::from_str("IR 0.10 input requires instanceId"));
+            let rows: Vec<Value> = serde_wasm_bindgen::from_value(rows).map_err(error)?;
+            let ids = self.typed.borrow().iter().filter_map(|(id, instance)| {
+                instance.runtime.app.inputs.iter().any(|input| {
+                    instance.runtime.app.strings.get(input.name).map(String::as_str) == Some(input_id)
+                }).then(|| id.clone())
+            }).collect::<Vec<_>>();
+            let mut metrics = UpdateMetrics::default();
+            for id in ids {
+                let mut typed = self.typed.borrow_mut();
+                typed.get_mut(&id).expect("live typed instance")
+                    .runtime.reconcile_input(input_id, rows.clone(), &mut metrics)?;
+            }
+            self.flush_component_work()?;
+            self.install_typed_event_listeners()?;
+            return serde_wasm_bindgen::to_value(&metrics).map_err(error);
         }
         let id = graph_instance_id(None, "main", None);
         self.initialize_typed_input_for(&id, input_id, rows)
@@ -272,7 +357,7 @@ impl PlecRuntime {
                 .reconcile_input(input_id, rows, &mut metrics)?;
             metrics
         };
-        self.mount_component_requests()?;
+        self.flush_component_work()?;
         self.install_typed_event_listeners()?;
         serde_wasm_bindgen::to_value(&metrics).map_err(error)
     }
@@ -281,21 +366,22 @@ impl PlecRuntime {
 impl PlecRuntime {
     pub(crate) fn apply_typed_delta(&self, delta: JsValue) -> Result<JsValue, JsValue> {
         let delta: Delta = serde_wasm_bindgen::from_value(delta).map_err(error)?;
-        let id = match (self.typed_components.borrow().is_some(), delta.instance_id()) {
-            (true, Some(id)) => id.to_owned(),
-            (true, None) => return Err(JsValue::from_str("IR 0.10 delta requires instanceId")),
-            (false, _) => graph_instance_id(None, "main", None),
+        let ids = match (self.typed_components.borrow().is_some(), delta.instance_id()) {
+            (true, Some(id)) => vec![id.to_owned()],
+            (true, None) => self.typed.borrow().iter().filter_map(|(id, instance)| {
+                instance.runtime.app.inputs.iter().any(|input| {
+                    instance.runtime.app.strings.get(input.name).map(String::as_str) == Some(delta.input_id())
+                }).then(|| id.clone())
+            }).collect(),
+            (false, _) => vec![graph_instance_id(None, "main", None)],
         };
-        let metrics = {
-            let mut typed = self.typed.borrow_mut();
-            let typed = typed
-                .get_mut(&id)
-                .ok_or_else(|| JsValue::from_str("typed application missing"))?;
-            let mut metrics = UpdateMetrics::default();
-            typed.runtime.apply_delta(delta, &mut metrics)?;
-            metrics
-        };
-        self.mount_component_requests()?;
+        let mut metrics = UpdateMetrics::default();
+        for id in ids {
+            self.typed.borrow_mut().get_mut(&id)
+                .ok_or_else(|| JsValue::from_str("typed application missing"))?
+                .runtime.apply_delta(delta.clone(), &mut metrics)?;
+        }
+        self.flush_component_work()?;
         self.install_typed_event_listeners()?;
         serde_wasm_bindgen::to_value(&metrics).map_err(error)
     }
@@ -342,6 +428,7 @@ impl TypedRuntime {
             listeners: Vec::new(),
             listener_requests: Vec::new(),
             component_requests: Vec::new(),
+            component_refreshes: Vec::new(),
             next_generation: 1,
             graph_generation: 1,
             host_inputs: HashMap::new(),
@@ -367,6 +454,42 @@ impl TypedRuntime {
 }
 
 impl TypedRuntime {
+    fn queue_component_refreshes(
+        &mut self,
+        nodes: Vec<(usize, Node)>,
+        row: Option<&HashMap<String, RuntimeValue>>,
+    ) -> Result<(), JsValue> {
+        for (call, start) in nodes {
+            let Some(TypedNode::Component { props, .. }) = self.app.nodes.get(call).cloned() else {
+                continue;
+            };
+            let props = props.into_iter().map(|prop| {
+                let name = self.app.strings.get(prop.name)
+                    .ok_or_else(|| JsValue::from_str("component prop name out of range"))?
+                    .clone();
+                let value = typed_eval(&self.app, prop.expression, &self.states, row, 0)?;
+                Ok((name, value))
+            }).collect::<Result<HashMap<_, _>, JsValue>>()?;
+            self.component_refreshes.push(TypedComponentRefresh { call, start, props });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn queue_static_component_refreshes(&mut self) -> Result<(), JsValue> {
+        self.queue_component_refreshes(
+            self.nodes.iter().map(|(call, node)| (*call, node.clone())).collect(),
+            None,
+        )
+    }
+
+    fn queue_row_component_refreshes(
+        &mut self,
+        nodes: HashMap<usize, Node>,
+        values: &HashMap<String, RuntimeValue>,
+    ) -> Result<(), JsValue> {
+        self.queue_component_refreshes(nodes.into_iter().collect(), Some(values))
+    }
+
     pub(crate) fn mount(&mut self, root: Element) -> Result<MountMetrics, JsValue> {
         self.invalidate_fetches();
         self.clear_listeners();
@@ -648,6 +771,7 @@ impl TypedRuntime {
                     component,
                     props: values,
                     parent: parent.clone(),
+                    start: start.clone(),
                     end,
                     key,
                 });
@@ -1241,6 +1365,13 @@ impl TypedRuntime {
                 }
             }
         }
+        let (nodes, values) = self
+            .loops
+            .get(&loop_index)
+            .and_then(|rows| rows.rows.get(key))
+            .map(|row| (row.nodes.clone(), row.values.clone()))
+            .ok_or_else(|| JsValue::from_str("row missing"))?;
+        self.queue_row_component_refreshes(nodes, &values)?;
         Ok(())
     }
 

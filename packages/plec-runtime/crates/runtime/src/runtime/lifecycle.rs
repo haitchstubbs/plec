@@ -123,6 +123,8 @@ impl PlecRuntime {
                     match_key: None,
                     route_state: None,
                     loader_runtime: None,
+                    component_call: None,
+                    component_start: None,
                     runtime: typed,
                 },
             );
@@ -148,6 +150,8 @@ impl PlecRuntime {
                     match_key: None,
                     route_state: None,
                     loader_runtime: None,
+                    component_call: None,
+                    component_start: None,
                     runtime: typed,
                 },
             );
