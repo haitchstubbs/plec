@@ -39,6 +39,7 @@ pub(crate) fn typed_eval_frame(
             TypedExpressionInstruction::LoadState { state } => {
                 stack.push(states.get(*state).cloned().unwrap_or(RuntimeValue::Null))
             }
+            TypedExpressionInstruction::LoadProp { .. } => stack.push(RuntimeValue::Null),
             TypedExpressionInstruction::LoadRowField { field } => {
                 let field = app.strings.get(*field).map(String::as_str).unwrap_or("");
                 stack.push(if field.is_empty() {

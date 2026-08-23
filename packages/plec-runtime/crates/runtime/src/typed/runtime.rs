@@ -536,6 +536,7 @@ impl TypedRuntime {
                 )?;
                 Ok(marker)
             }
+            TypedNode::Component { .. } => Err(JsValue::from_str("component applications require IR 0.10 loading")),
             TypedNode::Conditional { test, .. } => {
                 let parent =
                     parent.ok_or_else(|| JsValue::from_str("conditional parent missing"))?;

@@ -1,6 +1,49 @@
 use serde::Serialize;
 
 pub const VERSION: &str = "0.9";
+pub const COMPONENT_VERSION: &str = "0.10";
+
+/// A separately-versioned component application.  Component definitions keep
+/// their local node/state handles; call nodes connect those local programs.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentApplication {
+    pub version: &'static str,
+    pub root_component: usize,
+    pub components: Vec<ExecutableComponent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutableComponent {
+    pub id: String,
+    pub root_node: usize,
+    pub strings: Vec<String>,
+    pub constants: Vec<Value>,
+    pub nodes: Vec<Node>,
+    pub texts: Vec<Text>,
+    pub bindings: Vec<Binding>,
+    pub prop_programs: Vec<PropProgram>,
+    pub events: Vec<Event>,
+    pub inputs: Vec<Input>,
+    pub state_slots: Vec<StateSlot>,
+    pub parameters: Vec<ComponentParameter>,
+    pub expressions: Vec<ExpressionProgram>,
+    pub actions: Vec<ActionProgram>,
+    pub loops: Vec<Loop>,
+    pub dependency_edges: Vec<DependencyEdge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ComponentParameter {
+    pub name: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ComponentProp {
+    pub name: usize,
+    pub expression: usize,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +59,8 @@ pub struct ExecutableApplication {
     pub events: Vec<Event>,
     pub inputs: Vec<Input>,
     pub state_slots: Vec<StateSlot>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub parameters: Vec<ComponentParameter>,
     pub expressions: Vec<ExpressionProgram>,
     pub actions: Vec<ActionProgram>,
     pub loops: Vec<Loop>,
@@ -36,6 +81,7 @@ impl Default for ExecutableApplication {
             events: vec![],
             inputs: vec![],
             state_slots: vec![],
+            parameters: vec![],
             expressions: vec![],
             actions: vec![],
             loops: vec![],
@@ -76,6 +122,11 @@ pub enum Node {
     Loop {
         r#loop: usize,
         parent: Option<usize>,
+    },
+    Component {
+        component: usize,
+        parent: Option<usize>,
+        props: Vec<ComponentProp>,
     },
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -144,6 +195,7 @@ pub struct ExpressionProgram {
 pub enum ExpressionInstruction {
     Constant { constant: usize },
     LoadState { state: usize },
+    LoadProp { prop: usize },
     LoadRowField { field: usize },
     Field { field: usize },
     Unary { kind: &'static str },
