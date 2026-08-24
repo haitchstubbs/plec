@@ -129,6 +129,13 @@ pub enum Node {
         component: usize,
         parent: Option<usize>,
         props: Vec<ComponentProp>,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        children: Vec<usize>,
+    },
+    /// Insertion range for the implicit `children` prop. The content belongs
+    /// to the caller, not the component definition which declares this node.
+    Slot {
+        parent: Option<usize>,
     },
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]

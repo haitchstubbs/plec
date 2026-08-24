@@ -47,12 +47,23 @@ pub fn lower_application_to_executable(
                     "direct component parameters are not executable".into(),
                 )),
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        targets.insert(component.id.clone(), (index, props));
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|(name, _)| name != "children")
+            .collect::<Vec<_>>();
+        let has_slot = component
+            .nodes
+            .iter()
+            .filter(|node| matches!(node, HirNode::Slot(_)))
+            .count();
+        if has_slot > 1 {
+            return Err(LoweringError("components support one children slot".into()));
+        }
+        targets.insert(component.id.clone(), (index, props, has_slot == 1));
     }
     let root_component = *targets
         .get(&application.root)
-        .map(|(index, _)| index)
+        .map(|(index, _, _)| index)
         .ok_or_else(|| LoweringError("application root component missing".into()))?;
     let components = application
         .components
@@ -88,7 +99,7 @@ pub fn lower_application_to_executable(
 
 fn lower_component(
     component: &HirComponent,
-    targets: Option<&HashMap<ComponentId, (usize, Vec<(String, bool)>)>>,
+    targets: Option<&HashMap<ComponentId, (usize, Vec<(String, bool)>, bool)>>,
 ) -> Result<ExecutableApplication, LoweringError> {
     let mut ctx = Ctx::new(component, targets);
     for parameter in &component.parameters {
@@ -154,7 +165,7 @@ struct Ctx<'a> {
     callables: HashMap<BindingId, usize>,
     props: HashMap<BindingId, usize>,
     callback_props: HashMap<BindingId, usize>,
-    targets: Option<&'a HashMap<ComponentId, (usize, Vec<(String, bool)>)>>,
+    targets: Option<&'a HashMap<ComponentId, (usize, Vec<(String, bool)>, bool)>>,
     locals: HashMap<BindingId, plec_hir::ExprId>,
     active_locals: Vec<BindingId>,
     active_loop: Option<usize>,
@@ -162,7 +173,7 @@ struct Ctx<'a> {
 impl<'a> Ctx<'a> {
     fn new(
         component: &'a HirComponent,
-        targets: Option<&'a HashMap<ComponentId, (usize, Vec<(String, bool)>)>>,
+        targets: Option<&'a HashMap<ComponentId, (usize, Vec<(String, bool)>, bool)>>,
     ) -> Self {
         Self {
             component,
@@ -535,13 +546,10 @@ impl<'a> Ctx<'a> {
                 Ok(index)
             }
             HirNode::Component(call) => {
-                if !call.children.is_empty() {
-                    return Err(self.err("component children are not executable yet"));
-                }
                 let targets = self
                     .targets
                     .ok_or_else(|| self.err("component calls are not executable in IR 0.9"))?;
-                let (component, parameters) = targets
+                let (component, parameters, has_slot) = targets
                     .get(&call.target)
                     .ok_or_else(|| self.err("component target missing from application"))?;
                 let mut supplied = BTreeSet::new();
@@ -610,11 +618,19 @@ impl<'a> Ctx<'a> {
                 {
                     return Err(self.err("missing component prop"));
                 }
+                let children = has_slot.then(|| call
+                    .children
+                    .into_iter()
+                    .map(|child| self.node(child, None))
+                    .collect::<Result<Vec<_>, _>>())
+                    .transpose()?
+                    .unwrap_or_default();
                 let index = self.app.nodes.len();
                 self.app.nodes.push(Node::Component {
                     component: *component,
                     parent,
                     props,
+                    children,
                 });
                 self.edges(dependencies, "component", index);
                 let expressions = match &self.app.nodes[index] {
@@ -631,6 +647,12 @@ impl<'a> Ctx<'a> {
                     self.prop_edges(expression, "component", index);
                     self.row_edges(expression, "component", index);
                 }
+                Ok(index)
+            }
+            HirNode::Slot(_) => {
+                let parent = parent.ok_or_else(|| self.err("component slot requires an element parent"))?;
+                let index = self.app.nodes.len();
+                self.app.nodes.push(Node::Slot { parent: Some(parent) });
                 Ok(index)
             }
             _ => Err(self.err("node is not executable in the first IR slice")),
@@ -1043,6 +1065,21 @@ mod tests {
             .dependency_edges
             .iter()
             .any(|edge| edge.source.kind == "prop" && edge.target.kind == "binding"));
+    }
+
+    #[test]
+    fn lowers_implicit_children_as_a_parent_owned_slot_template() {
+        let modules = vec![parse_module("test.tsx", r#"
+            export function App() { return <Frame><p>Inside</p></Frame>; }
+            function Frame({ children }) { return <section>{children}</section>; }
+        "#).unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let root = discover_root_component(&modules, &graph, "test.tsx", Some("App")).unwrap();
+        let hir = lower_application(&modules, &root, &graph).unwrap();
+        let app = lower_application_to_executable(&hir).unwrap();
+        assert!(matches!(app.components[0].nodes.iter().find(|node| matches!(node, Node::Component { .. })),
+            Some(Node::Component { children, .. }) if children.len() == 1));
+        assert!(app.components[1].nodes.iter().any(|node| matches!(node, Node::Slot { .. })));
     }
 
     #[test]

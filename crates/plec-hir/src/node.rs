@@ -26,6 +26,8 @@ pub enum HirNode {
     Fragment(HirFragment),
     Conditional(HirConditional),
     ForEach(HirForEach),
+    /// The implicit React `children` insertion point of a component.
+    Slot(HirSlot),
     Empty,
 }
 
@@ -61,6 +63,12 @@ pub struct HirComponentCall {
     pub target: ComponentId,
     pub props: Vec<HirProp>,
     pub children: Vec<NodeId>,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirSlot {
+    pub id: NodeId,
     pub span: SourceSpan,
 }
 
