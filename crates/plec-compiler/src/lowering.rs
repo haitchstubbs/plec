@@ -142,11 +142,22 @@ fn lower_component(
         });
     }
     for callable in &component.callables {
-        if !callable.parameters.is_empty() {
-            return Err(ctx.err("callable parameters are not executable yet"));
-        }
-        let action = ctx.action(&callable.body, false)?;
+        let action = ctx.app.actions.len();
+        ctx.app.actions.push(ActionProgram {
+            frame_slots: 0,
+            parameter_slots: vec![],
+            instructions: vec![],
+        });
         ctx.callables.insert(callable.binding, action);
+    }
+    for callable in &component.callables {
+        let action = *ctx
+            .callables
+            .get(&callable.binding)
+            .expect("action reserved");
+        ctx.action(&callable.body, &callable.parameters, false)?;
+        let lowered = ctx.app.actions.pop().expect("action lowered");
+        ctx.app.actions[action] = lowered;
     }
     if component.root_nodes.len() != 1 {
         return Err(ctx.err("executable roots require exactly one node"));
@@ -165,6 +176,7 @@ struct Ctx<'a> {
     callables: HashMap<BindingId, usize>,
     props: HashMap<BindingId, usize>,
     callback_props: HashMap<BindingId, usize>,
+    action_parameters: HashMap<BindingId, usize>,
     targets: Option<&'a HashMap<ComponentId, (usize, Vec<(String, bool)>, bool)>>,
     locals: HashMap<BindingId, plec_hir::ExprId>,
     active_locals: Vec<BindingId>,
@@ -185,6 +197,7 @@ impl<'a> Ctx<'a> {
             callables: HashMap::new(),
             props: HashMap::new(),
             callback_props: HashMap::new(),
+            action_parameters: HashMap::new(),
             targets,
             locals: component
                 .locals
@@ -271,6 +284,13 @@ impl<'a> Ctx<'a> {
                         .ok_or_else(|| self.err("state used before lowering"))?;
                     deps.insert(state);
                     code.push(ExpressionInstruction::LoadState { state });
+                }
+                Some(HirBindingKind::Parameter { callable: false })
+                    if self.action_parameters.contains_key(&binding) =>
+                {
+                    code.push(ExpressionInstruction::LoadFrame {
+                        slot: self.action_parameters[&binding],
+                    });
                 }
                 Some(HirBindingKind::Parameter { callable: false }) => {
                     let prop = *self
@@ -786,6 +806,8 @@ impl<'a> Ctx<'a> {
                 if let Some(prop) = self.callback_props.get(binding).copied() {
                     let action = self.app.actions.len();
                     self.app.actions.push(ActionProgram {
+                        frame_slots: 0,
+                        parameter_slots: vec![],
                         instructions: vec![
                             ActionInstruction::CallProp { prop },
                             ActionInstruction::Return,
@@ -799,12 +821,25 @@ impl<'a> Ctx<'a> {
                 }
             }
             HirCallable::Inline { parameters, body } if parameters.is_empty() => {
-                self.action(body, self.active_loop.is_some())
+                self.action(body, parameters, self.active_loop.is_some())
             }
             _ => Err(self.err("callable is not executable in the first IR slice")),
         }
     }
-    fn action(&mut self, body: &HirCallableBody, row: bool) -> Result<usize, LoweringError> {
+    fn action(
+        &mut self,
+        body: &HirCallableBody,
+        parameters: &[BindingId],
+        row: bool,
+    ) -> Result<usize, LoweringError> {
+        let previous = std::mem::replace(
+            &mut self.action_parameters,
+            parameters
+                .iter()
+                .enumerate()
+                .map(|(slot, binding)| (*binding, slot))
+                .collect(),
+        );
         let mut code = vec![];
         match body {
             HirCallableBody::Block(stmts) => self.statements(stmts, &mut code, row)?,
@@ -813,15 +848,22 @@ impl<'a> Ctx<'a> {
                     let (expression, _) = self.expression(value, row)?;
                     code.push(ActionInstruction::Evaluate { expression });
                     code.push(ActionInstruction::StoreState { state });
+                } else if let Some(call) = self.local_action_call(*expr, row)? {
+                    code.push(call);
                 } else {
                     let prop = self.callback_call(*expr)?;
                     code.push(ActionInstruction::CallProp { prop });
                 }
             }
         }
+        self.action_parameters = previous;
         code.push(ActionInstruction::Return);
         let index = self.app.actions.len();
-        self.app.actions.push(ActionProgram { instructions: code });
+        self.app.actions.push(ActionProgram {
+            frame_slots: parameters.len(),
+            parameter_slots: (0..parameters.len()).collect(),
+            instructions: code,
+        });
         Ok(index)
     }
     fn statements(
@@ -864,9 +906,13 @@ impl<'a> Ctx<'a> {
                 }
                 HirStmt::Return { .. } => code.push(ActionInstruction::Return),
                 HirStmt::Expression { expression, .. } => {
-                    code.push(ActionInstruction::CallProp {
-                        prop: self.callback_call(*expression)?,
-                    });
+                    if let Some(call) = self.local_action_call(*expression, row)? {
+                        code.push(call);
+                    } else {
+                        code.push(ActionInstruction::CallProp {
+                            prop: self.callback_call(*expression)?,
+                        });
+                    }
                 }
             }
         }
@@ -897,6 +943,30 @@ impl<'a> Ctx<'a> {
                 .ok_or_else(|| self.err("state setter target missing"))?,
             args[0],
         ))
+    }
+
+    fn local_action_call(
+        &mut self,
+        id: plec_hir::ExprId,
+        row: bool,
+    ) -> Result<Option<ActionInstruction>, LoweringError> {
+        let HirExpr::Call { callee, args } = self.expr(id)?.clone() else {
+            return Ok(None);
+        };
+        let HirExpr::Binding(binding) = self.expr(callee)? else {
+            return Ok(None);
+        };
+        let Some(action) = self.callables.get(&binding).copied() else {
+            return Ok(None);
+        };
+        let arguments = args
+            .into_iter()
+            .map(|argument| {
+                self.expression(argument, row)
+                    .map(|(expression, _)| expression)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Some(ActionInstruction::Call { action, arguments }))
     }
 
     fn callback_call(&self, id: plec_hir::ExprId) -> Result<usize, LoweringError> {
@@ -957,6 +1027,30 @@ mod tests {
             .iter()
             .any(|edge| edge.source.kind == "state" && edge.target.kind == "binding"));
         assert!(app.prop_programs[0].writes[0].constant.is_some());
+    }
+
+    #[test]
+    fn lowers_parameterized_local_action_calls() {
+        let app = lower(
+            r#"
+            export function Counter() {
+                const [count, setCount] = useState(0);
+                const incrementBy = (step) => setCount(count + step);
+                return <button onClick={() => incrementBy(1)}>{count}</button>;
+            }
+        "#,
+        );
+        assert_eq!(app.actions[0].frame_slots, 1);
+        assert_eq!(app.actions[0].parameter_slots, [0]);
+        assert!(app.expressions.iter().any(|expression| {
+            expression.instructions.iter().any(|instruction| {
+                matches!(instruction, ExpressionInstruction::LoadFrame { slot: 0 })
+            })
+        }));
+        assert!(matches!(
+            app.actions[1].instructions[0],
+            ActionInstruction::Call { action: 0, .. }
+        ));
     }
 
     #[test]

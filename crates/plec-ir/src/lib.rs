@@ -205,6 +205,7 @@ pub enum ExpressionInstruction {
     Constant { constant: usize },
     LoadState { state: usize },
     LoadProp { prop: usize },
+    LoadFrame { slot: usize },
     LoadRowField { field: usize },
     Field { field: usize },
     Unary { kind: &'static str },
@@ -217,17 +218,41 @@ pub enum ExpressionInstruction {
     Return,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ActionProgram {
+    #[serde(skip_serializing_if = "is_zero", default)]
+    pub frame_slots: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub parameter_slots: Vec<usize>,
     pub instructions: Vec<ActionInstruction>,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum ActionInstruction {
-    Evaluate { expression: usize },
-    StoreState { state: usize },
-    CallProp { prop: usize },
-    Jump { target: usize },
-    JumpIfFalse { target: usize },
+    Evaluate {
+        expression: usize,
+    },
+    StoreState {
+        state: usize,
+    },
+    CallProp {
+        prop: usize,
+    },
+    Call {
+        action: usize,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        arguments: Vec<usize>,
+    },
+    Jump {
+        target: usize,
+    },
+    JumpIfFalse {
+        target: usize,
+    },
     Return,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]

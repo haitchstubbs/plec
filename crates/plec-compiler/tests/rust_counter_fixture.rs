@@ -86,6 +86,23 @@ const KEYED_SLOT_COMPONENT_SOURCE: &str = r#"
     }
 "#;
 
+const LOCAL_ACTION_COMPONENT_SOURCE: &str = r#"
+    export function Counter() {
+        const [count, setCount] = useState(0);
+        const incrementBy = (step) => setCount(count + step);
+        return <button onClick={() => incrementBy(1)}>{count}</button>;
+    }
+"#;
+
+const KEYED_LOCAL_ACTION_COMPONENT_SOURCE: &str = r#"
+    export function Todos() {
+        const todos = useCollection("items");
+        const [selected, setSelected] = useState("");
+        const select = (title) => setSelected(title);
+        return <main><p>{selected}</p><ul>{todos.map(todo => <li key={todo.id}><button onClick={() => select(todo.title)}>{todo.title}</button></li>)}</ul></main>;
+    }
+"#;
+
 #[test]
 fn rust_counter_artifact_matches_runtime_fixture() {
     assert_fixture(
@@ -279,6 +296,47 @@ fn rust_keyed_slot_component_artifact_matches_runtime_fixture() {
         .any(|node| matches!(node, plec_ir::Node::Slot { .. })));
     let fixture = fs::read_to_string(format!(
         "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-keyed-slot-component-0.10.json",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("runtime fixture should exist");
+    assert_eq!(
+        serde_json::to_value(executable).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+    );
+}
+
+#[test]
+fn rust_local_action_artifact_matches_runtime_fixture() {
+    assert_component_fixture(
+        "rust-local-action.tsx",
+        "Counter",
+        LOCAL_ACTION_COMPONENT_SOURCE,
+        "rust-local-action-0.10.json",
+    );
+}
+
+#[test]
+fn rust_keyed_local_action_artifact_matches_runtime_fixture() {
+    assert_component_fixture(
+        "rust-keyed-local-action.tsx",
+        "Todos",
+        KEYED_LOCAL_ACTION_COMPONENT_SOURCE,
+        "rust-keyed-local-action-0.10.json",
+    );
+}
+
+fn assert_component_fixture(path: &str, component: &str, source: &str, fixture_name: &str) {
+    let module = parse_module(path, source).expect("source should parse");
+    let modules = vec![module];
+    let graph =
+        build_semantic_graph(&modules, &Default::default()).expect("semantic graph should build");
+    let root = discover_root_component(&modules, &graph, path, Some(component))
+        .expect("root should be discovered");
+    let application = lower_application(&modules, &root, &graph).expect("root should lower to HIR");
+    let executable =
+        lower_application_to_executable(&application).expect("HIR should lower to component IR");
+    let fixture = fs::read_to_string(format!(
+        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/{fixture_name}",
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("runtime fixture should exist");
