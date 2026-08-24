@@ -238,6 +238,8 @@ const DEFAULT_RUNTIME_WASM_URL = '/runtime/runtime_bg.wasm';
 export interface PlecRouterMountOptions {
   root: Element;
   manifestUrl?: string;
+  /** A Rust-produced `{ manifest, application }` artifact. */
+  applicationUrl?: string;
   graphUrl?: (graphId: string) => string;
   runtimeJsUrl?: string;
   runtimeWasmUrl?: string;
@@ -433,14 +435,14 @@ export async function startPlecRouter(
   options: PlecRouterMountOptions,
 ): Promise<PlecRouterController> {
   markPlecTiming('plec:mount-start');
-  const manifestResponse = await fetch(
-    options.manifestUrl ?? '/route-manifest.json',
-  );
+  const manifestResponse = await fetch(options.applicationUrl ?? options.manifestUrl ?? '/route-manifest.json');
   if (!manifestResponse.ok)
     throw new Error(
       `Failed to load route manifest: ${manifestResponse.status}`,
     );
-  const manifest = (await manifestResponse.json()) as PlecRouteManifest;
+  const artifact = await manifestResponse.json();
+  const compiled = options.applicationUrl ? artifact as { manifest: PlecRouteManifest; application: any } : undefined;
+  const manifest = (compiled?.manifest ?? artifact) as PlecRouteManifest;
   const graphUrl = options.graphUrl ?? ((id) => `/graphs/${id}.json`);
   const graphIds = new Set<string>([
     manifest.rootGraphId,
@@ -460,7 +462,7 @@ export async function startPlecRouter(
     module_or_path: options.runtimeWasmUrl ?? DEFAULT_RUNTIME_WASM_URL,
   });
   const runtime = new runtimeModule.PlecRuntime();
-  const graphs = await Promise.all(
+  const graphs = compiled ? [compiled.application] : await Promise.all(
     [...graphIds].map(async (graphId) => {
       const response = await fetch(graphUrl(graphId));
       if (!response.ok)
@@ -471,7 +473,7 @@ export async function startPlecRouter(
       return await response.json();
     }),
   );
-  const cookieNames = graphs.flatMap((graph: any) =>
+  const cookieNames = graphs.flatMap((graph: any) => (graph.components ?? [graph]).flatMap((graph: any) =>
     (graph.capabilities ?? [])
       .filter(
         (capability: any) =>
@@ -479,7 +481,7 @@ export async function startPlecRouter(
           capability.operations.includes('getSync'),
       )
       .map((capability: any) => capability.name),
-  );
+  ));
   runtime.set_host_inputs({
     ...Object.fromEntries(
       [...new Set(cookieNames)].map((name) => [name, readCookie(name)]),
@@ -488,7 +490,8 @@ export async function startPlecRouter(
     'location.search': window.location.search,
     'location.hash': window.location.hash,
   });
-  graphs.forEach((graph: any, index) =>
+  if (compiled) runtime.register_graph('__rust_application__', compiled.application);
+  else graphs.forEach((graph: any, index) =>
     runtime.register_graph([...graphIds][index]!, graph),
   );
   const onCookieRequest = (event: Event) => {
@@ -535,7 +538,7 @@ export async function startPlecRouter(
   markPlecTiming('plec:mount-end');
 
   // Mount islands for the initial root graph
-  const rootGraph = graphs.find(
+  const rootGraph = !compiled && graphs.find(
     (g: any) => g.graphId === manifest.rootGraphId,
   );
   const disposeIslands = rootGraph

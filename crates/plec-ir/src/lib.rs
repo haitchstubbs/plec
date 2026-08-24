@@ -66,6 +66,8 @@ pub struct ExecutableComponent {
     pub actions: Vec<ActionProgram>,
     pub loops: Vec<Loop>,
     pub dependency_edges: Vec<DependencyEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub route_outlets: Vec<RouteOutlet>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

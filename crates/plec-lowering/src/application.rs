@@ -63,6 +63,7 @@ pub fn lower_application_to_executable(
                 actions: app.actions,
                 loops: app.loops,
                 dependency_edges: app.dependency_edges,
+                route_outlets: app.route_outlets,
             })
         })
         .collect::<Result<Vec<_>, LoweringError>>()?;

@@ -321,6 +321,7 @@ impl PlecRuntime {
                 runtime,
             },
         );
+        self.mount_component_requests()?;
         self.install_typed_event_listeners()
     }
     fn typed_outlet_element(&self, parent_id: &str, outlet_id: &str) -> Result<Element, JsValue> {

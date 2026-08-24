@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use plec_hir::{ComponentId, HirRoute, HirRouteApplication};
-use plec_ir::{RouteManifest, RouteManifestEntry};
+use plec_hir::{ComponentId, HirApplication, HirRoute, HirRouteApplication};
+use plec_ir::{ComponentApplication, RouteManifest, RouteManifestEntry};
 use plec_parser::ParsedModule;
 use plec_sema::{resolve_local_symbol, SemanticGraph};
 use swc_ecma_ast::{
@@ -150,6 +150,50 @@ pub fn lower_route_manifest(routes: &HirRouteApplication) -> RouteManifest {
             })
             .collect(),
     }
+}
+
+/// Lower every statically reachable route phase into one component registry.
+/// Route manifest graph IDs are canonical component IDs, so the runtime can
+/// select an already-validated component without consulting JavaScript.
+pub fn lower_route_application_to_executable(
+    modules: &[ParsedModule],
+    graph: &SemanticGraph,
+    routes: &HirRouteApplication,
+) -> Result<ComponentApplication, RouteError> {
+    let mut roots = vec![routes.root.clone()];
+    for route in &routes.routes {
+        roots.push(route.component.clone());
+        roots.extend(route.pending_component.clone());
+        roots.extend(route.error_component.clone());
+    }
+    let mut components = Vec::new();
+    for id in roots {
+        let root = crate::discover_root_component(modules, graph, &id.module_id, Some(&id.local_name))
+            .map_err(|error| RouteError(error.to_string()))?;
+        let application = crate::lower_application(modules, &root, graph)
+            .map_err(|error| RouteError(error.to_string()))?;
+        for component in application.components {
+            if !components.iter().any(|existing: &plec_hir::HirComponent| existing.id == component.id) {
+                components.push(component);
+            }
+        }
+    }
+    let mut executable = crate::lower_application_to_executable(&HirApplication {
+        root: routes.root.clone(),
+        components,
+    })
+    .map_err(|error| RouteError(error.to_string()))?;
+    for route in routes.routes.iter().filter(|route| route.parent.is_some()) {
+        let parent = route.parent.as_ref().and_then(|id| routes.routes.iter().find(|candidate| &candidate.id == id));
+        let parent_component = parent.map(|route| &route.component).unwrap_or(&routes.root);
+        let component_id = graph_id(parent_component);
+        let component = executable.components.iter_mut().find(|component| component.id == component_id)
+            .ok_or_else(|| RouteError("route parent component is not executable".into()))?;
+        if !component.route_outlets.iter().any(|outlet| outlet.id == route.outlet_id) {
+            component.route_outlets.push(plec_ir::RouteOutlet { id: route.outlet_id.clone(), node: component.root_node });
+        }
+    }
+    Ok(executable)
 }
 
 fn graph_id(component: &ComponentId) -> String {
@@ -365,5 +409,24 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("pendingMode"));
+    }
+
+    #[test]
+    fn lowers_route_components_into_one_runtime_registry() {
+        let modules = vec![parse_module("routes.tsx", r#"
+            export function Layout() { return <main />; }
+            export function Child() { return <p>child</p>; }
+            export const Root = createRootRoute({ component: Layout });
+            export const ChildRoute = createRoute({ getParentRoute: () => Root, path: 'child', component: Child });
+            export const router = createRouter({ routeTree: Root.addChildren([ChildRoute]) });
+        "#).unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let routes = lower_routes(&modules, &graph).unwrap();
+        let application = lower_route_application_to_executable(&modules, &graph, &routes).unwrap();
+        assert_eq!(application.version, "0.10");
+        assert!(application.components.iter().any(|component| component.id == "routes.tsx#Layout"));
+        assert!(application.components.iter().any(|component| component.id == "routes.tsx#Child"));
+        let layout = application.components.iter().find(|component| component.id == "routes.tsx#Layout").unwrap();
+        assert_eq!(layout.route_outlets[0].id, "main");
     }
 }

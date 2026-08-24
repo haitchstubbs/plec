@@ -997,6 +997,24 @@ fn rust_nested_component_fixture_refreshes_grandchild_without_remounting() {
 }
 
 #[wasm_bindgen_test]
+fn rust_component_registry_routes_without_legacy_renderer() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    runtime
+        .register_graph(
+            "ignored".into(),
+            serde_wasm_bindgen::to_value(&rust_component_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        r#"{"version":3,"rootGraphId":"rust-component.tsx#App","routes":[]}"#,
+    )
+    .unwrap();
+    runtime.start(root.clone(), manifest).unwrap();
+    assert_eq!(root.text_content().unwrap(), "one");
+}
+
+#[wasm_bindgen_test]
 fn rust_collection_rows_fixture_reconciles_keyed_rows_and_branch_listener() {
     let runtime = PlecRuntime::new();
     let root = mount_root();

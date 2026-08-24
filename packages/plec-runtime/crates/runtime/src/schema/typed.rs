@@ -9,6 +9,8 @@ use wasm_bindgen::JsValue;
 pub struct TypedApplication {
     #[serde(default = "component_version")]
     pub version: String,
+    #[serde(default)]
+    pub id: String,
     pub root_node: usize,
     pub strings: Vec<String>,
     #[serde(default)]
@@ -68,6 +70,9 @@ impl TypedComponentApplication {
         }
         for component in &self.components {
             component.validate()?;
+            if component.id.is_empty() {
+                return Err(JsValue::from_str("component graph id is required"));
+            }
             let mut parameters = HashSet::new();
             for parameter in &component.parameters {
                 let Some(name) = component.strings.get(parameter.name) else {
