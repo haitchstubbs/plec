@@ -2,7 +2,7 @@ use plec_parser::{ExportKind, ImportSpecifier, ParsedModule};
 use std::collections::{HashMap, HashSet};
 use swc_common::Span;
 use swc_ecma_ast::{
-    Callee, CallExpr, Decl, Expr, Function, Lit, Module, ModuleDecl, ModuleItem, Pat,
+    CallExpr, Callee, Decl, Expr, Function, Lit, Module, ModuleDecl, ModuleItem, Pat,
     TsFnOrConstructorType, TsType, TsTypeElement,
 };
 
@@ -249,8 +249,12 @@ fn collect_component_props(
             }
             Decl::Var(var_decl) => {
                 for declarator in &var_decl.decls {
-                    let Pat::Ident(ident) = &declarator.name else { continue };
-                    let Some(init) = declarator.init.as_deref() else { continue };
+                    let Pat::Ident(ident) = &declarator.name else {
+                        continue;
+                    };
+                    let Some(init) = declarator.init.as_deref() else {
+                        continue;
+                    };
                     match init {
                         Expr::Arrow(arrow) => {
                             if let Some(param) = arrow.params.first() {
@@ -291,8 +295,12 @@ fn collect_component_props_from_pat(
     component_props: &mut HashMap<String, HashMap<String, ComponentPropKind>>,
 ) {
     let Pat::Object(object) = pat else { return };
-    let Some(type_ann) = &object.type_ann else { return };
-    let TsType::TsTypeLit(type_lit) = &*type_ann.type_ann else { return };
+    let Some(type_ann) = &object.type_ann else {
+        return;
+    };
+    let TsType::TsTypeLit(type_lit) = &*type_ann.type_ann else {
+        return;
+    };
 
     let props = type_lit
         .members
@@ -304,15 +312,17 @@ fn collect_component_props_from_pat(
     }
 }
 
-fn component_prop_from_type_element(
-    member: &TsTypeElement,
-) -> Option<(String, ComponentPropKind)> {
+fn component_prop_from_type_element(member: &TsTypeElement) -> Option<(String, ComponentPropKind)> {
     match member {
         TsTypeElement::TsMethodSignature(method) => {
             ts_property_name(&method.key).map(|name| (name, ComponentPropKind::Callable))
         }
         TsTypeElement::TsPropertySignature(property) => {
-            let kind = match property.type_ann.as_deref().map(|ann| ann.type_ann.as_ref()) {
+            let kind = match property
+                .type_ann
+                .as_deref()
+                .map(|ann| ann.type_ann.as_ref())
+            {
                 Some(TsType::TsFnOrConstructorType(TsFnOrConstructorType::TsFnType(_))) => {
                     ComponentPropKind::Callable
                 }
@@ -442,15 +452,15 @@ fn is_function_valued(expr: &Option<Box<Expr>>) -> bool {
 
 fn unwrap_component_factory(expr: &Expr) -> &Expr {
     match expr {
-        Expr::Call(call) if is_component_factory_call(call) => {
-            call.args.first().and_then(|arg| {
-                match &*arg.expr {
-                    Expr::Arrow(_) | Expr::Fn(_) => Some(arg.expr.as_ref()),
-                    _ => None
-                }
-            }).unwrap_or(expr)
-        }
-        _ => expr
+        Expr::Call(call) if is_component_factory_call(call) => call
+            .args
+            .first()
+            .and_then(|arg| match &*arg.expr {
+                Expr::Arrow(_) | Expr::Fn(_) => Some(arg.expr.as_ref()),
+                _ => None,
+            })
+            .unwrap_or(expr),
+        _ => expr,
     }
 }
 

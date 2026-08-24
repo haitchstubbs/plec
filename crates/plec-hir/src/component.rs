@@ -10,11 +10,17 @@ pub struct HirBinding {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirBindingKind {
-    Parameter { callable: bool },
-    Input { kind: String },
+    Parameter {
+        callable: bool,
+    },
+    Input {
+        kind: String,
+    },
     Local,
     StateValue,
-    StateSetter { state: BindingId },
+    StateSetter {
+        state: BindingId,
+    },
     Callable,
     LoopItem,
     /// A value or error written by an async continuation frame.

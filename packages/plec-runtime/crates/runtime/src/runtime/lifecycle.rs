@@ -202,11 +202,15 @@ impl PlecRuntime {
     pub fn register_graph(&self, graph_id: String, ir: JsValue) -> Result<(), JsValue> {
         let value: Value = serde_wasm_bindgen::from_value(ir.clone()).map_err(error)?;
         if value.get("version").and_then(Value::as_str) == Some("0.10") {
-            let application: TypedComponentApplication = serde_json::from_value(value).map_err(error)?;
+            let application: TypedComponentApplication =
+                serde_json::from_value(value).map_err(error)?;
             application.validate()?;
             let mut registry = self.typed_registry.borrow_mut();
             for component in &application.components {
-                if registry.insert(component.id.clone(), component.clone()).is_some() {
+                if registry
+                    .insert(component.id.clone(), component.clone())
+                    .is_some()
+                {
                     return Err(JsValue::from_str("duplicate typed component graph id"));
                 }
             }

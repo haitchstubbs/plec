@@ -88,16 +88,22 @@ pub(crate) fn lower_component(
         });
     }
     for input in &component.inputs {
-        if input.kind != "collection" {
-            return Err(Ctx::new(component, targets).err("input kind is not executable"));
+        match input.kind.as_str() {
+            "collection" => {
+                let name = ctx.string(&input.name);
+                let slot = ctx.app.inputs.len();
+                ctx.inputs.insert(input.binding, slot);
+                ctx.app.inputs.push(Input {
+                    name,
+                    kind: "collection",
+                });
+            }
+            "location" => {
+                let host = ctx.host("location", None);
+                ctx.hosts.insert(input.binding, host);
+            }
+            _ => return Err(Ctx::new(component, targets).err("input kind is not executable")),
         }
-        let name = ctx.string(&input.name);
-        let slot = ctx.app.inputs.len();
-        ctx.inputs.insert(input.binding, slot);
-        ctx.app.inputs.push(Input {
-            name,
-            kind: "collection",
-        });
     }
     for callable in &component.callables {
         let action = ctx.app.actions.len();

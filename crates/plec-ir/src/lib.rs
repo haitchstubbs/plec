@@ -60,6 +60,10 @@ pub struct ExecutableComponent {
     pub prop_programs: Vec<PropProgram>,
     pub events: Vec<Event>,
     pub inputs: Vec<Input>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub host_slots: Vec<HostSlot>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub capabilities: Vec<CookieCapability>,
     pub state_slots: Vec<StateSlot>,
     pub parameters: Vec<ComponentParameter>,
     pub expressions: Vec<ExpressionProgram>,
@@ -96,6 +100,10 @@ pub struct ExecutableApplication {
     pub prop_programs: Vec<PropProgram>,
     pub events: Vec<Event>,
     pub inputs: Vec<Input>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub host_slots: Vec<HostSlot>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub capabilities: Vec<CookieCapability>,
     pub state_slots: Vec<StateSlot>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub parameters: Vec<ComponentParameter>,
@@ -120,6 +128,8 @@ impl Default for ExecutableApplication {
             prop_programs: vec![],
             events: vec![],
             inputs: vec![],
+            host_slots: vec![],
+            capabilities: vec![],
             state_slots: vec![],
             parameters: vec![],
             expressions: vec![],
@@ -224,6 +234,28 @@ pub struct Input {
     pub kind: &'static str,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSlot {
+    pub kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<usize>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CookieCapability {
+    pub kind: &'static str,
+    pub name: String,
+    pub operations: Vec<&'static str>,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub same_site: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secure: Option<bool>,
+    pub expiry_modes: Vec<&'static str>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EventField {
     pub name: usize,
     pub slot: usize,
@@ -245,6 +277,7 @@ pub enum ExpressionInstruction {
     LoadState { state: usize },
     LoadProp { prop: usize },
     LoadFrame { slot: usize },
+    LoadHost { host: usize },
     LoadRowField { field: usize },
     Field { field: usize },
     Unary { kind: &'static str },
@@ -345,10 +378,15 @@ fn is_success(value: &ReturnOutcome) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum ReturnOutcome { Success, Failure }
+pub enum ReturnOutcome {
+    Success,
+    Failure,
+}
 
 impl Default for ReturnOutcome {
-    fn default() -> Self { Self::Success }
+    fn default() -> Self {
+        Self::Success
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

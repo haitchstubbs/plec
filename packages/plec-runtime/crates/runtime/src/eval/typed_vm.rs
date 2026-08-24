@@ -40,7 +40,10 @@ pub(crate) fn typed_eval_frame(
                 stack.push(states.get(*state).cloned().unwrap_or(RuntimeValue::Null))
             }
             TypedExpressionInstruction::LoadProp { prop } => stack.push(
-                app.runtime_props.get(*prop).cloned().unwrap_or(RuntimeValue::Null),
+                app.runtime_props
+                    .get(*prop)
+                    .cloned()
+                    .unwrap_or(RuntimeValue::Null),
             ),
             TypedExpressionInstruction::LoadRowField { field } => {
                 let field = app.strings.get(*field).map(String::as_str).unwrap_or("");
@@ -73,47 +76,41 @@ pub(crate) fn typed_eval_frame(
                             .get("location.pathname")
                             .cloned()
                             .map(|pathname| {
-                                RuntimeValue::Record(HashMap::from([(
-                                    "location".into(),
-                                    RuntimeValue::Record(HashMap::from([
-                                        ("pathname".into(), pathname),
-                                        (
-                                            "search".into(),
-                                            app.host_inputs
-                                                .get("location.search")
-                                                .cloned()
-                                                .unwrap_or_default(),
-                                        ),
-                                        (
-                                            "hash".into(),
-                                            app.host_inputs
-                                                .get("location.hash")
-                                                .cloned()
-                                                .unwrap_or_default(),
-                                        ),
-                                    ])),
-                                )]))
+                                RuntimeValue::Record(HashMap::from([
+                                    ("pathname".into(), pathname),
+                                    (
+                                        "search".into(),
+                                        app.host_inputs
+                                            .get("location.search")
+                                            .cloned()
+                                            .unwrap_or_default(),
+                                    ),
+                                    (
+                                        "hash".into(),
+                                        app.host_inputs
+                                            .get("location.hash")
+                                            .cloned()
+                                            .unwrap_or_default(),
+                                    ),
+                                ]))
                             })
                             .or_else(|| {
                                 window().ok().and_then(|window| {
                                     let location = window.location();
-                                    Some(RuntimeValue::Record(HashMap::from([(
-                                        "location".into(),
-                                        RuntimeValue::Record(HashMap::from([
-                                            (
-                                                "pathname".into(),
-                                                RuntimeValue::String(location.pathname().ok()?),
-                                            ),
-                                            (
-                                                "search".into(),
-                                                RuntimeValue::String(location.search().ok()?),
-                                            ),
-                                            (
-                                                "hash".into(),
-                                                RuntimeValue::String(location.hash().ok()?),
-                                            ),
-                                        ])),
-                                    )])))
+                                    Some(RuntimeValue::Record(HashMap::from([
+                                        (
+                                            "pathname".into(),
+                                            RuntimeValue::String(location.pathname().ok()?),
+                                        ),
+                                        (
+                                            "search".into(),
+                                            RuntimeValue::String(location.search().ok()?),
+                                        ),
+                                        (
+                                            "hash".into(),
+                                            RuntimeValue::String(location.hash().ok()?),
+                                        ),
+                                    ])))
                                 })
                             }),
                         "mediaQuery" => slot
@@ -410,6 +407,9 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(typed_eval(&app, 0, &[], None, 0).unwrap(), RuntimeValue::Number(1.0));
+        assert_eq!(
+            typed_eval(&app, 0, &[], None, 0).unwrap(),
+            RuntimeValue::Number(1.0)
+        );
     }
 }

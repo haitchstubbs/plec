@@ -22,7 +22,11 @@ fn main() -> Result<(), String> {
     let application = match args.next().as_deref() {
         None => false,
         Some(value) if value == "--application" && args.next().is_none() => true,
-        _ => return Err("usage: plec-route-manifest <entry> <app-root> <repo-root> [--application]".into()),
+        _ => {
+            return Err(
+                "usage: plec-route-manifest <entry> <app-root> <repo-root> [--application]".into(),
+            )
+        }
     };
 
     let source = read_source_graph(entry, app_root, repo_root)?;
@@ -41,8 +45,10 @@ fn main() -> Result<(), String> {
         .map_err(|error| format!("unsupported compiled route application: {error}"))?;
     println!(
         "{}",
-        serde_json::to_string(&serde_json::json!({ "manifest": manifest, "application": application }))
-            .map_err(|error| error.to_string())?
+        serde_json::to_string(
+            &serde_json::json!({ "manifest": manifest, "application": application })
+        )
+        .map_err(|error| error.to_string())?
     );
     Ok(())
 }

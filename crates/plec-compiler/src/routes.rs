@@ -168,12 +168,16 @@ pub fn lower_route_application_to_executable(
     }
     let mut components = Vec::new();
     for id in roots {
-        let root = crate::discover_root_component(modules, graph, &id.module_id, Some(&id.local_name))
-            .map_err(|error| RouteError(error.to_string()))?;
+        let root =
+            crate::discover_root_component(modules, graph, &id.module_id, Some(&id.local_name))
+                .map_err(|error| RouteError(error.to_string()))?;
         let application = crate::lower_application(modules, &root, graph)
             .map_err(|error| RouteError(error.to_string()))?;
         for component in application.components {
-            if !components.iter().any(|existing: &plec_hir::HirComponent| existing.id == component.id) {
+            if !components
+                .iter()
+                .any(|existing: &plec_hir::HirComponent| existing.id == component.id)
+            {
                 components.push(component);
             }
         }
@@ -184,13 +188,26 @@ pub fn lower_route_application_to_executable(
     })
     .map_err(|error| RouteError(error.to_string()))?;
     for route in routes.routes.iter().filter(|route| route.parent.is_some()) {
-        let parent = route.parent.as_ref().and_then(|id| routes.routes.iter().find(|candidate| &candidate.id == id));
+        let parent = route
+            .parent
+            .as_ref()
+            .and_then(|id| routes.routes.iter().find(|candidate| &candidate.id == id));
         let parent_component = parent.map(|route| &route.component).unwrap_or(&routes.root);
         let component_id = graph_id(parent_component);
-        let component = executable.components.iter_mut().find(|component| component.id == component_id)
+        let component = executable
+            .components
+            .iter_mut()
+            .find(|component| component.id == component_id)
             .ok_or_else(|| RouteError("route parent component is not executable".into()))?;
-        if !component.route_outlets.iter().any(|outlet| outlet.id == route.outlet_id) {
-            component.route_outlets.push(plec_ir::RouteOutlet { id: route.outlet_id.clone(), node: component.root_node });
+        if !component
+            .route_outlets
+            .iter()
+            .any(|outlet| outlet.id == route.outlet_id)
+        {
+            component.route_outlets.push(plec_ir::RouteOutlet {
+                id: route.outlet_id.clone(),
+                node: component.root_node,
+            });
         }
     }
     Ok(executable)
@@ -424,9 +441,19 @@ mod tests {
         let routes = lower_routes(&modules, &graph).unwrap();
         let application = lower_route_application_to_executable(&modules, &graph, &routes).unwrap();
         assert_eq!(application.version, "0.10");
-        assert!(application.components.iter().any(|component| component.id == "routes.tsx#Layout"));
-        assert!(application.components.iter().any(|component| component.id == "routes.tsx#Child"));
-        let layout = application.components.iter().find(|component| component.id == "routes.tsx#Layout").unwrap();
+        assert!(application
+            .components
+            .iter()
+            .any(|component| component.id == "routes.tsx#Layout"));
+        assert!(application
+            .components
+            .iter()
+            .any(|component| component.id == "routes.tsx#Child"));
+        let layout = application
+            .components
+            .iter()
+            .find(|component| component.id == "routes.tsx#Layout")
+            .unwrap();
         assert_eq!(layout.route_outlets[0].id, "main");
     }
 }

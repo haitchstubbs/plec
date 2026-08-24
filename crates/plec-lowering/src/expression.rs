@@ -40,6 +40,13 @@ impl Ctx<'_> {
                     constant: self.constant(v),
                 });
             }
+            HirExpr::Host { kind, name } => {
+                let host = match kind.as_str() {
+                    "cookie" => self.host("cookie", name.as_deref()),
+                    _ => return Err(self.err("host value is not executable")),
+                };
+                code.push(ExpressionInstruction::LoadHost { host });
+            }
             HirExpr::Binding(binding) => match self
                 .component
                 .bindings
@@ -53,6 +60,13 @@ impl Ctx<'_> {
                         .ok_or_else(|| self.err("state used before lowering"))?;
                     deps.insert(state);
                     code.push(ExpressionInstruction::LoadState { state });
+                }
+                Some(HirBindingKind::Input { kind }) if kind == "location" => {
+                    let host = *self
+                        .hosts
+                        .get(&binding)
+                        .ok_or_else(|| self.err("location used before lowering"))?;
+                    code.push(ExpressionInstruction::LoadHost { host });
                 }
                 Some(HirBindingKind::Parameter { callable: false })
                     if self.action_parameters.contains_key(&binding) =>

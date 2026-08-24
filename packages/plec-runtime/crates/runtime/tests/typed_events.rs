@@ -917,15 +917,27 @@ async fn rust_general_async_actions_fixture_preserves_frame_and_finally_lifecycl
     initialize_rows(&runtime, serde_json::json!([{"id":"one","title":"Old"}]));
     let row = root.query_selector("li").unwrap().unwrap();
     let text = row.first_child().unwrap();
-    root.query_selector("button").unwrap().unwrap()
-        .dyn_into::<web_sys::EventTarget>().unwrap()
-        .dispatch_event(&Event::new("click").unwrap()).unwrap();
+    root.query_selector("button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
     settle_fetch().await;
     let next = root.query_selector("li").unwrap().unwrap();
     assert!(row.is_same_node(Some(&next)));
     assert!(text.is_same_node(next.first_child().as_ref()));
     assert_eq!(next.text_content().unwrap(), "New");
-    assert_eq!(root.query_selector_all("p").unwrap().item(1).unwrap().text_content().unwrap(), "true");
+    assert_eq!(
+        root.query_selector_all("p")
+            .unwrap()
+            .item(1)
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "true"
+    );
     restore_plec_fetch();
 
     set_plec_fetch_queue(r#"[{"status":500,"statusText":"Failed","body":"nope"}]"#);
@@ -933,21 +945,43 @@ async fn rust_general_async_actions_fixture_preserves_frame_and_finally_lifecycl
     let root = mount_root();
     load_and_mount(&runtime, rust_general_async_actions_artifact(), &root);
     initialize_rows(&runtime, serde_json::json!([{"id":"one","title":"Old"}]));
-    root.query_selector("button").unwrap().unwrap()
-        .dyn_into::<web_sys::EventTarget>().unwrap()
-        .dispatch_event(&Event::new("click").unwrap()).unwrap();
+    root.query_selector("button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
     settle_fetch().await;
-    assert!(root.query_selector("p").unwrap().unwrap().text_content().unwrap().contains("request failed (500)"));
-    assert_eq!(root.query_selector_all("p").unwrap().item(1).unwrap().text_content().unwrap(), "true");
+    assert!(root
+        .query_selector("p")
+        .unwrap()
+        .unwrap()
+        .text_content()
+        .unwrap()
+        .contains("request failed (500)"));
+    assert_eq!(
+        root.query_selector_all("p")
+            .unwrap()
+            .item(1)
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "true"
+    );
     restore_plec_fetch();
 
     set_plec_fetch_queue(r#"[{"pending":true}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     load_and_mount(&runtime, rust_general_async_actions_artifact(), &root);
-    root.query_selector("button").unwrap().unwrap()
-        .dyn_into::<web_sys::EventTarget>().unwrap()
-        .dispatch_event(&Event::new("click").unwrap()).unwrap();
+    root.query_selector("button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
     runtime.dispose().unwrap();
     settle_fetch().await;
     assert_eq!(plec_fetch_aborts(), 1);
@@ -1006,10 +1040,9 @@ fn rust_component_registry_routes_without_legacy_renderer() {
             serde_wasm_bindgen::to_value(&rust_component_artifact()).unwrap(),
         )
         .unwrap();
-    let manifest = js_sys::JSON::parse(
-        r#"{"version":3,"rootGraphId":"rust-component.tsx#App","routes":[]}"#,
-    )
-    .unwrap();
+    let manifest =
+        js_sys::JSON::parse(r#"{"version":3,"rootGraphId":"rust-component.tsx#App","routes":[]}"#)
+            .unwrap();
     runtime.start(root.clone(), manifest).unwrap();
     assert_eq!(root.text_content().unwrap(), "one");
 }
@@ -1653,13 +1686,21 @@ async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
     let runtime = PlecRuntime::new();
     let root = mount_root();
     let route = rust_route_async_artifact();
-    runtime.register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
-    runtime.register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
-    let manifest = js_sys::JSON::parse(&serde_json::json!({
-        "version":3,"rootGraphId":"root","routes":[
-            {"id":"page","path":"*","graphId":"page","outletId":"main","loaderAction":0}
-        ]
-    }).to_string()).unwrap();
+    runtime
+        .register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .unwrap();
+    runtime
+        .register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        &serde_json::json!({
+            "version":3,"rootGraphId":"root","routes":[
+                {"id":"page","path":"*","graphId":"page","outletId":"main","loaderAction":0}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
     runtime.start(root.clone(), manifest).unwrap();
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap_or_default(), "loaded");
@@ -1669,9 +1710,18 @@ async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
     let runtime = PlecRuntime::new();
     let root = mount_root();
     let route = rust_route_async_artifact();
-    runtime.register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
-    runtime.register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
-    runtime.register_graph("error".into(), serde_wasm_bindgen::to_value(&route_error_artifact()).unwrap()).unwrap();
+    runtime
+        .register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .unwrap();
+    runtime
+        .register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .unwrap();
+    runtime
+        .register_graph(
+            "error".into(),
+            serde_wasm_bindgen::to_value(&route_error_artifact()).unwrap(),
+        )
+        .unwrap();
     let manifest = js_sys::JSON::parse(&serde_json::json!({
         "version":3,"rootGraphId":"root","routes":[
             {"id":"page","path":"*","graphId":"page","errorGraphId":"error","outletId":"main","loaderAction":0}
@@ -1679,22 +1729,38 @@ async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
     }).to_string()).unwrap();
     runtime.start(root.clone(), manifest).unwrap();
     settle_fetch().await;
-    assert!(root.text_content().unwrap_or_default().contains("request failed (500)"));
+    assert!(root
+        .text_content()
+        .unwrap_or_default()
+        .contains("request failed (500)"));
     restore_plec_fetch();
 
     set_plec_fetch_queue(r#"[{"pending":true}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     let route = rust_route_async_artifact();
-    runtime.register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
-    runtime.register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
-    runtime.register_graph("next".into(), serde_wasm_bindgen::to_value(&fetch_artifact("text", true, false)).unwrap()).unwrap();
-    let manifest = js_sys::JSON::parse(&serde_json::json!({
-        "version":3,"rootGraphId":"root","routes":[
-            {"id":"page","path":"/","graphId":"page","outletId":"main","loaderAction":0},
-            {"id":"next","path":"/next","graphId":"next","outletId":"main"}
-        ]
-    }).to_string()).unwrap();
+    runtime
+        .register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .unwrap();
+    runtime
+        .register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .unwrap();
+    runtime
+        .register_graph(
+            "next".into(),
+            serde_wasm_bindgen::to_value(&fetch_artifact("text", true, false)).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        &serde_json::json!({
+            "version":3,"rootGraphId":"root","routes":[
+                {"id":"page","path":"/","graphId":"page","outletId":"main","loaderAction":0},
+                {"id":"next","path":"/next","graphId":"next","outletId":"main"}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
     runtime.start(root.clone(), manifest).unwrap();
     runtime.navigate("/next".into(), false).unwrap();
     settle_fetch().await;

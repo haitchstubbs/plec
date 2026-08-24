@@ -513,6 +513,27 @@ fn lower_component_var(
             ctx,
         ),
         Pat::Ident(ident) => match init {
+            Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useLocation")) =>
+            {
+                if !call.args.is_empty() {
+                    return Err("useLocation requires no arguments".to_string());
+                }
+                let span = source_span_from_swc(ident.id.span, ctx.module_id);
+                let binding = ctx.declare_binding(
+                    ident.id.sym.to_string(),
+                    HirBindingKind::Input {
+                        kind: "location".to_string(),
+                    },
+                    span.clone(),
+                )?;
+                ctx.inputs.push(HirInput {
+                    binding,
+                    name: "location".to_string(),
+                    kind: "location".to_string(),
+                    span,
+                });
+                Ok(())
+            }
             Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useCollection")) =>
             {
                 if call.args.len() != 1 || call.args[0].spread.is_some() {
@@ -1459,6 +1480,19 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
     let span = span_from_expr(expr, ctx.module_id);
 
     let hir_expr = match expr {
+        Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.obj.as_ref(), Expr::Ident(object) if object.sym == "cookie") && matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref property) if property.sym == "getSync"))) =>
+        {
+            if call.args.len() != 1 || call.args[0].spread.is_some() {
+                return Err("cookie.getSync requires one static name".to_string());
+            }
+            let Expr::Lit(Lit::Str(name)) = call.args[0].expr.as_ref() else {
+                return Err("cookie.getSync requires one static name".to_string());
+            };
+            HirExpr::Host {
+                kind: "cookie".to_string(),
+                name: Some(name.value.to_string_lossy().into_owned()),
+            }
+        }
         Expr::Ident(ident) => HirExpr::Binding(ctx.resolve_binding(&ident.sym)?),
 
         Expr::Lit(lit) => match lit {
@@ -1879,6 +1913,38 @@ mod tests {
         } else {
             panic!("Expected member expression");
         }
+    }
+
+    #[test]
+    fn lowers_location_and_sync_cookie_host_values() {
+        let hir = build_and_lower(
+            r#"
+            export function App() {
+                const location = useLocation();
+                const [open, setOpen] = useState(cookie.getSync('sidebar') === 'open');
+                return <div>{location.pathname}{open}</div>;
+            }
+        "#,
+        )
+        .expect("host values should lower");
+
+        assert!(hir.inputs.iter().any(|input| input.kind == "location"));
+        assert!(hir.expressions.iter().any(|expression| matches!(
+            expression.expression,
+            HirExpr::Host { ref kind, ref name } if kind == "cookie" && name.as_deref() == Some("sidebar")
+        )));
+        let executable = crate::lower_component_to_executable(&hir)
+            .expect("host values should produce executable IR");
+        assert_eq!(executable.host_slots.len(), 2);
+        assert!(executable
+            .host_slots
+            .iter()
+            .any(|slot| slot.kind == "location"));
+        assert!(executable
+            .host_slots
+            .iter()
+            .any(|slot| slot.kind == "cookie"));
+        assert_eq!(executable.capabilities[0].name, "sidebar");
     }
 
     #[test]
