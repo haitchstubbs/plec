@@ -37,10 +37,21 @@ impl PlecRuntime {
             .borrow()
             .iter()
             .filter_map(|(id, instance)| {
-                instance.runtime.app.inputs.iter().any(|input| {
-                    instance.runtime.app.strings.get(input.name).map(String::as_str)
-                        == Some(input_id.as_str())
-                }).then(|| id.clone())
+                instance
+                    .runtime
+                    .app
+                    .inputs
+                    .iter()
+                    .any(|input| {
+                        instance
+                            .runtime
+                            .app
+                            .strings
+                            .get(input.name)
+                            .map(String::as_str)
+                            == Some(input_id.as_str())
+                    })
+                    .then(|| id.clone())
             })
             .collect::<Vec<_>>();
         serde_wasm_bindgen::to_value(&ids).map_err(error)

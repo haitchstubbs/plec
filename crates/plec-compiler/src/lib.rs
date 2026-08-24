@@ -14,4 +14,6 @@ pub use lowering::{
     lower_route_loader_to_executable, LoweringError,
 };
 pub use read_source_graph::{read_source_graph, SourceGraph};
-pub use routes::{lower_route_application_to_executable, lower_route_manifest, lower_routes, RouteError};
+pub use routes::{
+    lower_route_application_to_executable, lower_route_manifest, lower_routes, RouteError,
+};

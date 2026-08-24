@@ -71,6 +71,12 @@ pub enum HirTemplatePart {
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirExpr {
     Literal(HirValue),
+    /// A synchronous value supplied by the typed browser host. DOM nodes never
+    /// cross this boundary; only serializable host values do.
+    Host {
+        kind: String,
+        name: Option<String>,
+    },
     Binding(BindingId),
     Member {
         object: ExprId,

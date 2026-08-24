@@ -57,6 +57,8 @@ pub fn lower_application_to_executable(
                 prop_programs: app.prop_programs,
                 events: app.events,
                 inputs: app.inputs,
+                host_slots: app.host_slots,
+                capabilities: app.capabilities,
                 state_slots: app.state_slots,
                 parameters: app.parameters,
                 expressions: app.expressions,

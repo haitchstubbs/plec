@@ -44,9 +44,9 @@ impl PlecRuntime {
                 before_row_key,
                 &mut metrics,
             )?,
-            Delta::Remove { input_id, row_key, .. } => {
-                self.remove(instance_id, &input_id, &row_key, &mut metrics)?
-            }
+            Delta::Remove {
+                input_id, row_key, ..
+            } => self.remove(instance_id, &input_id, &row_key, &mut metrics)?,
             Delta::Move {
                 input_id,
                 row_key,

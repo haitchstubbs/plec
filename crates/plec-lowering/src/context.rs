@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use plec_hir::{BindingId, ComponentId, HirComponent, HirExpr};
-use plec_ir::{ExecutableApplication, Value};
+use plec_ir::{CookieCapability, ExecutableApplication, HostSlot, Value};
 
 use crate::LoweringError;
 
@@ -14,6 +14,7 @@ pub(crate) struct Ctx<'a> {
     pub(crate) constants: HashMap<String, usize>,
     pub(crate) states: HashMap<BindingId, usize>,
     pub(crate) inputs: HashMap<BindingId, usize>,
+    pub(crate) hosts: HashMap<BindingId, usize>,
     pub(crate) callables: HashMap<BindingId, usize>,
     pub(crate) props: HashMap<BindingId, usize>,
     pub(crate) callback_props: HashMap<BindingId, usize>,
@@ -33,6 +34,7 @@ impl<'a> Ctx<'a> {
             constants: HashMap::new(),
             states: HashMap::new(),
             inputs: HashMap::new(),
+            hosts: HashMap::new(),
             callables: HashMap::new(),
             props: HashMap::new(),
             callback_props: HashMap::new(),
@@ -69,6 +71,44 @@ impl<'a> Ctx<'a> {
         self.app.constants.push(value);
         self.constants.insert(key, id);
         id
+    }
+    pub(crate) fn host(&mut self, kind: &'static str, name: Option<&str>) -> usize {
+        if kind == "cookie" {
+            let name = name.expect("cookie host slots require a static name");
+            if !self
+                .app
+                .capabilities
+                .iter()
+                .any(|capability| capability.name == name)
+            {
+                self.app.capabilities.push(CookieCapability {
+                    kind: "cookie",
+                    name: name.into(),
+                    operations: vec!["getSync"],
+                    path: "/".into(),
+                    same_site: None,
+                    secure: None,
+                    expiry_modes: vec!["session"],
+                });
+            }
+        }
+        let name = name.map(|name| self.string(name));
+        if let Some((index, _)) = self
+            .app
+            .host_slots
+            .iter()
+            .enumerate()
+            .find(|(_, slot)| slot.kind == kind && slot.name == name && slot.query.is_none())
+        {
+            return index;
+        }
+        let index = self.app.host_slots.len();
+        self.app.host_slots.push(HostSlot {
+            kind,
+            query: None,
+            name,
+        });
+        index
     }
     pub(crate) fn expr(&self, id: plec_hir::ExprId) -> Result<&HirExpr, LoweringError> {
         self.component
