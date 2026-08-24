@@ -24,6 +24,8 @@ Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/ro
 
 Runtime owns component-instance identity, local action-frame execution, collection mutation/reconciliation, slot row context, prop refresh, callback dispatch/frame transfer, named-input fan-out, and orphan disposal.
 
+Rust 0.10 route-registry artifact: static route roots/phases can lower into one canonical component registry; browser may load `{manifest, application}` without TS graph artifacts. Fullstack remains TS-graph-built: layout uses `cookie`, `useRef`, `useEffect`, `useLocation`; todos use unsupported broad async/state expressions.
+
 TypeScript owns dynamic component execution/hook fallback (`renderValue`/root rerender) and executable graph lowering. Rust owns production static route declaration/tree metadata; build invokes `plec-route-manifest`, then maps Rust route component IDs to TS-produced graph artifacts. Browser adapts generic structural `LiveCollection` changes into fixed runtime deltas; no TanStack-specific semantics exist in this repository.
 Runtime owns typed artifact validation, state/delta dispatch, keyed-loop reconciliation, conditional lifecycle, direct listener ownership.
 
@@ -86,6 +88,8 @@ Resolved: collection binding/member/mutation operands survive HIR -> `Collection
 
 Runtime schema now requires one target `Slot` for component children and bounds child IDs.
 
+0.10 registry registration indexes every component by canonical ID for typed route manifests; routed graph mount must drain component requests after instance insertion.
+
 Generic external collections use `toArray` plus `subscribeChanges`; adapter preserves named input, key, row fields, and before-key ordering without owning reconciliation semantics.
 
 2026-08-24: compiler fixtures 11/11 pass; WASM suite 24/27 passes. Known unrelated failures: two route-loader/fetch assertions; one row fetch-frame duplicate-text assertion.
@@ -138,6 +142,8 @@ Rust/WASM fixtures: `rust-local-action-0.10.json`, `rust-keyed-local-action-0.10
 Score scope v2: 140 points. Rust proof totals 104; `legacy-component-execution` (20) and `route-tree-navigation` (16) remain TypeScript-owned gaps. `route-aware-async-actions` means terminal fetch loader + stale-load disposal (8), not router ownership.
 
 2026-08-24: production build emits Rust route manifest (`version:3`, `rust-route-v1`) but graphs remain TS artifacts; no score change until a Rust-produced route/component artifact mounts through browser runtime.
+
+2026-08-24: Rust route registry source/lowering test and WASM manifest mount proof pass; no score change. Fullstack cannot use registry until unsupported legacy APIs are removed/lowered; `legacy-component-execution` and `route-tree-navigation` remain GAP.
 
 Legacy deprecation blocked until all three gaps have Rust source-to-browser proof and legacy evidence is removed/unreachable. A 100% score only supports deprecation when this v2 scope has no TypeScript-owned contracts.
 
