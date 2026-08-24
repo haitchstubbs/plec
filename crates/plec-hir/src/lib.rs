@@ -20,7 +20,7 @@ pub use node::{
 pub use component::{HirApplication, HirComponent, HirRoute, HirRouteApplication};
 pub use component::{
     HirBinding, HirBindingKind, HirCallableBody, HirCallableDecl, HirInput, HirLocal, HirParameter,
-    HirParameterSource, HirState, HirStmt,
+    HirParameterSource, HirRefSlot, HirState, HirStmt,
 };
 
 mod component;

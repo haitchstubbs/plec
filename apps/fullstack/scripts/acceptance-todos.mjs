@@ -45,7 +45,7 @@ async function assertArtifacts() {
         'utf8',
       ),
     );
-    assert.equal(graph.version, '0.9', `${id} is not a typed graph`);
+    assert.equal(graph.version, '0.10', `${id} is not a typed graph`);
   }
   return graphIds;
 }

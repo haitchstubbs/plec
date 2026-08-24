@@ -14,6 +14,14 @@ const SOURCE: &str = r#"
     }
 "#;
 
+const REF_SOURCE: &str = r#"
+    export function RefCounter() {
+        const count = useRef(1);
+        const panel = useHostRef();
+        return <div ref={panel}><button onClick={() => count.current = count.current + 1}>{count.current}</button></div>;
+    }
+"#;
+
 const COLLECTION_SOURCE: &str = r#"
     export function Todos() {
         const todos = useCollection("items");
@@ -134,6 +142,19 @@ const GENERAL_ASYNC_ACTION_SOURCE: &str = r#"
             }
         }
         return <main><button onClick={refresh}>Refresh</button><p>{error}</p><p>{done}</p><ul>{todos.map(todo => <li key={todo.id}>{todo.title}</li>)}</ul></main>;
+    }
+"#;
+
+const COOKIE_ACTION_SOURCE: &str = r#"
+    export function CookieActions() {
+        const [value, setValue] = useState("");
+        async function save() {
+            const current = await cookie.get('sidebar', { path: '/', sameSite: 'lax', secure: true });
+            await cookie.set('sidebar', value, { path: '/', sameSite: 'lax', secure: true, maxAge: 60 });
+            void cookie.delete('old_sidebar', { path: '/' });
+            setValue(current);
+        }
+        return <button onClick={save}>{value}</button>;
     }
 "#;
 
@@ -425,6 +446,40 @@ fn rust_general_async_actions_artifact_matches_runtime_fixture() {
         GENERAL_ASYNC_ACTION_SOURCE,
         "rust-general-async-actions-0.9.json",
     );
+}
+
+#[test]
+fn rust_cookie_actions_lower_to_declared_capability_requests() {
+    let module = parse_module("rust-cookie-actions.tsx", COOKIE_ACTION_SOURCE).unwrap();
+    let modules = vec![module];
+    let graph = build_semantic_graph(&modules, &Default::default()).unwrap();
+    let root = discover_root_component(&modules, &graph, "rust-cookie-actions.tsx", Some("CookieActions")).unwrap();
+    let hir = lower_root_component(&root, &graph).unwrap();
+    let executable = lower_component_to_executable(&hir).unwrap();
+    assert_eq!(executable.capabilities.len(), 2);
+    let sidebar = executable.capabilities.iter().find(|capability| capability.name == "sidebar").unwrap();
+    assert_eq!(sidebar.operations, vec!["get", "set"]);
+    assert_eq!(sidebar.path, "/");
+    assert_eq!(sidebar.same_site.as_deref(), Some("lax"));
+    assert_eq!(sidebar.secure, Some(true));
+    assert_eq!(sidebar.expiry_modes, vec!["session", "maxAge"]);
+    assert!(executable.actions.iter().flat_map(|action| &action.instructions).any(|instruction| matches!(instruction,
+        plec_ir::ActionInstruction::CapabilityRequest { request: plec_ir::CapabilityRequest::Cookie { operation: "set", max_age: Some(60), .. }, .. }
+    )));
+}
+
+#[test]
+fn rust_refs_lower_to_non_reactive_slots_and_explicit_host_attachment() {
+    let modules = vec![parse_module("refs.tsx", REF_SOURCE).unwrap()];
+    let semantic = build_semantic_graph(&modules, &Default::default()).unwrap();
+    let root = discover_root_component(&modules, &semantic, "refs.tsx", Some("RefCounter")).unwrap();
+    let hir = lower_root_component(&root, &semantic).unwrap();
+    let app = lower_component_to_executable(&hir).unwrap();
+    assert_eq!(app.ref_slots.len(), 1);
+    assert_eq!(app.host_refs.len(), 1);
+    assert!(matches!(app.nodes[0], plec_ir::Node::Element { host_ref: Some(0), .. }));
+    assert!(app.dependency_edges.is_empty());
+    assert!(app.actions.iter().flat_map(|action| &action.instructions).any(|instruction| matches!(instruction, plec_ir::ActionInstruction::StoreRef { reference: 0 })));
 }
 
 fn assert_component_fixture(path: &str, component: &str, source: &str, fixture_name: &str) {

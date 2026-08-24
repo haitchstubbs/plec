@@ -15,5 +15,6 @@ pub use lowering::{
 };
 pub use read_source_graph::{read_source_graph, SourceGraph};
 pub use routes::{
-    lower_route_application_to_executable, lower_route_manifest, lower_routes, RouteError,
+    lower_route_application_to_executable, lower_route_artifacts, lower_route_manifest, lower_routes,
+    RouteArtifact, RouteArtifactBundle, RouteError,
 };

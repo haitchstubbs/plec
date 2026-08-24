@@ -13,6 +13,8 @@ pub(crate) struct Ctx<'a> {
     pub(crate) strings: HashMap<String, usize>,
     pub(crate) constants: HashMap<String, usize>,
     pub(crate) states: HashMap<BindingId, usize>,
+    pub(crate) refs: HashMap<BindingId, usize>,
+    pub(crate) host_refs: HashMap<BindingId, usize>,
     pub(crate) inputs: HashMap<BindingId, usize>,
     pub(crate) hosts: HashMap<BindingId, usize>,
     pub(crate) callables: HashMap<BindingId, usize>,
@@ -33,6 +35,8 @@ impl<'a> Ctx<'a> {
             strings: HashMap::new(),
             constants: HashMap::new(),
             states: HashMap::new(),
+            refs: HashMap::new(),
+            host_refs: HashMap::new(),
             inputs: HashMap::new(),
             hosts: HashMap::new(),
             callables: HashMap::new(),
@@ -72,25 +76,10 @@ impl<'a> Ctx<'a> {
         self.constants.insert(key, id);
         id
     }
-    pub(crate) fn host(&mut self, kind: &'static str, name: Option<&str>) -> usize {
+    pub(crate) fn host(&mut self, kind: &'static str, name: Option<&str>) -> Result<usize, LoweringError> {
         if kind == "cookie" {
             let name = name.expect("cookie host slots require a static name");
-            if !self
-                .app
-                .capabilities
-                .iter()
-                .any(|capability| capability.name == name)
-            {
-                self.app.capabilities.push(CookieCapability {
-                    kind: "cookie",
-                    name: name.into(),
-                    operations: vec!["getSync"],
-                    path: "/".into(),
-                    same_site: None,
-                    secure: None,
-                    expiry_modes: vec!["session"],
-                });
-            }
+            self.cookie_capability("getSync", name, "/", None, None, None)?;
         }
         let name = name.map(|name| self.string(name));
         if let Some((index, _)) = self
@@ -100,7 +89,7 @@ impl<'a> Ctx<'a> {
             .enumerate()
             .find(|(_, slot)| slot.kind == kind && slot.name == name && slot.query.is_none())
         {
-            return index;
+            return Ok(index);
         }
         let index = self.app.host_slots.len();
         self.app.host_slots.push(HostSlot {
@@ -108,7 +97,31 @@ impl<'a> Ctx<'a> {
             query: None,
             name,
         });
-        index
+        Ok(index)
+    }
+    pub(crate) fn cookie_capability(
+        &mut self,
+        operation: &'static str,
+        name: &str,
+        path: &str,
+        same_site: Option<&str>,
+        secure: Option<bool>,
+        max_age: Option<i64>,
+    ) -> Result<(), LoweringError> {
+        let expiry = if max_age.is_some() { "maxAge" } else { "session" };
+        if let Some(capability) = self.app.capabilities.iter_mut().find(|capability| capability.name == name) {
+            if capability.path != path || capability.same_site.as_deref() != same_site || capability.secure != secure {
+                return Err(self.err("cookie capability options conflict for the same name"));
+            }
+            if !capability.operations.contains(&operation) { capability.operations.push(operation); }
+            if !capability.expiry_modes.contains(&expiry) { capability.expiry_modes.push(expiry); }
+            return Ok(());
+        }
+        self.app.capabilities.push(CookieCapability {
+            kind: "cookie", name: name.into(), operations: vec![operation], path: path.into(),
+            same_site: same_site.map(str::to_owned), secure, expiry_modes: vec![expiry],
+        });
+        Ok(())
     }
     pub(crate) fn expr(&self, id: plec_hir::ExprId) -> Result<&HirExpr, LoweringError> {
         self.component

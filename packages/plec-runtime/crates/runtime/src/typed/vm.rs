@@ -147,6 +147,11 @@ impl TypedRuntime {
                         self.states[state] = value;
                         self.refresh_state(state, metrics)?;
                     }
+                    TypedActionInstruction::StoreRef { reference } => {
+                        let value = stack.pop().ok_or_else(|| JsValue::from_str("action stack underflow: storeRef"))?;
+                        let slot = self.app.ref_values.get_mut(reference).ok_or_else(|| JsValue::from_str("ref handle out of range"))?;
+                        *slot = value;
+                    }
                     TypedActionInstruction::CallProp { prop, arguments } => {
                         let mut callback = self
                             .callbacks
@@ -337,8 +342,12 @@ impl TypedRuntime {
                                 entry.kind == "cookie"
                                     && entry.name == name
                                     && entry.operations.iter().any(|allowed| allowed == &operation)
+                                    && entry.path == request.path
+                                    && entry.same_site == request.same_site
+                                    && entry.secure == request.secure
+                                    && entry.expiry_modes.iter().any(|mode| mode == &request.expiry)
                             }) {
-                                return Err(JsValue::from_str("cookie operation is not declared"));
+                                return Err(JsValue::from_str("cookie request is not declared"));
                             }
                             continuation.current = TypedActionFrame {
                                 action,

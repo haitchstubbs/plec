@@ -65,6 +65,10 @@ pub struct ExecutableComponent {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub capabilities: Vec<CookieCapability>,
     pub state_slots: Vec<StateSlot>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub ref_slots: Vec<RefSlot>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub host_refs: Vec<HostRef>,
     pub parameters: Vec<ComponentParameter>,
     pub expressions: Vec<ExpressionProgram>,
     pub actions: Vec<ActionProgram>,
@@ -106,6 +110,10 @@ pub struct ExecutableApplication {
     pub capabilities: Vec<CookieCapability>,
     pub state_slots: Vec<StateSlot>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub ref_slots: Vec<RefSlot>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub host_refs: Vec<HostRef>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub parameters: Vec<ComponentParameter>,
     pub expressions: Vec<ExpressionProgram>,
     pub actions: Vec<ActionProgram>,
@@ -131,6 +139,8 @@ impl Default for ExecutableApplication {
             host_slots: vec![],
             capabilities: vec![],
             state_slots: vec![],
+            ref_slots: vec![],
+            host_refs: vec![],
             parameters: vec![],
             expressions: vec![],
             actions: vec![],
@@ -159,6 +169,8 @@ pub enum Node {
         tag: usize,
         parent: Option<usize>,
         children: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        host_ref: Option<usize>,
     },
     Text {
         text: usize,
@@ -267,6 +279,11 @@ pub struct StateSlot {
     pub frame_slot: usize,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefSlot { pub initial_expression: usize }
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HostRef {}
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ExpressionProgram {
     pub instructions: Vec<ExpressionInstruction>,
 }
@@ -275,6 +292,7 @@ pub struct ExpressionProgram {
 pub enum ExpressionInstruction {
     Constant { constant: usize },
     LoadState { state: usize },
+    LoadRef { reference: usize },
     LoadProp { prop: usize },
     LoadFrame { slot: usize },
     LoadHost { host: usize },
@@ -319,6 +337,7 @@ pub enum ActionInstruction {
     StoreState {
         state: usize,
     },
+    StoreRef { reference: usize },
     CallProp {
         prop: usize,
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -398,6 +417,20 @@ pub enum CapabilityRequest {
         decode: &'static str,
         #[serde(rename = "requireOk")]
         require_ok: bool,
+    },
+    Cookie {
+        operation: &'static str,
+        name: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        value: Option<usize>,
+        path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        same_site: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        secure: Option<bool>,
+        expiry: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_age: Option<i64>,
     },
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]

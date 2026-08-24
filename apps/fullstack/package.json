@@ -10,7 +10,7 @@
     "bench:navigation:smoke": "node scripts/bench-navigation-smoke.mjs",
     "test:acceptance": "yarn --cwd ../.. exec turbo run build --filter=@wasm-runtime/fullstack && node scripts/acceptance-todos.mjs",
     "test": "yarn check:no-react && vitest run",
-    "typecheck": "yarn check:no-react && yarn --cwd ../.. exec tsc -p apps/fullstack/tsconfig.json --noEmit",
+    "typecheck": "yarn check:no-react && cargo check -p plec-compiler",
     "check:no-react": "node scripts/check-no-react.mjs",
     "clean": "powershell -NoProfile -Command \"if (Test-Path dist) { Remove-Item -Recurse -Force dist }\""
   },
@@ -24,7 +24,6 @@
     "@tailwindcss/cli": "^4.3.3",
     "esbuild": "^0.27.4",
     "playwright": "^1.55.0",
-    "plec-compiler": "workspace:*",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vitest": "^3.2.4"

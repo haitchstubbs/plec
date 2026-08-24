@@ -4,6 +4,7 @@ use crate::schema::delta::RuntimeValue;
 use crate::schema::routing::RouteManifestEntry;
 use crate::typed::runtime::*;
 use std::collections::HashMap;
+use web_sys::{CustomEvent, CustomEventInit};
 
 #[derive(Clone)]
 struct TypedRouteMatch {
@@ -190,6 +191,10 @@ impl PlecRuntime {
         }
         let root_id = graph_instance_id(None, "main", None);
         if !self.typed.borrow().contains_key(&root_id) {
+            if !self.has_typed_graph(&manifest.root_graph_id) {
+                self.request_typed_graph(&manifest.root_graph_id)?;
+                return Ok(());
+            }
             self.mount_typed_graph(
                 root_id.clone(),
                 None,
@@ -204,6 +209,10 @@ impl PlecRuntime {
         let mut parent_id = root_id;
         for matched in typed_route_chain(&manifest, &location.pathname) {
             let route = matched.route;
+            if !self.has_typed_graph(&route.graph_id) {
+                self.request_typed_graph(&route.graph_id)?;
+                return Ok(());
+            }
             let match_key = typed_match_key(&route.id, &matched.params, &location);
             let current = self.typed.borrow().iter().find_map(|(id, entry)| {
                 (entry.parent_id.as_deref() == Some(parent_id.as_str())
@@ -245,6 +254,24 @@ impl PlecRuntime {
         }
         self.dispose_typed_children(&parent_id)?;
         self.refresh_navigation_state(&location.pathname)
+    }
+
+    fn has_typed_graph(&self, graph_id: &str) -> bool {
+        self.typed_component_registry.borrow().contains_key(graph_id)
+            || self.typed_registry.borrow().contains_key(graph_id)
+    }
+
+    /// URL resolution deliberately remains at the browser boundary.  WASM
+    /// only asks for a graph identity and resumes the same location once the
+    /// adapter registers the fetched immutable artifact.
+    fn request_typed_graph(&self, graph_id: &str) -> Result<(), JsValue> {
+        let init = CustomEventInit::new();
+        init.set_detail(&serde_wasm_bindgen::to_value(
+            &serde_json::json!({ "graphId": graph_id }),
+        ).map_err(error)?);
+        let event = CustomEvent::new_with_event_init_dict("plec:graph-needed", &init)?;
+        window()?.dispatch_event(&event)?;
+        Ok(())
     }
 
     fn mount_typed_child(
@@ -293,13 +320,21 @@ impl PlecRuntime {
         root: Element,
         replace: bool,
     ) -> Result<(), JsValue> {
-        let app = self
-            .typed_registry
+        let graph = self
+            .typed_component_registry
             .borrow()
             .get(&graph_id)
-            .cloned()
-            .ok_or_else(|| JsValue::from_str("typed route graph is not registered"))?;
+            .cloned();
+        let app = match graph {
+            Some(graph) => graph.components.get(graph.root_component).cloned()
+                .ok_or_else(|| JsValue::from_str("typed route graph root is missing"))?,
+            None => self.typed_registry.borrow().get(&graph_id).cloned()
+                .ok_or_else(|| JsValue::from_str("typed route graph is not registered"))?,
+        };
         let mut runtime = TypedRuntime::new(app)?;
+        if let Some(graph) = self.typed_component_registry.borrow().get(&graph_id).cloned() {
+            runtime.set_component_definitions(graph.components);
+        }
         runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
         runtime.graph_generation = self.next_typed_generation();
         if replace {
@@ -506,13 +541,17 @@ impl PlecRuntime {
         preserve_loader: bool,
         error: Option<RuntimeValue>,
     ) -> Result<(), JsValue> {
-        let app = self
-            .typed_registry
-            .borrow()
-            .get(graph_id)
-            .cloned()
-            .ok_or_else(|| JsValue::from_str("typed route graph is not registered"))?;
+        let graph = self.typed_component_registry.borrow().get(graph_id).cloned();
+        let app = match graph.as_ref() {
+            Some(graph) => graph.components.get(graph.root_component).cloned()
+                .ok_or_else(|| JsValue::from_str("typed route graph root is missing"))?,
+            None => self.typed_registry.borrow().get(graph_id).cloned()
+                .ok_or_else(|| JsValue::from_str("typed route graph is not registered"))?,
+        };
         let mut next = TypedRuntime::new(app)?;
+        if let Some(graph) = graph {
+            next.set_component_definitions(graph.components);
+        }
         next.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
         next.graph_generation = self.next_typed_generation();
         if let Some(error) = error {

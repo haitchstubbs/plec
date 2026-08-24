@@ -13,6 +13,7 @@ swc_common.workspace = true
 swc_ecma_ast.workspace = true
 swc_ecma_visit.workspace = true
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tempfile.workspace = true

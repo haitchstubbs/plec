@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf};
 
 use plec_compiler::{
-    lower_route_application_to_executable, lower_route_manifest, lower_routes, read_source_graph,
+    lower_route_artifacts, lower_route_manifest, lower_routes, read_source_graph,
 };
 use plec_sema::build_semantic_graph;
 
@@ -19,12 +19,12 @@ fn main() -> Result<(), String> {
         args.next()
             .ok_or("usage: plec-route-manifest <entry> <app-root> <repo-root>")?,
     );
-    let application = match args.next().as_deref() {
+    let artifacts = match args.next().as_deref() {
         None => false,
-        Some(value) if value == "--application" && args.next().is_none() => true,
+        Some(value) if value == "--artifacts" && args.next().is_none() => true,
         _ => {
             return Err(
-                "usage: plec-route-manifest <entry> <app-root> <repo-root> [--application]".into(),
+                "usage: plec-route-manifest <entry> <app-root> <repo-root> [--artifacts]".into(),
             )
         }
     };
@@ -34,21 +34,18 @@ fn main() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let routes = lower_routes(&source.modules, &graph).map_err(|error| error.to_string())?;
     let manifest = lower_route_manifest(&routes);
-    if !application {
+    if !artifacts {
         println!(
             "{}",
             serde_json::to_string(&manifest).map_err(|error| error.to_string())?
         );
         return Ok(());
     }
-    let application = lower_route_application_to_executable(&source.modules, &graph, &routes)
+    let artifacts = lower_route_artifacts(&source.modules, &graph, &routes)
         .map_err(|error| format!("unsupported compiled route application: {error}"))?;
     println!(
         "{}",
-        serde_json::to_string(
-            &serde_json::json!({ "manifest": manifest, "application": application })
-        )
-        .map_err(|error| error.to_string())?
+        serde_json::to_string(&artifacts).map_err(|error| error.to_string())?
     );
     Ok(())
 }

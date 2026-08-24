@@ -6,14 +6,14 @@ use plec_hir::{
     HirCallable, HirCallableBody, HirCallableDecl, HirComponent, HirComponentCall, HirConditional,
     HirElement, HirEventBinding, HirExpr, HirExprNode, HirForEach, HirFragment, HirInput, HirLocal,
     HirLogicalOp, HirNode, HirParameter, HirParameterSource, HirProp, HirSlot, HirState, HirStmt,
-    HirTemplatePart, HirText, HirUnaryOp, HirValue, NodeId, SourceSpan,
+    HirTemplatePart, HirText, HirUnaryOp, HirValue, HirRefSlot, NodeId, SourceSpan,
 };
 use plec_sema::{resolve_component, ComponentPropKind, SemanticGraph};
 use swc_common::{Span, Spanned};
 use swc_ecma_ast::{
     ArrowFunctionBody, BinaryOp, Callee, Decl, Expr, Function, JSXAttr, JSXAttrName,
     JSXAttrOrSpread, JSXAttrValue, JSXElement, JSXElementName, JSXExpr, JSXFragment, JSXObject,
-    Lit, Pat, Stmt, VarDeclKind,
+    Lit, Pat, Prop, PropName, PropOrSpread, Stmt, VarDeclKind,
 };
 
 /// Normalize JSX event name to DOM event name.
@@ -134,6 +134,7 @@ struct HirLoweringCtx<'a> {
     inputs: Vec<HirInput>,
     locals: Vec<HirLocal>,
     states: Vec<HirState>,
+    ref_slots: Vec<HirRefSlot>,
     callables: Vec<HirCallableDecl>,
     scopes: Vec<std::collections::HashMap<String, BindingId>>,
     semantic_graph: &'a SemanticGraph,
@@ -153,6 +154,7 @@ impl<'a> HirLoweringCtx<'a> {
             inputs: Vec::new(),
             locals: Vec::new(),
             states: Vec::new(),
+            ref_slots: Vec::new(),
             callables: Vec::new(),
             scopes: vec![std::collections::HashMap::new()],
             semantic_graph,
@@ -269,6 +271,7 @@ pub fn lower_root_component(
         bindings: ctx.bindings,
         locals: ctx.locals,
         states: ctx.states,
+        ref_slots: ctx.ref_slots,
         callables: ctx.callables,
         root_nodes: vec![root_node_id],
         nodes: ctx.nodes,
@@ -513,6 +516,20 @@ fn lower_component_var(
             ctx,
         ),
         Pat::Ident(ident) => match init {
+            Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useRef")) => {
+                if call.args.len() != 1 || call.args[0].spread.is_some() { return Err("useRef requires one non-spread initializer".into()); }
+                let span = source_span_from_swc(ident.id.span, ctx.module_id);
+                let initializer = lower_expression(&call.args[0].expr, ctx)?;
+                let binding = ctx.declare_binding(ident.id.sym.to_string(), HirBindingKind::RefSlot, span.clone())?;
+                ctx.ref_slots.push(HirRefSlot { binding, initializer, span });
+                Ok(())
+            }
+            Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useHostRef")) => {
+                if !call.args.is_empty() { return Err("useHostRef requires no arguments".into()); }
+                let span = source_span_from_swc(ident.id.span, ctx.module_id);
+                ctx.declare_binding(ident.id.sym.to_string(), HirBindingKind::HostRef, span)?;
+                Ok(())
+            }
             Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useLocation")) =>
             {
                 if !call.args.is_empty() {
@@ -711,7 +728,20 @@ fn lower_arrow_callable(
         .map(|param| lower_callable_parameter(param, ctx))
         .collect::<Result<Vec<_>, _>>()?;
     let body = match arrow.body.as_ref() {
-        ArrowFunctionBody::Expr(expr) => HirCallableBody::Expression(lower_expression(expr, ctx)?),
+        ArrowFunctionBody::Expr(expr) => {
+            if let Expr::Assign(assign) = expr.as_ref() {
+                if let swc_ecma_ast::AssignTarget::Simple(swc_ecma_ast::SimpleAssignTarget::Member(member)) = &assign.left {
+                    if let (Expr::Ident(reference), swc_ecma_ast::MemberProp::Ident(property)) = (member.obj.as_ref(), &member.prop) {
+                        if property.sym == *"current" {
+                            let binding = ctx.resolve_binding(&reference.sym)?;
+                            if matches!(ctx.bindings[binding.0 as usize].kind, HirBindingKind::RefSlot) {
+                                HirCallableBody::Block(vec![HirStmt::RefUpdate { reference: binding, value: lower_expression(&assign.right, ctx)?, span: source_span_from_swc(assign.span, ctx.module_id) }])
+                            } else { return Err("only useRef.current can be assigned".into()); }
+                        } else { return Err("only ref.current assignment is supported".into()); }
+                    } else { return Err("only ref.current assignment is supported".into()); }
+                } else { return Err("only ref.current assignment is supported".into()); }
+            } else { HirCallableBody::Expression(lower_expression(expr, ctx)?) }
+        }
         ArrowFunctionBody::FunctionBody(body) => {
             HirCallableBody::Block(lower_callable_statements(&body.stmts, ctx)?)
         }
@@ -757,6 +787,9 @@ fn lower_awaited_call(
     let Callee::Expr(callee) = &call.callee else {
         return Err("await must call fetch or a local action".into());
     };
+    if let Some(cookie) = lower_cookie_call(call, target, span.clone(), ctx)? {
+        return Ok(cookie);
+    }
     if matches!(callee.as_ref(), Expr::Ident(ident) if ident.sym == *"fetch") {
         if call.args.is_empty()
             || call.args.len() > 2
@@ -809,6 +842,84 @@ fn lower_awaited_call(
     })
 }
 
+fn lower_cookie_call(
+    call: &swc_ecma_ast::CallExpr,
+    target: Option<BindingId>,
+    span: SourceSpan,
+    ctx: &mut HirLoweringCtx<'_>,
+) -> Result<Option<HirStmt>, String> {
+    let Callee::Expr(callee) = &call.callee else { return Ok(None) };
+    let Expr::Member(member) = callee.as_ref() else { return Ok(None) };
+    let Expr::Ident(object) = member.obj.as_ref() else { return Ok(None) };
+    if object.sym != *"cookie" { return Ok(None) }
+    let swc_ecma_ast::MemberProp::Ident(property) = &member.prop else {
+        return Err("cookie operation must be a named method".into());
+    };
+    let operation = property.sym.to_string();
+    if !matches!(operation.as_str(), "get" | "set" | "delete") {
+        return Err("cookie supports get, set, and delete actions".into());
+    }
+    if call.args.iter().any(|argument| argument.spread.is_some()) {
+        return Err("cookie arguments cannot use spread".into());
+    }
+    let expected = if operation == "set" { 2..=3 } else { 1..=2 };
+    if !expected.contains(&call.args.len()) {
+        return Err(format!("cookie.{operation} has invalid arguments"));
+    }
+    let Expr::Lit(Lit::Str(name)) = call.args[0].expr.as_ref() else {
+        return Err(format!("cookie.{operation} requires a static cookie name"));
+    };
+    let value = if operation == "set" {
+        Some(lower_expression(&call.args[1].expr, ctx)?)
+    } else { None };
+    let options = if operation == "set" { call.args.get(2) } else { call.args.get(1) };
+    let (path, same_site, secure, max_age) = lower_cookie_options(options.map(|argument| argument.expr.as_ref()))?;
+    Ok(Some(HirStmt::AwaitCookie {
+        target,
+        operation,
+        name: name.value.to_string_lossy().into_owned(),
+        value,
+        path,
+        same_site,
+        secure,
+        max_age,
+        span,
+    }))
+}
+
+fn lower_cookie_options(value: Option<&Expr>) -> Result<(String, Option<String>, Option<bool>, Option<i64>), String> {
+    let Some(value) = value else { return Ok(("/".into(), None, None, None)) };
+    let Expr::Object(object) = value else {
+        return Err("cookie options must be a static object".into());
+    };
+    let mut path = "/".to_string();
+    let mut same_site = None;
+    let mut secure = None;
+    let mut max_age = None;
+    for property in &object.props {
+        let PropOrSpread::Prop(property) = property else { return Err("cookie options cannot use spread".into()) };
+        let Prop::KeyValue(property) = property.as_ref() else { return Err("cookie options must use named properties".into()) };
+        let key = match &property.key {
+            PropName::Ident(value) => value.sym.as_ref(),
+            PropName::Str(value) => value.value.as_str().ok_or("cookie option key must be UTF-8")?,
+            _ => return Err("cookie options must use static names".into()),
+        };
+        match (key, property.value.as_ref()) {
+            ("path", Expr::Lit(Lit::Str(value))) => path = value.value.to_string_lossy().into_owned(),
+            ("sameSite", Expr::Lit(Lit::Str(value))) => {
+                let value = value.value.to_string_lossy().into_owned();
+                if !matches!(value.as_str(), "lax" | "strict" | "none") { return Err("cookie.sameSite must be lax, strict, or none".into()) }
+                same_site = Some(value);
+            }
+            ("secure", Expr::Lit(Lit::Bool(value))) => secure = Some(value.value),
+            ("maxAge", Expr::Lit(Lit::Num(value))) if value.value.is_finite() && value.value.fract() == 0.0 && value.value >= i64::MIN as f64 && value.value <= i64::MAX as f64 => max_age = Some(value.value as i64),
+            ("path" | "sameSite" | "secure" | "maxAge", _) => return Err("cookie options must be static path, sameSite, secure, and maxAge values".into()),
+            _ => return Err("unsupported cookie option".into()),
+        }
+    }
+    Ok((path, same_site, secure, max_age))
+}
+
 fn lower_async_variable(
     var: &swc_ecma_ast::VarDecl,
     ctx: &mut HirLoweringCtx<'_>,
@@ -837,6 +948,32 @@ fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result
     match stmt {
         Stmt::Decl(Decl::Var(var)) => lower_async_variable(var, ctx),
         Stmt::Expr(expr_stmt) => {
+            if let Expr::Assign(assign) = expr_stmt.expr.as_ref() {
+                if let swc_ecma_ast::AssignTarget::Simple(swc_ecma_ast::SimpleAssignTarget::Member(member)) = &assign.left {
+                    if let (Expr::Ident(reference), swc_ecma_ast::MemberProp::Ident(property)) = (member.obj.as_ref(), &member.prop) {
+                        if property.sym == *"current" {
+                            let binding = ctx.resolve_binding(&reference.sym)?;
+                            if matches!(ctx.bindings[binding.0 as usize].kind, HirBindingKind::RefSlot) {
+                                return Ok(HirStmt::RefUpdate { reference: binding, value: lower_expression(&assign.right, ctx)?, span });
+                            }
+                            if matches!(ctx.bindings[binding.0 as usize].kind, HirBindingKind::HostRef) { return Err("hostRef.current is lifecycle-owned and cannot be assigned".into()); }
+                        }
+                    }
+                }
+                return Err("only ref.current assignment is supported".into());
+            }
+            if let Expr::Await(awaited) = expr_stmt.expr.as_ref() {
+                return lower_awaited_call(awaited, None, span, ctx);
+            }
+            let expression = match expr_stmt.expr.as_ref() {
+                Expr::Unary(unary) if matches!(unary.op, swc_ecma_ast::UnaryOp::Void) => unary.arg.as_ref(),
+                expression => expression,
+            };
+            if let Expr::Call(call) = expression {
+                if let Some(cookie) = lower_cookie_call(call, None, span.clone(), ctx)? {
+                    return Ok(cookie);
+                }
+            }
             if let Expr::Call(call) = expr_stmt.expr.as_ref() {
                 if let Callee::Expr(callee) = &call.callee {
                     if let Expr::Ident(ident) = callee.as_ref() {
@@ -1010,12 +1147,20 @@ fn lower_jsx_element_with_consumed_key(
 
     let mut props = Vec::new();
     let mut events = Vec::new();
+    let mut host_ref = None;
     for attr_or_spread in &jsx.opening.attrs {
         if let JSXAttrOrSpread::JSXAttr(attr) = attr_or_spread {
             if key_consumed && jsx_attr_name(attr).as_deref() == Some("key") {
                 continue;
             }
-            lower_jsx_attr(attr, ctx, &mut props, target.as_ref(), &mut events)?;
+            if target.is_none() && jsx_attr_name(attr).as_deref() == Some("ref") {
+                let Some(JSXAttrValue::JSXExprContainer(container)) = &attr.value else { return Err("intrinsic ref requires useHostRef()".into()) };
+                let JSXExpr::Expr(expr) = &container.expr else { return Err("intrinsic ref requires a useHostRef binding".into()) };
+                let Expr::Ident(ident) = expr.as_ref() else { return Err("intrinsic ref requires a useHostRef binding".into()) };
+                let binding = ctx.resolve_binding(&ident.sym)?;
+                if !matches!(ctx.bindings[binding.0 as usize].kind, HirBindingKind::HostRef) { return Err("intrinsic ref requires useHostRef()".into()); }
+                if host_ref.replace(binding).is_some() { return Err("intrinsic elements support one ref".into()); }
+            } else { lower_jsx_attr(attr, ctx, &mut props, target.as_ref(), &mut events)?; }
         } else {
             return Err("JSX spread attributes are not supported by structural HIR".to_string());
         }
@@ -1044,6 +1189,7 @@ fn lower_jsx_element_with_consumed_key(
             tag: tag_name,
             props,
             events,
+            host_ref,
             children,
             span,
         })
@@ -1517,10 +1663,15 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
                     return Err("Private member properties not supported".to_string())
                 }
             };
-            HirExpr::Member {
-                object: object_id,
-                property,
-            }
+            if property == "current" {
+                if let HirExpr::Binding(binding) = ctx.expressions[object_id.0 as usize].expression {
+                    match ctx.bindings[binding.0 as usize].kind {
+                        HirBindingKind::RefSlot => HirExpr::RefCurrent { reference: binding },
+                        HirBindingKind::HostRef => HirExpr::HostRefCurrent { reference: binding },
+                        _ => HirExpr::Member { object: object_id, property },
+                    }
+                } else { HirExpr::Member { object: object_id, property } }
+            } else { HirExpr::Member { object: object_id, property } }
         }
 
         Expr::Unary(unary) => {

@@ -78,6 +78,10 @@ pub struct PlecRuntime {
     /// match a newly-created graph that happens to start at generation one.
     pub(crate) typed_generation: Rc<RefCell<u64>>,
     pub(crate) typed_registry: Rc<RefCell<HashMap<String, TypedApplication>>>,
+    /// Independently fetched 0.10 graph closures.  Do not merge these by
+    /// component id: the same helper component may legitimately occur in two
+    /// live route artifacts.
+    pub(crate) typed_component_registry: Rc<RefCell<HashMap<String, TypedComponentApplication>>>,
     pub(crate) typed_manifest: Rc<RefCell<Option<RouteManifest>>>,
     pub(crate) typed_host_inputs: Rc<RefCell<HashMap<String, RuntimeValue>>>,
     /// Immutable component definitions for the currently loaded IR 0.10 application.
@@ -95,6 +99,7 @@ impl Clone for PlecRuntime {
             typed_root: Rc::clone(&self.typed_root),
             typed_generation: Rc::clone(&self.typed_generation),
             typed_registry: Rc::clone(&self.typed_registry),
+            typed_component_registry: Rc::clone(&self.typed_component_registry),
             typed_manifest: Rc::clone(&self.typed_manifest),
             typed_host_inputs: Rc::clone(&self.typed_host_inputs),
             typed_components: Rc::clone(&self.typed_components),
@@ -136,6 +141,7 @@ impl PlecRuntime {
             application.validate()?;
             let mut typed =
                 TypedRuntime::new(application.components[application.root_component].clone())?;
+            typed.set_component_definitions(application.components.clone());
             typed.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
             typed.graph_generation = self.next_typed_generation();
             self.dispose_typed_instances();
@@ -175,6 +181,7 @@ impl PlecRuntime {
         for (_, mut instance) in self.typed.borrow_mut().drain() {
             instance.runtime.invalidate_fetches();
             instance.runtime.clear_listeners();
+            instance.runtime.clear_host_refs();
         }
     }
 }
@@ -205,15 +212,9 @@ impl PlecRuntime {
             let application: TypedComponentApplication =
                 serde_json::from_value(value).map_err(error)?;
             application.validate()?;
-            let mut registry = self.typed_registry.borrow_mut();
-            for component in &application.components {
-                if registry
-                    .insert(component.id.clone(), component.clone())
-                    .is_some()
-                {
-                    return Err(JsValue::from_str("duplicate typed component graph id"));
-                }
-            }
+            self.typed_component_registry
+                .borrow_mut()
+                .insert(graph_id, application.clone());
             *self.typed_components.borrow_mut() = Some(application);
             return Ok(());
         }
@@ -458,6 +459,7 @@ impl PlecRuntime {
         for (_, mut instance) in self.typed.borrow_mut().drain() {
             instance.runtime.invalidate_fetches();
             instance.runtime.clear_listeners();
+            instance.runtime.clear_host_refs();
             if let Some(root) = instance.runtime.root {
                 root.set_inner_html("");
             }
@@ -469,6 +471,8 @@ impl PlecRuntime {
         *self.router.borrow_mut() = None;
         *self.typed_manifest.borrow_mut() = None;
         self.typed_registry.borrow_mut().clear();
+        self.typed_component_registry.borrow_mut().clear();
+        *self.typed_components.borrow_mut() = None;
         let instance_ids = self.instances.borrow().keys().cloned().collect::<Vec<_>>();
         for instance_id in instance_ids {
             if self.instances.borrow().contains_key(&instance_id) {

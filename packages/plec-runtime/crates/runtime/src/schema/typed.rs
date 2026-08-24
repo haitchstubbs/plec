@@ -29,6 +29,10 @@ pub struct TypedApplication {
     #[serde(default)]
     pub state_slots: Vec<TypedStateSlot>,
     #[serde(default)]
+    pub ref_slots: Vec<TypedRefSlot>,
+    #[serde(default)]
+    pub host_refs: Vec<TypedHostRef>,
+    #[serde(default)]
     pub parameters: Vec<TypedComponentParameter>,
     pub route_error_state: Option<usize>,
     #[serde(default)]
@@ -49,6 +53,8 @@ pub struct TypedApplication {
     pub host_inputs: HashMap<String, RuntimeValue>,
     #[serde(skip)]
     pub runtime_props: Vec<RuntimeValue>,
+    #[serde(skip)]
+    pub ref_values: Vec<RuntimeValue>,
 }
 
 fn component_version() -> String {
@@ -294,6 +300,7 @@ pub enum TypedActionInstruction {
     StoreState {
         state: usize,
     },
+    StoreRef { reference: usize },
     CallProp {
         prop: usize,
         #[serde(default)]
@@ -417,6 +424,8 @@ pub enum TypedNode {
         parent: Option<usize>,
         #[serde(default)]
         children: Vec<usize>,
+        #[serde(default)]
+        host_ref: Option<usize>,
     },
     Text {
         text: usize,
@@ -486,6 +495,11 @@ pub struct TypedStateSlot {
     pub initial_expression: usize,
     pub frame_slot: usize,
 }
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypedRefSlot { pub initial_expression: usize }
+#[derive(Clone, Deserialize)]
+pub struct TypedHostRef {}
 
 #[derive(Clone, Deserialize)]
 pub struct TypedProgram {
@@ -501,6 +515,7 @@ pub enum TypedExpressionInstruction {
     LoadState {
         state: usize,
     },
+    LoadRef { reference: usize },
     LoadProp {
         prop: usize,
     },
@@ -776,6 +791,16 @@ impl TypedApplication {
                 return Err("state name handle out of range");
             }
         }
+        for reference in &self.ref_slots {
+            if reference.initial_expression >= self.expressions.len() {
+                return Err("ref expression handle out of range");
+            }
+        }
+        for node in &self.nodes {
+            if matches!(node, TypedNode::Element { host_ref: Some(reference), .. } if *reference >= self.host_refs.len()) {
+                return Err("host ref handle out of range");
+            }
+        }
         if self
             .route_error_state
             .map(|state| state >= self.state_slots.len())
@@ -861,6 +886,11 @@ impl TypedApplication {
                     {
                         return Err("action state handle out of range")
                     }
+                    TypedActionInstruction::StoreRef { reference }
+                        if *reference >= self.ref_slots.len() =>
+                    {
+                        return Err("action ref handle out of range")
+                    }
                     TypedActionInstruction::CallProp { prop, arguments }
                         if self
                             .parameters
@@ -928,7 +958,7 @@ impl TypedApplication {
                         error_slot,
                         ..
                     } if matches!(request, TypedCapabilityRequest::Fetch(request) if request.url >= self.expressions.len() || request.body.map(|body| body >= self.expressions.len()).unwrap_or(false) || request.headers.iter().any(|header| header.name >= self.strings.len() || header.value >= self.expressions.len()))
-                        || matches!(request, TypedCapabilityRequest::Cookie(request) if request.name >= self.strings.len() || request.value.map(|value| value >= self.expressions.len()).unwrap_or(false) || !["get", "set", "delete"].contains(&request.operation.as_str()) || (request.operation == "set" && request.value.is_none()) || (request.expiry == "maxAge" && request.max_age.is_none()))
+                        || matches!(request, TypedCapabilityRequest::Cookie(request) if request.name >= self.strings.len() || request.value.map(|value| value >= self.expressions.len()).unwrap_or(false) || !["get", "set", "delete"].contains(&request.operation.as_str()) || (request.operation == "set" && request.value.is_none()) || !["session", "maxAge"].contains(&request.expiry.as_str()) || (request.expiry == "maxAge" && request.max_age.is_none()) || (request.expiry == "session" && request.max_age.is_some()) || request.same_site.as_deref().is_some_and(|same_site| !["lax", "strict", "none"].contains(&same_site)))
                         || *success_pc >= action.instructions.len()
                         || *failure_pc >= action.instructions.len()
                         || finally_pc
@@ -975,6 +1005,9 @@ impl TypedApplication {
         for program in &self.expressions {
             if program.instructions.iter().any(|instruction| matches!(instruction, TypedExpressionInstruction::LoadHost { host } if *host >= self.host_slots.len())) {
                 return Err("host input handle out of range");
+            }
+            if program.instructions.iter().any(|instruction| matches!(instruction, TypedExpressionInstruction::LoadRef { reference } if *reference >= self.ref_slots.len())) {
+                return Err("ref input handle out of range");
             }
         }
         Ok(())

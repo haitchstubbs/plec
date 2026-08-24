@@ -25,6 +25,10 @@ pub enum HirBindingKind {
     LoopItem,
     /// A value or error written by an async continuation frame.
     AsyncValue,
+    /// Instance-owned, deliberately non-reactive mutable storage.
+    RefSlot,
+    /// A lifecycle-bound handle to one intrinsic host node.
+    HostRef,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,6 +68,13 @@ pub struct HirState {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct HirRefSlot {
+    pub binding: BindingId,
+    pub initializer: ExprId,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct HirCallableDecl {
     pub binding: BindingId,
     pub parameters: Vec<BindingId>,
@@ -79,6 +90,19 @@ pub enum HirCallableBody {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirStmt {
+    /// Browser-owned cookie access. Names and options are intentionally static
+    /// so a graph declares its complete capability surface before execution.
+    AwaitCookie {
+        target: Option<BindingId>,
+        operation: String,
+        name: String,
+        value: Option<ExprId>,
+        path: String,
+        same_site: Option<String>,
+        secure: Option<bool>,
+        max_age: Option<i64>,
+        span: SourceSpan,
+    },
     /// A deliberately narrow async boundary. Route loaders currently support
     /// only a terminal `return await fetch(url)` capability request.
     AwaitFetch {
@@ -109,6 +133,11 @@ pub enum HirStmt {
         value: ExprId,
         span: SourceSpan,
     },
+    RefUpdate {
+        reference: BindingId,
+        value: ExprId,
+        span: SourceSpan,
+    },
     If {
         test: ExprId,
         consequent: Vec<HirStmt>,
@@ -129,6 +158,7 @@ pub struct HirComponent {
     pub bindings: Vec<HirBinding>,
     pub locals: Vec<HirLocal>,
     pub states: Vec<HirState>,
+    pub ref_slots: Vec<HirRefSlot>,
     pub callables: Vec<HirCallableDecl>,
     pub root_nodes: Vec<NodeId>,
     pub nodes: Vec<HirNode>,
@@ -173,6 +203,7 @@ impl HirComponent {
             bindings: Vec::new(),
             locals: Vec::new(),
             states: Vec::new(),
+            ref_slots: Vec::new(),
             callables: Vec::new(),
             root_nodes: Vec::new(),
             nodes: Vec::new(),
