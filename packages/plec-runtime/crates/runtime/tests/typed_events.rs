@@ -88,6 +88,24 @@ fn rust_keyed_callback_component_artifact() -> serde_json::Value {
     .expect("Rust keyed callback fixture should be valid JSON")
 }
 
+fn component_slot_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version":"0.10", "rootComponent":0,
+        "components":[
+            {"id":"App","rootNode":0,"strings":["main","p"],"constants":[],
+             "nodes":[
+                {"op":"element","tag":0,"parent":null,"children":[3]},
+                {"op":"element","tag":1,"parent":null,"children":[2]},
+                {"op":"text","text":0,"parent":1},
+                {"op":"component","component":1,"parent":0,"props":[],"children":[1]}
+             ],"texts":[{"value":"Inside"}],"bindings":[],"propPrograms":[],"events":[],"inputs":[],"stateSlots":[],"parameters":[],"expressions":[],"actions":[],"loops":[],"dependencyEdges":[]},
+            {"id":"Frame","rootNode":0,"strings":["section"],"constants":[],
+             "nodes":[{"op":"element","tag":0,"parent":null,"children":[1]},{"op":"slot","parent":0}],
+             "texts":[],"bindings":[],"propPrograms":[],"events":[],"inputs":[],"stateSlots":[],"parameters":[],"expressions":[],"actions":[],"loops":[],"dependencyEdges":[]}
+        ]
+    })
+}
+
 /// A minimal external keyed loop whose row button writes the row title to the
 /// static output text. It exercises row-owned listener frames without relying
 /// on any legacy runtime behaviour.
@@ -509,6 +527,17 @@ fn rust_component_fixture_refreshes_child_without_remounting() {
     assert_eq!(next.text_content().unwrap(), "two");
     assert!(span.is_same_node(Some(&next)));
     assert!(text.is_same_node(next.first_child().as_ref()));
+}
+
+#[wasm_bindgen_test]
+fn component_slot_mounts_caller_owned_children_inside_the_callee_anchor() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, component_slot_artifact(), &root);
+    let section = root.query_selector("section").unwrap().unwrap();
+    let paragraph = section.query_selector("p").unwrap().unwrap();
+    assert_eq!(paragraph.text_content().as_deref(), Some("Inside"));
+    assert!(root.query_selector("main > p").unwrap().is_none());
 }
 
 #[wasm_bindgen_test]

@@ -13,7 +13,7 @@ pub use expr::{
 // Nodes
 pub use node::{
     HirComponentCall, HirConditional, HirElement, HirEventBinding, HirForEach, HirFragment,
-    HirNode, HirProp, HirText,
+    HirNode, HirProp, HirSlot, HirText,
 };
 
 // Component

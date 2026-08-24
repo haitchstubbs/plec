@@ -48,10 +48,16 @@ pub(crate) struct TypedComponentRequest {
     pub(crate) component: usize,
     pub(crate) props: HashMap<String, RuntimeValue>,
     pub(crate) callbacks: HashMap<String, TypedCallbackSpec>,
+    pub(crate) children: Vec<usize>,
     pub(crate) parent: Node,
     pub(crate) start: Node,
     pub(crate) end: Node,
     pub(crate) key: String,
+}
+
+pub(crate) struct TypedSlotRequest {
+    pub(crate) start: Node,
+    pub(crate) end: Node,
 }
 
 #[derive(Clone)]
@@ -84,6 +90,7 @@ pub(crate) struct TypedRuntime {
     pub(crate) listeners: Vec<TypedListener>,
     pub(crate) listener_requests: Vec<TypedListenerRequest>,
     pub(crate) component_requests: Vec<TypedComponentRequest>,
+    pub(crate) slot_requests: Vec<TypedSlotRequest>,
     pub(crate) component_refreshes: Vec<TypedComponentRefresh>,
     pub(crate) callback_requests: Vec<TypedCallback>,
     pub(crate) callbacks: Vec<Option<TypedCallback>>,
@@ -393,6 +400,18 @@ impl PlecRuntime {
                 runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
                 runtime.graph_generation = self.next_typed_generation();
                 runtime.mount_before(&request.parent, &request.end)?;
+                if !request.children.is_empty() && !runtime.slot_requests.is_empty() {
+                    let slot = runtime.slot_requests.pop().expect("slot exists");
+                    if !runtime.slot_requests.is_empty() {
+                        return Err(JsValue::from_str("component declares multiple children slots"));
+                    }
+                    let mut typed = self.typed.borrow_mut();
+                    typed
+                        .get_mut(&parent_id)
+                        .ok_or_else(|| JsValue::from_str("component parent missing"))?
+                        .runtime
+                        .mount_slot_children(&request.children, &slot.start, &slot.end)?;
+                }
                 let id = format!("{parent_id}/component:{}:{}", request.call, request.key);
                 self.typed.borrow_mut().insert(
                     id.clone(),
@@ -575,6 +594,7 @@ impl TypedRuntime {
             listeners: Vec::new(),
             listener_requests: Vec::new(),
             component_requests: Vec::new(),
+            slot_requests: Vec::new(),
             component_refreshes: Vec::new(),
             callback_requests: Vec::new(),
             callbacks: Vec::new(),
@@ -705,6 +725,36 @@ impl TypedRuntime {
         parent.insert_before(&node, Some(end))?;
         self.apply_static_bindings()?;
         self.queue_static_listeners();
+        Ok(())
+    }
+
+    /// Slot templates execute in the caller runtime, so their state, rows,
+    /// listeners, and nested component calls retain caller ownership.
+    pub(crate) fn mount_slot_children(
+        &mut self,
+        children: &[usize],
+        start: &Node,
+        end: &Node,
+    ) -> Result<(), JsValue> {
+        let parent = end
+            .parent_node()
+            .ok_or_else(|| JsValue::from_str("slot parent missing"))?;
+        let fragment: Node = document()?.create_document_fragment().into();
+        for child in children {
+            self.instantiate_node(
+                &document()?,
+                *child,
+                Some(&fragment),
+                None,
+                0,
+                &mut HashMap::new(),
+                &mut HashMap::new(),
+            )?;
+        }
+        parent.insert_before(&fragment, Some(end))?;
+        self.apply_static_bindings()?;
+        self.queue_static_listeners();
+        let _ = start;
         Ok(())
     }
 }
@@ -915,7 +965,7 @@ impl TypedRuntime {
                 Ok(marker)
             }
             TypedNode::Component {
-                component, props, ..
+                component, props, children, ..
             } => {
                 let parent = parent.ok_or_else(|| JsValue::from_str("component parent missing"))?;
                 let start: Node = doc
@@ -960,10 +1010,28 @@ impl TypedRuntime {
                     component,
                     props: values,
                     callbacks,
+                    children,
                     parent: parent.clone(),
                     start: start.clone(),
                     end,
                     key,
+                });
+                if row.is_some() {
+                    local.insert(index, start.clone());
+                } else {
+                    self.nodes.insert(index, start.clone());
+                }
+                Ok(start)
+            }
+            TypedNode::Slot { .. } => {
+                let parent = parent.ok_or_else(|| JsValue::from_str("slot parent missing"))?;
+                let start: Node = doc.create_comment(&format!("plec:slot:{index}")).into();
+                let end: Node = doc.create_comment(&format!("plec:slot-end:{index}")).into();
+                parent.append_child(&start)?;
+                parent.append_child(&end)?;
+                self.slot_requests.push(TypedSlotRequest {
+                    start: start.clone(),
+                    end,
                 });
                 if row.is_some() {
                     local.insert(index, start.clone());

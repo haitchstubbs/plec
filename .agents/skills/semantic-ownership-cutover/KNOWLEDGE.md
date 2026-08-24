@@ -5,7 +5,7 @@
 Rust: TSX parser + semantic graph -> canonical root component -> reachable `HirApplication` -> per-component HIR -> executable IR 0.9/0.10 components -> JSON -> typed WASM runtime -> DOM.
 Proven: scalar state text update; keyed collection row insert/update/move/remove; standalone/row-local conditional lifecycle; static, keyed, and nested direct component prop refresh without remount.
 `useCollection("name")` is a named collection HIR input; lowering preserves it as executable input and links its keyed loop.
-Next frontier: component children/slots; callable props complete.
+Slots now HIR/IR/runtime static-mount: `{children}` -> `Slot`; call owns child templates. Next: slot range/lifecycle ownership.
 
 ## Ownership
 
@@ -23,15 +23,17 @@ Static component props: Rust 0.10 artifact -> WASM parent-state update; browser 
 Keyed component props: Rust 0.10 artifact -> WASM collection deltas; browser fixture proves child text/row identity survives update/move, local child action remains live, and remove detaches child/listener.
 Nested direct component props: Rust 0.10 `App -> Child -> Grandchild` artifact -> WASM mount/state update; browser fixture proves transitive prop refresh keeps section/span/text identity and grandchild local action live.
 Keyed callable component props: Rust 0.10 artifact -> WASM child click -> parent action; browser fixture proves parent row capture, child identity across move, and removed child callback inert.
+Static slot: Rust HIR/0.10 `Component.children` + callee `Slot` -> WASM anchor mount; browser fixture proves caller `<p>` mounts inside callee `<section>`.
 
 ## Capability status
 
 Rust HIR represents reachable acyclic component applications, canonical calls/props, `useCollection("name")`, fragments, conditionals, keyed `ForEach`, loop-item bindings, callable parameters.
-Rust lowering executes collection inputs, keyed rows, named row fields/edges, row-owned inline events, standalone/row-local conditionals, scalar state, nested direct component props, zero-arg callable props, and `LoadProp`; preserves `prop` and row-field component edges; rejects callable arguments/conditionals and JSX children. Runtime loads 0.10, drains nested calls at comment anchors, refreshes prop-dependent sinks, dispatches child callbacks to parent actions with captured row values, fans named input snapshots/deltas to live instances, and drops detached child instances.
+Rust lowering executes static slot templates plus prior slices; rejects callable arguments/conditionals. Runtime mounts caller templates via `DocumentFragment` between callee slot anchors. Dynamic slot row/frame/lifecycle ownership not proven.
 
 ## Semantic-loss boundaries
 
 Reachable component identity/call props/parameters survive into `HirApplication` and 0.10 IR. Child sinks retain `prop` edges. Runtime-local component anchors connect parent call nodes to child instances; row roots retain component start/end range so keyed move/remove owns child DOM and lifecycle.
+Slot template node IDs survive 0.10, but mount currently has no component-call slot range/listener owner or row frame; do not call dynamic/keyed slot disposal correct.
 
 ## Contract drift
 
@@ -43,6 +45,7 @@ Reachable component identity/call props/parameters survive into `HirApplication`
 Listeners direct; owners `Static`, keyed `Row`, or `Conditional` with inherited row owner; dispose before region/row/route/runtime removal.
 Moves and binding-only row updates retain listener generation; stale owner callbacks inert.
 Component-root rows own full start/end anchor range; move/remove must move/remove child DOM between anchors.
+Slot ranges need equivalent caller-owned range/listener/frame ownership before keyed or removable slots are enabled.
 Text bindings must target text nodes and mutate only data.
 
 ## Graph observations
@@ -57,7 +60,7 @@ Rust vertical fixtures: `crates/plec-compiler/tests/rust_counter_fixture.rs`; ru
 
 ## Candidate clusters
 
-1. Component children/slots: call-site child ownership + slot/input binding + component lifecycle.
+1. Complete component slots: call-site range + caller frame + listener disposal + keyed move/remove. Static anchor mount is landed; do not split range/lifecycle.
 
 ## Corrections
 

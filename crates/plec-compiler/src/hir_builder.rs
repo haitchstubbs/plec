@@ -6,7 +6,7 @@ use plec_hir::{
     HirCallableBody, HirCallableDecl, HirComponent, HirComponentCall, HirConditional, HirElement,
     HirEventBinding, HirExpr, HirExprNode, HirForEach, HirFragment, HirLocal, HirLogicalOp,
     HirApplication, HirInput, HirNode, HirParameter, HirParameterSource, HirProp, HirState, HirStmt, HirTemplatePart,
-    HirText, HirUnaryOp, HirValue, NodeId, SourceSpan,
+    HirSlot, HirText, HirUnaryOp, HirValue, NodeId, SourceSpan,
 };
 use plec_sema::{resolve_component, ComponentPropKind, SemanticGraph};
 use swc_common::{Span, Spanned};
@@ -170,6 +170,15 @@ impl<'a> HirLoweringCtx<'a> {
         let id = NodeId(self.next_node_id);
         self.next_node_id += 1;
         id
+    }
+
+    fn is_children_parameter(&self, binding: BindingId) -> bool {
+        self.bindings
+            .get(binding.0 as usize)
+            .is_some_and(|binding| {
+                binding.name == "children"
+                    && matches!(binding.kind, HirBindingKind::Parameter { callable: false })
+            })
     }
 
     fn declare_binding(
@@ -889,6 +898,9 @@ fn lower_jsx_attr(
             "JSX key is only supported on the direct root of a .map() callback".to_string(),
         );
     }
+    if component_target.is_some() && name == "children" {
+        return Err("component children must use JSX child syntax".to_string());
+    }
 
     match &attr.value {
         Some(JSXAttrValue::Str(str_lit)) => {
@@ -1025,8 +1037,12 @@ fn lower_jsx_child(
                 } else {
                     // Value expressions become text nodes
                     let span = source_span_from_swc(container.span, ctx.module_id);
-                    let node_id = ctx.alloc_node_id();
                     let expr_id = lower_expression(expr, ctx)?;
+                    let node_id = ctx.alloc_node_id();
+                    if matches!(ctx.expressions[expr_id.0 as usize].expression, HirExpr::Binding(binding) if ctx.is_children_parameter(binding)) {
+                        ctx.nodes.push(HirNode::Slot(HirSlot { id: node_id, span }));
+                        return Ok(Some(node_id));
+                    }
                     ctx.nodes.push(HirNode::Text(HirText::Expression {
                         id: node_id,
                         expression: expr_id,

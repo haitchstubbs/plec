@@ -81,13 +81,17 @@ impl TypedComponentApplication {
                 if let TypedNode::Component {
                     component: target,
                     props,
+                    children,
                     ..
                 } = node
                 {
                     let Some(target) = self.components.get(*target) else {
                         return Err(JsValue::from_str("component target out of range"));
                     };
-                    if props.len() != target.parameters.len() {
+                    let required = target.parameters.iter().filter(|parameter| {
+                        target.strings.get(parameter.name).map(String::as_str) != Some("children")
+                    }).count();
+                    if props.len() != required || children.iter().any(|child| *child >= component.nodes.len()) {
                         return Err(JsValue::from_str("missing component prop"));
                     }
                     let mut supplied = HashSet::new();
@@ -108,7 +112,9 @@ impl TypedComponentApplication {
                             return Err(JsValue::from_str("invalid component prop"));
                         }
                     }
-                    if target.parameters.iter().any(|parameter| {
+                    if target.parameters.iter().filter(|parameter| {
+                        target.strings.get(parameter.name).map(String::as_str) != Some("children")
+                    }).any(|parameter| {
                         target
                             .strings
                             .get(parameter.name)
@@ -390,6 +396,11 @@ pub enum TypedNode {
         parent: Option<usize>,
         #[serde(default)]
         props: Vec<TypedComponentProp>,
+        #[serde(default)]
+        children: Vec<usize>,
+    },
+    Slot {
+        parent: Option<usize>,
     },
 }
 
@@ -675,6 +686,9 @@ fn subtree_contains(nodes: &[TypedNode], root: usize, target: usize) -> bool {
                     .map(|child| subtree_contains(nodes, child, target))
                     .unwrap_or(false)
         }
+        Some(TypedNode::Component { children, .. }) => children
+            .iter()
+            .any(|child| subtree_contains(nodes, *child, target)),
         _ => false,
     }) || matches!(
         nodes.get(target),
@@ -682,7 +696,8 @@ fn subtree_contains(nodes: &[TypedNode], root: usize, target: usize) -> bool {
           | TypedNode::Text { parent: Some(parent), .. }
           | TypedNode::Conditional { parent: Some(parent), .. }
           | TypedNode::Loop { parent: Some(parent), .. }
-          | TypedNode::Component { parent: Some(parent), .. })
+          | TypedNode::Component { parent: Some(parent), .. }
+          | TypedNode::Slot { parent: Some(parent) })
           if subtree_contains(nodes, root, *parent)
     )
 }
