@@ -49,7 +49,9 @@ pub struct TypedApplication {
     pub runtime_props: Vec<RuntimeValue>,
 }
 
-fn component_version() -> String { "0.10".into() }
+fn component_version() -> String {
+    "0.10".into()
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,7 +78,12 @@ impl TypedComponentApplication {
                 }
             }
             for node in &component.nodes {
-                if let TypedNode::Component { component: target, props, .. } = node {
+                if let TypedNode::Component {
+                    component: target,
+                    props,
+                    ..
+                } = node
+                {
                     let Some(target) = self.components.get(*target) else {
                         return Err(JsValue::from_str("component target out of range"));
                     };
@@ -85,15 +92,29 @@ impl TypedComponentApplication {
                     }
                     let mut supplied = HashSet::new();
                     for prop in props {
-                        let Some(name) = component.strings.get(prop.name) else {
+                        let Some(name) = component.strings.get(prop.name()) else {
                             return Err(JsValue::from_str("component prop name out of range"));
                         };
-                        if prop.expression >= component.expressions.len() || !supplied.insert(name.clone()) {
+                        let expected = target.parameters.iter().find(|parameter| {
+                            target.strings.get(parameter.name).map(String::as_str)
+                                == Some(name.as_str())
+                        });
+                        if expected.is_none()
+                            || expected
+                                .is_some_and(|parameter| parameter.callable != prop.callable())
+                            || !prop.valid(component)
+                            || !supplied.insert(name.clone())
+                        {
                             return Err(JsValue::from_str("invalid component prop"));
                         }
                     }
                     if target.parameters.iter().any(|parameter| {
-                        target.strings.get(parameter.name).map(String::as_str).map(|name| !supplied.contains(name)).unwrap_or(true)
+                        target
+                            .strings
+                            .get(parameter.name)
+                            .map(String::as_str)
+                            .map(|name| !supplied.contains(name))
+                            .unwrap_or(true)
                     }) {
                         return Err(JsValue::from_str("missing component prop"));
                     }
@@ -107,12 +128,54 @@ impl TypedComponentApplication {
 #[derive(Clone, Deserialize)]
 pub struct TypedComponentParameter {
     pub name: usize,
+    pub callable: bool,
 }
 
-#[derive(Clone, Deserialize)]
-pub struct TypedComponentProp {
-    pub name: usize,
-    pub expression: usize,
+#[derive(Clone)]
+pub enum TypedComponentProp {
+    Value { name: usize, expression: usize },
+    Callable { name: usize, action: usize },
+}
+
+impl<'de> Deserialize<'de> for TypedComponentProp {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            kind: String,
+            name: usize,
+            expression: Option<usize>,
+            action: Option<usize>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        match (raw.kind.as_str(), raw.expression, raw.action) {
+            ("value", Some(expression), None) => Ok(Self::Value {
+                name: raw.name,
+                expression,
+            }),
+            ("callable", None, Some(action)) => Ok(Self::Callable {
+                name: raw.name,
+                action,
+            }),
+            _ => Err(serde::de::Error::custom("invalid component prop")),
+        }
+    }
+}
+
+impl TypedComponentProp {
+    pub fn name(&self) -> usize {
+        match self {
+            Self::Value { name, .. } | Self::Callable { name, .. } => *name,
+        }
+    }
+    pub fn callable(&self) -> bool {
+        matches!(self, Self::Callable { .. })
+    }
+    fn valid(&self, app: &TypedApplication) -> bool {
+        match self {
+            Self::Value { expression, .. } => *expression < app.expressions.len(),
+            Self::Callable { action, .. } => *action < app.actions.len(),
+        }
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -185,6 +248,9 @@ pub enum TypedActionInstruction {
     },
     StoreState {
         state: usize,
+    },
+    CallProp {
+        prop: usize,
     },
     CollectionMutation {
         input: usize,
@@ -628,7 +694,7 @@ impl TypedApplication {
     }
 
     fn validate_contract(&self) -> Result<(), &'static str> {
-        if self.version != "0.9" && self.version != "0.10" {
+        if !matches!(self.version.as_str(), "0.9" | "0.10") {
             return Err("unsupported executable application version");
         }
         if self.root_node >= self.nodes.len() {
@@ -738,6 +804,15 @@ impl TypedApplication {
                         if *state >= self.state_slots.len() =>
                     {
                         return Err("action state handle out of range")
+                    }
+                    TypedActionInstruction::CallProp { prop }
+                        if self
+                            .parameters
+                            .get(*prop)
+                            .map(|parameter| parameter.callable)
+                            != Some(true) =>
+                    {
+                        return Err("action callable prop out of range")
                     }
                     TypedActionInstruction::Call {
                         action: callee,

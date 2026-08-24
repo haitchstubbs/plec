@@ -37,12 +37,14 @@ pub struct ExecutableComponent {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ComponentParameter {
     pub name: usize,
+    pub callable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ComponentProp {
-    pub name: usize,
-    pub expression: usize,
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ComponentProp {
+    Value { name: usize, expression: usize },
+    Callable { name: usize, action: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -216,6 +218,7 @@ pub struct ActionProgram {
 pub enum ActionInstruction {
     Evaluate { expression: usize },
     StoreState { state: usize },
+    CallProp { prop: usize },
     Jump { target: usize },
     JumpIfFalse { target: usize },
     Return,

@@ -320,12 +320,20 @@ impl PlecRuntime {
         // A child component can disappear with its keyed row or conditional
         // parent. Its callback may still be invoked on a detached test node;
         // detached component roots are never live execution targets.
-        let component_detached = self.typed.try_borrow().ok().map(|typed| {
-            typed.get(instance_id)
-                .and_then(|instance| instance.runtime.nodes.get(&instance.runtime.app.root_node))
-                .map(|node| node.parent_node().is_none())
-                .unwrap_or(false)
-        }).unwrap_or(false);
+        let component_detached = self
+            .typed
+            .try_borrow()
+            .ok()
+            .map(|typed| {
+                typed
+                    .get(instance_id)
+                    .and_then(|instance| {
+                        instance.runtime.nodes.get(&instance.runtime.app.root_node)
+                    })
+                    .map(|node| node.parent_node().is_none())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
         if component_detached {
             return Ok(());
         }
@@ -359,6 +367,7 @@ impl PlecRuntime {
                 runtime.take_pending_cookies(),
             )
         };
+        self.dispatch_typed_callbacks(instance_id)?;
         let has_pending_fetch = !pending.is_empty();
         #[cfg(feature = "fetch")]
         for mut request in pending {
@@ -390,6 +399,34 @@ impl PlecRuntime {
         if install_listeners && !has_pending_fetch && event.type_() != "keydown" {
             self.install_typed_event_listeners()?;
         }
+        Ok(())
+    }
+
+    fn dispatch_typed_callbacks(&self, instance_id: &str) -> Result<(), JsValue> {
+        let callbacks = self
+            .typed
+            .borrow_mut()
+            .get_mut(instance_id)
+            .map(|instance| std::mem::take(&mut instance.runtime.callback_requests))
+            .unwrap_or_default();
+        for callback in callbacks {
+            let Some(mut typed) = self.typed.try_borrow_mut().ok() else {
+                continue;
+            };
+            let Some(parent) = typed.get_mut(&callback.parent_id) else {
+                continue;
+            };
+            let mut metrics = UpdateMetrics::default();
+            parent.runtime.execute_action_with_frame(
+                callback.action,
+                &[],
+                callback.row,
+                None,
+                &mut metrics,
+            )?;
+        }
+        self.flush_component_work()?;
+        self.install_typed_event_listeners()?;
         Ok(())
     }
 }
