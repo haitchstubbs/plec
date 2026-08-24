@@ -540,6 +540,7 @@ export const RouteManifestEntrySchema = z.object({
   path: z.string(),
   graphId: z.string(),
   pendingGraphId: z.string().optional(),
+  pendingMode: z.enum(['replace', 'retain']).default('replace'),
   errorGraphId: z.string().optional(),
   /** Index into this route graph's executable action table. */
   loaderAction: z.number().int().nonnegative().optional(),

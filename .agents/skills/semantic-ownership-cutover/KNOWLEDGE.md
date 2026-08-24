@@ -66,6 +66,8 @@ Rust lowers direct collection member calls with explicit key/value programs; oth
 
 Rust lowers terminal `return await fetch(url)` only; general await/control-flow and route declaration parsing remain TypeScript-owned.
 
+Rust preserves static route `pendingMode` (`replace`/`retain`) into manifest; typed runtime retains normal graph while loader runs when `retain`. Rust local calls to direct fetch actions preserve typed continuation frame slots; `try`/`catch`/`finally`, decoded result locals, and effect/ref semantics remain TypeScript-owned.
+
 ## Semantic-loss boundaries
 
 Reachable component identity/call props/parameters survive into `HirApplication` and 0.10 IR. Child sinks retain `prop` edges. Runtime-local component anchors connect parent call nodes to child instances; row roots retain component start/end range so keyed move/remove owns child DOM and lifecycle.
@@ -151,3 +153,5 @@ Detached test roots make `Node.is_connected()` false; assert parent removal or r
 `2026-08-24`: Rust emits `CollectionMutation` for direct `append`, `keyedReplace`, and `keyedRemove`; browser proof preserves keyed replacement identity and disposes removal.
 
 `2026-08-24`: route loader Rust artifact/compiler and WASM probes pass. `adaptLiveCollection` converts generic host insert/update/move/remove records; Rust 0.10 input/loop fixture and WASM keyed-row fixture prove targeted reconciliation.
+
+`2026-08-24`: route `pendingMode` survives Rust HIR/manifest/WASM schema; direct local call to a fetch action emits typed continuation slots. No ownership score change: required browser fixture and remaining capstone semantics absent.

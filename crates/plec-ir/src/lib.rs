@@ -34,11 +34,17 @@ pub struct RouteManifestEntry {
     pub graph_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_graph_id: Option<String>,
+    #[serde(skip_serializing_if = "is_replace_pending_mode", default)]
+    pub pending_mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_graph_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub loader_action: Option<usize>,
     pub outlet_id: String,
+}
+
+fn is_replace_pending_mode(value: &String) -> bool {
+    value == "replace"
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -306,6 +312,14 @@ pub enum ActionInstruction {
         action: usize,
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
         arguments: Vec<usize>,
+        #[serde(rename = "successPc", skip_serializing_if = "Option::is_none")]
+        success_pc: Option<usize>,
+        #[serde(rename = "failurePc", skip_serializing_if = "Option::is_none")]
+        failure_pc: Option<usize>,
+        #[serde(rename = "resultSlot", skip_serializing_if = "Option::is_none")]
+        result_slot: Option<usize>,
+        #[serde(rename = "errorSlot", skip_serializing_if = "Option::is_none")]
+        error_slot: Option<usize>,
     },
     Jump {
         target: usize,

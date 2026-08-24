@@ -38,12 +38,13 @@ pub fn lower_routes(modules: &[ParsedModule], graph: &SemanticGraph) -> Result<H
                 let parent = if factory == "createRootRoute" { None } else { parent_option(options.props.as_slice(), module, graph)? };
                 let path = string_option(options.props.as_slice(), "path")?.unwrap_or_default();
                 let pending_component = optional_component_option(options.props.as_slice(), "pendingComponent", module, graph)?;
+                let pending_mode = pending_mode_option(options.props.as_slice())?;
                 let error_component = optional_component_option(options.props.as_slice(), "errorComponent", module, graph)?;
                 let loader = optional_ident_option(options.props.as_slice(), "loader")?;
                 let outlet_id = string_option(options.props.as_slice(), "outletId")?.unwrap_or_else(|| "main".into());
                 let id = format!("{}#{}", module.id, name.id.sym);
                 route_locals.insert((module.id.clone(), name.id.sym.to_string()), id.clone());
-                routes.push(HirRoute { id, parent, path, component, pending_component, error_component, loader, outlet_id });
+                routes.push(HirRoute { id, parent, path, component, pending_component, pending_mode, error_component, loader, outlet_id });
             }
         }
     }
@@ -67,7 +68,7 @@ pub fn lower_route_manifest(routes: &HirRouteApplication) -> RouteManifest {
         root_graph_id: graph_id(&routes.root),
         routes: routes.routes.iter().map(|route| RouteManifestEntry {
             id: route.id.clone(), parent_id: route.parent.clone(), path: route.path.clone(), graph_id: graph_id(&route.component),
-            pending_graph_id: route.pending_component.as_ref().map(graph_id), error_graph_id: route.error_component.as_ref().map(graph_id),
+            pending_graph_id: route.pending_component.as_ref().map(graph_id), pending_mode: route.pending_mode.clone(), error_graph_id: route.error_component.as_ref().map(graph_id),
             // Loader action zero is reserved by route-graph lowering; callers
             // cannot supply this runtime handle.
             loader_action: route.loader.as_ref().map(|_| 0), outlet_id: route.outlet_id.clone(),
@@ -97,6 +98,13 @@ fn string_option(props: &[PropOrSpread], name: &str) -> Result<Option<String>, R
     }
     Ok(None)
 }
+fn pending_mode_option(props: &[PropOrSpread]) -> Result<String, RouteError> {
+    match string_option(props, "pendingMode")?.as_deref() {
+        None | Some("replace") => Ok("replace".into()),
+        Some("retain") => Ok("retain".into()),
+        Some(_) => Err(RouteError("route pendingMode must be 'replace' or 'retain'".into())),
+    }
+}
 fn optional_ident_option(props: &[PropOrSpread], name: &str) -> Result<Option<String>, RouteError> { match prop(props, name) { None => Ok(None), Some(Expr::Ident(value)) => Ok(Some(value.sym.to_string())), Some(Expr::Arrow(_)) | Some(Expr::Fn(_)) => Ok(Some(name.into())), Some(_) => Err(RouteError(format!("route {name} must be a local function"))) } }
 fn component_option(props: &[PropOrSpread], name: &str, module: &ParsedModule, graph: &SemanticGraph) -> Result<ComponentId, RouteError> { optional_component_option(props, name, module, graph)?.ok_or_else(|| RouteError(format!("route {name} is required"))) }
 fn optional_component_option(props: &[PropOrSpread], name: &str, module: &ParsedModule, graph: &SemanticGraph) -> Result<Option<ComponentId>, RouteError> { match prop(props, name) { None => Ok(None), Some(Expr::Ident(value)) => resolve_local_symbol(graph, &module.id, value.sym.as_ref()).map(|symbol| Some(ComponentId::new(symbol.module_id, symbol.local_name))).ok_or_else(|| RouteError(format!("route {name} must reference a resolvable component"))), Some(_) => Err(RouteError(format!("route {name} must be a component symbol"))) } }
@@ -116,7 +124,7 @@ mod tests {
             function Pending() { return <p />; }
             function Failure() { return <p />; }
             export const Root = createRootRoute({ component: Layout });
-            export const HomeRoute = createRoute({ getParentRoute: () => Root, path: '', component: Home, loader: async () => await fetch('/data'), pendingComponent: Pending, errorComponent: Failure });
+            export const HomeRoute = createRoute({ getParentRoute: () => Root, path: '', component: Home, loader: async () => await fetch('/data'), pendingComponent: Pending, pendingMode: 'retain', errorComponent: Failure });
             export const router = createRouter({ routeTree: Root.addChildren([HomeRoute]) });
         "#).unwrap()];
         let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
@@ -128,6 +136,7 @@ mod tests {
         assert_eq!(manifest.routes[1].parent_id.as_deref(), Some("routes.tsx#Root"));
         assert_eq!(manifest.routes[1].loader_action, Some(0));
         assert_eq!(manifest.routes[1].pending_graph_id.as_deref(), Some("routes.tsx#Pending"));
+        assert_eq!(manifest.routes[1].pending_mode, "retain");
     }
 
     #[test]
@@ -141,5 +150,16 @@ mod tests {
         "#).unwrap()];
         let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
         assert!(lower_routes(&modules, &graph).unwrap_err().to_string().contains("path must be a string literal"));
+    }
+
+    #[test]
+    fn rejects_unknown_pending_modes() {
+        let modules = vec![parse_module("routes.tsx", r#"
+            function Layout() { return <main />; }
+            export const Root = createRootRoute({ component: Layout, pendingMode: 'later' });
+            export const router = createRouter({ routeTree: Root });
+        "#).unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        assert!(lower_routes(&modules, &graph).unwrap_err().to_string().contains("pendingMode"));
     }
 }

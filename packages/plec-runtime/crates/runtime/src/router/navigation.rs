@@ -269,6 +269,7 @@ impl PlecRuntime {
         self.typed.borrow_mut().get_mut(&id).unwrap().route_state = Some(TypedRouteState {
             normal_graph_id: route.graph_id.clone(),
             pending_graph_id: route.pending_graph_id.clone(),
+            pending_mode: route.pending_mode.clone(),
             error_graph_id: route.error_graph_id.clone(),
             loader_action: route.loader_action,
             params: params.clone(),
@@ -467,7 +468,12 @@ impl PlecRuntime {
                         location.hash.clone(),
                     );
                     state.phase = TypedRoutePhase::Loading;
-                    (pending, state.pending_graph_id.clone())
+                    (
+                        pending,
+                        (state.pending_mode != "retain")
+                            .then(|| state.pending_graph_id.clone())
+                            .flatten(),
+                    )
                 };
             if let Some(graph_id) = pending_graph.1 {
                 self.show_typed_route_graph(id, &graph_id, true, None)?;
@@ -862,6 +868,7 @@ mod tests {
             path: path.into(),
             graph_id: id.into(),
             pending_graph_id: None,
+            pending_mode: "replace".into(),
             error_graph_id: None,
             outlet_id: "main".into(),
             loader: None,

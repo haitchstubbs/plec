@@ -161,6 +161,7 @@ impl TypedGraphInstance {
 pub(crate) struct TypedRouteState {
     pub(crate) normal_graph_id: String,
     pub(crate) pending_graph_id: Option<String>,
+    pub(crate) pending_mode: String,
     pub(crate) error_graph_id: Option<String>,
     pub(crate) loader_action: Option<usize>,
     pub(crate) params: HashMap<String, String>,
