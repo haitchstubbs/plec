@@ -88,6 +88,17 @@ const compiledRoutes = await compileRouteEntry(
   },
 );
 
+const rustRouteManifest = JSON.parse(
+  execFileSync(
+    'cargo',
+    [
+      'run', '-q', '-p', 'plec-compiler', '--bin', 'plec-route-manifest', '--',
+      path.join(appDir, 'src/router.tsx'), appDir, repoRoot,
+    ],
+    { cwd: repoRoot, encoding: 'utf8' },
+  ),
+);
+
 const graphs = [
   compiledRoutes.rootGraph,
   ...compiledRoutes.routes.flatMap((route) =>
@@ -104,20 +115,37 @@ await Promise.all(
   ),
 );
 
+const compiledRouteByGraphId = new Map(
+  compiledRoutes.routes.map((route) => [route.id, route]),
+);
+const rootRoute = rustRouteManifest.routes.find((route) => !route.parentId);
+const rootGraph = rootRoute && compiledRoutes.rootGraph;
+if (!rootRoute || !rootGraph)
+  throw new Error('Rust route manifest has no root route.');
 const routeManifest = {
   version: 3,
-  revision: compiledRoutes.revision,
-  rootGraphId: compiledRoutes.rootGraph.graphId,
-  routes: compiledRoutes.routes.map((route) => ({
-    id: route.id,
-    parentId: route.parentId,
-    path: route.path,
-    graphId: route.graph.graphId,
-    pendingGraphId: route.pendingGraph?.graphId,
-    errorGraphId: route.errorGraph?.graphId,
-    loaderAction: route.loaderAction,
-    outletId: route.outletId,
-  })),
+  revision: rustRouteManifest.revision,
+  rootGraphId: rootGraph.graphId,
+  routes: rustRouteManifest.routes
+    .filter((route) => route.id !== rootRoute.id)
+    .map((route) => {
+      const compiled = compiledRouteByGraphId.get(route.graphId);
+      if (!compiled)
+        throw new Error(`TypeScript graph artifact missing for Rust route ${route.id}.`);
+      return {
+        id: route.id,
+        ...(route.parentId && route.parentId !== rootRoute.id
+          ? { parentId: route.parentId }
+          : {}),
+        path: route.path,
+        graphId: compiled.graph.graphId,
+        pendingGraphId: compiled.pendingGraph?.graphId,
+        pendingMode: route.pendingMode,
+        errorGraphId: compiled.errorGraph?.graphId,
+        loaderAction: compiled.loaderAction,
+        outletId: route.outletId,
+      };
+    }),
 };
 
 await writeFile(

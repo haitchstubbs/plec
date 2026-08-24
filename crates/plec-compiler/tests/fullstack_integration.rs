@@ -20,7 +20,6 @@ fn repository_root() -> PathBuf {
 }
 
 #[test]
-#[ignore = "integration fixture: reads apps/fullstack"]
 fn resolves_fullstack_imported_component_calls_to_canonical_targets() {
     let repo_root = repository_root();
     let app_root = repo_root.join("apps/fullstack");
@@ -66,7 +65,6 @@ fn resolves_fullstack_imported_component_calls_to_canonical_targets() {
 }
 
 #[test]
-#[ignore = "integration fixture: reads apps/fullstack"]
 fn lowers_fullstack_route_tree_to_a_rust_manifest() {
     let repo_root = repository_root();
     let app_root = repo_root.join("apps/fullstack");
