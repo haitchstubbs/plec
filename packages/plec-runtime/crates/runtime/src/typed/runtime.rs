@@ -1458,6 +1458,26 @@ impl TypedRuntime {
             .enumerate()
             .filter_map(|(index, entry)| (entry.input == Some(input_index)).then_some(index))
             .collect::<Vec<_>>();
+        if let Some(loop_index) = targets.first().copied() {
+            let loop_def = self.app.loops[loop_index].clone();
+            let mut collection = TypedCollection::default();
+            for (index, value) in values.iter().cloned().enumerate() {
+                let row = runtime_from_json(value)?
+                    .record()
+                    .cloned()
+                    .ok_or_else(|| JsValue::from_str("LOOP_ROW_NOT_OBJECT"))?;
+                let key = typed_value_string(&typed_eval(
+                    &self.app,
+                    loop_def.key_expression,
+                    &self.states,
+                    Some(&row),
+                    index,
+                )?);
+                collection.order.push(key.clone());
+                collection.rows.insert(key, row);
+            }
+            self.collections.insert(input_index, collection);
+        }
         for loop_index in targets {
             let loop_def = self.app.loops[loop_index].clone();
             let parent = self.parent_for_loop(loop_index)?;

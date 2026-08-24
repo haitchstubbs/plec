@@ -7,6 +7,7 @@ members = [
   "crates/plec-sema",
   "crates/plec-hir",
   "crates/plec-ir",
+  "crates/plec-lowering",
 ]
 
 [workspace.package]

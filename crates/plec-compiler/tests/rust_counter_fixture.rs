@@ -118,6 +118,25 @@ const ROUTE_ASYNC_SOURCE: &str = r#"
     }
 "#;
 
+const GENERAL_ASYNC_ACTION_SOURCE: &str = r#"
+    export function Todos() {
+        const todos = useCollection("items");
+        const [error, setError] = useState("");
+        const [done, setDone] = useState(false);
+        async function refresh() {
+            try {
+                const todo = await fetch("/todo");
+                todos.keyedReplace("one", todo);
+            } catch (reason) {
+                setError(reason.message);
+            } finally {
+                setDone(true);
+            }
+        }
+        return <main><button onClick={refresh}>Refresh</button><p>{error}</p><p>{done}</p><ul>{todos.map(todo => <li key={todo.id}>{todo.title}</li>)}</ul></main>;
+    }
+"#;
+
 #[test]
 fn rust_counter_artifact_matches_runtime_fixture() {
     assert_fixture(
@@ -362,23 +381,49 @@ fn rust_route_async_artifact_matches_runtime_fixture() {
     let hir = lower_root_component(&root, &graph).expect("route page should lower to HIR");
     let executable = lower_route_loader_to_executable(&hir, "loader", "result", "main")
         .expect("route loader should lower to executable IR");
-    let loader = executable.actions.first().expect("loader action should be first");
+    let loader = executable
+        .actions
+        .first()
+        .expect("loader action should be first");
     assert!(loader.route_loader);
     assert_eq!(loader.loader_result_state, Some(0));
     assert_eq!(loader.frame_slots, 2);
-    assert!(matches!(loader.instructions.first(), Some(plec_ir::ActionInstruction::CapabilityRequest {
-        request: plec_ir::CapabilityRequest::Fetch { method: "GET", decode: "text", require_ok: true, .. },
-        success_pc: 1, failure_pc: 1, result_slot: 0, error_slot: 1,
-    })));
+    assert!(matches!(
+        loader.instructions.first(),
+        Some(plec_ir::ActionInstruction::CapabilityRequest {
+            request: plec_ir::CapabilityRequest::Fetch {
+                method: "GET",
+                decode: "text",
+                require_ok: true,
+                ..
+            },
+            success_pc: 1,
+            failure_pc: 2,
+            result_slot: 0,
+            error_slot: 1,
+            ..
+        })
+    ));
     assert_eq!(executable.route_outlets[0].id, "main");
     assert_eq!(executable.route_outlets[0].node, executable.root_node);
     let fixture = fs::read_to_string(format!(
         "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-route-async-0.9.json",
         env!("CARGO_MANIFEST_DIR")
-    )).expect("runtime fixture should exist");
+    ))
+    .expect("runtime fixture should exist");
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
         serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+    );
+}
+
+#[test]
+fn rust_general_async_actions_artifact_matches_runtime_fixture() {
+    assert_fixture(
+        "rust-general-async-actions.tsx",
+        "Todos",
+        GENERAL_ASYNC_ACTION_SOURCE,
+        "rust-general-async-actions-0.9.json",
     );
 }
 

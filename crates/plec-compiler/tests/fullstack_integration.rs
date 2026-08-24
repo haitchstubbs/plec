@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use plec_compiler::{
-    discover_root_component, lower_route_manifest, lower_routes, lower_root_component,
+    discover_root_component, lower_root_component, lower_route_manifest, lower_routes,
     read_source_graph,
 };
 use plec_hir::{ComponentId, HirNode};
@@ -72,15 +72,20 @@ fn lowers_fullstack_route_tree_to_a_rust_manifest() {
     let app_root = repo_root.join("apps/fullstack");
     let source_graph = read_source_graph(app_root.join("src/router.tsx"), &app_root, &repo_root)
         .expect("apps/fullstack router source graph should load");
-    let semantic_graph = build_semantic_graph(&source_graph.modules, &source_graph.resolved_imports)
-        .expect("router source graph should resolve imports");
+    let semantic_graph =
+        build_semantic_graph(&source_graph.modules, &source_graph.resolved_imports)
+            .expect("router source graph should resolve imports");
     let manifest = lower_route_manifest(
         &lower_routes(&source_graph.modules, &semantic_graph)
             .expect("static fullstack route declarations should lower"),
     );
     assert_eq!(manifest.version, 3);
     assert_eq!(manifest.routes.len(), 5);
-    let todos = manifest.routes.iter().find(|route| route.path == "todos").unwrap();
+    let todos = manifest
+        .routes
+        .iter()
+        .find(|route| route.path == "todos")
+        .unwrap();
     assert_eq!(todos.loader_action, Some(0));
     assert!(todos.pending_graph_id.is_some());
     assert!(todos.error_graph_id.is_some());

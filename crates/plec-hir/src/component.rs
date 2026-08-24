@@ -17,6 +17,8 @@ pub enum HirBindingKind {
     StateSetter { state: BindingId },
     Callable,
     LoopItem,
+    /// A value or error written by an async continuation frame.
+    AsyncValue,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,7 +76,22 @@ pub enum HirStmt {
     /// A deliberately narrow async boundary. Route loaders currently support
     /// only a terminal `return await fetch(url)` capability request.
     AwaitFetch {
+        target: Option<BindingId>,
         url: ExprId,
+        method: String,
+        decode: String,
+        span: SourceSpan,
+    },
+    AwaitCall {
+        target: Option<BindingId>,
+        callee: BindingId,
+        arguments: Vec<ExprId>,
+        span: SourceSpan,
+    },
+    Try {
+        body: Vec<HirStmt>,
+        catch: Option<(BindingId, Vec<HirStmt>)>,
+        finally: Vec<HirStmt>,
         span: SourceSpan,
     },
     Expression {

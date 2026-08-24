@@ -566,6 +566,7 @@ version = "0.1.0"
 dependencies = [
  "plec-hir",
  "plec-ir",
+ "plec-lowering",
  "plec-parser",
  "plec-sema",
  "serde_json",
@@ -585,6 +586,14 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "plec-lowering"
+version = "0.1.0"
+dependencies = [
+ "plec-hir",
+ "plec-ir",
 ]
 
 [[package]]

@@ -303,6 +303,8 @@ pub enum ActionInstruction {
         success_pc: usize,
         #[serde(rename = "failurePc")]
         failure_pc: usize,
+        #[serde(rename = "finallyPc", skip_serializing_if = "Option::is_none")]
+        finally_pc: Option<usize>,
         #[serde(rename = "resultSlot")]
         result_slot: usize,
         #[serde(rename = "errorSlot")]
@@ -327,7 +329,24 @@ pub enum ActionInstruction {
     JumpIfFalse {
         target: usize,
     },
-    Return,
+    Return {
+        #[serde(skip_serializing_if = "is_success", default)]
+        outcome: ReturnOutcome,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        value: Option<usize>,
+    },
+}
+
+fn is_success(value: &ReturnOutcome) -> bool {
+    matches!(value, ReturnOutcome::Success)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReturnOutcome { Success, Failure }
+
+impl Default for ReturnOutcome {
+    fn default() -> Self { Self::Success }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
