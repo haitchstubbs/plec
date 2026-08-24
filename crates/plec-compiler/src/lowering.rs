@@ -913,7 +913,7 @@ impl<'a> Ctx<'a> {
         code.push(ActionInstruction::Return);
         let return_pc = code.len() - 1;
         let mut frame_slots = parameters.len();
-        for instruction in &mut code {
+        for (pc, instruction) in code.iter_mut().enumerate() {
             if let ActionInstruction::CapabilityRequest {
                 success_pc,
                 failure_pc,
@@ -927,6 +927,23 @@ impl<'a> Ctx<'a> {
                 *result_slot = frame_slots;
                 *error_slot = frame_slots + 1;
                 frame_slots += 2;
+            }
+            if let ActionInstruction::Call {
+                action,
+                success_pc,
+                failure_pc,
+                result_slot,
+                error_slot,
+                ..
+            } = instruction
+            {
+                if self.action_may_suspend(*action) {
+                    *success_pc = Some(pc + 1);
+                    *failure_pc = Some(return_pc);
+                    *result_slot = Some(frame_slots);
+                    *error_slot = Some(frame_slots + 1);
+                    frame_slots += 2;
+                }
             }
         }
         let index = self.app.actions.len();
@@ -1055,7 +1072,29 @@ impl<'a> Ctx<'a> {
                     .map(|(expression, _)| expression)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Some(ActionInstruction::Call { action, arguments }))
+        Ok(Some(ActionInstruction::Call {
+            action,
+            arguments,
+            success_pc: None,
+            failure_pc: None,
+            result_slot: None,
+            error_slot: None,
+        }))
+    }
+
+    fn action_may_suspend(&self, action: usize) -> bool {
+        let Some((binding, _)) = self
+            .callables
+            .iter()
+            .find(|(_, candidate)| **candidate == action)
+        else {
+            return false;
+        };
+        self.component
+            .callables
+            .iter()
+            .find(|callable| callable.binding == *binding)
+            .is_some_and(|callable| callable_body_may_suspend(&callable.body))
     }
 
     fn collection_mutation_call(
@@ -1130,6 +1169,25 @@ impl<'a> Ctx<'a> {
     }
 }
 
+fn callable_body_may_suspend(body: &HirCallableBody) -> bool {
+    match body {
+        HirCallableBody::Expression(_) => false,
+        HirCallableBody::Block(statements) => statements.iter().any(statement_may_suspend),
+    }
+}
+
+fn statement_may_suspend(statement: &HirStmt) -> bool {
+    match statement {
+        HirStmt::AwaitFetch { .. } => true,
+        HirStmt::If {
+            consequent,
+            alternate,
+            ..
+        } => consequent.iter().any(statement_may_suspend) || alternate.iter().any(statement_may_suspend),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1195,6 +1253,31 @@ mod tests {
             app.actions[1].instructions[0],
             ActionInstruction::Call { action: 0, .. }
         ));
+    }
+
+    #[test]
+    fn lowers_calls_to_fetch_actions_as_resumable_frames() {
+        let app = lower(
+            r#"
+            export function App() {
+                async function load() { return await fetch('/status'); }
+                function refresh() { load(); }
+                return <button onClick={refresh}>Refresh</button>;
+            }
+        "#,
+        );
+        assert!(matches!(
+            app.actions[1].instructions[0],
+            ActionInstruction::Call {
+                action: 0,
+                success_pc: Some(1),
+                failure_pc: Some(1),
+                result_slot: Some(0),
+                error_slot: Some(1),
+                ..
+            }
+        ));
+        assert_eq!(app.actions[1].frame_slots, 2);
     }
 
     #[test]

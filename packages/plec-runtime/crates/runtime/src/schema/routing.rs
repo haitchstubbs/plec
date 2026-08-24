@@ -21,6 +21,8 @@ pub struct RouteManifestEntry {
     pub graph_id: String,
     #[serde(default)]
     pub pending_graph_id: Option<String>,
+    #[serde(default = "default_pending_mode")]
+    pub pending_mode: String,
     #[serde(default)]
     pub error_graph_id: Option<String>,
     pub outlet_id: String,
@@ -30,6 +32,10 @@ pub struct RouteManifestEntry {
     pub loader_state_slot_id: Option<String>,
     #[serde(default)]
     pub loader_action: Option<usize>,
+}
+
+fn default_pending_mode() -> String {
+    "replace".into()
 }
 
 #[derive(Clone)]

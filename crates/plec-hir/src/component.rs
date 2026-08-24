@@ -135,6 +135,7 @@ pub struct HirRoute {
     pub path: String,
     pub component: ComponentId,
     pub pending_component: Option<ComponentId>,
+    pub pending_mode: String,
     pub error_component: Option<ComponentId>,
     pub loader: Option<String>,
     pub outlet_id: String,
