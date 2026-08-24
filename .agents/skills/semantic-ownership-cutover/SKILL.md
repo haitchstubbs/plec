@@ -50,10 +50,19 @@ Do not expand scope merely because adjacent syntax is easy to support.
 
 ## Measurable cutover progress
 
-`cutover-contracts.json` is the fixed cutover denominator. Each weighted contract
-requires source, HIR, IR, runtime, and browser proof. Its probes must verify a
-Rust-produced artifact; representation, snapshots, TypeScript-produced JSON, and
-agent judgement never earn partial ownership credit.
+`cutover-contracts.json` is the versioned, fixed cutover denominator for the
+declared deprecation scope. Each weighted contract declares its current semantic
+`owner`: `rust` or `typescript`. A TypeScript-owned contract is always a visible
+`GAP`, even when nearby Rust probes pass. It may move to `rust` only after source,
+HIR, IR, runtime, and browser probes verify a Rust-produced artifact; representation,
+snapshots, TypeScript-produced JSON, and agent judgement never earn partial ownership credit.
+
+The score is an ownership score, not a feature-presence score. `100%` means only
+that every contract in the manifest is Rust-owned. It means the legacy compiler
+can be deprecated only when the manifest's deprecation scope has no
+TypeScript-owned contracts and the legacy evidence for each former gap has been
+removed or made unreachable. Expand or reweight that scope only through a
+`corrections` entry with repository evidence.
 
 Run from repository root:
 
@@ -64,9 +73,10 @@ node .agents/skills/semantic-ownership-cutover/cutover-progress.mjs --targets ro
 
 The report is authoritative for Rust-owned percentage, cutover remaining,
 failed/blocked contracts, and the maximum points a target slice can retire.
-The denominator is frozen. Add, remove, or reweight a contract only with a
-`corrections` entry containing repository evidence; never redefine scope to
-improve the score.
+The current denominator is frozen. Add, remove, or reweight a contract only with
+a `corrections` entry containing repository evidence; never redefine scope to
+improve the score. When the user asks whether TypeScript can be deprecated,
+include every known TypeScript-authoritative semantic boundary in this scope.
 
 ## Endgame mode
 
@@ -409,10 +419,11 @@ A useful heuristic:
    Temporary architecture cost
    Would cutting it smaller require throwaway schema, compatibility logic, duplicated lowering, or knowingly incomplete semantics?
    Prefer high coherence, leverage, and provability over minimum line count.
-   Run `cutover-progress.mjs` before selection. Name manifest target IDs,
-   current remaining percentage, planned percentage-point delta, and projected
-   remaining percentage. In endgame mode choose one capstone; mention an
-   alternative only when it is a concrete blocker.
+Run `cutover-progress.mjs` before selection. Name manifest target IDs, current
+remaining percentage, planned percentage-point delta, and projected remaining
+percentage. Treat `GAP` as an unowned candidate, not as a probe regression.
+In endgame mode choose one capstone; mention an alternative only when it is a
+concrete blocker.
 9. Trace the selected contract end to end
    For the preferred candidate, trace every required semantic invariant through:
 
@@ -452,8 +463,9 @@ Remove or replace superseded facts.
 Invoke caveman to compress the result.
 Ensure the next agent can understand the new frontier without repeating this discovery pass.
 Run target probes and `cutover-progress.mjs` again. A cutover is incomplete
-until score changes through passing probes and persistent knowledge records only
-durable baseline/result, not raw logs.
+until its contract owner changes from `typescript` to `rust` through passing
+probes, its legacy evidence is no longer authoritative, and persistent knowledge
+records only durable baseline/result, not raw logs.
 Architectural guardrails
 HIR must remain semantic rather than a mirror of runtime IR.
 Do not make HIR depend on executable IR details solely to ease lowering.
@@ -515,7 +527,8 @@ State the durable facts added, changed, or removed from `KNOWLEDGE.md`.
 Do not dump the file contents unless requested.
 Score report
 Include owned/total weight, remaining percentage, target IDs, planned delta,
-and each failed or blocked contract. Do not estimate these values.
+and each failed, blocked, or TypeScript-owned `GAP` contract. State whether the
+score is sufficient for legacy-compiler deprecation. Do not estimate these values.
 Completion condition
 Finish with:
 
