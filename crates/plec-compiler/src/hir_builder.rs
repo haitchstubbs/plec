@@ -2,11 +2,11 @@ use crate::component_discovery::{
     ComponentDeclaration, ReturnedComponentExpression, RootComponent,
 };
 use plec_hir::{
-    BindingId, ComponentId, ExprId, HirBinaryOp, HirBinding, HirBindingKind, HirCallable,
-    HirCallableBody, HirCallableDecl, HirComponent, HirComponentCall, HirConditional, HirElement,
-    HirEventBinding, HirExpr, HirExprNode, HirForEach, HirFragment, HirLocal, HirLogicalOp,
-    HirApplication, HirInput, HirNode, HirParameter, HirParameterSource, HirProp, HirState, HirStmt, HirTemplatePart,
-    HirSlot, HirText, HirUnaryOp, HirValue, NodeId, SourceSpan,
+    BindingId, ComponentId, ExprId, HirApplication, HirBinaryOp, HirBinding, HirBindingKind,
+    HirCallable, HirCallableBody, HirCallableDecl, HirComponent, HirComponentCall, HirConditional,
+    HirElement, HirEventBinding, HirExpr, HirExprNode, HirForEach, HirFragment, HirInput, HirLocal,
+    HirLogicalOp, HirNode, HirParameter, HirParameterSource, HirProp, HirSlot, HirState, HirStmt,
+    HirTemplatePart, HirText, HirUnaryOp, HirValue, NodeId, SourceSpan,
 };
 use plec_sema::{resolve_component, ComponentPropKind, SemanticGraph};
 use swc_common::{Span, Spanned};
@@ -291,22 +291,33 @@ pub fn lower_application(
     ) -> Result<(), String> {
         let id = ComponentId::new(&root.symbol.module_id, &root.symbol.local_name);
         if visiting.contains(&id) {
-            return Err(format!("Recursive component '{}' is unsupported", root.symbol.local_name));
+            return Err(format!(
+                "Recursive component '{}' is unsupported",
+                root.symbol.local_name
+            ));
         }
         if components.iter().any(|component| component.id == id) {
             return Ok(());
         }
         visiting.push(id.clone());
         let component = lower_root_component(root, semantic_graph)?;
-        let targets = component.nodes.iter().filter_map(|node| match node {
-            HirNode::Component(call) => Some(call.target.clone()),
-            _ => None,
-        }).collect::<Vec<_>>();
+        let targets = component
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                HirNode::Component(call) => Some(call.target.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         components.push(component);
         for target in targets {
             let child = crate::discover_root_component(
-                parsed_modules, semantic_graph, &target.module_id, Some(&target.local_name),
-            ).map_err(|error| error.to_string())?;
+                parsed_modules,
+                semantic_graph,
+                &target.module_id,
+                Some(&target.local_name),
+            )
+            .map_err(|error| error.to_string())?;
             visit(parsed_modules, &child, semantic_graph, visiting, components)?;
         }
         visiting.pop();
@@ -315,8 +326,17 @@ pub fn lower_application(
 
     let root_id = ComponentId::new(&root.symbol.module_id, &root.symbol.local_name);
     let mut components = Vec::new();
-    visit(parsed_modules, root, semantic_graph, &mut Vec::new(), &mut components)?;
-    Ok(HirApplication { root: root_id, components })
+    visit(
+        parsed_modules,
+        root,
+        semantic_graph,
+        &mut Vec::new(),
+        &mut components,
+    )?;
+    Ok(HirApplication {
+        root: root_id,
+        components,
+    })
 }
 
 fn lower_component_program(
@@ -493,8 +513,7 @@ fn lower_component_var(
             ctx,
         ),
         Pat::Ident(ident) => match init {
-            Expr::Call(call)
-                if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useCollection")) =>
+            Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useCollection")) =>
             {
                 if call.args.len() != 1 || call.args[0].spread.is_some() {
                     return Err("useCollection requires one static name".to_string());
@@ -505,7 +524,9 @@ fn lower_component_var(
                 let span = source_span_from_swc(ident.id.span, ctx.module_id);
                 let binding = ctx.declare_binding(
                     ident.id.sym.to_string(),
-                    HirBindingKind::Input { kind: "collection".to_string() },
+                    HirBindingKind::Input {
+                        kind: "collection".to_string(),
+                    },
                     span.clone(),
                 )?;
                 ctx.inputs.push(HirInput {
@@ -703,9 +724,97 @@ fn lower_callable_statements(
         .collect()
 }
 
+fn lower_awaited_call(
+    awaited: &swc_ecma_ast::AwaitExpr,
+    target: Option<BindingId>,
+    span: SourceSpan,
+    ctx: &mut HirLoweringCtx<'_>,
+) -> Result<HirStmt, String> {
+    let Expr::Call(call) = awaited.arg.as_ref() else {
+        return Err("await must call fetch or a local action".into());
+    };
+    let Callee::Expr(callee) = &call.callee else {
+        return Err("await must call fetch or a local action".into());
+    };
+    if matches!(callee.as_ref(), Expr::Ident(ident) if ident.sym == *"fetch") {
+        if call.args.is_empty()
+            || call.args.len() > 2
+            || call.args.iter().any(|arg| arg.spread.is_some())
+        {
+            return Err("fetch requires a URL and optional static method".into());
+        }
+        let method = match call.args.get(1).map(|arg| arg.expr.as_ref()) {
+            None => "GET".to_string(),
+            Some(Expr::Object(options)) => options.props.iter().find_map(|prop| match prop {
+                swc_ecma_ast::PropOrSpread::Prop(prop) => match prop.as_ref() {
+                    swc_ecma_ast::Prop::KeyValue(value)
+                        if matches!(&value.key, swc_ecma_ast::PropName::Ident(key) if key.sym == *"method") =>
+                    match value.value.as_ref() {
+                        Expr::Lit(Lit::Str(value)) => Some(value.value.to_string_lossy().into_owned()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            }).unwrap_or_else(|| "GET".to_string()),
+            _ => return Err("fetch options must be a static object".into()),
+        };
+        return Ok(HirStmt::AwaitFetch {
+            target,
+            url: lower_expression(&call.args[0].expr, ctx)?,
+            method,
+            // A returned route-loader value remains the existing text contract;
+            // bound async values are decoded before their continuation resumes.
+            decode: if target.is_some() { "json" } else { "text" }.to_string(),
+            span,
+        });
+    }
+    let Expr::Ident(callee) = callee.as_ref() else {
+        return Err("await must call fetch or a local action".into());
+    };
+    let callee = ctx.resolve_binding(&callee.sym)?;
+    if !ctx.is_callable_binding(callee) || call.args.iter().any(|arg| arg.spread.is_some()) {
+        return Err("awaited calls require a local action and non-spread arguments".into());
+    }
+    Ok(HirStmt::AwaitCall {
+        target,
+        callee,
+        arguments: call
+            .args
+            .iter()
+            .map(|arg| lower_expression(&arg.expr, ctx))
+            .collect::<Result<_, _>>()?,
+        span,
+    })
+}
+
+fn lower_async_variable(
+    var: &swc_ecma_ast::VarDecl,
+    ctx: &mut HirLoweringCtx<'_>,
+) -> Result<HirStmt, String> {
+    if var.decls.len() != 1 || var.kind == VarDeclKind::Var {
+        return Err("async result declarations require one let or const identifier".into());
+    }
+    let declaration = &var.decls[0];
+    let Pat::Ident(name) = &declaration.name else {
+        return Err("async result declarations require an identifier".into());
+    };
+    let Some(Expr::Await(awaited)) = declaration.init.as_deref() else {
+        return Err("callable declarations are unsupported".into());
+    };
+    let span = source_span_from_swc(var.span, ctx.module_id);
+    let target = ctx.declare_binding(
+        name.id.sym.to_string(),
+        HirBindingKind::AsyncValue,
+        source_span_from_swc(name.id.span, ctx.module_id),
+    )?;
+    lower_awaited_call(awaited, Some(target), span, ctx)
+}
+
 fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result<HirStmt, String> {
     let span = source_span_from_swc(stmt.span(), ctx.module_id);
     match stmt {
+        Stmt::Decl(Decl::Var(var)) => lower_async_variable(var, ctx),
         Stmt::Expr(expr_stmt) => {
             if let Expr::Call(call) = expr_stmt.expr.as_ref() {
                 if let Callee::Expr(callee) = &call.callee {
@@ -749,22 +858,7 @@ fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result
         }
         Stmt::Return(return_stmt) => {
             if let Some(Expr::Await(awaited)) = return_stmt.arg.as_deref() {
-                let Expr::Call(call) = awaited.arg.as_ref() else {
-                    return Err("awaited route capability must be a call".into());
-                };
-                let Callee::Expr(callee) = &call.callee else {
-                    return Err("awaited route capability must be fetch(url)".into());
-                };
-                let Expr::Ident(fetch) = callee.as_ref() else {
-                    return Err("awaited route capability must be fetch(url)".into());
-                };
-                if fetch.sym != *"fetch" || call.args.len() != 1 || call.args[0].spread.is_some() {
-                    return Err("awaited route capability must be fetch(url)".into());
-                }
-                return Ok(HirStmt::AwaitFetch {
-                    url: lower_expression(&call.args[0].expr, ctx)?,
-                    span,
-                });
+                return lower_awaited_call(awaited, None, span, ctx);
             }
             Ok(HirStmt::Return {
                 value: return_stmt
@@ -772,6 +866,41 @@ fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result
                     .as_deref()
                     .map(|expr| lower_expression(expr, ctx))
                     .transpose()?,
+                span,
+            })
+        }
+        Stmt::Try(try_stmt) => {
+            let body = lower_callable_statements(&try_stmt.block.stmts, ctx)?;
+            let catch = try_stmt
+                .handler
+                .as_ref()
+                .map(|handler| {
+                    ctx.push_scope();
+                    let binding = match handler.param.as_ref() {
+                        None => None,
+                        Some(Pat::Ident(ident)) => Some(ctx.declare_binding(
+                            ident.id.sym.to_string(),
+                            HirBindingKind::AsyncValue,
+                            source_span_from_swc(ident.id.span, ctx.module_id),
+                        )?),
+                        _ => return Err("catch parameters must be identifiers".to_string()),
+                    };
+                    let statements = lower_callable_statements(&handler.body.stmts, ctx)?;
+                    ctx.pop_scope();
+                    Ok(binding.map(|binding| (binding, statements)))
+                })
+                .transpose()?
+                .flatten();
+            let finally = try_stmt
+                .finalizer
+                .as_ref()
+                .map(|block| lower_callable_statements(&block.stmts, ctx))
+                .transpose()?
+                .unwrap_or_default();
+            Ok(HirStmt::Try {
+                body,
+                catch,
+                finally,
                 span,
             })
         }
@@ -1059,7 +1188,8 @@ fn lower_jsx_child(
                     let span = source_span_from_swc(container.span, ctx.module_id);
                     let expr_id = lower_expression(expr, ctx)?;
                     let node_id = ctx.alloc_node_id();
-                    if matches!(ctx.expressions[expr_id.0 as usize].expression, HirExpr::Binding(binding) if ctx.is_children_parameter(binding)) {
+                    if matches!(ctx.expressions[expr_id.0 as usize].expression, HirExpr::Binding(binding) if ctx.is_children_parameter(binding))
+                    {
                         ctx.nodes.push(HirNode::Slot(HirSlot { id: node_id, span }));
                         return Ok(Some(node_id));
                     }
@@ -2606,20 +2736,28 @@ mod tests {
 
     #[test]
     fn lowers_reachable_components_and_rejects_cycles() {
-        let modules = vec![parse_module("App.tsx", r#"
+        let modules = vec![parse_module(
+            "App.tsx",
+            r#"
             export function App() { return <Child />; }
             function Child() { return <div>child</div>; }
-        "#).unwrap()];
+        "#,
+        )
+        .unwrap()];
         let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
         let root = discover_root_component(&modules, &graph, "App.tsx", Some("App")).unwrap();
         let app = lower_application(&modules, &root, &graph).unwrap();
         assert_eq!(app.components.len(), 2);
         assert_eq!(app.root, ComponentId::new("App.tsx", "App"));
 
-        let modules = vec![parse_module("Cycle.tsx", r#"
+        let modules = vec![parse_module(
+            "Cycle.tsx",
+            r#"
             export function App() { return <Child />; }
             function Child() { return <App />; }
-        "#).unwrap()];
+        "#,
+        )
+        .unwrap()];
         let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
         let root = discover_root_component(&modules, &graph, "Cycle.tsx", Some("App")).unwrap();
         assert!(lower_application(&modules, &root, &graph)

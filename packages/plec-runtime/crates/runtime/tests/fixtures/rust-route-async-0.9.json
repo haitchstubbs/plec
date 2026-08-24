@@ -8,7 +8,7 @@
     {"op":"text","text":0,"parent":0}
   ],
   "texts": [{"binding":0}],
-  "bindings": [{"target":1,"sink":"text","expression":2}],
+  "bindings": [{"target":1,"sink":"text","expression":3}],
   "propPrograms": [],
   "events": [],
   "inputs": [],
@@ -16,6 +16,7 @@
   "expressions": [
     {"instructions":[{"op":"constant","constant":0},{"op":"return"}]},
     {"instructions":[{"op":"constant","constant":1},{"op":"return"}]},
+    {"instructions":[{"op":"loadFrame","slot":1},{"op":"return"}]},
     {"instructions":[{"op":"loadState","state":0},{"op":"return"}]}
   ],
   "actions": [{
@@ -23,8 +24,9 @@
     "loaderResultState":0,
     "routeLoader":true,
     "instructions":[
-      {"op":"capabilityRequest","capability":"fetch","request":{"url":1,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":1,"resultSlot":0,"errorSlot":1},
-      {"op":"return"}
+      {"op":"capabilityRequest","capability":"fetch","request":{"url":1,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":2,"resultSlot":0,"errorSlot":1},
+      {"op":"return"},
+      {"op":"return","outcome":"failure","value":2}
     ]
   }],
   "loops": [],

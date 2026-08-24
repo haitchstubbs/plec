@@ -1,0 +1,9 @@
+[package]
+name = "plec-lowering"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+plec-hir = { path = "../plec-hir" }
+plec-ir = { path = "../plec-ir" }
+

@@ -8,6 +8,7 @@ plec-parser = { path = "../plec-parser" }
 plec-sema = { path = "../plec-sema" }
 plec-hir = { path = "../plec-hir" }
 plec-ir = { path = "../plec-ir" }
+plec-lowering = { path = "../plec-lowering" }
 swc_common.workspace = true
 swc_ecma_ast.workspace = true
 swc_ecma_visit.workspace = true
