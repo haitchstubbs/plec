@@ -168,6 +168,14 @@ fn resolve_source_candidate(base: &Path) -> Option<PathBuf> {
     if base.extension().is_some() {
         candidates.push(base.to_path_buf());
 
+        // `./home.route` is an extensionless authored module name with a
+        // meaningful suffix, not a request for `./home.tsx`.
+        if base.extension().and_then(|extension| extension.to_str()) == Some("route") {
+            for extension in ["tsx", "ts", "jsx", "mjs", "js"] {
+                candidates.push(base.with_extension(format!("route.{extension}")));
+            }
+        }
+
         let without_extension = base.with_extension("");
         add_source_candidates(&mut candidates, &without_extension);
     } else {
@@ -317,6 +325,19 @@ mod tests {
                 .get(&("src/App.tsx".to_string(), "./components/Button".to_string(),)),
             Some(&"src/components/Button.tsx".to_string()),
         );
+    }
+
+    #[test]
+    fn preserves_route_file_suffix_when_resolving_imports() {
+        let temp = tempdir().expect("temporary directory should be created");
+        let root = temp.path();
+        let entry = root.join("src/router.tsx");
+        write_file(&entry, "import './home.route';");
+        write_file(&root.join("src/home.tsx"), "export const page = 1;");
+        write_file(&root.join("src/home.route.tsx"), "export const Route = 1;");
+
+        let graph = read_source_graph(&entry, root, root).expect("route import should resolve");
+        assert_eq!(graph.modules[1].id, "src/home.route.tsx");
     }
 
     #[test]

@@ -17,7 +17,7 @@ pub use node::{
 };
 
 // Component
-pub use component::{HirApplication, HirComponent};
+pub use component::{HirApplication, HirComponent, HirRoute, HirRouteApplication};
 pub use component::{
     HirBinding, HirBindingKind, HirCallableBody, HirCallableDecl, HirInput, HirLocal, HirParameter,
     HirParameterSource, HirState, HirStmt,
