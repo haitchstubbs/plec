@@ -49,10 +49,17 @@ pub(crate) struct TypedComponentRequest {
     pub(crate) props: HashMap<String, RuntimeValue>,
     pub(crate) callbacks: HashMap<String, TypedCallbackSpec>,
     pub(crate) children: Vec<usize>,
+    pub(crate) row_context: Option<TypedRowContext>,
     pub(crate) parent: Node,
     pub(crate) start: Node,
     pub(crate) end: Node,
     pub(crate) key: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct TypedRowContext {
+    pub(crate) loop_index: usize,
+    pub(crate) row_key: String,
 }
 
 pub(crate) struct TypedSlotRequest {
@@ -403,14 +410,21 @@ impl PlecRuntime {
                 if !request.children.is_empty() && !runtime.slot_requests.is_empty() {
                     let slot = runtime.slot_requests.pop().expect("slot exists");
                     if !runtime.slot_requests.is_empty() {
-                        return Err(JsValue::from_str("component declares multiple children slots"));
+                        return Err(JsValue::from_str(
+                            "component declares multiple children slots",
+                        ));
                     }
                     let mut typed = self.typed.borrow_mut();
                     typed
                         .get_mut(&parent_id)
                         .ok_or_else(|| JsValue::from_str("component parent missing"))?
                         .runtime
-                        .mount_slot_children(&request.children, &slot.start, &slot.end)?;
+                        .mount_slot_children(
+                            &request.children,
+                            &slot.start,
+                            &slot.end,
+                            request.row_context.as_ref(),
+                        )?;
                 }
                 let id = format!("{parent_id}/component:{}:{}", request.call, request.key);
                 self.typed.borrow_mut().insert(
@@ -688,6 +702,7 @@ impl TypedRuntime {
             None,
             None,
             0,
+            None,
             &mut HashMap::new(),
             &mut HashMap::new(),
         )?;
@@ -719,6 +734,7 @@ impl TypedRuntime {
             None,
             None,
             0,
+            None,
             &mut HashMap::new(),
             &mut HashMap::new(),
         )?;
@@ -735,25 +751,83 @@ impl TypedRuntime {
         children: &[usize],
         start: &Node,
         end: &Node,
+        row_context: Option<&TypedRowContext>,
     ) -> Result<(), JsValue> {
         let parent = end
             .parent_node()
             .ok_or_else(|| JsValue::from_str("slot parent missing"))?;
         let fragment: Node = document()?.create_document_fragment().into();
+        let (row, row_index) = match row_context {
+            Some(context) => {
+                let rows = self
+                    .loops
+                    .get(&context.loop_index)
+                    .ok_or_else(|| JsValue::from_str("slot row missing"))?;
+                let row = rows
+                    .rows
+                    .get(&context.row_key)
+                    .ok_or_else(|| JsValue::from_str("slot row missing"))?;
+                let row_index = rows
+                    .order
+                    .iter()
+                    .position(|key| key == &context.row_key)
+                    .unwrap_or(0);
+                (Some(row.values.clone()), row_index)
+            }
+            None => (None, 0),
+        };
+        let mut local = HashMap::new();
+        let mut regions = HashMap::new();
         for child in children {
             self.instantiate_node(
                 &document()?,
                 *child,
                 Some(&fragment),
-                None,
-                0,
-                &mut HashMap::new(),
-                &mut HashMap::new(),
+                row.as_ref(),
+                row_index,
+                row_context,
+                &mut local,
+                &mut regions,
             )?;
         }
         parent.insert_before(&fragment, Some(end))?;
-        self.apply_static_bindings()?;
-        self.queue_static_listeners();
+        if let Some(context) = row_context {
+            self.apply_bindings_to_nodes(&local, row.as_ref(), &mut UpdateMetrics::default())?;
+            let generation = self
+                .loops
+                .get(&context.loop_index)
+                .and_then(|rows| rows.rows.get(&context.row_key))
+                .map(|row| row.generation)
+                .ok_or_else(|| JsValue::from_str("slot row missing"))?;
+            let owner = TypedListenerOwner::Row {
+                loop_index: context.loop_index,
+                row_key: context.row_key.clone(),
+                generation,
+            };
+            for (target, node) in &local {
+                self.queue_listener(*target, node.clone(), owner.clone());
+            }
+            for (conditional, region) in &regions {
+                let conditional_owner = TypedListenerOwner::Conditional {
+                    conditional: *conditional,
+                    generation: region.generation,
+                    row: Some(Box::new(owner.clone())),
+                };
+                for (target, node) in &region.nodes {
+                    self.queue_listener(*target, node.clone(), conditional_owner.clone());
+                }
+            }
+            let row = self
+                .loops
+                .get_mut(&context.loop_index)
+                .and_then(|rows| rows.rows.get_mut(&context.row_key))
+                .ok_or_else(|| JsValue::from_str("slot row missing"))?;
+            row.nodes.extend(local);
+            row.conditionals.extend(regions);
+        } else {
+            self.apply_static_bindings()?;
+            self.queue_static_listeners();
+        }
         let _ = start;
         Ok(())
     }
@@ -887,6 +961,7 @@ impl TypedRuntime {
         parent: Option<&Node>,
         row: Option<&HashMap<String, RuntimeValue>>,
         row_index: usize,
+        row_context: Option<&TypedRowContext>,
         local: &mut HashMap<usize, Node>,
         row_regions: &mut HashMap<usize, TypedConditionalRegion>,
     ) -> Result<Node, JsValue> {
@@ -924,6 +999,7 @@ impl TypedRuntime {
                         Some(&node),
                         row,
                         row_index,
+                        row_context,
                         local,
                         row_regions,
                     )?;
@@ -965,7 +1041,10 @@ impl TypedRuntime {
                 Ok(marker)
             }
             TypedNode::Component {
-                component, props, children, ..
+                component,
+                props,
+                children,
+                ..
             } => {
                 let parent = parent.ok_or_else(|| JsValue::from_str("component parent missing"))?;
                 let start: Node = doc
@@ -1011,6 +1090,7 @@ impl TypedRuntime {
                     props: values,
                     callbacks,
                     children,
+                    row_context: row_context.cloned(),
                     parent: parent.clone(),
                     start: start.clone(),
                     end,
@@ -1080,6 +1160,7 @@ impl TypedRuntime {
                             Some(parent),
                             row,
                             row_index,
+                            row_context,
                             local,
                             row_regions,
                         )?;
@@ -1191,6 +1272,7 @@ impl TypedRuntime {
                 Some(&parent),
                 None,
                 0,
+                None,
                 &mut HashMap::new(),
                 &mut HashMap::new(),
             )?;
@@ -1226,6 +1308,11 @@ impl TypedRuntime {
                     self.collect_branch_nodes(*child, output);
                 }
             }
+            Some(TypedNode::Component { children, .. }) => {
+                for child in children {
+                    self.collect_branch_nodes(*child, output);
+                }
+            }
             Some(TypedNode::Conditional {
                 consequent,
                 alternate,
@@ -1251,6 +1338,11 @@ impl TypedRuntime {
         }
         match self.app.nodes.get(index) {
             Some(TypedNode::Element { children, .. }) => {
+                for child in children {
+                    self.collect_instantiated_branch_nodes(*child, local, output);
+                }
+            }
+            Some(TypedNode::Component { children, .. }) => {
                 for child in children {
                     self.collect_instantiated_branch_nodes(*child, local, output);
                 }
@@ -1511,12 +1603,17 @@ impl TypedRuntime {
         let mut nodes = HashMap::new();
         let doc = document()?;
         let mut conditionals = HashMap::new();
+        let row_context = TypedRowContext {
+            loop_index,
+            row_key: key.clone(),
+        };
         let root = self.instantiate_node(
             &doc,
             template,
             Some(parent),
             Some(&values),
             index,
+            Some(&row_context),
             &mut nodes,
             &mut conditionals,
         )?;
@@ -1674,7 +1771,13 @@ impl TypedRuntime {
                 .and_then(|rows| rows.rows.get(key))
                 .and_then(|row| row.conditionals.get(&conditional))
                 .map(|region| region.selected);
-            if current == Some(next) {
+            // Slot content mounts after its keyed component instance. Its
+            // conditional region is therefore absent during the row's first
+            // reconciliation and arrives with the correct initial branch.
+            let Some(current) = current else {
+                continue;
+            };
+            if current == next {
                 continue;
             }
             let mut region = self
@@ -1715,12 +1818,17 @@ impl TypedRuntime {
                     .ok_or_else(|| JsValue::from_str("row conditional parent missing"))?;
                 let mut local = HashMap::new();
                 let mut nested = HashMap::new();
+                let row_context = TypedRowContext {
+                    loop_index,
+                    row_key: key.to_owned(),
+                };
                 let child = self.instantiate_node(
                     &document()?,
                     branch,
                     Some(&parent),
                     Some(values),
                     row_index,
+                    Some(&row_context),
                     &mut local,
                     &mut nested,
                 )?;
@@ -1772,6 +1880,11 @@ impl TypedRuntime {
     ) -> Result<(), JsValue> {
         match self.app.nodes.get(node) {
             Some(TypedNode::Element { children, .. }) => {
+                for child in children {
+                    self.collect_row_conditional_selections(*child, row, row_index, selections)?;
+                }
+            }
+            Some(TypedNode::Component { children, .. }) => {
                 for child in children {
                     self.collect_row_conditional_selections(*child, row, row_index, selections)?;
                 }

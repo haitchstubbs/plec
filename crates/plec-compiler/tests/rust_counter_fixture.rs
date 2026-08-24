@@ -75,6 +75,17 @@ const KEYED_CALLBACK_COMPONENT_SOURCE: &str = r#"
     }
 "#;
 
+const KEYED_SLOT_COMPONENT_SOURCE: &str = r#"
+    export function Todos() {
+        const todos = useCollection("items");
+        const [selected, setSelected] = useState("");
+        return <main><p>{selected}</p><ul>{todos.map(todo => <Frame key={todo.id}><button onClick={() => setSelected(todo.title)}>{todo.title}</button>{todo.done ? <strong>Done</strong> : <em>Open</em>}</Frame>)}</ul></main>;
+    }
+    function Frame({ children }) {
+        return <li>{children}</li>;
+    }
+"#;
+
 #[test]
 fn rust_counter_artifact_matches_runtime_fixture() {
     assert_fixture(
@@ -234,6 +245,43 @@ fn rust_keyed_callback_component_artifact_matches_runtime_fixture() {
         "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-keyed-callback-component-0.10.json",
         env!("CARGO_MANIFEST_DIR")
     )).expect("runtime fixture should exist");
+    assert_eq!(
+        serde_json::to_value(executable).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+    );
+}
+
+#[test]
+fn rust_keyed_slot_component_artifact_matches_runtime_fixture() {
+    let module = parse_module("rust-keyed-slot-component.tsx", KEYED_SLOT_COMPONENT_SOURCE)
+        .expect("source should parse");
+    let modules = vec![module];
+    let graph =
+        build_semantic_graph(&modules, &Default::default()).expect("semantic graph should build");
+    let root = discover_root_component(
+        &modules,
+        &graph,
+        "rust-keyed-slot-component.tsx",
+        Some("Todos"),
+    )
+    .expect("Todos should be discovered");
+    let application =
+        lower_application(&modules, &root, &graph).expect("Todos should lower to HIR");
+    let executable =
+        lower_application_to_executable(&application).expect("Todos should lower to component IR");
+    assert!(executable.components[0]
+        .dependency_edges
+        .iter()
+        .any(|edge| edge.source.kind == "rowField" && edge.target.kind == "binding"));
+    assert!(executable.components[1]
+        .nodes
+        .iter()
+        .any(|node| matches!(node, plec_ir::Node::Slot { .. })));
+    let fixture = fs::read_to_string(format!(
+        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-keyed-slot-component-0.10.json",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("runtime fixture should exist");
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
         serde_json::from_str::<serde_json::Value>(&fixture).unwrap()

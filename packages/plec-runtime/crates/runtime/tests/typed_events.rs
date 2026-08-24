@@ -88,6 +88,11 @@ fn rust_keyed_callback_component_artifact() -> serde_json::Value {
     .expect("Rust keyed callback fixture should be valid JSON")
 }
 
+fn rust_keyed_slot_component_artifact() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/rust-keyed-slot-component-0.10.json"))
+        .expect("Rust keyed slot fixture should be valid JSON")
+}
+
 fn component_slot_artifact() -> serde_json::Value {
     serde_json::json!({
         "version":"0.10", "rootComponent":0,
@@ -538,6 +543,99 @@ fn component_slot_mounts_caller_owned_children_inside_the_callee_anchor() {
     let paragraph = section.query_selector("p").unwrap().unwrap();
     assert_eq!(paragraph.text_content().as_deref(), Some("Inside"));
     assert!(root.query_selector("main > p").unwrap().is_none());
+}
+
+#[wasm_bindgen_test]
+fn rust_keyed_slot_fixture_retains_caller_row_identity_and_disposes_slots() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, rust_keyed_slot_component_artifact(), &root);
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"insert","input_id":"items","row_key":"one","row":{"id":"one","title":"One","done":false},"before_row_key":null}),
+    );
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"insert","input_id":"items","row_key":"two","row":{"id":"two","title":"Two","done":false},"before_row_key":null}),
+    );
+
+    let first = root.query_selector("li").unwrap().unwrap();
+    let first_node: web_sys::Node = first.clone().into();
+    let button = first.query_selector("button").unwrap().unwrap();
+    let text = button.first_child().unwrap();
+    assert_eq!(
+        first
+            .query_selector("em")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "Open"
+    );
+
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"update","input_id":"items","row_key":"one","changes":{"title":"Updated","done":true}}),
+    );
+    assert!(first_node.is_same_node(
+        root.query_selector("li")
+            .unwrap()
+            .as_ref()
+            .map(|node| node.unchecked_ref())
+    ));
+    assert!(text.is_same_node(button.first_child().as_ref()));
+    assert_eq!(button.text_content().unwrap(), "Updated");
+    assert!(first.query_selector("strong").unwrap().is_some());
+    assert_eq!(
+        root.query_selector_all("li")
+            .unwrap()
+            .item(1)
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "TwoOpen"
+    );
+
+    button
+        .clone()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(
+        root.query_selector("p")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "Updated"
+    );
+
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"move","input_id":"items","row_key":"two","before_row_key":"one"}),
+    );
+    assert!(first_node.is_same_node(root.query_selector_all("li").unwrap().item(1).as_ref()));
+    assert!(text.is_same_node(button.first_child().as_ref()));
+
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"remove","input_id":"items","row_key":"one"}),
+    );
+    assert!(first.parent_node().is_none());
+    button
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(
+        root.query_selector("p")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "Updated"
+    );
 }
 
 #[wasm_bindgen_test]

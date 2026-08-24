@@ -88,10 +88,19 @@ impl TypedComponentApplication {
                     let Some(target) = self.components.get(*target) else {
                         return Err(JsValue::from_str("component target out of range"));
                     };
-                    let required = target.parameters.iter().filter(|parameter| {
-                        target.strings.get(parameter.name).map(String::as_str) != Some("children")
-                    }).count();
-                    if props.len() != required || children.iter().any(|child| *child >= component.nodes.len()) {
+                    validate_component_slot_target(target, children, component.nodes.len())
+                        .map_err(JsValue::from_str)?;
+                    let required = target
+                        .parameters
+                        .iter()
+                        .filter(|parameter| {
+                            target.strings.get(parameter.name).map(String::as_str)
+                                != Some("children")
+                        })
+                        .count();
+                    if props.len() != required
+                        || children.iter().any(|child| *child >= component.nodes.len())
+                    {
                         return Err(JsValue::from_str("missing component prop"));
                     }
                     let mut supplied = HashSet::new();
@@ -112,16 +121,22 @@ impl TypedComponentApplication {
                             return Err(JsValue::from_str("invalid component prop"));
                         }
                     }
-                    if target.parameters.iter().filter(|parameter| {
-                        target.strings.get(parameter.name).map(String::as_str) != Some("children")
-                    }).any(|parameter| {
-                        target
-                            .strings
-                            .get(parameter.name)
-                            .map(String::as_str)
-                            .map(|name| !supplied.contains(name))
-                            .unwrap_or(true)
-                    }) {
+                    if target
+                        .parameters
+                        .iter()
+                        .filter(|parameter| {
+                            target.strings.get(parameter.name).map(String::as_str)
+                                != Some("children")
+                        })
+                        .any(|parameter| {
+                            target
+                                .strings
+                                .get(parameter.name)
+                                .map(String::as_str)
+                                .map(|name| !supplied.contains(name))
+                                .unwrap_or(true)
+                        })
+                    {
                         return Err(JsValue::from_str("missing component prop"));
                     }
                 }
@@ -129,6 +144,25 @@ impl TypedComponentApplication {
         }
         Ok(())
     }
+}
+
+fn validate_component_slot_target(
+    target: &TypedApplication,
+    children: &[usize],
+    caller_node_count: usize,
+) -> Result<(), &'static str> {
+    let slots = target
+        .nodes
+        .iter()
+        .filter(|node| matches!(node, TypedNode::Slot { .. }))
+        .count();
+    if slots > 1 || (!children.is_empty() && slots != 1) {
+        return Err("invalid component slot");
+    }
+    if children.iter().any(|child| *child >= caller_node_count) {
+        return Err("component child out of range");
+    }
+    Ok(())
 }
 
 #[derive(Clone, Deserialize)]
@@ -966,6 +1000,51 @@ mod tests {
             "events": [event]
         }))
         .unwrap()
+    }
+
+    fn component_slot_application(frame_nodes: Value) -> TypedComponentApplication {
+        serde_json::from_value(serde_json::json!({
+            "version":"0.10", "rootComponent":0,
+            "components":[
+                {"id":"App","rootNode":0,"strings":["p"],"constants":[],
+                 "nodes":[
+                    {"op":"component","component":1,"parent":null,"props":[],"children":[1]},
+                    {"op":"element","tag":0,"parent":null,"children":[]}
+                 ],"texts":[],"bindings":[],"propPrograms":[],"events":[],"inputs":[],"stateSlots":[],"parameters":[],"expressions":[],"actions":[],"loops":[],"dependencyEdges":[]},
+                {"id":"Frame","rootNode":0,"strings":["section"],"constants":[],
+                 "nodes":frame_nodes,"texts":[],"bindings":[],"propPrograms":[],"events":[],"inputs":[],"stateSlots":[],"parameters":[],"expressions":[],"actions":[],"loops":[],"dependencyEdges":[]}
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn typed_component_decoder_rejects_invalid_slot_targets() {
+        let slotless = component_slot_application(serde_json::json!(
+            [{"op":"element","tag":0,"parent":null,"children":[]}]
+        ));
+        assert_eq!(
+            validate_component_slot_target(
+                &slotless.components[1],
+                &[1],
+                slotless.components[0].nodes.len()
+            ),
+            Err("invalid component slot")
+        );
+
+        let multiple = component_slot_application(serde_json::json!([
+            {"op":"element","tag":0,"parent":null,"children":[1,2]},
+            {"op":"slot","parent":0},
+            {"op":"slot","parent":0}
+        ]));
+        assert_eq!(
+            validate_component_slot_target(
+                &multiple.components[1],
+                &[1],
+                multiple.components[0].nodes.len()
+            ),
+            Err("invalid component slot")
+        );
     }
     #[test]
     fn typed_decoder_rejects_invalid_collection_action_operands() {
