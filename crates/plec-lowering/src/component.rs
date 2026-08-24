@@ -1,7 +1,7 @@
-use plec_hir::{HirBindingKind, HirComponent};
+use plec_hir::{HirBindingKind, HirComponent, HirNode};
 use plec_ir::{
     ActionInstruction, ActionProgram, ComponentParameter, ExecutableApplication, Input,
-    RouteOutlet, StateSlot,
+    RouteOutlet, StateSlot, RefSlot, HostRef,
 };
 
 use crate::{ComponentTargets, Ctx, LoweringError};
@@ -60,6 +60,16 @@ pub(crate) fn lower_component(
     targets: Option<&ComponentTargets>,
 ) -> Result<ExecutableApplication, LoweringError> {
     let mut ctx = Ctx::new(component, targets);
+    let mut attached_host_refs = std::collections::HashSet::new();
+    for node in &component.nodes {
+        if let HirNode::Element(element) = node {
+            if let Some(reference) = element.host_ref {
+                if !attached_host_refs.insert(reference) {
+                    return Err(ctx.err("useHostRef may attach to exactly one intrinsic element"));
+                }
+            }
+        }
+    }
     for parameter in &component.parameters {
         let plec_hir::HirParameterSource::Prop { name } = &parameter.source else {
             return Err(ctx.err("direct component parameters are not executable"));
@@ -87,6 +97,19 @@ pub(crate) fn lower_component(
             frame_slot: slot,
         });
     }
+    for reference in &component.ref_slots {
+        let initial_expression = ctx.expression(reference.initializer, false)?.0;
+        let slot = ctx.app.ref_slots.len();
+        ctx.refs.insert(reference.binding, slot);
+        ctx.app.ref_slots.push(RefSlot { initial_expression });
+    }
+    for binding in &component.bindings {
+        if matches!(binding.kind, HirBindingKind::HostRef) {
+            let slot = ctx.app.host_refs.len();
+            ctx.host_refs.insert(binding.id, slot);
+            ctx.app.host_refs.push(HostRef {});
+        }
+    }
     for input in &component.inputs {
         match input.kind.as_str() {
             "collection" => {
@@ -99,7 +122,7 @@ pub(crate) fn lower_component(
                 });
             }
             "location" => {
-                let host = ctx.host("location", None);
+                let host = ctx.host("location", None)?;
                 ctx.hosts.insert(input.binding, host);
             }
             _ => return Err(Ctx::new(component, targets).err("input kind is not executable")),

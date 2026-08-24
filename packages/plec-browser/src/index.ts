@@ -226,6 +226,7 @@ interface WasmRuntimeInstance {
   dispose(): void;
   register_graph(graphId: string, ir: unknown): void;
   start(root: Element, manifest: unknown): void;
+  navigate(href: string, replace: boolean): void;
 }
 interface WasmRuntimeModule {
   default(input?: unknown): Promise<unknown>;
@@ -444,17 +445,6 @@ export async function startPlecRouter(
   const compiled = options.applicationUrl ? artifact as { manifest: PlecRouteManifest; application: any } : undefined;
   const manifest = (compiled?.manifest ?? artifact) as PlecRouteManifest;
   const graphUrl = options.graphUrl ?? ((id) => `/graphs/${id}.json`);
-  const graphIds = new Set<string>([
-    manifest.rootGraphId,
-    ...manifest.routes.flatMap(
-      (route) =>
-        [
-          route.graphId,
-          route.pendingGraphId,
-          route.errorGraphId,
-        ].filter(Boolean) as string[],
-    ),
-  ]);
   const runtimeModule = await loadRuntimeModule(
     options.runtimeJsUrl ?? DEFAULT_RUNTIME_JS_URL,
   );
@@ -462,38 +452,39 @@ export async function startPlecRouter(
     module_or_path: options.runtimeWasmUrl ?? DEFAULT_RUNTIME_WASM_URL,
   });
   const runtime = new runtimeModule.PlecRuntime();
-  const graphs = compiled ? [compiled.application] : await Promise.all(
-    [...graphIds].map(async (graphId) => {
-      const response = await fetch(graphUrl(graphId));
-      if (!response.ok)
-        throw new Error(
-          `Failed to load graph ${graphId}: ${response.status}`,
-        );
-      //return validateExecutableApplication(await response.json());
-      return await response.json();
-    }),
-  );
-  const cookieNames = graphs.flatMap((graph: any) => (graph.components ?? [graph]).flatMap((graph: any) =>
-    (graph.capabilities ?? [])
-      .filter(
-        (capability: any) =>
-          capability.kind === 'cookie' &&
-          capability.operations.includes('getSync'),
-      )
-      .map((capability: any) => capability.name),
-  ));
-  runtime.set_host_inputs({
-    ...Object.fromEntries(
-      [...new Set(cookieNames)].map((name) => [name, readCookie(name)]),
-    ),
+  const hostInputs: Record<string, unknown> = {
     'location.pathname': window.location.pathname,
     'location.search': window.location.search,
     'location.hash': window.location.hash,
-  });
-  if (compiled) runtime.register_graph('__rust_application__', compiled.application);
-  else graphs.forEach((graph: any, index) =>
-    runtime.register_graph([...graphIds][index]!, graph),
-  );
+  };
+  const hydrateSyncCookies = (graph: any) => {
+    for (const component of graph.components ?? [graph]) {
+      for (const capability of component.capabilities ?? []) {
+        if (capability.kind === 'cookie' && capability.operations.includes('getSync'))
+          hostInputs[capability.name] = readCookie(capability.name);
+      }
+    }
+    runtime.set_host_inputs(hostInputs);
+  };
+  const loadedGraphs = new Map<string, any>();
+  const loadGraph = async (graphId: string, fresh = false) => {
+    if (!fresh && loadedGraphs.has(graphId)) return loadedGraphs.get(graphId);
+    const response = await fetch(graphUrl(graphId));
+    if (!response.ok)
+      throw new Error(`Failed to load graph ${graphId}: ${response.status}`);
+    const graph = await response.json();
+    loadedGraphs.set(graphId, graph);
+    hydrateSyncCookies(graph);
+    runtime.register_graph(graphId, graph);
+    return graph;
+  };
+  const graphs = compiled
+    ? [compiled.application]
+    : [await loadGraph(manifest.rootGraphId)];
+  if (compiled) {
+    hydrateSyncCookies(compiled.application);
+    runtime.register_graph('__rust_application__', compiled.application);
+  }
   const onCookieRequest = (event: Event) => {
     const request = (event as CustomEvent<any>).detail;
     try {
@@ -534,6 +525,14 @@ export async function startPlecRouter(
     }
   };
   window.addEventListener('plec:cookie-request', onCookieRequest);
+  const onGraphNeeded = (event: Event) => {
+    const graphId = (event as CustomEvent<{ graphId?: string }>).detail?.graphId;
+    if (!graphId || compiled) return;
+    void loadGraph(graphId, true)
+      .then(() => runtime.navigate(`${window.location.pathname}${window.location.search}${window.location.hash}`, true))
+      .catch((error) => console.error(`Failed to load Plec graph ${graphId}`, error));
+  };
+  window.addEventListener('plec:graph-needed', onGraphNeeded);
   runtime.start(options.root, manifest);
   markPlecTiming('plec:mount-end');
 
@@ -551,6 +550,7 @@ export async function startPlecRouter(
         'plec:cookie-request',
         onCookieRequest,
       );
+      window.removeEventListener('plec:graph-needed', onGraphNeeded);
       disposeIslands.forEach((dispose) => dispose());
       runtime.dispose();
     },

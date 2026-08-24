@@ -60,6 +60,8 @@ pub fn lower_application_to_executable(
                 host_slots: app.host_slots,
                 capabilities: app.capabilities,
                 state_slots: app.state_slots,
+                ref_slots: app.ref_slots,
+                host_refs: app.host_refs,
                 parameters: app.parameters,
                 expressions: app.expressions,
                 actions: app.actions,

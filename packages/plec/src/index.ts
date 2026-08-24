@@ -1,7 +1,7 @@
 import { Fragment, jsx, jsxs } from './client/jsx';
 import { createRoot } from './client/root/create-root';
 import { useState } from './client/state/use-state';
-import { useRef } from './client/state/use-ref';
+import { useHostRef, useRef } from './client/state/use-ref';
 import { useEffect } from './client/state/use-effect';
 import {
   createRootRoute,
@@ -22,6 +22,7 @@ export {
   createRoot,
   useState,
   useRef,
+  useHostRef,
   useEffect,
   useLocation,
   cookie,
@@ -40,6 +41,7 @@ export const Plec = {
   createRoot,
   useState,
   useRef,
+  useHostRef,
   useEffect,
   useLocation,
   cookie,

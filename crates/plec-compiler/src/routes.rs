@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use plec_hir::{ComponentId, HirApplication, HirRoute, HirRouteApplication};
-use plec_ir::{ComponentApplication, RouteManifest, RouteManifestEntry};
+use plec_ir::{ComponentApplication, RouteManifest, RouteManifestEntry, RouteOutlet};
 use plec_parser::ParsedModule;
 use plec_sema::{resolve_local_symbol, SemanticGraph};
+use serde::Serialize;
 use swc_ecma_ast::{
     ArrowFunctionBody, Callee, Decl, Expr, KeyValueProp, ModuleItem, Pat, Prop, PropName,
     PropOrSpread, Stmt, VarDecl,
@@ -18,6 +19,23 @@ impl std::fmt::Display for RouteError {
     }
 }
 impl std::error::Error for RouteError {}
+
+/// The complete Rust-owned browser build input.  Graphs intentionally remain
+/// independent artifacts: a mounted layout keeps its definition while a route
+/// outlet can receive a newly fetched graph with the same component closure.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteArtifactBundle {
+    pub manifest: RouteManifest,
+    pub graphs: Vec<RouteArtifact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteArtifact {
+    pub graph_id: String,
+    pub graph: ComponentApplication,
+}
 
 /// Discover the deliberately static Plec route surface. Route construction is
 /// source semantics; the runtime only receives this lowered representation.
@@ -150,6 +168,84 @@ pub fn lower_route_manifest(routes: &HirRouteApplication) -> RouteManifest {
             })
             .collect(),
     }
+}
+
+/// Compile every independently mountable route phase.  Unlike the historical
+/// registry artifact, each output is self-contained and has a root component
+/// matching its graph id.  This is the artifact boundary used by lazy browser
+/// loading.
+pub fn lower_route_artifacts(
+    modules: &[ParsedModule],
+    graph: &SemanticGraph,
+    routes: &HirRouteApplication,
+) -> Result<RouteArtifactBundle, RouteError> {
+    let mut phases = vec![routes.root.clone()];
+    for route in &routes.routes {
+        phases.push(route.component.clone());
+        phases.extend(route.pending_component.clone());
+        phases.extend(route.error_component.clone());
+    }
+    phases.dedup();
+
+    let mut artifacts = Vec::new();
+    for phase in phases {
+        let root = crate::discover_root_component(modules, graph, &phase.module_id, Some(&phase.local_name))
+            .map_err(|error| RouteError(error.to_string()))?;
+        let application = crate::lower_application(modules, &root, graph)
+            .map_err(|error| RouteError(error.to_string()))?;
+        let executable = crate::lower_application_to_executable(&application)
+            .map_err(|error| RouteError(error.to_string()))?;
+        artifacts.push(RouteArtifact {
+            graph_id: graph_id(&phase),
+            graph: executable,
+        });
+    }
+
+    // Route outlets belong to the persistent parent graph, never to a merged
+    // application registry.  A child replacement therefore cannot recreate
+    // its parent layout.
+    for route in routes.routes.iter().filter(|route| route.parent.is_some()) {
+        let parent = route
+            .parent
+            .as_ref()
+            .and_then(|id| routes.routes.iter().find(|candidate| &candidate.id == id));
+        let parent_component = parent.map(|route| &route.component).unwrap_or(&routes.root);
+        let artifact = artifacts
+            .iter_mut()
+            .find(|artifact| artifact.graph_id == graph_id(parent_component))
+            .ok_or_else(|| RouteError("route parent artifact is missing".into()))?;
+        let root = artifact
+            .graph
+            .components
+            .get_mut(artifact.graph.root_component)
+            .ok_or_else(|| RouteError("route artifact root component is missing".into()))?;
+        if !root.route_outlets.iter().any(|outlet| outlet.id == route.outlet_id) {
+            root.route_outlets.push(RouteOutlet {
+                id: route.outlet_id.clone(),
+                node: root.root_node,
+            });
+        }
+    }
+
+    let mut manifest = lower_route_manifest(routes);
+    // A revision must be stable across processes and derived from the Rust
+    // compiler's canonical route/graph content rather than a JS build step.
+    manifest.revision = stable_revision(&artifacts);
+    Ok(RouteArtifactBundle { manifest, graphs: artifacts })
+}
+
+fn stable_revision(artifacts: &[RouteArtifact]) -> String {
+    // FNV-1a is intentionally small and deterministic; this is a cache-bust
+    // revision, not a security digest.
+    let mut hash = 0xcbf29ce484222325_u64;
+    for artifact in artifacts {
+        let json = serde_json::to_vec(artifact).expect("route artifacts serialize");
+        for byte in json {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("rust-route-{hash:016x}")
 }
 
 /// Lower every statically reachable route phase into one component registry.
@@ -455,5 +551,27 @@ mod tests {
             .find(|component| component.id == "routes.tsx#Layout")
             .unwrap();
         assert_eq!(layout.route_outlets[0].id, "main");
+    }
+
+    #[test]
+    fn emits_independent_component_graphs_for_each_route_phase() {
+        let modules = vec![parse_module("routes.tsx", r#"
+            export function Layout() { return <main />; }
+            export function Child() { return <p>child</p>; }
+            export function Pending() { return <p>pending</p>; }
+            export function Failure() { return <p>failed</p>; }
+            export const Root = createRootRoute({ component: Layout });
+            export const ChildRoute = createRoute({ getParentRoute: () => Root, path: 'child', component: Child, pendingComponent: Pending, errorComponent: Failure });
+            export const router = createRouter({ routeTree: Root.addChildren([ChildRoute]) });
+        "#).unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let routes = lower_routes(&modules, &graph).unwrap();
+        let artifacts = lower_route_artifacts(&modules, &graph, &routes).unwrap();
+        assert_eq!(artifacts.manifest.version, 3);
+        assert_eq!(artifacts.graphs.len(), 4);
+        assert!(artifacts.graphs.iter().all(|artifact| artifact.graph.version == "0.10"));
+        let layout = artifacts.graphs.iter().find(|artifact| artifact.graph_id == "routes.tsx#Layout").unwrap();
+        assert_eq!(layout.graph.components[layout.graph.root_component].route_outlets[0].id, "main");
+        assert!(artifacts.manifest.revision.starts_with("rust-route-"));
     }
 }

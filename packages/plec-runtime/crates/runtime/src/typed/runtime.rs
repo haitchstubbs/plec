@@ -92,6 +92,7 @@ pub(crate) struct TypedRuntime {
     pub(crate) root: Option<Element>,
     pub(crate) nodes: HashMap<usize, Node>,
     pub(crate) states: Vec<RuntimeValue>,
+    pub(crate) host_ref_nodes: Vec<Option<Node>>,
     pub(crate) collections: HashMap<usize, TypedCollection>,
     pub(crate) loops: HashMap<usize, TypedLoopRows>,
     pub(crate) conditionals: HashMap<usize, TypedConditionalRegion>,
@@ -106,6 +107,8 @@ pub(crate) struct TypedRuntime {
     pub(crate) graph_generation: u64,
     pub(crate) host_inputs: HashMap<String, RuntimeValue>,
     pub(crate) host_refs: HashMap<String, Node>,
+    /// Component indices in a 0.10 node are local to its graph artifact.
+    pub(crate) component_definitions: Option<Vec<TypedApplication>>,
     pub(crate) pending_cookies: Vec<TypedPendingCookie>,
     pub(crate) next_cookie_id: u64,
     pub(crate) next_component_instance: u64,
@@ -189,6 +192,7 @@ impl PlecRuntime {
             typed_root: Rc::new(RefCell::new(None)),
             typed_generation: Rc::new(RefCell::new(0)),
             typed_registry: Rc::new(RefCell::new(HashMap::new())),
+            typed_component_registry: Rc::new(RefCell::new(HashMap::new())),
             typed_manifest: Rc::new(RefCell::new(None)),
             typed_host_inputs: Rc::new(RefCell::new(HashMap::new())),
             typed_components: Rc::new(RefCell::new(None)),
@@ -214,6 +218,18 @@ impl PlecRuntime {
             "__legacy__".into(),
         )?;
         self.mount_instance(&instance_id, root, true)
+    }
+}
+
+impl TypedRuntime {
+    fn clear_host_ref_for_node(&mut self, index: usize, node: &Node) {
+        let Some(TypedNode::Element { host_ref: Some(reference), .. }) = self.app.nodes.get(index) else { return };
+        if self.host_ref_nodes.get(*reference).and_then(Option::as_ref).is_some_and(|active| active.is_same_node(Some(node))) {
+            self.host_ref_nodes[*reference] = None;
+        }
+    }
+    pub(crate) fn set_component_definitions(&mut self, definitions: Vec<TypedApplication>) {
+        self.component_definitions = Some(definitions);
     }
 }
 
@@ -349,10 +365,6 @@ impl PlecRuntime {
     }
 
     pub(crate) fn mount_component_requests(&self) -> Result<(), JsValue> {
-        let definitions = self.typed_components.borrow().clone();
-        let Some(definitions) = definitions else {
-            return Ok(());
-        };
         loop {
             let requests = self
                 .typed
@@ -371,8 +383,13 @@ impl PlecRuntime {
                 return Ok(());
             }
             for (parent_id, request) in requests {
+                let definitions = self
+                    .typed
+                    .borrow()
+                    .get(&parent_id)
+                    .and_then(|instance| instance.runtime.component_definitions.clone())
+                    .ok_or_else(|| JsValue::from_str("component graph definitions missing"))?;
                 let mut app = definitions
-                    .components
                     .get(request.component)
                     .ok_or_else(|| JsValue::from_str("component target out of range"))?
                     .clone();
@@ -391,6 +408,7 @@ impl PlecRuntime {
                     })
                     .collect::<Result<Vec<_>, JsValue>>()?;
                 let mut runtime = TypedRuntime::new(app)?;
+                runtime.set_component_definitions(definitions);
                 runtime.callbacks = runtime
                     .app
                     .parameters
@@ -596,15 +614,19 @@ impl TypedRuntime {
     }
     pub(crate) fn new(app: TypedApplication) -> Result<Self, JsValue> {
         app.validate()?;
+        let mut app = app;
         let mut states = Vec::new();
         for slot in &app.state_slots {
             states.push(typed_eval(&app, slot.initial_expression, &[], None, 0)?);
         }
+        app.ref_values = app.ref_slots.iter().map(|slot| typed_eval(&app, slot.initial_expression, &[], None, 0)).collect::<Result<Vec<_>, _>>()?;
+        let host_ref_nodes = vec![None; app.host_refs.len()];
         Ok(Self {
             app,
             root: None,
             nodes: HashMap::new(),
             states,
+            host_ref_nodes,
             loops: HashMap::new(),
             conditionals: HashMap::new(),
             collections: HashMap::new(),
@@ -619,6 +641,7 @@ impl TypedRuntime {
             graph_generation: 1,
             host_inputs: HashMap::new(),
             host_refs: HashMap::new(),
+            component_definitions: None,
             pending_cookies: Vec::new(),
             next_cookie_id: 0,
             next_component_instance: 0,
@@ -975,7 +998,7 @@ impl TypedRuntime {
             .ok_or_else(|| JsValue::from_str("node handle out of range"))?
             .clone()
         {
-            TypedNode::Element { tag, children, .. } => {
+            TypedNode::Element { tag, children, host_ref, .. } => {
                 let tag = self
                     .app
                     .strings
@@ -1011,6 +1034,10 @@ impl TypedRuntime {
                     local.insert(index, node.clone());
                 } else {
                     self.nodes.insert(index, node.clone());
+                }
+                if let Some(reference) = host_ref {
+                    let slot = self.host_ref_nodes.get_mut(reference).ok_or_else(|| JsValue::from_str("host ref handle out of range"))?;
+                    *slot = Some(node.clone());
                 }
                 Ok(node)
             }
@@ -1252,7 +1279,8 @@ impl TypedRuntime {
             generation: region.generation,
             row: None,
         });
-        for node in region.nodes.values() {
+        for (index, node) in &region.nodes {
+            self.clear_host_ref_for_node(*index, node);
             if let Some(parent) = node.parent_node() {
                 parent.remove_child(node)?;
                 metrics.dom_operations += 1;
@@ -1567,6 +1595,9 @@ impl TypedRuntime {
                 .and_then(|rows| rows.rows.remove(&key))
             {
                 self.dispose_region_listeners(loop_index, &key, row.generation);
+                for (index, node) in &row.nodes {
+                    self.clear_host_ref_for_node(*index, node);
+                }
                 if let Some(parent) = row.root.parent_node() {
                     for node in Self::row_dom_nodes(&row.root, row.end.as_ref()) {
                         parent.remove_child(&node)?;
@@ -1613,6 +1644,9 @@ impl TypedRuntime {
 }
 
 impl TypedRuntime {
+    pub(crate) fn clear_host_refs(&mut self) {
+        self.host_ref_nodes.fill(None);
+    }
     pub(crate) fn insert_typed_row(
         &mut self,
         loop_index: usize,

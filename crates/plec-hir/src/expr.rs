@@ -78,6 +78,10 @@ pub enum HirExpr {
         name: Option<String>,
     },
     Binding(BindingId),
+    /// Reading non-reactive component storage.
+    RefCurrent { reference: BindingId },
+    /// Opaque host handle; ordinary expressions may not consume this.
+    HostRefCurrent { reference: BindingId },
     Member {
         object: ExprId,
         property: String,

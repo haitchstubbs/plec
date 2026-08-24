@@ -15,7 +15,6 @@ import { createHash } from 'node:crypto';
 import { constants, brotliCompress } from 'node:zlib';
 import { promisify } from 'node:util';
 import { build } from 'esbuild';
-import { compileRouteEntry } from 'plec-compiler/node-entry';
 
 const OPTIMIZE = true;
 
@@ -79,78 +78,29 @@ await Promise.all([
 // Compile routes
 //
 
-const compiledRoutes = await compileRouteEntry(
-  path.join(appDir, 'src/router.tsx'),
-  {
-    rootDir: appDir,
-    repoRootDir: repoRoot,
-    mode: 'strict',
-  },
-);
-
-const rustRouteManifest = JSON.parse(
+const rustArtifacts = JSON.parse(
   execFileSync(
     'cargo',
     [
       'run', '-q', '-p', 'plec-compiler', '--bin', 'plec-route-manifest', '--',
-      path.join(appDir, 'src/router.tsx'), appDir, repoRoot,
+      path.join(appDir, 'src/router.tsx'), appDir, repoRoot, '--artifacts',
     ],
     { cwd: repoRoot, encoding: 'utf8' },
   ),
 );
 
-const graphs = [
-  compiledRoutes.rootGraph,
-  ...compiledRoutes.routes.flatMap((route) =>
-    [route.graph, route.pendingGraph, route.errorGraph].filter(Boolean),
-  ),
-];
-
 await Promise.all(
-  graphs.map((graph) =>
+  rustArtifacts.graphs.map(({ graphId, graph }) =>
     writeFile(
-      path.join(graphsDir, `${graph.graphId}.json`),
+      path.join(graphsDir, `${graphId}.json`),
       `${JSON.stringify(graph, null, 2)}\n`,
     ),
   ),
 );
 
-const compiledRouteByGraphId = new Map(
-  compiledRoutes.routes.map((route) => [route.id, route]),
-);
-const rootRoute = rustRouteManifest.routes.find((route) => !route.parentId);
-const rootGraph = rootRoute && compiledRoutes.rootGraph;
-if (!rootRoute || !rootGraph)
-  throw new Error('Rust route manifest has no root route.');
-const routeManifest = {
-  version: 3,
-  revision: rustRouteManifest.revision,
-  rootGraphId: rootGraph.graphId,
-  routes: rustRouteManifest.routes
-    .filter((route) => route.id !== rootRoute.id)
-    .map((route) => {
-      const compiled = compiledRouteByGraphId.get(route.graphId);
-      if (!compiled)
-        throw new Error(`TypeScript graph artifact missing for Rust route ${route.id}.`);
-      return {
-        id: route.id,
-        ...(route.parentId && route.parentId !== rootRoute.id
-          ? { parentId: route.parentId }
-          : {}),
-        path: route.path,
-        graphId: compiled.graph.graphId,
-        pendingGraphId: compiled.pendingGraph?.graphId,
-        pendingMode: route.pendingMode,
-        errorGraphId: compiled.errorGraph?.graphId,
-        loaderAction: compiled.loaderAction,
-        outletId: route.outletId,
-      };
-    }),
-};
-
 await writeFile(
   path.join(publicDir, 'route-manifest.json'),
-  `${JSON.stringify(routeManifest, null, 2)}\n`,
+  `${JSON.stringify(rustArtifacts.manifest, null, 2)}\n`,
 );
 
 //

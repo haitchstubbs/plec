@@ -37,6 +37,8 @@ pub struct HirElement {
     pub tag: String,
     pub props: Vec<HirProp>,
     pub events: Vec<HirEventBinding>,
+    /// This is intentionally not a prop: host ownership is structural.
+    pub host_ref: Option<BindingId>,
     pub children: Vec<NodeId>,
     pub span: SourceSpan,
 }

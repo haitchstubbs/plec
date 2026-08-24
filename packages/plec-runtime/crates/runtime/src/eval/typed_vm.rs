@@ -39,6 +39,9 @@ pub(crate) fn typed_eval_frame(
             TypedExpressionInstruction::LoadState { state } => {
                 stack.push(states.get(*state).cloned().unwrap_or(RuntimeValue::Null))
             }
+            TypedExpressionInstruction::LoadRef { reference } => stack.push(
+                app.ref_values.get(*reference).cloned().unwrap_or(RuntimeValue::Null)
+            ),
             TypedExpressionInstruction::LoadProp { prop } => stack.push(
                 app.runtime_props
                     .get(*prop)

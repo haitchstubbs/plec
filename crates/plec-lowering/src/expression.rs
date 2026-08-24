@@ -42,7 +42,7 @@ impl Ctx<'_> {
             }
             HirExpr::Host { kind, name } => {
                 let host = match kind.as_str() {
-                    "cookie" => self.host("cookie", name.as_deref()),
+                    "cookie" => self.host("cookie", name.as_deref())?,
                     _ => return Err(self.err("host value is not executable")),
                 };
                 code.push(ExpressionInstruction::LoadHost { host });
@@ -106,6 +106,11 @@ impl Ctx<'_> {
                 }
                 _ => return Err(self.err("binding is not executable in this expression")),
             },
+            HirExpr::RefCurrent { reference } => {
+                let reference = *self.refs.get(&reference).ok_or_else(|| self.err("ref used before lowering"))?;
+                code.push(ExpressionInstruction::LoadRef { reference });
+            }
+            HirExpr::HostRefCurrent { .. } => return Err(self.err("hostRef.current requires a host capability primitive")),
             HirExpr::Member { object, property } => {
                 if matches!(self.expr(object)?, HirExpr::Binding(binding) if matches!(self.component.bindings[binding.0 as usize].kind, HirBindingKind::LoopItem))
                 {

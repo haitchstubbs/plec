@@ -204,6 +204,32 @@ impl Ctx<'_> {
                         error_slot,
                     });
                 }
+                HirStmt::AwaitCookie { target, operation, name, value, path, same_site, secure, max_age, .. } => {
+                    let operation = match operation.as_str() {
+                        "get" => "get", "set" => "set", "delete" => "delete",
+                        _ => return Err(self.err("unsupported cookie operation")),
+                    };
+                    self.cookie_capability(operation, name, path, same_site.as_deref(), *secure, *max_age)?;
+                    let value = value.map(|value| self.expression(value, row).map(|(expression, _)| expression)).transpose()?;
+                    let result_slot = target.and_then(|binding| self.async_slots.get(&binding).copied()).unwrap_or_else(|| {
+                        let slot = *frame_slots; *frame_slots += 1; slot
+                    });
+                    let error_slot = { let slot = *frame_slots; *frame_slots += 1; slot };
+                    code.push(ActionInstruction::CapabilityRequest {
+                        request: CapabilityRequest::Cookie {
+                            operation, name: self.string(name), value, path: path.clone(),
+                            same_site: same_site.clone(), secure: *secure,
+                            expiry: if max_age.is_some() { "maxAge" } else { "session" }, max_age: *max_age,
+                        },
+                        success_pc: usize::MAX, failure_pc: usize::MAX, finally_pc: None, result_slot, error_slot,
+                    });
+                }
+                HirStmt::RefUpdate { reference, value, .. } => {
+                    let reference = *self.refs.get(reference).ok_or_else(|| self.err("ref used before lowering"))?;
+                    let (expression, _) = self.expression(*value, row)?;
+                    code.push(ActionInstruction::Evaluate { expression });
+                    code.push(ActionInstruction::StoreRef { reference });
+                }
                 HirStmt::AwaitCall {
                     target,
                     callee,
@@ -519,6 +545,10 @@ fn reserve_async_slots(body: &HirCallableBody, next: &mut usize) -> HashMap<Bind
                 | HirStmt::AwaitCall {
                     target: Some(binding),
                     ..
+                }
+                | HirStmt::AwaitCookie {
+                    target: Some(binding),
+                    ..
                 } => {
                     slots.entry(*binding).or_insert_with(|| {
                         let slot = *next;
@@ -582,6 +612,7 @@ fn fetch_decode(value: &str) -> Result<&'static str, LoweringError> {
 fn statement_may_suspend(statement: &HirStmt) -> bool {
     match statement {
         HirStmt::AwaitFetch { .. } => true,
+        HirStmt::AwaitCookie { .. } => true,
         HirStmt::AwaitCall { .. } => true,
         HirStmt::If {
             consequent,

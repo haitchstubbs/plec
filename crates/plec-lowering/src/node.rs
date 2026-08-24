@@ -24,10 +24,12 @@ impl Ctx<'_> {
             HirNode::Element(element) => {
                 let index = self.app.nodes.len();
                 let tag = self.string(&element.tag);
+                let host_ref = element.host_ref.map(|binding| self.host_refs.get(&binding).copied().ok_or_else(|| self.err("host ref used before lowering"))).transpose()?;
                 self.app.nodes.push(Node::Element {
                     tag,
                     parent,
                     children: vec![],
+                    host_ref,
                 });
                 let mut children = vec![];
                 for child in element.children {
