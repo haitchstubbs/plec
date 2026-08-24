@@ -130,12 +130,12 @@ impl PlecRuntime {
             );
             return Ok(());
         }
-        if value.get("version").and_then(Value::as_str) == Some("0.10") {
-            let application: TypedComponentApplication = serde_json::from_value(value).map_err(error)?;
+        if matches!(value.get("version").and_then(Value::as_str), Some("0.10")) {
+            let application: TypedComponentApplication =
+                serde_json::from_value(value).map_err(error)?;
             application.validate()?;
-            let mut typed = TypedRuntime::new(
-                application.components[application.root_component].clone(),
-            )?;
+            let mut typed =
+                TypedRuntime::new(application.components[application.root_component].clone())?;
             typed.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
             typed.graph_generation = self.next_typed_generation();
             self.dispose_typed_instances();

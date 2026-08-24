@@ -2,14 +2,14 @@ use std::collections::{BTreeSet, HashMap};
 
 use plec_hir::{
     BindingId, ComponentId, HirApplication, HirBindingKind, HirCallable, HirCallableBody,
-    HirComponent, HirExpr, HirLogicalOp, HirNode, HirProp, HirStmt, HirText, HirUnaryOp,
-    HirValue, NodeId,
+    HirComponent, HirExpr, HirLogicalOp, HirNode, HirProp, HirStmt, HirText, HirUnaryOp, HirValue,
+    NodeId,
 };
 use plec_ir::{
     ActionInstruction, ActionProgram, Binding, ComponentApplication, ComponentParameter,
     ComponentProp, DependencyEdge, DependencyEndpoint, Event, ExecutableApplication,
-    ExecutableComponent, ExpressionInstruction, ExpressionProgram, Input, Loop, Node,
-    PropProgram, PropWrite, StateSlot, Text, Value, COMPONENT_VERSION,
+    ExecutableComponent, ExpressionInstruction, ExpressionProgram, Input, Loop, Node, PropProgram,
+    PropWrite, StateSlot, Text, Value, COMPONENT_VERSION,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,55 +32,82 @@ pub fn lower_application_to_executable(
 ) -> Result<ComponentApplication, LoweringError> {
     let mut targets = HashMap::new();
     for (index, component) in application.components.iter().enumerate() {
-        let props = component.parameters.iter().map(|parameter| match &parameter.source {
-            plec_hir::HirParameterSource::Prop { name } => Ok(name.clone()),
-            plec_hir::HirParameterSource::Direct => Err(LoweringError("direct component parameters are not executable".into())),
-        }).collect::<Result<Vec<_>, _>>()?;
+        let props = component
+            .parameters
+            .iter()
+            .map(|parameter| match &parameter.source {
+                plec_hir::HirParameterSource::Prop { name } => Ok((
+                    name.clone(),
+                    matches!(
+                        component.bindings[parameter.binding.0 as usize].kind,
+                        HirBindingKind::Parameter { callable: true }
+                    ),
+                )),
+                plec_hir::HirParameterSource::Direct => Err(LoweringError(
+                    "direct component parameters are not executable".into(),
+                )),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         targets.insert(component.id.clone(), (index, props));
     }
-    let root_component = *targets.get(&application.root)
+    let root_component = *targets
+        .get(&application.root)
         .map(|(index, _)| index)
         .ok_or_else(|| LoweringError("application root component missing".into()))?;
-    let components = application.components.iter().map(|component| {
-        let app = lower_component(component, Some(&targets))?;
-        Ok(ExecutableComponent {
-            id: format!("{}#{}", component.id.module_id, component.id.local_name),
-            root_node: app.root_node,
-            strings: app.strings,
-            constants: app.constants,
-            nodes: app.nodes,
-            texts: app.texts,
-            bindings: app.bindings,
-            prop_programs: app.prop_programs,
-            events: app.events,
-            inputs: app.inputs,
-            state_slots: app.state_slots,
-            parameters: app.parameters,
-            expressions: app.expressions,
-            actions: app.actions,
-            loops: app.loops,
-            dependency_edges: app.dependency_edges,
+    let components = application
+        .components
+        .iter()
+        .map(|component| {
+            let app = lower_component(component, Some(&targets))?;
+            Ok(ExecutableComponent {
+                id: format!("{}#{}", component.id.module_id, component.id.local_name),
+                root_node: app.root_node,
+                strings: app.strings,
+                constants: app.constants,
+                nodes: app.nodes,
+                texts: app.texts,
+                bindings: app.bindings,
+                prop_programs: app.prop_programs,
+                events: app.events,
+                inputs: app.inputs,
+                state_slots: app.state_slots,
+                parameters: app.parameters,
+                expressions: app.expressions,
+                actions: app.actions,
+                loops: app.loops,
+                dependency_edges: app.dependency_edges,
+            })
         })
-    }).collect::<Result<Vec<_>, LoweringError>>()?;
-    Ok(ComponentApplication { version: COMPONENT_VERSION, root_component, components })
+        .collect::<Result<Vec<_>, LoweringError>>()?;
+    Ok(ComponentApplication {
+        version: COMPONENT_VERSION,
+        root_component,
+        components,
+    })
 }
 
 fn lower_component(
     component: &HirComponent,
-    targets: Option<&HashMap<ComponentId, (usize, Vec<String>)>>,
+    targets: Option<&HashMap<ComponentId, (usize, Vec<(String, bool)>)>>,
 ) -> Result<ExecutableApplication, LoweringError> {
     let mut ctx = Ctx::new(component, targets);
     for parameter in &component.parameters {
         let plec_hir::HirParameterSource::Prop { name } = &parameter.source else {
             return Err(ctx.err("direct component parameters are not executable"));
         };
-        if !matches!(component.bindings[parameter.binding.0 as usize].kind, HirBindingKind::Parameter { callable: false }) {
-            return Err(ctx.err("callable component parameters are not executable yet"));
-        }
+        let callable = matches!(
+            component.bindings[parameter.binding.0 as usize].kind,
+            HirBindingKind::Parameter { callable: true }
+        );
         let slot = ctx.app.parameters.len();
         ctx.props.insert(parameter.binding, slot);
+        if callable {
+            ctx.callback_props.insert(parameter.binding, slot);
+        }
         let name = ctx.string(name);
-        ctx.app.parameters.push(ComponentParameter { name });
+        ctx.app
+            .parameters
+            .push(ComponentParameter { name, callable });
     }
     for state in &component.states {
         let initial_expression = ctx.expression(state.initializer, false)?.0;
@@ -98,7 +125,10 @@ fn lower_component(
         let name = ctx.string(&input.name);
         let slot = ctx.app.inputs.len();
         ctx.inputs.insert(input.binding, slot);
-        ctx.app.inputs.push(Input { name, kind: "collection" });
+        ctx.app.inputs.push(Input {
+            name,
+            kind: "collection",
+        });
     }
     for callable in &component.callables {
         if !callable.parameters.is_empty() {
@@ -123,7 +153,8 @@ struct Ctx<'a> {
     inputs: HashMap<BindingId, usize>,
     callables: HashMap<BindingId, usize>,
     props: HashMap<BindingId, usize>,
-    targets: Option<&'a HashMap<ComponentId, (usize, Vec<String>)>>,
+    callback_props: HashMap<BindingId, usize>,
+    targets: Option<&'a HashMap<ComponentId, (usize, Vec<(String, bool)>)>>,
     locals: HashMap<BindingId, plec_hir::ExprId>,
     active_locals: Vec<BindingId>,
     active_loop: Option<usize>,
@@ -131,7 +162,7 @@ struct Ctx<'a> {
 impl<'a> Ctx<'a> {
     fn new(
         component: &'a HirComponent,
-        targets: Option<&'a HashMap<ComponentId, (usize, Vec<String>)>>,
+        targets: Option<&'a HashMap<ComponentId, (usize, Vec<(String, bool)>)>>,
     ) -> Self {
         Self {
             component,
@@ -142,6 +173,7 @@ impl<'a> Ctx<'a> {
             inputs: HashMap::new(),
             callables: HashMap::new(),
             props: HashMap::new(),
+            callback_props: HashMap::new(),
             targets,
             locals: component
                 .locals
@@ -230,7 +262,9 @@ impl<'a> Ctx<'a> {
                     code.push(ExpressionInstruction::LoadState { state });
                 }
                 Some(HirBindingKind::Parameter { callable: false }) => {
-                    let prop = *self.props.get(&binding)
+                    let prop = *self
+                        .props
+                        .get(&binding)
                         .ok_or_else(|| self.err("component prop used before lowering"))?;
                     code.push(ExpressionInstruction::LoadProp { prop });
                 }
@@ -252,7 +286,8 @@ impl<'a> Ctx<'a> {
                 _ => return Err(self.err("binding is not executable in this expression")),
             },
             HirExpr::Member { object, property } => {
-                if matches!(self.expr(object)?, HirExpr::Binding(binding) if matches!(self.component.bindings[binding.0 as usize].kind, HirBindingKind::LoopItem)) {
+                if matches!(self.expr(object)?, HirExpr::Binding(binding) if matches!(self.component.bindings[binding.0 as usize].kind, HirBindingKind::LoopItem))
+                {
                     if !row {
                         return Err(self.err("row field used outside a loop"));
                     }
@@ -439,7 +474,10 @@ impl<'a> Ctx<'a> {
                 let (source, deps) = if input.is_some() {
                     let index = self.app.expressions.len();
                     self.app.expressions.push(ExpressionProgram {
-                        instructions: vec![ExpressionInstruction::MakeArray { count: 0 }, ExpressionInstruction::Return],
+                        instructions: vec![
+                            ExpressionInstruction::MakeArray { count: 0 },
+                            ExpressionInstruction::Return,
+                        ],
                     });
                     (index, BTreeSet::new())
                 } else {
@@ -480,8 +518,17 @@ impl<'a> Ctx<'a> {
                     alternate: None,
                 });
                 let consequent = self.node(conditional.consequent[0], None)?;
-                let alternate = conditional.alternate.first().map(|node| self.node(*node, None)).transpose()?;
-                self.app.nodes[index] = Node::Conditional { test, parent, consequent, alternate };
+                let alternate = conditional
+                    .alternate
+                    .first()
+                    .map(|node| self.node(*node, None))
+                    .transpose()?;
+                self.app.nodes[index] = Node::Conditional {
+                    test,
+                    parent,
+                    consequent,
+                    alternate,
+                };
                 self.edges(deps, "conditional", index);
                 self.prop_edges(test, "conditional", index);
                 self.row_edges(test, "conditional", index);
@@ -491,45 +538,93 @@ impl<'a> Ctx<'a> {
                 if !call.children.is_empty() {
                     return Err(self.err("component children are not executable yet"));
                 }
-                let targets = self.targets.ok_or_else(|| self.err("component calls are not executable in IR 0.9"))?;
-                let (component, parameters) = targets.get(&call.target)
+                let targets = self
+                    .targets
+                    .ok_or_else(|| self.err("component calls are not executable in IR 0.9"))?;
+                let (component, parameters) = targets
+                    .get(&call.target)
                     .ok_or_else(|| self.err("component target missing from application"))?;
                 let mut supplied = BTreeSet::new();
                 let mut props = Vec::new();
                 let mut dependencies = BTreeSet::new();
                 for prop in call.props {
-                    let (name, expression, deps) = match prop {
+                    let (name, prop, deps) = match prop {
                         HirProp::Static { name, value } => {
                             let constant = self.constant(Value::String(value));
                             let expression = self.app.expressions.len();
-                            self.app.expressions.push(ExpressionProgram { instructions: vec![
-                                ExpressionInstruction::Constant { constant }, ExpressionInstruction::Return,
-                            ] });
-                            (name, expression, BTreeSet::new())
+                            self.app.expressions.push(ExpressionProgram {
+                                instructions: vec![
+                                    ExpressionInstruction::Constant { constant },
+                                    ExpressionInstruction::Return,
+                                ],
+                            });
+                            (
+                                name.clone(),
+                                ComponentProp::Value {
+                                    name: self.string(&name),
+                                    expression,
+                                },
+                                BTreeSet::new(),
+                            )
                         }
                         HirProp::Expression { name, value } => {
-                            let (expression, deps) = self.expression(value, self.active_loop.is_some())?;
-                            (name, expression, deps)
+                            let (expression, deps) =
+                                self.expression(value, self.active_loop.is_some())?;
+                            (
+                                name.clone(),
+                                ComponentProp::Value {
+                                    name: self.string(&name),
+                                    expression,
+                                },
+                                deps,
+                            )
                         }
-                        HirProp::Callable { .. } => return Err(self.err("callable component props are not executable yet")),
+                        HirProp::Callable { name, callable } => {
+                            let action = self.callable(&callable)?;
+                            (
+                                name.clone(),
+                                ComponentProp::Callable {
+                                    name: self.string(&name),
+                                    action,
+                                },
+                                BTreeSet::new(),
+                            )
+                        }
                     };
                     if !supplied.insert(name.clone()) {
                         return Err(self.err("duplicate component prop"));
                     }
-                    if !parameters.contains(&name) {
+                    let Some((_, callable)) =
+                        parameters.iter().find(|(parameter, _)| parameter == &name)
+                    else {
                         return Err(self.err("unknown component prop"));
+                    };
+                    if *callable != matches!(prop, ComponentProp::Callable { .. }) {
+                        return Err(self.err("component prop kind does not match parameter"));
                     }
                     dependencies.extend(deps);
-                    props.push(ComponentProp { name: self.string(&name), expression });
+                    props.push(prop);
                 }
-                if supplied.len() != parameters.len() || parameters.iter().any(|name| !supplied.contains(name)) {
+                if supplied.len() != parameters.len()
+                    || parameters.iter().any(|(name, _)| !supplied.contains(name))
+                {
                     return Err(self.err("missing component prop"));
                 }
                 let index = self.app.nodes.len();
-                self.app.nodes.push(Node::Component { component: *component, parent, props });
+                self.app.nodes.push(Node::Component {
+                    component: *component,
+                    parent,
+                    props,
+                });
                 self.edges(dependencies, "component", index);
                 let expressions = match &self.app.nodes[index] {
-                    Node::Component { props, .. } => props.iter().map(|prop| prop.expression).collect::<Vec<_>>(),
+                    Node::Component { props, .. } => props
+                        .iter()
+                        .filter_map(|prop| match prop {
+                            ComponentProp::Value { expression, .. } => Some(*expression),
+                            ComponentProp::Callable { .. } => None,
+                        })
+                        .collect::<Vec<_>>(),
                     _ => unreachable!(),
                 };
                 for expression in expressions {
@@ -600,43 +695,86 @@ impl<'a> Ctx<'a> {
                     handle: state,
                     r#loop: None,
                 },
-                target: DependencyEndpoint { kind, handle, r#loop: None },
+                target: DependencyEndpoint {
+                    kind,
+                    handle,
+                    r#loop: None,
+                },
             })
         }
     }
     fn row_edges(&mut self, expression: usize, kind: &'static str, target_handle: usize) {
-        let Some(loop_index) = self.active_loop else { return };
-        let fields = self.app.expressions[expression].instructions.iter().filter_map(|instruction| match instruction {
-            ExpressionInstruction::LoadRowField { field } => Some(*field),
-            _ => None,
-        }).collect::<BTreeSet<_>>();
+        let Some(loop_index) = self.active_loop else {
+            return;
+        };
+        let fields = self.app.expressions[expression]
+            .instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                ExpressionInstruction::LoadRowField { field } => Some(*field),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
         for field in fields {
             self.app.dependency_edges.push(DependencyEdge {
-                source: DependencyEndpoint { kind: "rowField", handle: field, r#loop: Some(loop_index) },
-                target: DependencyEndpoint { kind, handle: target_handle, r#loop: None },
+                source: DependencyEndpoint {
+                    kind: "rowField",
+                    handle: field,
+                    r#loop: Some(loop_index),
+                },
+                target: DependencyEndpoint {
+                    kind,
+                    handle: target_handle,
+                    r#loop: None,
+                },
             });
         }
     }
     fn prop_edges(&mut self, expression: usize, kind: &'static str, target_handle: usize) {
-        let props = self.app.expressions[expression].instructions.iter().filter_map(|instruction| match instruction {
-            ExpressionInstruction::LoadProp { prop } => Some(*prop),
-            _ => None,
-        }).collect::<BTreeSet<_>>();
+        let props = self.app.expressions[expression]
+            .instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                ExpressionInstruction::LoadProp { prop } => Some(*prop),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
         for prop in props {
             self.app.dependency_edges.push(DependencyEdge {
-                source: DependencyEndpoint { kind: "prop", handle: prop, r#loop: None },
-                target: DependencyEndpoint { kind, handle: target_handle, r#loop: None },
+                source: DependencyEndpoint {
+                    kind: "prop",
+                    handle: prop,
+                    r#loop: None,
+                },
+                target: DependencyEndpoint {
+                    kind,
+                    handle: target_handle,
+                    r#loop: None,
+                },
             });
         }
     }
     fn callable(&mut self, callable: &HirCallable) -> Result<usize, LoweringError> {
         match callable {
-            HirCallable::Reference { binding } => self
-                .callables
-                .get(binding)
-                .copied()
-                .ok_or_else(|| self.err("event callable is not a zero-parameter local action")),
-            HirCallable::Inline { parameters, body } if parameters.is_empty() => self.action(body, self.active_loop.is_some()),
+            HirCallable::Reference { binding } => {
+                if let Some(prop) = self.callback_props.get(binding).copied() {
+                    let action = self.app.actions.len();
+                    self.app.actions.push(ActionProgram {
+                        instructions: vec![
+                            ActionInstruction::CallProp { prop },
+                            ActionInstruction::Return,
+                        ],
+                    });
+                    Ok(action)
+                } else {
+                    self.callables.get(binding).copied().ok_or_else(|| {
+                        self.err("event callable is not a zero-parameter local action")
+                    })
+                }
+            }
+            HirCallable::Inline { parameters, body } if parameters.is_empty() => {
+                self.action(body, self.active_loop.is_some())
+            }
             _ => Err(self.err("callable is not executable in the first IR slice")),
         }
     }
@@ -645,10 +783,14 @@ impl<'a> Ctx<'a> {
         match body {
             HirCallableBody::Block(stmts) => self.statements(stmts, &mut code, row)?,
             HirCallableBody::Expression(expr) => {
-                let (state, value) = self.setter_call(*expr)?;
-                let (expression, _) = self.expression(value, row)?;
-                code.push(ActionInstruction::Evaluate { expression });
-                code.push(ActionInstruction::StoreState { state });
+                if let Ok((state, value)) = self.setter_call(*expr) {
+                    let (expression, _) = self.expression(value, row)?;
+                    code.push(ActionInstruction::Evaluate { expression });
+                    code.push(ActionInstruction::StoreState { state });
+                } else {
+                    let prop = self.callback_call(*expr)?;
+                    code.push(ActionInstruction::CallProp { prop });
+                }
             }
         }
         code.push(ActionInstruction::Return);
@@ -659,7 +801,8 @@ impl<'a> Ctx<'a> {
     fn statements(
         &mut self,
         stmts: &[HirStmt],
-        code: &mut Vec<ActionInstruction>, row: bool,
+        code: &mut Vec<ActionInstruction>,
+        row: bool,
     ) -> Result<(), LoweringError> {
         for stmt in stmts {
             match stmt {
@@ -694,8 +837,10 @@ impl<'a> Ctx<'a> {
                     code[jump_end] = ActionInstruction::Jump { target: end };
                 }
                 HirStmt::Return { .. } => code.push(ActionInstruction::Return),
-                HirStmt::Expression { .. } => {
-                    return Err(self.err("generic action expressions are not executable yet"))
+                HirStmt::Expression { expression, .. } => {
+                    code.push(ActionInstruction::CallProp {
+                        prop: self.callback_call(*expression)?,
+                    });
                 }
             }
         }
@@ -726,6 +871,22 @@ impl<'a> Ctx<'a> {
                 .ok_or_else(|| self.err("state setter target missing"))?,
             args[0],
         ))
+    }
+
+    fn callback_call(&self, id: plec_hir::ExprId) -> Result<usize, LoweringError> {
+        let HirExpr::Call { callee, args } = self.expr(id)? else {
+            return Err(self.err("callable action must be a direct component prop call"));
+        };
+        if !args.is_empty() {
+            return Err(self.err("callable component props do not accept arguments"));
+        }
+        let HirExpr::Binding(binding) = self.expr(*callee)? else {
+            return Err(self.err("callable component prop must be a direct binding"));
+        };
+        self.callback_props
+            .get(binding)
+            .copied()
+            .ok_or_else(|| self.err("action is not a callable component prop"))
     }
 }
 
@@ -807,10 +968,21 @@ mod tests {
         assert_eq!(app.inputs.len(), 1);
         assert_eq!(app.inputs[0].kind, "collection");
         assert_eq!(app.loops[0].input, Some(0));
-        assert!(matches!(app.nodes.iter().find(|node| matches!(node, Node::Conditional { .. })), Some(_)));
+        assert!(matches!(
+            app.nodes
+                .iter()
+                .find(|node| matches!(node, Node::Conditional { .. })),
+            Some(_)
+        ));
         assert!(app.events.iter().any(|event| event.r#loop == Some(0)));
-        assert!(app.dependency_edges.iter().any(|edge| edge.source.kind == "rowField" && edge.target.kind == "binding"));
-        assert!(app.dependency_edges.iter().any(|edge| edge.source.kind == "rowField" && edge.target.kind == "conditional"));
+        assert!(app
+            .dependency_edges
+            .iter()
+            .any(|edge| edge.source.kind == "rowField" && edge.target.kind == "binding"));
+        assert!(app
+            .dependency_edges
+            .iter()
+            .any(|edge| edge.source.kind == "rowField" && edge.target.kind == "conditional"));
     }
 
     #[test]
@@ -834,7 +1006,9 @@ mod tests {
 
     #[test]
     fn lowers_component_application_with_scalar_props() {
-        let modules = vec![parse_module("test.tsx", r#"
+        let modules = vec![parse_module(
+            "test.tsx",
+            r#"
             export function App() {
                 const [name, setName] = useState("Ada");
                 return <main><Child name={name} /></main>;
@@ -843,28 +1017,78 @@ mod tests {
                 const [suffix, setSuffix] = useState("!");
                 return <button onClick={() => setSuffix("?")}>{name}{suffix}</button>;
             }
-        "#).unwrap()];
+        "#,
+        )
+        .unwrap()];
         let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
         let root = discover_root_component(&modules, &graph, "test.tsx", Some("App")).unwrap();
         let hir = lower_application(&modules, &root, &graph).unwrap();
         let app = lower_application_to_executable(&hir).unwrap();
         assert_eq!(app.version, "0.10");
         assert_eq!(app.components.len(), 2);
-        assert!(app.components[0].nodes.iter().any(|node| matches!(node, Node::Component { component: 1, .. })));
-        assert!(app.components[1].expressions.iter().any(|expression| expression.instructions.iter().any(|instruction| matches!(instruction, ExpressionInstruction::LoadProp { prop: 0 }))));
-        assert!(app.components[1].dependency_edges.iter().any(|edge| edge.source.kind == "prop" && edge.target.kind == "binding"));
+        assert!(app.components[0]
+            .nodes
+            .iter()
+            .any(|node| matches!(node, Node::Component { component: 1, .. })));
+        assert!(app.components[1]
+            .expressions
+            .iter()
+            .any(
+                |expression| expression.instructions.iter().any(|instruction| matches!(
+                    instruction,
+                    ExpressionInstruction::LoadProp { prop: 0 }
+                ))
+            ));
+        assert!(app.components[1]
+            .dependency_edges
+            .iter()
+            .any(|edge| edge.source.kind == "prop" && edge.target.kind == "binding"));
+    }
+
+    #[test]
+    fn lowers_keyed_callable_component_prop() {
+        let modules = vec![parse_module("test.tsx", r#"
+            export function Todos() {
+                const todos = useCollection("items");
+                const [selected, setSelected] = useState("");
+                return <main><p>{selected}</p><ul>{todos.map(todo => <Child key={todo.id} onPick={() => setSelected(todo.title)} />)}</ul></main>;
+            }
+            function Child({ onPick }: { onPick: () => void }) {
+                return <button onClick={onPick}>Pick</button>;
+            }
+        "#).unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let root = discover_root_component(&modules, &graph, "test.tsx", Some("Todos")).unwrap();
+        let hir = lower_application(&modules, &root, &graph).unwrap();
+        let app = lower_application_to_executable(&hir).unwrap();
+        assert_eq!(app.version, "0.10");
+        assert!(
+            matches!(app.components[0].nodes.iter().find(|node| matches!(node, Node::Component { .. })), Some(Node::Component { props, .. }) if matches!(props[0], ComponentProp::Callable { .. }))
+        );
+        assert!(app.components[1].parameters[0].callable);
+        assert!(app.components[1].actions.iter().any(|action| matches!(
+            action.instructions.first(),
+            Some(ActionInstruction::CallProp { prop: 0 })
+        )));
     }
 
     #[test]
     fn component_application_rejects_missing_props_and_preserves_loop_call_edges() {
-        let modules = vec![parse_module("test.tsx", r#"
+        let modules = vec![parse_module(
+            "test.tsx",
+            r#"
             export function App() { return <Child />; }
             function Child({ name }) { return <div>{name}</div>; }
-        "#).unwrap()];
+        "#,
+        )
+        .unwrap()];
         let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
         let root = discover_root_component(&modules, &graph, "test.tsx", Some("App")).unwrap();
         let hir = lower_application(&modules, &root, &graph).unwrap();
-        assert!(lower_application_to_executable(&hir).unwrap_err().to_string().contains("missing component prop"));
+        assert!(lower_application_to_executable(&hir)
+            .unwrap_err()
+            .to_string()
+            .contains("missing component prop"));
 
         let modules = vec![parse_module("test.tsx", r#"
             export function App() { const rows = [{ id: "1" }]; return <ul>{rows.map(row => <Child key={row.id} name={row.id} />)}</ul>; }
@@ -874,7 +1098,13 @@ mod tests {
         let root = discover_root_component(&modules, &graph, "test.tsx", Some("App")).unwrap();
         let hir = lower_application(&modules, &root, &graph).unwrap();
         let app = lower_application_to_executable(&hir).unwrap();
-        assert!(app.components[0].nodes.iter().any(|node| matches!(node, Node::Component { .. })));
-        assert!(app.components[0].dependency_edges.iter().any(|edge| edge.source.kind == "rowField" && edge.target.kind == "component"));
+        assert!(app.components[0]
+            .nodes
+            .iter()
+            .any(|node| matches!(node, Node::Component { .. })));
+        assert!(app.components[0]
+            .dependency_edges
+            .iter()
+            .any(|edge| edge.source.kind == "rowField" && edge.target.kind == "component"));
     }
 }

@@ -9,7 +9,7 @@
       "constants": [],
       "nodes": [
         {"op": "element", "tag": 1, "parent": null, "children": [2]},
-        {"op": "component", "component": 1, "parent": null, "props": [{"name": 3, "expression": 2}]},
+        {"op": "component", "component": 1, "parent": null, "props": [{"kind": "value", "name": 3, "expression": 2}]},
         {"op": "loop", "loop": 0, "parent": 0}
       ],
       "texts": [],
@@ -49,7 +49,7 @@
       "events": [{"target": 3, "type": 4, "action": 0}],
       "inputs": [],
       "stateSlots": [{"initialExpression": 0, "frameSlot": 0}],
-      "parameters": [{"name": 0}],
+      "parameters": [{"name": 0, "callable": false}],
       "expressions": [
         {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
         {"instructions": [{"op": "loadProp", "prop": 0}, {"op": "return"}]},

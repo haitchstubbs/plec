@@ -1,6 +1,7 @@
 use crate::dom::{bindings::*, platform::*};
 use crate::eval::typed_vm::*;
 use crate::runtime::lifecycle::*;
+use crate::schema::typed::TypedComponentProp;
 use crate::typed::cookie::*;
 use crate::typed::events::*;
 #[cfg(feature = "fetch")]
@@ -46,10 +47,24 @@ pub(crate) struct TypedComponentRequest {
     pub(crate) call: usize,
     pub(crate) component: usize,
     pub(crate) props: HashMap<String, RuntimeValue>,
+    pub(crate) callbacks: HashMap<String, TypedCallbackSpec>,
     pub(crate) parent: Node,
     pub(crate) start: Node,
     pub(crate) end: Node,
     pub(crate) key: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct TypedCallback {
+    pub(crate) parent_id: String,
+    pub(crate) action: usize,
+    pub(crate) row: Option<HashMap<String, RuntimeValue>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct TypedCallbackSpec {
+    pub(crate) action: usize,
+    pub(crate) row: Option<HashMap<String, RuntimeValue>>,
 }
 
 pub(crate) struct TypedComponentRefresh {
@@ -70,6 +85,8 @@ pub(crate) struct TypedRuntime {
     pub(crate) listener_requests: Vec<TypedListenerRequest>,
     pub(crate) component_requests: Vec<TypedComponentRequest>,
     pub(crate) component_refreshes: Vec<TypedComponentRefresh>,
+    pub(crate) callback_requests: Vec<TypedCallback>,
+    pub(crate) callbacks: Vec<Option<TypedCallback>>,
     pub(crate) next_generation: u64,
     pub(crate) graph_generation: u64,
     pub(crate) host_inputs: HashMap<String, RuntimeValue>,
@@ -216,29 +233,62 @@ impl PlecRuntime {
     pub(crate) fn flush_component_work(&self) -> Result<(), JsValue> {
         loop {
             self.mount_component_requests()?;
-            let refreshes = self.typed.borrow_mut().iter_mut().flat_map(|(parent, instance)| {
-                instance.runtime.component_refreshes.drain(..)
-                    .map(|refresh| (parent.clone(), refresh)).collect::<Vec<_>>()
-            }).collect::<Vec<_>>();
+            let refreshes = self
+                .typed
+                .borrow_mut()
+                .iter_mut()
+                .flat_map(|(parent, instance)| {
+                    instance
+                        .runtime
+                        .component_refreshes
+                        .drain(..)
+                        .map(|refresh| (parent.clone(), refresh))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
             if refreshes.is_empty() {
                 self.dispose_orphan_components();
                 return Ok(());
             }
             for (parent, refresh) in refreshes {
-                let children = self.typed.borrow().iter().filter_map(|(id, instance)| {
-                    (instance.parent_id.as_deref() == Some(parent.as_str())
-                        && instance.component_call == Some(refresh.call)
-                        && instance.component_start.as_ref().is_some_and(|start| start.is_same_node(Some(&refresh.start))))
+                let children = self
+                    .typed
+                    .borrow()
+                    .iter()
+                    .filter_map(|(id, instance)| {
+                        (instance.parent_id.as_deref() == Some(parent.as_str())
+                            && instance.component_call == Some(refresh.call)
+                            && instance
+                                .component_start
+                                .as_ref()
+                                .is_some_and(|start| start.is_same_node(Some(&refresh.start))))
                         .then(|| id.clone())
-                }).collect::<Vec<_>>();
+                    })
+                    .collect::<Vec<_>>();
                 for child in children {
                     let mut typed = self.typed.borrow_mut();
                     let instance = typed.get_mut(&child).expect("component instance exists");
-                    let values = instance.runtime.app.parameters.iter().map(|parameter| {
-                        let name = instance.runtime.app.strings.get(parameter.name)
-                            .ok_or_else(|| JsValue::from_str("component parameter handle out of range"))?;
-                        Ok(refresh.props.get(name).cloned().unwrap_or(RuntimeValue::Null))
-                    }).collect::<Result<Vec<_>, JsValue>>()?;
+                    let values = instance
+                        .runtime
+                        .app
+                        .parameters
+                        .iter()
+                        .map(|parameter| {
+                            let name = instance
+                                .runtime
+                                .app
+                                .strings
+                                .get(parameter.name)
+                                .ok_or_else(|| {
+                                    JsValue::from_str("component parameter handle out of range")
+                                })?;
+                            Ok(refresh
+                                .props
+                                .get(name)
+                                .cloned()
+                                .unwrap_or(RuntimeValue::Null))
+                        })
+                        .collect::<Result<Vec<_>, JsValue>>()?;
                     let changed = instance.runtime.app.runtime_props != values;
                     instance.runtime.app.runtime_props = values;
                     if changed {
@@ -254,14 +304,24 @@ impl PlecRuntime {
 
     fn dispose_orphan_components(&self) {
         loop {
-            let stale = self.typed.borrow().iter().filter_map(|(id, instance)| {
-                instance.parent_id.as_ref().and_then(|_| {
-                    instance.runtime.nodes.get(&instance.runtime.app.root_node)
-                        .filter(|node| node.parent_node().is_none())
-                        .map(|_| id.clone())
+            let stale = self
+                .typed
+                .borrow()
+                .iter()
+                .filter_map(|(id, instance)| {
+                    instance.parent_id.as_ref().and_then(|_| {
+                        instance
+                            .runtime
+                            .nodes
+                            .get(&instance.runtime.app.root_node)
+                            .filter(|node| node.parent_node().is_none())
+                            .map(|_| id.clone())
+                    })
                 })
-            }).collect::<Vec<_>>();
-            if stale.is_empty() { return; }
+                .collect::<Vec<_>>();
+            if stale.is_empty() {
+                return;
+            }
             let mut typed = self.typed.borrow_mut();
             for id in stale {
                 if let Some(mut instance) = typed.remove(&id) {
@@ -274,38 +334,81 @@ impl PlecRuntime {
 
     pub(crate) fn mount_component_requests(&self) -> Result<(), JsValue> {
         let definitions = self.typed_components.borrow().clone();
-        let Some(definitions) = definitions else { return Ok(()); };
+        let Some(definitions) = definitions else {
+            return Ok(());
+        };
         loop {
-            let requests = self.typed.borrow_mut().iter_mut().flat_map(|(id, instance)| {
-                instance.runtime.component_requests.drain(..).map(|request| (id.clone(), request)).collect::<Vec<_>>()
-            }).collect::<Vec<_>>();
-            if requests.is_empty() { return Ok(()); }
+            let requests = self
+                .typed
+                .borrow_mut()
+                .iter_mut()
+                .flat_map(|(id, instance)| {
+                    instance
+                        .runtime
+                        .component_requests
+                        .drain(..)
+                        .map(|request| (id.clone(), request))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            if requests.is_empty() {
+                return Ok(());
+            }
             for (parent_id, request) in requests {
-                let mut app = definitions.components.get(request.component)
+                let mut app = definitions
+                    .components
+                    .get(request.component)
                     .ok_or_else(|| JsValue::from_str("component target out of range"))?
                     .clone();
-                app.runtime_props = app.parameters.iter().map(|parameter| {
-                    let name = app.strings.get(parameter.name)
-                        .ok_or_else(|| JsValue::from_str("component parameter handle out of range"))?;
-                    Ok(request.props.get(name).cloned().unwrap_or(RuntimeValue::Null))
-                }).collect::<Result<Vec<_>, JsValue>>()?;
+                app.runtime_props = app
+                    .parameters
+                    .iter()
+                    .map(|parameter| {
+                        let name = app.strings.get(parameter.name).ok_or_else(|| {
+                            JsValue::from_str("component parameter handle out of range")
+                        })?;
+                        Ok(request
+                            .props
+                            .get(name)
+                            .cloned()
+                            .unwrap_or(RuntimeValue::Null))
+                    })
+                    .collect::<Result<Vec<_>, JsValue>>()?;
                 let mut runtime = TypedRuntime::new(app)?;
+                runtime.callbacks = runtime
+                    .app
+                    .parameters
+                    .iter()
+                    .map(|parameter| {
+                        let name = runtime.app.strings.get(parameter.name).ok_or_else(|| {
+                            JsValue::from_str("component parameter handle out of range")
+                        })?;
+                        Ok(request.callbacks.get(name).map(|callback| TypedCallback {
+                            parent_id: parent_id.clone(),
+                            action: callback.action,
+                            row: callback.row.clone(),
+                        }))
+                    })
+                    .collect::<Result<Vec<_>, JsValue>>()?;
                 runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
                 runtime.graph_generation = self.next_typed_generation();
                 runtime.mount_before(&request.parent, &request.end)?;
                 let id = format!("{parent_id}/component:{}:{}", request.call, request.key);
-                self.typed.borrow_mut().insert(id.clone(), TypedGraphInstance {
-                    parent_id: Some(parent_id),
-                    outlet_id: format!("component:{}", request.call),
-                    graph_id: format!("component:{}", request.component),
-                    route_id: None,
-                    match_key: None,
-                    route_state: None,
-                    loader_runtime: None,
-                    component_call: Some(request.call),
-                    component_start: Some(request.start),
-                    runtime,
-                });
+                self.typed.borrow_mut().insert(
+                    id.clone(),
+                    TypedGraphInstance {
+                        parent_id: Some(parent_id),
+                        outlet_id: format!("component:{}", request.call),
+                        graph_id: format!("component:{}", request.component),
+                        route_id: None,
+                        match_key: None,
+                        route_state: None,
+                        loader_runtime: None,
+                        component_call: Some(request.call),
+                        component_start: Some(request.start),
+                        runtime,
+                    },
+                );
             }
         }
     }
@@ -319,16 +422,36 @@ impl PlecRuntime {
     ) -> Result<JsValue, JsValue> {
         if self.typed_components.borrow().is_some() {
             let rows: Vec<Value> = serde_wasm_bindgen::from_value(rows).map_err(error)?;
-            let ids = self.typed.borrow().iter().filter_map(|(id, instance)| {
-                instance.runtime.app.inputs.iter().any(|input| {
-                    instance.runtime.app.strings.get(input.name).map(String::as_str) == Some(input_id)
-                }).then(|| id.clone())
-            }).collect::<Vec<_>>();
+            let ids = self
+                .typed
+                .borrow()
+                .iter()
+                .filter_map(|(id, instance)| {
+                    instance
+                        .runtime
+                        .app
+                        .inputs
+                        .iter()
+                        .any(|input| {
+                            instance
+                                .runtime
+                                .app
+                                .strings
+                                .get(input.name)
+                                .map(String::as_str)
+                                == Some(input_id)
+                        })
+                        .then(|| id.clone())
+                })
+                .collect::<Vec<_>>();
             let mut metrics = UpdateMetrics::default();
             for id in ids {
                 let mut typed = self.typed.borrow_mut();
-                typed.get_mut(&id).expect("live typed instance")
-                    .runtime.reconcile_input(input_id, rows.clone(), &mut metrics)?;
+                typed
+                    .get_mut(&id)
+                    .expect("live typed instance")
+                    .runtime
+                    .reconcile_input(input_id, rows.clone(), &mut metrics)?;
             }
             self.flush_component_work()?;
             self.install_typed_event_listeners()?;
@@ -367,20 +490,43 @@ impl PlecRuntime {
 impl PlecRuntime {
     pub(crate) fn apply_typed_delta(&self, delta: JsValue) -> Result<JsValue, JsValue> {
         let delta: Delta = serde_wasm_bindgen::from_value(delta).map_err(error)?;
-        let ids = match (self.typed_components.borrow().is_some(), delta.instance_id()) {
+        let ids = match (
+            self.typed_components.borrow().is_some(),
+            delta.instance_id(),
+        ) {
             (true, Some(id)) => vec![id.to_owned()],
-            (true, None) => self.typed.borrow().iter().filter_map(|(id, instance)| {
-                instance.runtime.app.inputs.iter().any(|input| {
-                    instance.runtime.app.strings.get(input.name).map(String::as_str) == Some(delta.input_id())
-                }).then(|| id.clone())
-            }).collect(),
+            (true, None) => self
+                .typed
+                .borrow()
+                .iter()
+                .filter_map(|(id, instance)| {
+                    instance
+                        .runtime
+                        .app
+                        .inputs
+                        .iter()
+                        .any(|input| {
+                            instance
+                                .runtime
+                                .app
+                                .strings
+                                .get(input.name)
+                                .map(String::as_str)
+                                == Some(delta.input_id())
+                        })
+                        .then(|| id.clone())
+                })
+                .collect(),
             (false, _) => vec![graph_instance_id(None, "main", None)],
         };
         let mut metrics = UpdateMetrics::default();
         for id in ids {
-            self.typed.borrow_mut().get_mut(&id)
+            self.typed
+                .borrow_mut()
+                .get_mut(&id)
                 .ok_or_else(|| JsValue::from_str("typed application missing"))?
-                .runtime.apply_delta(delta.clone(), &mut metrics)?;
+                .runtime
+                .apply_delta(delta.clone(), &mut metrics)?;
         }
         self.flush_component_work()?;
         self.install_typed_event_listeners()?;
@@ -430,6 +576,8 @@ impl TypedRuntime {
             listener_requests: Vec::new(),
             component_requests: Vec::new(),
             component_refreshes: Vec::new(),
+            callback_requests: Vec::new(),
+            callbacks: Vec::new(),
             next_generation: 1,
             graph_generation: 1,
             host_inputs: HashMap::new(),
@@ -464,21 +612,35 @@ impl TypedRuntime {
             let Some(TypedNode::Component { props, .. }) = self.app.nodes.get(call).cloned() else {
                 continue;
             };
-            let props = props.into_iter().map(|prop| {
-                let name = self.app.strings.get(prop.name)
-                    .ok_or_else(|| JsValue::from_str("component prop name out of range"))?
-                    .clone();
-                let value = typed_eval(&self.app, prop.expression, &self.states, row, 0)?;
-                Ok((name, value))
-            }).collect::<Result<HashMap<_, _>, JsValue>>()?;
-            self.component_refreshes.push(TypedComponentRefresh { call, start, props });
+            let props = props
+                .into_iter()
+                .filter_map(|prop| match prop {
+                    TypedComponentProp::Value { name, expression } => Some((name, expression)),
+                    TypedComponentProp::Callable { .. } => None,
+                })
+                .map(|(name, expression)| {
+                    let name = self
+                        .app
+                        .strings
+                        .get(name)
+                        .ok_or_else(|| JsValue::from_str("component prop name out of range"))?
+                        .clone();
+                    let value = typed_eval(&self.app, expression, &self.states, row, 0)?;
+                    Ok((name, value))
+                })
+                .collect::<Result<HashMap<_, _>, JsValue>>()?;
+            self.component_refreshes
+                .push(TypedComponentRefresh { call, start, props });
         }
         Ok(())
     }
 
     pub(crate) fn queue_static_component_refreshes(&mut self) -> Result<(), JsValue> {
         self.queue_component_refreshes(
-            self.nodes.iter().map(|(call, node)| (*call, node.clone())).collect(),
+            self.nodes
+                .iter()
+                .map(|(call, node)| (*call, node.clone()))
+                .collect(),
             None,
         )
     }
@@ -752,31 +914,62 @@ impl TypedRuntime {
                 )?;
                 Ok(marker)
             }
-            TypedNode::Component { component, props, .. } => {
+            TypedNode::Component {
+                component, props, ..
+            } => {
                 let parent = parent.ok_or_else(|| JsValue::from_str("component parent missing"))?;
-                let start: Node = doc.create_comment(&format!("plec:component:{index}")).into();
-                let end: Node = doc.create_comment(&format!("plec:component-end:{index}")).into();
+                let start: Node = doc
+                    .create_comment(&format!("plec:component:{index}"))
+                    .into();
+                let end: Node = doc
+                    .create_comment(&format!("plec:component-end:{index}"))
+                    .into();
                 parent.append_child(&start)?;
                 parent.append_child(&end)?;
-                let values = props.into_iter().map(|prop| {
-                    let name = self.app.strings.get(prop.name)
+                let mut values = HashMap::new();
+                let mut callbacks = HashMap::new();
+                for prop in props {
+                    let name = self
+                        .app
+                        .strings
+                        .get(prop.name())
                         .ok_or_else(|| JsValue::from_str("component prop name out of range"))?
                         .clone();
-                    let value = typed_eval(&self.app, prop.expression, &self.states, row, row_index)?;
-                    Ok((name, value))
-                }).collect::<Result<HashMap<_, _>, JsValue>>()?;
+                    match prop {
+                        TypedComponentProp::Value { expression, .. } => {
+                            values.insert(
+                                name,
+                                typed_eval(&self.app, expression, &self.states, row, row_index)?,
+                            );
+                        }
+                        TypedComponentProp::Callable { action, .. } => {
+                            callbacks.insert(
+                                name,
+                                TypedCallbackSpec {
+                                    action,
+                                    row: row.cloned(),
+                                },
+                            );
+                        }
+                    }
+                }
                 let key = format!("{index}:{}", self.next_component_instance);
                 self.next_component_instance += 1;
                 self.component_requests.push(TypedComponentRequest {
                     call: index,
                     component,
                     props: values,
+                    callbacks,
                     parent: parent.clone(),
                     start: start.clone(),
                     end,
                     key,
                 });
-                if row.is_some() { local.insert(index, start.clone()); } else { self.nodes.insert(index, start.clone()); }
+                if row.is_some() {
+                    local.insert(index, start.clone());
+                } else {
+                    self.nodes.insert(index, start.clone());
+                }
                 Ok(start)
             }
             TypedNode::Conditional { test, .. } => {
@@ -1154,7 +1347,9 @@ impl TypedRuntime {
     fn row_dom_nodes(root: &Node, end: Option<&Node>) -> Vec<Node> {
         let mut nodes = vec![root.clone()];
         while end.is_some_and(|end| !nodes.last().unwrap().is_same_node(Some(end))) {
-            let Some(next) = nodes.last().unwrap().next_sibling() else { break; };
+            let Some(next) = nodes.last().unwrap().next_sibling() else {
+                break;
+            };
             nodes.push(next);
         }
         nodes
@@ -1217,7 +1412,12 @@ impl TypedRuntime {
             .map(|rows| {
                 desired
                     .iter()
-                    .flat_map(|key| rows.rows.get(key).map(|row| Self::row_dom_nodes(&row.root, row.end.as_ref())).unwrap_or_default())
+                    .flat_map(|key| {
+                        rows.rows
+                            .get(key)
+                            .map(|row| Self::row_dom_nodes(&row.root, row.end.as_ref()))
+                            .unwrap_or_default()
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
