@@ -5,15 +5,15 @@ End State: Typescript plec should basically be deletable
 
 ## Frontier
 
-Rust: TSX parser + semantic graph -> canonical root component -> reachable `HirApplication` -> per-component HIR -> executable IR 0.9/0.10 components -> JSON -> typed WASM runtime -> DOM.
+Rust: TSX parser + semantic graph -> canonical root component -> reachable `HirApplication` -> per-component HIR -> executable IR 0.9/0.10 components/actions -> JSON -> typed WASM runtime -> DOM.
 Proven: scalar state text update; keyed collection row insert/update/move/remove; standalone/row-local conditional lifecycle; static, keyed, and nested direct component prop refresh without remount.
 `useCollection("name")` is a named collection HIR input; lowering preserves it as executable input and links its keyed loop.
 Slots: Rust artifact -> keyed caller template -> callee `Slot` -> WASM DOM; row text/conditional/event retain caller ownership through update/move/remove.
-Next: inspect next loss boundary; slot lifecycle complete for one implicit keyed slot.
+Next: callable component-prop arguments need cross-instance argument/frame ownership; keep distinct from local calls.
 
 ## Ownership
 
-Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/row/conditional lowering, direct calls, implicit slot validity/lowering, zero-arg callable props, and parent state/row-field/prop->component dependency edges. Runtime owns component-instance identity, slot row context, prop refresh, callback dispatch, named-input fan-out, and orphan disposal.
+Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/row/conditional lowering, direct calls, parameterized local action frames/calls, implicit slot validity/lowering, zero-arg callable props, and parent state/row-field/prop->component dependency edges. Runtime owns component-instance identity, local action-frame execution, slot row context, prop refresh, callback dispatch, named-input fan-out, and orphan disposal.
 TypeScript owns production component expansion, rich actions, router, and TanStack integration/delta production.
 Runtime owns typed artifact validation, state/delta dispatch, keyed-loop reconciliation, conditional lifecycle, direct listener ownership.
 
@@ -28,16 +28,19 @@ Keyed component props: Rust 0.10 artifact -> WASM collection deltas; browser fix
 Nested direct component props: Rust 0.10 `App -> Child -> Grandchild` artifact -> WASM mount/state update; browser fixture proves transitive prop refresh keeps section/span/text identity and grandchild local action live.
 Keyed callable component props: Rust 0.10 artifact -> WASM child click -> parent action; browser fixture proves parent row capture, child identity across move, and removed child callback inert.
 Keyed slot: Rust 0.10 artifact -> WASM caller button/text/conditional inside callee `<li>`; update/move retain identities, remove detaches slot and stale callback inert.
+Parameterized local action: Rust 0.10 artifact -> WASM `LoadFrame`/`Call`; scalar update retains text identity and keyed row argument retains row/button identity through move.
 
 ## Capability status
 
 Rust HIR represents reachable acyclic component applications, canonical calls/props, `useCollection("name")`, fragments, conditionals, keyed `ForEach`, loop-item bindings, callable parameters.
 Rust lowers one implicit `{children}` slot; slotless child calls fail. Runtime validates one target slot, mounts templates with keyed row context, merges nodes/conditionals/listeners into caller row. Rust fixture/WASM proof complete.
+Rust lowers callable parameters into deterministic action frame slots and direct local calls into typed `Call` argument programs; runtime schema/VM validates and executes this contract.
 
 ## Semantic-loss boundaries
 
 Reachable component identity/call props/parameters survive into `HirApplication` and 0.10 IR. Child sinks retain `prop` edges. Runtime-local component anchors connect parent call nodes to child instances; row roots retain component start/end range so keyed move/remove owns child DOM and lifecycle.
 Resolved: slot template IDs, row frame, listener ownership, and conditional regions survive caller -> callee anchors. Calls with children and no target `Slot` fail lowering/validation.
+Resolved: local callable parameter identity survives HIR -> 0.10 action frame -> runtime `LoadFrame`. Still lost: callback arguments at child `CallProp` -> parent action frame boundary.
 
 ## Contract drift
 
@@ -62,10 +65,11 @@ Other local graphs are static or state-only; graph artifacts are current local e
 
 Application discovery: `crates/plec-compiler/src/hir_builder.rs::lower_application`; executable lowering: `crates/plec-compiler/src/lowering.rs`; HIR component/input model: `crates/plec-hir/src/{component,node}.rs`; Rust IR: `crates/plec-ir/src/lib.rs`.
 Rust vertical fixtures: `crates/plec-compiler/tests/rust_counter_fixture.rs`; runtime artifacts: `packages/plec-runtime/crates/runtime/tests/fixtures/rust-*.json`; browser proof: `typed_events.rs` (`rust_keyed_slot_fixture_retains_caller_row_identity_and_disposes_slots`). Component prototype: `crates/plec-compiler/src/lowering.rs::lower_application_to_executable`; runtime typed schema/mount: `schema/typed.rs`, `typed/runtime.rs`.
+Action-frame lowering: `crates/plec-compiler/src/lowering.rs::{action,local_action_call}`; Rust/WASM fixtures: `rust-local-action-0.10.json`, `rust-keyed-local-action-0.10.json`, `typed_events.rs::rust_keyed_local_action_fixture_retains_row_identity`.
 
 ## Candidate clusters
 
-No selected candidate. Re-evaluate from remaining loss boundaries.
+Callable component-prop arguments + cross-instance callback frame/payload ownership; separate from local action frames.
 
 ## Corrections
 

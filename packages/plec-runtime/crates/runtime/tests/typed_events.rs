@@ -93,6 +93,16 @@ fn rust_keyed_slot_component_artifact() -> serde_json::Value {
         .expect("Rust keyed slot fixture should be valid JSON")
 }
 
+fn rust_local_action_artifact() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/rust-local-action-0.10.json"))
+        .expect("Rust local-action fixture should be valid JSON")
+}
+
+fn rust_keyed_local_action_artifact() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/rust-keyed-local-action-0.10.json"))
+        .expect("Rust keyed local-action fixture should be valid JSON")
+}
+
 fn component_slot_artifact() -> serde_json::Value {
     serde_json::json!({
         "version":"0.10", "rootComponent":0,
@@ -514,6 +524,23 @@ fn rust_compiler_counter_fixture_mounts_and_updates_one_text_binding() {
 }
 
 #[wasm_bindgen_test]
+fn rust_local_action_fixture_updates_existing_text_node() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, rust_local_action_artifact(), &root);
+    let button = root.query_selector("button").unwrap().unwrap();
+    let text = button.first_child().unwrap();
+    button
+        .clone()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(button.text_content().as_deref(), Some("1"));
+    assert!(text.is_same_node(button.first_child().as_ref()));
+}
+
+#[wasm_bindgen_test]
 fn rust_component_fixture_refreshes_child_without_remounting() {
     let runtime = PlecRuntime::new();
     let root = mount_root();
@@ -636,6 +663,52 @@ fn rust_keyed_slot_fixture_retains_caller_row_identity_and_disposes_slots() {
             .unwrap(),
         "Updated"
     );
+}
+
+#[wasm_bindgen_test]
+fn rust_keyed_local_action_fixture_retains_row_identity() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, rust_keyed_local_action_artifact(), &root);
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"insert","input_id":"items","row_key":"one","row":{"id":"one","title":"One"},"before_row_key":null}),
+    );
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"insert","input_id":"items","row_key":"two","row":{"id":"two","title":"Two"},"before_row_key":null}),
+    );
+    let first = root.query_selector("li").unwrap().unwrap();
+    let first_node: web_sys::Node = first.clone().into();
+    let button = first.query_selector("button").unwrap().unwrap();
+    button
+        .clone()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(
+        root.query_selector("p")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .as_deref(),
+        Some("One")
+    );
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"move","input_id":"items","row_key":"two","before_row_key":"one"}),
+    );
+    assert!(first_node.is_same_node(root.query_selector_all("li").unwrap().item(1).as_ref()));
+    let moved_button = root
+        .query_selector_all("li")
+        .unwrap()
+        .item(1)
+        .and_then(|row| row.dyn_into::<Element>().ok())
+        .and_then(|row| row.query_selector("button").ok().flatten())
+        .unwrap();
+    let moved_button_node: web_sys::Node = moved_button.into();
+    assert!(button.is_same_node(Some(&moved_button_node)));
 }
 
 #[wasm_bindgen_test]
