@@ -13,6 +13,34 @@ pub struct ComponentApplication {
     pub components: Vec<ExecutableComponent>,
 }
 
+/// The router is deliberately a separate artifact: graphs keep local runtime
+/// handles while this manifest owns the links between route instances.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteManifest {
+    pub version: u32,
+    pub revision: String,
+    pub root_graph_id: String,
+    pub routes: Vec<RouteManifestEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteManifestEntry {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    pub path: String,
+    pub graph_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_graph_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_graph_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loader_action: Option<usize>,
+    pub outlet_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecutableComponent {

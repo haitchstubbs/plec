@@ -119,6 +119,27 @@ pub struct HirApplication {
     pub components: Vec<HirComponent>,
 }
 
+/// Route declarations are semantic input to the executable route manifest.
+/// They intentionally reference canonical component IDs rather than runtime
+/// graph IDs so lowering remains the only place that chooses artifact names.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirRouteApplication {
+    pub root: ComponentId,
+    pub routes: Vec<HirRoute>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirRoute {
+    pub id: String,
+    pub parent: Option<String>,
+    pub path: String,
+    pub component: ComponentId,
+    pub pending_component: Option<ComponentId>,
+    pub error_component: Option<ComponentId>,
+    pub loader: Option<String>,
+    pub outlet_id: String,
+}
+
 impl HirComponent {
     pub fn new(id: ComponentId, span: SourceSpan) -> Self {
         Self {
