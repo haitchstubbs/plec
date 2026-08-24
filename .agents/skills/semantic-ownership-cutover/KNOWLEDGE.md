@@ -24,7 +24,7 @@ Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/ro
 
 Runtime owns component-instance identity, local action-frame execution, collection mutation/reconciliation, slot row context, prop refresh, callback dispatch/frame transfer, named-input fan-out, and orphan disposal.
 
-TypeScript owns dynamic component execution/hook fallback (`renderValue`/root rerender) and route-tree navigation/outlet selection. Browser adapts generic structural `LiveCollection` changes into fixed runtime deltas; no TanStack-specific semantics exist in this repository.
+TypeScript owns dynamic component execution/hook fallback (`renderValue`/root rerender) and executable graph lowering. Rust owns production static route declaration/tree metadata; build invokes `plec-route-manifest`, then maps Rust route component IDs to TS-produced graph artifacts. Browser adapts generic structural `LiveCollection` changes into fixed runtime deltas; no TanStack-specific semantics exist in this repository.
 Runtime owns typed artifact validation, state/delta dispatch, keyed-loop reconciliation, conditional lifecycle, direct listener ownership.
 
 ## Proven slices
@@ -66,7 +66,7 @@ Rust lowers callable parameters into deterministic action frame slots, direct lo
 
 Rust lowers direct collection member calls with explicit key/value programs; other collection APIs remain rejected.
 
-Rust lowers constrained `await fetch`/local calls, result bindings, `try`/`catch`/`finally`, decoded JSON values, and success/failure returns. Route declaration parsing remains TypeScript-owned.
+Rust lowers constrained `await fetch`/local calls, result bindings, `try`/`catch`/`finally`, decoded JSON values, and success/failure returns. `plec-route-manifest` lowers static route declarations/tree from the production router entry.
 
 Rust preserves static route `pendingMode` (`replace`/`retain`) into manifest; typed runtime retains normal graph while loader runs when `retain`. Rust local calls and fetch actions preserve typed continuation/result/error slots; refs/effects remain TypeScript-owned.
 
@@ -136,6 +136,8 @@ Rust/WASM fixtures: `rust-local-action-0.10.json`, `rust-keyed-local-action-0.10
 ## Candidate clusters
 
 Score scope v2: 140 points. Rust proof totals 104; `legacy-component-execution` (20) and `route-tree-navigation` (16) remain TypeScript-owned gaps. `route-aware-async-actions` means terminal fetch loader + stale-load disposal (8), not router ownership.
+
+2026-08-24: production build emits Rust route manifest (`version:3`, `rust-route-v1`) but graphs remain TS artifacts; no score change until a Rust-produced route/component artifact mounts through browser runtime.
 
 Legacy deprecation blocked until all three gaps have Rust source-to-browser proof and legacy evidence is removed/unreachable. A 100% score only supports deprecation when this v2 scope has no TypeScript-owned contracts.
 
