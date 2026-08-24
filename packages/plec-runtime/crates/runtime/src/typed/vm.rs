@@ -147,12 +147,26 @@ impl TypedRuntime {
                         self.states[state] = value;
                         self.refresh_state(state, metrics)?;
                     }
-                    TypedActionInstruction::CallProp { prop } => {
-                        let callback = self
+                    TypedActionInstruction::CallProp { prop, arguments } => {
+                        let mut callback = self
                             .callbacks
                             .get(prop)
                             .and_then(Clone::clone)
                             .ok_or_else(|| JsValue::from_str("callable component prop missing"))?;
+                        callback.arguments = arguments
+                            .into_iter()
+                            .map(|expression| {
+                                typed_eval_frame(
+                                    &self.app,
+                                    expression,
+                                    &self.states,
+                                    row.as_ref(),
+                                    0,
+                                    &frame,
+                                    &event,
+                                )
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
                         self.callback_requests.push(callback);
                     }
                     TypedActionInstruction::PreventDefault => {

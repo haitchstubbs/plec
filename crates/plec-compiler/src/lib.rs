@@ -8,5 +8,8 @@ pub use component_discovery::{
     ReturnedComponentExpression, RootComponent,
 };
 pub use hir_builder::{lower_application, lower_root_component};
-pub use lowering::{lower_application_to_executable, lower_component_to_executable, LoweringError};
+pub use lowering::{
+    lower_application_to_executable, lower_component_to_executable,
+    lower_route_loader_to_executable, LoweringError,
+};
 pub use read_source_graph::{read_source_graph, SourceGraph};

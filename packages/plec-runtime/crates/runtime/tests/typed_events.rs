@@ -103,6 +103,16 @@ fn rust_keyed_local_action_artifact() -> serde_json::Value {
         .expect("Rust keyed local-action fixture should be valid JSON")
 }
 
+fn rust_collection_mutation_artifact() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/rust-collection-mutation-0.10.json"))
+        .expect("Rust collection mutation fixture should be valid JSON")
+}
+
+fn rust_route_async_artifact() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/rust-route-async-0.9.json"))
+        .expect("Rust route async fixture should be valid JSON")
+}
+
 fn component_slot_artifact() -> serde_json::Value {
     serde_json::json!({
         "version":"0.10", "rootComponent":0,
@@ -850,6 +860,50 @@ fn rust_keyed_callback_component_fixture_dispatches_parent_row_action() {
 }
 
 #[wasm_bindgen_test]
+fn rust_collection_mutation_fixture_updates_one_keyed_row_without_remounting() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, rust_collection_mutation_artifact(), &root);
+    root.query_selector("button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    let row = root.query_selector("li").unwrap().unwrap();
+    let row_node: web_sys::Node = row.clone().into();
+    let title = row.query_selector("span").unwrap().unwrap();
+    let title_text = title.first_child().unwrap();
+    assert_eq!(title.text_content().unwrap(), "One");
+
+    root.query_selector_all("button")
+        .unwrap()
+        .item(1)
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    let next_row = root.query_selector("li").unwrap().unwrap();
+    let next_title = next_row.query_selector("span").unwrap().unwrap();
+    assert!(row_node.is_same_node(Some(&next_row)));
+    assert!(title_text.is_same_node(next_title.first_child().as_ref()));
+    assert_eq!(next_title.text_content().unwrap(), "Two");
+
+    root.query_selector_all("button")
+        .unwrap()
+        .item(2)
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert!(row.parent_node().is_none());
+    assert_eq!(root.text_content().unwrap(), "Add");
+}
+
+#[wasm_bindgen_test]
 fn rust_nested_component_fixture_refreshes_grandchild_without_remounting() {
     let runtime = PlecRuntime::new();
     let root = mount_root();
@@ -1520,6 +1574,62 @@ async fn typed_route_loader_writes_its_declared_result_state() {
     runtime.start(root.clone(), manifest).unwrap();
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap_or_default(), "loaded");
+    restore_plec_fetch();
+}
+
+#[wasm_bindgen_test(async)]
+async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
+    set_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    let route = rust_route_async_artifact();
+    runtime.register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
+    runtime.register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
+    let manifest = js_sys::JSON::parse(&serde_json::json!({
+        "version":3,"rootGraphId":"root","routes":[
+            {"id":"page","path":"*","graphId":"page","outletId":"main","loaderAction":0}
+        ]
+    }).to_string()).unwrap();
+    runtime.start(root.clone(), manifest).unwrap();
+    settle_fetch().await;
+    assert_eq!(root.text_content().unwrap_or_default(), "loaded");
+    restore_plec_fetch();
+
+    set_plec_fetch_queue(r#"[{"status":500,"statusText":"Failed","body":"nope"}]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    let route = rust_route_async_artifact();
+    runtime.register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
+    runtime.register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
+    runtime.register_graph("error".into(), serde_wasm_bindgen::to_value(&route_error_artifact()).unwrap()).unwrap();
+    let manifest = js_sys::JSON::parse(&serde_json::json!({
+        "version":3,"rootGraphId":"root","routes":[
+            {"id":"page","path":"*","graphId":"page","errorGraphId":"error","outletId":"main","loaderAction":0}
+        ]
+    }).to_string()).unwrap();
+    runtime.start(root.clone(), manifest).unwrap();
+    settle_fetch().await;
+    assert!(root.text_content().unwrap_or_default().contains("request failed (500)"));
+    restore_plec_fetch();
+
+    set_plec_fetch_queue(r#"[{"pending":true}]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    let route = rust_route_async_artifact();
+    runtime.register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
+    runtime.register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap()).unwrap();
+    runtime.register_graph("next".into(), serde_wasm_bindgen::to_value(&fetch_artifact("text", true, false)).unwrap()).unwrap();
+    let manifest = js_sys::JSON::parse(&serde_json::json!({
+        "version":3,"rootGraphId":"root","routes":[
+            {"id":"page","path":"/","graphId":"page","outletId":"main","loaderAction":0},
+            {"id":"next","path":"/next","graphId":"next","outletId":"main"}
+        ]
+    }).to_string()).unwrap();
+    runtime.start(root.clone(), manifest).unwrap();
+    runtime.navigate("/next".into(), false).unwrap();
+    settle_fetch().await;
+    assert_eq!(plec_fetch_aborts(), 1);
+    assert_eq!(root.text_content().unwrap_or_default(), "");
     restore_plec_fetch();
 }
 

@@ -72,6 +72,7 @@ pub(crate) struct TypedCallback {
     pub(crate) parent_id: String,
     pub(crate) action: usize,
     pub(crate) row: Option<HashMap<String, RuntimeValue>>,
+    pub(crate) arguments: Vec<RuntimeValue>,
 }
 
 #[derive(Clone)]
@@ -401,6 +402,7 @@ impl PlecRuntime {
                             parent_id: parent_id.clone(),
                             action: callback.action,
                             row: callback.row.clone(),
+                            arguments: vec![],
                         }))
                     })
                     .collect::<Result<Vec<_>, JsValue>>()?;

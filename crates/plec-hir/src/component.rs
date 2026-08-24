@@ -71,6 +71,12 @@ pub enum HirCallableBody {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirStmt {
+    /// A deliberately narrow async boundary. Route loaders currently support
+    /// only a terminal `return await fetch(url)` capability request.
+    AwaitFetch {
+        url: ExprId,
+        span: SourceSpan,
+    },
     Expression {
         expression: ExprId,
         span: SourceSpan,

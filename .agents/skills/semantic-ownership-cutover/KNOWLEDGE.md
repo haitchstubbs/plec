@@ -9,11 +9,12 @@ Rust: TSX parser + semantic graph -> canonical root component -> reachable `HirA
 Proven: scalar state text update; keyed collection row insert/update/move/remove; standalone/row-local conditional lifecycle; static, keyed, and nested direct component prop refresh without remount.
 `useCollection("name")` is a named collection HIR input; lowering preserves it as executable input and links its keyed loop.
 Slots: Rust artifact -> keyed caller template -> callee `Slot` -> WASM DOM; row text/conditional/event retain caller ownership through update/move/remove.
-Next: callable component-prop arguments need cross-instance argument/frame ownership; keep distinct from local calls.
+Callable props: child `CallProp` argument programs -> evaluated child frame -> parent action parameter frame; keyed child callbacks retain row ownership through move/remove.
+Collection writes: direct `useCollection` `append`, `keyedReplace`, `keyedRemove` calls -> typed mutations -> keyed runtime reconciliation.
 
 ## Ownership
 
-Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/row/conditional lowering, direct calls, parameterized local action frames/calls, implicit slot validity/lowering, zero-arg callable props, and parent state/row-field/prop->component dependency edges. Runtime owns component-instance identity, local action-frame execution, slot row context, prop refresh, callback dispatch, named-input fan-out, and orphan disposal.
+Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/row/conditional lowering, direct calls, parameterized local action frames/calls, direct collection writes, implicit slot validity/lowering, callable-prop argument programs, and parent state/row-field/prop->component dependency edges. Runtime owns component-instance identity, local action-frame execution, collection mutation/reconciliation, slot row context, prop refresh, callback dispatch/frame transfer, named-input fan-out, and orphan disposal.
 TypeScript owns production component expansion, rich actions, router, and TanStack integration/delta production.
 Runtime owns typed artifact validation, state/delta dispatch, keyed-loop reconciliation, conditional lifecycle, direct listener ownership.
 
@@ -26,33 +27,38 @@ Standalone conditional: Rust artifact -> WASM state switch; browser fixture prov
 Static component props: Rust 0.10 artifact -> WASM parent-state update; browser fixture proves child span/text identity survives prop refresh.
 Keyed component props: Rust 0.10 artifact -> WASM collection deltas; browser fixture proves child text/row identity survives update/move, local child action remains live, and remove detaches child/listener.
 Nested direct component props: Rust 0.10 `App -> Child -> Grandchild` artifact -> WASM mount/state update; browser fixture proves transitive prop refresh keeps section/span/text identity and grandchild local action live.
-Keyed callable component props: Rust 0.10 artifact -> WASM child click -> parent action; browser fixture proves parent row capture, child identity across move, and removed child callback inert.
+Keyed callable component props: Rust 0.10 artifact -> WASM child prop argument -> parent action frame; browser fixture proves value after move, child identity, and removed callback inert.
 Keyed slot: Rust 0.10 artifact -> WASM caller button/text/conditional inside callee `<li>`; update/move retain identities, remove detaches slot and stale callback inert.
 Parameterized local action: Rust 0.10 artifact -> WASM `LoadFrame`/`Call`; scalar update retains text identity and keyed row argument retains row/button identity through move.
+Parameterized callable component prop: Rust 0.10 keyed child -> WASM child prop evaluation -> parent action frame; browser fixture proves value passes after move and removed callback remains inert.
+Collection mutation: Rust 0.10 `append`/`keyedReplace`/`keyedRemove` -> WASM keyed reconciliation; browser fixture proves replacement keeps row/text identity and removal detaches row.
 
 ## Capability status
 
 Rust HIR represents reachable acyclic component applications, canonical calls/props, `useCollection("name")`, fragments, conditionals, keyed `ForEach`, loop-item bindings, callable parameters.
 Rust lowers one implicit `{children}` slot; slotless child calls fail. Runtime validates one target slot, mounts templates with keyed row context, merges nodes/conditionals/listeners into caller row. Rust fixture/WASM proof complete.
-Rust lowers callable parameters into deterministic action frame slots and direct local calls into typed `Call` argument programs; runtime schema/VM validates and executes this contract.
+Rust lowers callable parameters into deterministic action frame slots, direct local calls, and callable-prop calls into typed argument programs; runtime schema/VM validates expressions, transfers callback values to parent parameter slots, and checks parent action arity.
+Rust lowers direct collection member calls with explicit key/value programs; other collection APIs remain rejected.
 
 ## Semantic-loss boundaries
 
 Reachable component identity/call props/parameters survive into `HirApplication` and 0.10 IR. Child sinks retain `prop` edges. Runtime-local component anchors connect parent call nodes to child instances; row roots retain component start/end range so keyed move/remove owns child DOM and lifecycle.
 Resolved: slot template IDs, row frame, listener ownership, and conditional regions survive caller -> callee anchors. Calls with children and no target `Slot` fail lowering/validation.
-Resolved: local callable parameter identity survives HIR -> 0.10 action frame -> runtime `LoadFrame`. Still lost: callback arguments at child `CallProp` -> parent action frame boundary.
+Resolved: local callable parameter identity survives HIR -> 0.10 action frame -> runtime `LoadFrame`; callback arguments survive child `CallProp` -> parent action frame.
+Resolved: collection binding/member/mutation operands survive HIR -> `CollectionMutation`; keyed row identity reaches runtime replacement/removal.
 
 ## Contract drift
 
 `plec-ir` serializes Rust artifact; runtime separately deserializes typed 0.9/0.10 schema. Rust/runtime independently define 0.10 value/callable component props; loader decodes/validates 0.10, mounts child runtimes, refreshes values without remount, and carries runtime-only callbacks.
 Runtime schema now requires one target `Slot` for component children and bounds child IDs.
-2026-08-24: compiler fixtures 8/8 pass; WASM suite 21/24 passes. Known unrelated failures: two route-loader/fetch assertions; one row fetch-frame duplicate-text assertion.
+2026-08-24: compiler fixtures 11/11 pass; WASM suite 24/27 passes. Known unrelated failures: two route-loader/fetch assertions; one row fetch-frame duplicate-text assertion.
 
 ## Runtime invariants
 
 Listeners direct; owners `Static`, keyed `Row`, or `Conditional` with inherited row owner; dispose before region/row/route/runtime removal.
 Moves and binding-only row updates retain listener generation; stale owner callbacks inert.
-Component-root rows own full start/end anchor range; move/remove must move/remove child DOM between anchors.
+Component-root rows own full start/end anchor range; move/remove must move/remove child DOM between anchors. Callback dispatch maps evaluated child arguments to declared parent action parameter slots and rejects arity mismatch.
+Collection mutation validates before mutation; keyed replacement updates sinks without remount, removal disposes row-owned DOM/listeners.
 Slot templates execute in caller runtime; keyed row context owns bindings, conditional regions, listeners, move/remove lifecycle while callee anchors supply physical DOM range.
 Text bindings must target text nodes and mutate only data.
 
@@ -69,13 +75,14 @@ Action-frame lowering: `crates/plec-compiler/src/lowering.rs::{action,local_acti
 
 ## Candidate clusters
 
-Callable component-prop arguments + cross-instance callback frame/payload ownership; separate from local action frames.
+No unproven local action/collection-write boundary remains. TanStack collection API mapping, rich actions, and router remain separate TypeScript-owned clusters.
 
 ## Corrections
 
 `Text.binding` is required by runtime typed mounting; Rust emitter now supplies it. Numeric `add` must preserve numbers; runtime VM fixed locally.
 Detached test roots make `Node.is_connected()` false; assert parent removal or root selection instead.
 2026-08-24: 0.10 preserves scalar/row-field component edges and runtime prop reads; schema rejects invalid component targets/props. Rust keyed-component fixture/browser proof confirms update/move identity, child-local action, and removal disposal.
-2026-08-24: 0.10 tags value/callable props; validates parameter kind; `CallProp` queues runtime-only callback descriptors. Keyed callback fixture/browser proof covers parent action dispatch and stale removed child inertness.
+2026-08-24: 0.10 tags value/callable props; validates parameter kind; `CallProp` queues evaluated argument values with runtime-only callback descriptors. Keyed callback fixture/browser proof covers parent parameter dispatch and stale removed child inertness.
 2026-08-24: static slot WASM test uses hand-authored typed IR; Rust lowering proof is structural only, not end-to-end.
 2026-08-24: keyed-slot Rust fixture/browser proof passes; initial row reconciliation defers slot conditionals until component mount, then ordinary row deltas reconcile them.
+2026-08-24: Rust emits `CollectionMutation` for direct `append`, `keyedReplace`, and `keyedRemove`; browser proof preserves keyed replacement identity and disposes removal.

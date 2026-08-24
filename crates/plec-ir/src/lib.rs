@@ -67,6 +67,8 @@ pub struct ExecutableApplication {
     pub actions: Vec<ActionProgram>,
     pub loops: Vec<Loop>,
     pub dependency_edges: Vec<DependencyEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub route_outlets: Vec<RouteOutlet>,
 }
 
 impl Default for ExecutableApplication {
@@ -88,6 +90,7 @@ impl Default for ExecutableApplication {
             actions: vec![],
             loops: vec![],
             dependency_edges: vec![],
+            route_outlets: vec![],
         }
     }
 }
@@ -224,11 +227,19 @@ pub struct ActionProgram {
     pub frame_slots: usize,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub parameter_slots: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loader_result_state: Option<usize>,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub route_loader: bool,
     pub instructions: Vec<ActionInstruction>,
 }
 
 fn is_zero(value: &usize) -> bool {
     *value == 0
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
@@ -241,6 +252,27 @@ pub enum ActionInstruction {
     },
     CallProp {
         prop: usize,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        arguments: Vec<usize>,
+    },
+    CollectionMutation {
+        input: usize,
+        kind: &'static str,
+        key: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        value: Option<usize>,
+    },
+    CapabilityRequest {
+        #[serde(flatten)]
+        request: CapabilityRequest,
+        #[serde(rename = "successPc")]
+        success_pc: usize,
+        #[serde(rename = "failurePc")]
+        failure_pc: usize,
+        #[serde(rename = "resultSlot")]
+        result_slot: usize,
+        #[serde(rename = "errorSlot")]
+        error_slot: usize,
     },
     Call {
         action: usize,
@@ -254,6 +286,18 @@ pub enum ActionInstruction {
         target: usize,
     },
     Return,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "capability", content = "request", rename_all = "camelCase")]
+pub enum CapabilityRequest {
+    Fetch {
+        url: usize,
+        method: &'static str,
+        decode: &'static str,
+        #[serde(rename = "requireOk")]
+        require_ok: bool,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -278,4 +322,10 @@ pub struct DependencyEndpoint {
     pub handle: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub r#loop: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RouteOutlet {
+    pub id: String,
+    pub node: usize,
 }

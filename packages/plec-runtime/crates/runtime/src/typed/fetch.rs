@@ -362,6 +362,7 @@ impl PlecRuntime {
                         return Err(JsValue::from_str("loader state handle out of range"));
                     }
                     runtime.states[state] = value;
+                    runtime.refresh_state(state, &mut UpdateMetrics::default())?;
                     instance.loader_runtime.is_some()
                 };
                 if restore {

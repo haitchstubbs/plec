@@ -747,14 +747,34 @@ fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result
                 span,
             })
         }
-        Stmt::Return(return_stmt) => Ok(HirStmt::Return {
-            value: return_stmt
-                .arg
-                .as_deref()
-                .map(|expr| lower_expression(expr, ctx))
-                .transpose()?,
-            span,
-        }),
+        Stmt::Return(return_stmt) => {
+            if let Some(Expr::Await(awaited)) = return_stmt.arg.as_deref() {
+                let Expr::Call(call) = awaited.arg.as_ref() else {
+                    return Err("awaited route capability must be a call".into());
+                };
+                let Callee::Expr(callee) = &call.callee else {
+                    return Err("awaited route capability must be fetch(url)".into());
+                };
+                let Expr::Ident(fetch) = callee.as_ref() else {
+                    return Err("awaited route capability must be fetch(url)".into());
+                };
+                if fetch.sym != *"fetch" || call.args.len() != 1 || call.args[0].spread.is_some() {
+                    return Err("awaited route capability must be fetch(url)".into());
+                }
+                return Ok(HirStmt::AwaitFetch {
+                    url: lower_expression(&call.args[0].expr, ctx)?,
+                    span,
+                });
+            }
+            Ok(HirStmt::Return {
+                value: return_stmt
+                    .arg
+                    .as_deref()
+                    .map(|expr| lower_expression(expr, ctx))
+                    .transpose()?,
+                span,
+            })
+        }
         unsupported => Err(format!("Unsupported callable statement: {unsupported:?}")),
     }
 }

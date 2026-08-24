@@ -416,10 +416,25 @@ impl PlecRuntime {
             let Some(parent) = typed.get_mut(&callback.parent_id) else {
                 continue;
             };
+            let action = parent
+                .runtime
+                .app
+                .actions
+                .get(callback.action)
+                .ok_or_else(|| JsValue::from_str("callback action out of range"))?;
+            if action.parameter_slots.len() != callback.arguments.len() {
+                return Err(JsValue::from_str("callback action arity mismatch"));
+            }
+            let frame = action
+                .parameter_slots
+                .iter()
+                .copied()
+                .zip(callback.arguments)
+                .collect::<Vec<_>>();
             let mut metrics = UpdateMetrics::default();
             parent.runtime.execute_action_with_frame(
                 callback.action,
-                &[],
+                &frame,
                 callback.row,
                 None,
                 &mut metrics,
