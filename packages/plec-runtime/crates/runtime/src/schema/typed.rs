@@ -291,6 +291,8 @@ pub enum TypedActionInstruction {
     },
     CallProp {
         prop: usize,
+        #[serde(default)]
+        arguments: Vec<usize>,
     },
     CollectionMutation {
         input: usize,
@@ -854,12 +856,15 @@ impl TypedApplication {
                     {
                         return Err("action state handle out of range")
                     }
-                    TypedActionInstruction::CallProp { prop }
+                    TypedActionInstruction::CallProp { prop, arguments }
                         if self
                             .parameters
                             .get(*prop)
                             .map(|parameter| parameter.callable)
-                            != Some(true) =>
+                            != Some(true)
+                            || arguments
+                                .iter()
+                                .any(|expression| *expression >= self.expressions.len()) =>
                     {
                         return Err("action callable prop out of range")
                     }

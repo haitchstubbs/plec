@@ -2,7 +2,7 @@ use std::fs;
 
 use plec_compiler::{
     discover_root_component, lower_application, lower_application_to_executable,
-    lower_component_to_executable, lower_root_component,
+    lower_component_to_executable, lower_root_component, lower_route_loader_to_executable,
 };
 use plec_parser::parse_module;
 use plec_sema::build_semantic_graph;
@@ -68,10 +68,10 @@ const KEYED_CALLBACK_COMPONENT_SOURCE: &str = r#"
     export function Todos() {
         const todos = useCollection("items");
         const [selected, setSelected] = useState("");
-        return <main><p>{selected}</p><ul>{todos.map(todo => <Child key={todo.id} onPick={() => setSelected(todo.title)} />)}</ul></main>;
+        return <main><p>{selected}</p><ul>{todos.map(todo => <Child key={todo.id} title={todo.title} onPick={(title) => setSelected(title)} />)}</ul></main>;
     }
-    function Child({ onPick }: { onPick: () => void }) {
-        return <button onClick={onPick}>Pick</button>;
+    function Child({ title, onPick }: { title: string, onPick: (title: string) => void }) {
+        return <button onClick={() => onPick(title)}>Pick</button>;
     }
 "#;
 
@@ -100,6 +100,21 @@ const KEYED_LOCAL_ACTION_COMPONENT_SOURCE: &str = r#"
         const [selected, setSelected] = useState("");
         const select = (title) => setSelected(title);
         return <main><p>{selected}</p><ul>{todos.map(todo => <li key={todo.id}><button onClick={() => select(todo.title)}>{todo.title}</button></li>)}</ul></main>;
+    }
+"#;
+
+const COLLECTION_MUTATION_COMPONENT_SOURCE: &str = r#"
+    export function Todos() {
+        const todos = useCollection("items");
+        return <main><button onClick={() => todos.append("one", { id: "one", title: "One", done: false })}>Add</button><ul>{todos.map(todo => <li key={todo.id}><span>{todo.title}</span><button onClick={() => todos.keyedReplace(todo.id, { id: todo.id, title: "Two", done: true })}>Replace</button><button onClick={() => todos.keyedRemove(todo.id)}>Remove</button></li>)}</ul></main>;
+    }
+"#;
+
+const ROUTE_ASYNC_SOURCE: &str = r#"
+    export function RoutePage() {
+        const [result, setResult] = useState("");
+        const loader = async () => { return await fetch("/route-data"); };
+        return <main>{result}</main>;
     }
 "#;
 
@@ -322,6 +337,48 @@ fn rust_keyed_local_action_artifact_matches_runtime_fixture() {
         "Todos",
         KEYED_LOCAL_ACTION_COMPONENT_SOURCE,
         "rust-keyed-local-action-0.10.json",
+    );
+}
+
+#[test]
+fn rust_collection_mutation_artifact_matches_runtime_fixture() {
+    assert_component_fixture(
+        "rust-collection-mutation.tsx",
+        "Todos",
+        COLLECTION_MUTATION_COMPONENT_SOURCE,
+        "rust-collection-mutation-0.10.json",
+    );
+}
+
+#[test]
+fn rust_route_async_artifact_matches_runtime_fixture() {
+    let module = parse_module("rust-route-async.tsx", ROUTE_ASYNC_SOURCE)
+        .expect("route source should parse");
+    let modules = vec![module];
+    let graph = build_semantic_graph(&modules, &Default::default())
+        .expect("route source should build a semantic graph");
+    let root = discover_root_component(&modules, &graph, "rust-route-async.tsx", Some("RoutePage"))
+        .expect("route page should be discovered");
+    let hir = lower_root_component(&root, &graph).expect("route page should lower to HIR");
+    let executable = lower_route_loader_to_executable(&hir, "loader", "result", "main")
+        .expect("route loader should lower to executable IR");
+    let loader = executable.actions.first().expect("loader action should be first");
+    assert!(loader.route_loader);
+    assert_eq!(loader.loader_result_state, Some(0));
+    assert_eq!(loader.frame_slots, 2);
+    assert!(matches!(loader.instructions.first(), Some(plec_ir::ActionInstruction::CapabilityRequest {
+        request: plec_ir::CapabilityRequest::Fetch { method: "GET", decode: "text", require_ok: true, .. },
+        success_pc: 1, failure_pc: 1, result_slot: 0, error_slot: 1,
+    })));
+    assert_eq!(executable.route_outlets[0].id, "main");
+    assert_eq!(executable.route_outlets[0].node, executable.root_node);
+    let fixture = fs::read_to_string(format!(
+        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-route-async-0.9.json",
+        env!("CARGO_MANIFEST_DIR")
+    )).expect("runtime fixture should exist");
+    assert_eq!(
+        serde_json::to_value(executable).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
     );
 }
 

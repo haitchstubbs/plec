@@ -356,7 +356,7 @@ export async function mountPlecApplication(
                 : id;
             return [
               inputId,
-              liveCollectionProducer(inputId, collection),
+              adaptLiveCollection(inputId, collection),
             ];
           },
         ),
@@ -781,10 +781,11 @@ function mergeMountMetrics(
   return { ...total, ...browser };
 }
 
-function liveCollectionProducer(
+/** Adapt a host collection into the runtime's stable keyed-delta protocol. */
+export function adaptLiveCollection<Row extends object>(
   inputId: string,
-  collection: LiveCollection<any>,
-): DeltaInput<any[]> {
+  collection: LiveCollection<Row>,
+): DeltaInput<Row[]> {
   return {
     getSnapshot: () => collection.toArray,
     subscribeDeltas: (notify) => {
@@ -873,9 +874,9 @@ function publishDeltas(
   return total;
 }
 
-function toRuntimeDelta(
+function toRuntimeDelta<Row extends object>(
   inputId: string,
-  change: LiveCollectionChange<Record<string, unknown>>,
+  change: LiveCollectionChange<Row>,
 ): RuntimeDelta {
   const rowKey = String(change.key);
   switch (change.type) {
@@ -884,7 +885,7 @@ function toRuntimeDelta(
         type: 'insert',
         inputId,
         rowKey,
-        row: change.value,
+        row: change.value as Record<string, unknown>,
         beforeRowKey: normalizeRowKey(change.beforeKey),
       };
     case 'update':
@@ -893,7 +894,12 @@ function toRuntimeDelta(
         inputId,
         rowKey,
         changes:
-          change.changes ?? diff(change.previousValue, change.value),
+          change.changes
+            ? { ...change.changes }
+            : diff(
+                change.previousValue as Record<string, unknown>,
+                change.value as Record<string, unknown>,
+              ),
       };
     case 'delete':
       return { type: 'remove', inputId, rowKey };

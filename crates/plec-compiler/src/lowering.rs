@@ -6,10 +6,10 @@ use plec_hir::{
     NodeId,
 };
 use plec_ir::{
-    ActionInstruction, ActionProgram, Binding, ComponentApplication, ComponentParameter,
+    ActionInstruction, ActionProgram, Binding, CapabilityRequest, ComponentApplication, ComponentParameter,
     ComponentProp, DependencyEdge, DependencyEndpoint, Event, ExecutableApplication,
     ExecutableComponent, ExpressionInstruction, ExpressionProgram, Input, Loop, Node, PropProgram,
-    PropWrite, StateSlot, Text, Value, COMPONENT_VERSION,
+    PropWrite, RouteOutlet, StateSlot, Text, Value, COMPONENT_VERSION,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +25,50 @@ pub fn lower_component_to_executable(
     component: &HirComponent,
 ) -> Result<ExecutableApplication, LoweringError> {
     lower_component(component, None)
+}
+
+/// Compile the narrow route-loader contract used by the typed router. The
+/// loader must be a local callable ending in `return await fetch(url)` and
+/// writes directly to the named state slot when the request resolves.
+pub fn lower_route_loader_to_executable(
+    component: &HirComponent,
+    loader_name: &str,
+    result_state_name: &str,
+    outlet_id: &str,
+) -> Result<ExecutableApplication, LoweringError> {
+    let mut app = lower_component(component, None)?;
+    let loader = component
+        .callables
+        .iter()
+        .position(|callable| {
+            component.bindings[callable.binding.0 as usize].name == loader_name
+        })
+        .ok_or_else(|| LoweringError("route loader callable missing".into()))?;
+    let state = component
+        .states
+        .iter()
+        .position(|state| {
+            component.bindings[state.value.0 as usize].name == result_state_name
+        })
+        .ok_or_else(|| LoweringError("route loader result state missing".into()))?;
+    let action = app
+        .actions
+        .get_mut(loader)
+        .ok_or_else(|| LoweringError("route loader action missing".into()))?;
+    if !action.instructions.iter().any(|instruction| {
+        matches!(instruction, ActionInstruction::CapabilityRequest {
+            request: CapabilityRequest::Fetch { .. }, ..
+        })
+    }) {
+        return Err(LoweringError("route loader requires return await fetch(url)".into()));
+    }
+    action.route_loader = true;
+    action.loader_result_state = Some(state);
+    app.route_outlets.push(RouteOutlet {
+        id: outlet_id.into(),
+        node: app.root_node,
+    });
+    Ok(app)
 }
 
 pub fn lower_application_to_executable(
@@ -146,6 +190,8 @@ fn lower_component(
         ctx.app.actions.push(ActionProgram {
             frame_slots: 0,
             parameter_slots: vec![],
+            loader_result_state: None,
+            route_loader: false,
             instructions: vec![],
         });
         ctx.callables.insert(callable.binding, action);
@@ -808,8 +854,13 @@ impl<'a> Ctx<'a> {
                     self.app.actions.push(ActionProgram {
                         frame_slots: 0,
                         parameter_slots: vec![],
+                        loader_result_state: None,
+                        route_loader: false,
                         instructions: vec![
-                            ActionInstruction::CallProp { prop },
+                            ActionInstruction::CallProp {
+                                prop,
+                                arguments: vec![],
+                            },
                             ActionInstruction::Return,
                         ],
                     });
@@ -820,7 +871,7 @@ impl<'a> Ctx<'a> {
                     })
                 }
             }
-            HirCallable::Inline { parameters, body } if parameters.is_empty() => {
+            HirCallable::Inline { parameters, body } => {
                 self.action(body, parameters, self.active_loop.is_some())
             }
             _ => Err(self.err("callable is not executable in the first IR slice")),
@@ -848,20 +899,42 @@ impl<'a> Ctx<'a> {
                     let (expression, _) = self.expression(value, row)?;
                     code.push(ActionInstruction::Evaluate { expression });
                     code.push(ActionInstruction::StoreState { state });
+                } else if let Some(mutation) = self.collection_mutation_call(*expr, row)? {
+                    code.push(mutation);
                 } else if let Some(call) = self.local_action_call(*expr, row)? {
                     code.push(call);
                 } else {
-                    let prop = self.callback_call(*expr)?;
-                    code.push(ActionInstruction::CallProp { prop });
+                    let (prop, arguments) = self.callback_call(*expr, row)?;
+                    code.push(ActionInstruction::CallProp { prop, arguments });
                 }
             }
         }
         self.action_parameters = previous;
         code.push(ActionInstruction::Return);
+        let return_pc = code.len() - 1;
+        let mut frame_slots = parameters.len();
+        for instruction in &mut code {
+            if let ActionInstruction::CapabilityRequest {
+                success_pc,
+                failure_pc,
+                result_slot,
+                error_slot,
+                ..
+            } = instruction
+            {
+                *success_pc = return_pc;
+                *failure_pc = return_pc;
+                *result_slot = frame_slots;
+                *error_slot = frame_slots + 1;
+                frame_slots += 2;
+            }
+        }
         let index = self.app.actions.len();
         self.app.actions.push(ActionProgram {
-            frame_slots: parameters.len(),
+            frame_slots,
             parameter_slots: (0..parameters.len()).collect(),
+            loader_result_state: None,
+            route_loader: false,
             instructions: code,
         });
         Ok(index)
@@ -874,6 +947,21 @@ impl<'a> Ctx<'a> {
     ) -> Result<(), LoweringError> {
         for stmt in stmts {
             match stmt {
+                HirStmt::AwaitFetch { url, .. } => {
+                    let (url, _) = self.expression(*url, row)?;
+                    code.push(ActionInstruction::CapabilityRequest {
+                        request: CapabilityRequest::Fetch {
+                            url,
+                            method: "GET",
+                            decode: "text",
+                            require_ok: true,
+                        },
+                        success_pc: 0,
+                        failure_pc: 0,
+                        result_slot: 0,
+                        error_slot: 0,
+                    });
+                }
                 HirStmt::StateUpdate { state, value, .. } => {
                     let state = *self
                         .states
@@ -906,12 +994,13 @@ impl<'a> Ctx<'a> {
                 }
                 HirStmt::Return { .. } => code.push(ActionInstruction::Return),
                 HirStmt::Expression { expression, .. } => {
-                    if let Some(call) = self.local_action_call(*expression, row)? {
+                    if let Some(mutation) = self.collection_mutation_call(*expression, row)? {
+                        code.push(mutation);
+                    } else if let Some(call) = self.local_action_call(*expression, row)? {
                         code.push(call);
                     } else {
-                        code.push(ActionInstruction::CallProp {
-                            prop: self.callback_call(*expression)?,
-                        });
+                        let (prop, arguments) = self.callback_call(*expression, row)?;
+                        code.push(ActionInstruction::CallProp { prop, arguments });
                     }
                 }
             }
@@ -969,20 +1058,75 @@ impl<'a> Ctx<'a> {
         Ok(Some(ActionInstruction::Call { action, arguments }))
     }
 
-    fn callback_call(&self, id: plec_hir::ExprId) -> Result<usize, LoweringError> {
-        let HirExpr::Call { callee, args } = self.expr(id)? else {
-            return Err(self.err("callable action must be a direct component prop call"));
+    fn collection_mutation_call(
+        &mut self,
+        id: plec_hir::ExprId,
+        row: bool,
+    ) -> Result<Option<ActionInstruction>, LoweringError> {
+        let (callee, args) = match self.expr(id)?.clone() {
+            HirExpr::Call { callee, args } => (callee, args),
+            _ => return Ok(None),
         };
-        if !args.is_empty() {
-            return Err(self.err("callable component props do not accept arguments"));
-        }
-        let HirExpr::Binding(binding) = self.expr(*callee)? else {
+        let (object, kind) = match self.expr(callee)?.clone() {
+            HirExpr::Member { object, property } => (object, property),
+            _ => return Ok(None),
+        };
+        let HirExpr::Binding(binding) = self.expr(object)? else {
+            return Ok(None);
+        };
+        let Some(input) = self.inputs.get(binding).copied() else {
+            return Ok(None);
+        };
+        let (key, value) = match (kind.as_str(), args.as_slice()) {
+            ("append" | "keyedReplace", [key, value]) => (*key, Some(*value)),
+            ("keyedRemove", [key]) => (*key, None),
+            _ => return Err(self.err("collection mutation arguments are invalid")),
+        };
+        let key = self.expression(key, row)?.0;
+        let value = value
+            .map(|value| {
+                self.expression(value, row)
+                    .map(|(expression, _)| expression)
+            })
+            .transpose()?;
+        Ok(Some(ActionInstruction::CollectionMutation {
+            input,
+            kind: match kind.as_str() {
+                "append" => "append",
+                "keyedReplace" => "keyedReplace",
+                "keyedRemove" => "keyedRemove",
+                _ => unreachable!(),
+            },
+            key,
+            value,
+        }))
+    }
+
+    fn callback_call(
+        &mut self,
+        id: plec_hir::ExprId,
+        row: bool,
+    ) -> Result<(usize, Vec<usize>), LoweringError> {
+        let (callee, args) = match self.expr(id)?.clone() {
+            HirExpr::Call { callee, args } => (callee, args),
+            _ => return Err(self.err("callable action must be a direct component prop call")),
+        };
+        let HirExpr::Binding(binding) = self.expr(callee)? else {
             return Err(self.err("callable component prop must be a direct binding"));
         };
-        self.callback_props
+        let prop = self
+            .callback_props
             .get(binding)
             .copied()
-            .ok_or_else(|| self.err("action is not a callable component prop"))
+            .ok_or_else(|| self.err("action is not a callable component prop"))?;
+        let arguments = args
+            .iter()
+            .map(|argument| {
+                self.expression(*argument, row)
+                    .map(|(expression, _)| expression)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((prop, arguments))
     }
 }
 
@@ -1231,7 +1375,7 @@ mod tests {
         assert!(app.components[1].parameters[0].callable);
         assert!(app.components[1].actions.iter().any(|action| matches!(
             action.instructions.first(),
-            Some(ActionInstruction::CallProp { prop: 0 })
+            Some(ActionInstruction::CallProp { prop: 0, arguments }) if arguments.is_empty()
         )));
     }
 

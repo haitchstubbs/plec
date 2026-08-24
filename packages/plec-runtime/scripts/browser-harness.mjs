@@ -9,8 +9,15 @@ const driverDir = path.resolve(
 
 const result = spawnSync(
   'wasm-pack',
-  ['test', '--headless', '--chrome', 'crates/runtime'],
+  [
+    'test',
+    '--headless',
+    '--chrome',
+    'crates/runtime',
+    ...(process.argv.length > 2 ? ['--', ...process.argv.slice(2)] : []),
+  ],
   {
+    cwd: path.resolve(import.meta.dirname, '..'),
     stdio: 'inherit',
     env: {
       ...process.env,
