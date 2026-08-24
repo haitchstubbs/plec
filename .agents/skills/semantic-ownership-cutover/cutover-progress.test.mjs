@@ -4,8 +4,8 @@ import { evaluate, summary, validateManifest } from './cutover-progress.mjs';
 
 function manifest() {
   return { frozenDenominator: 10, contracts: [
-    { id: 'base', weight: 4, stages: ['source', 'HIR', 'IR', 'runtime', 'browser'], prerequisites: [], probes: [{ command: 'pass', args: [], expect: 'ok' }] },
-    { id: 'next', weight: 6, stages: ['source', 'HIR', 'IR', 'runtime', 'browser'], prerequisites: ['base'], probes: [{ command: 'next', args: [], expect: 'ok' }] },
+    { id: 'base', owner: 'rust', weight: 4, stages: ['source', 'HIR', 'IR', 'runtime', 'browser'], prerequisites: [], probes: [{ command: 'pass', args: [], expect: 'ok' }] },
+    { id: 'next', owner: 'rust', weight: 6, stages: ['source', 'HIR', 'IR', 'runtime', 'browser'], prerequisites: ['base'], probes: [{ command: 'next', args: [], expect: 'ok' }] },
   ] };
 }
 
@@ -28,4 +28,12 @@ test('reports ownership, blocked contracts, and target delta', () => {
   results = evaluate(value, { run: () => false });
   assert.equal(results.get('base').status, 'failed');
   assert.equal(results.get('next').status, 'blocked');
+});
+
+test('keeps TypeScript-owned candidate contracts visible as gaps', () => {
+  const value = manifest();
+  value.contracts[1] = { ...value.contracts[1], owner: 'typescript', legacyEvidence: 'packages/plec/src/legacy.ts::render' };
+  const results = evaluate(value, { run: () => true });
+  assert.equal(results.get('next').status, 'gap');
+  assert.deepEqual(summary(value, results), { owned: 4, remaining: 6, plannedDelta: 0, postSliceRemaining: 6 });
 });

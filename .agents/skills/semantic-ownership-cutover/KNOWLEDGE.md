@@ -24,7 +24,7 @@ Rust owns parser, semantic graph, component discovery, HIR, scalar/collection/ro
 
 Runtime owns component-instance identity, local action-frame execution, collection mutation/reconciliation, slot row context, prop refresh, callback dispatch/frame transfer, named-input fan-out, and orphan disposal.
 
-TypeScript owns production component expansion, rich actions, and router. Browser adapts generic structural `LiveCollection` changes into fixed runtime deltas; no TanStack-specific semantics exist in this repository.
+TypeScript owns dynamic component execution/hook fallback (`renderValue`/root rerender), general async action control flow, and route-tree navigation/outlet selection. Browser adapts generic structural `LiveCollection` changes into fixed runtime deltas; no TanStack-specific semantics exist in this repository.
 Runtime owns typed artifact validation, state/delta dispatch, keyed-loop reconciliation, conditional lifecycle, direct listener ownership.
 
 ## Proven slices
@@ -131,9 +131,9 @@ Rust/WASM fixtures: `rust-local-action-0.10.json`, `rust-keyed-local-action-0.10
 
 ## Candidate clusters
 
-Score: 100/100 Rust-owned after `route-aware-async-actions` and generic external-collection delta probes pass; frozen target ID `tanstack-integration` retained with correction because no TanStack dependency exists.
+Score scope v2: 140 points. Existing Rust proof totals 88; `legacy-component-execution` (20), `general-async-actions` (16), and `route-tree-navigation` (16) are explicit TypeScript-owned gaps. `route-aware-async-actions` now means only terminal fetch loader + stale-load disposal (8), not rich actions/router.
 
-No unproven ownership target remains in the frozen denominator. Production component expansion, rich actions, and router remain separate TypeScript-owned work outside it.
+Legacy deprecation blocked until all three gaps have Rust source-to-browser proof and legacy evidence is removed/unreachable. A 100% score only supports deprecation when this v2 scope has no TypeScript-owned contracts.
 
 ## Corrections
 

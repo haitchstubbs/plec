@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const stages = new Set(['source', 'HIR', 'IR', 'runtime', 'browser']);
+const owners = new Set(['rust', 'typescript']);
 
 export function validateManifest(manifest) {
   if (!Number.isFinite(manifest.frozenDenominator) || manifest.frozenDenominator <= 0) throw new Error('frozenDenominator must be positive');
@@ -16,6 +17,8 @@ export function validateManifest(manifest) {
     ids.add(contract.id);
     if (!Number.isFinite(contract.weight) || contract.weight <= 0) throw new Error(`contract ${contract.id} has non-positive weight`);
     weight += contract.weight;
+    if (!owners.has(contract.owner)) throw new Error(`contract ${contract.id} must declare rust or typescript ownership`);
+    if (contract.owner === 'typescript' && !contract.legacyEvidence) throw new Error(`TypeScript-owned contract ${contract.id} needs legacy evidence`);
     if (!Array.isArray(contract.stages) || contract.stages.length !== stages.size || !contract.stages.every((stage) => stages.has(stage))) throw new Error(`contract ${contract.id} must require source, HIR, IR, runtime, and browser`);
     if (!Array.isArray(contract.probes) || contract.probes.length === 0) throw new Error(`contract ${contract.id} has no probes`);
     for (const probe of contract.probes) if (!probe.command || !Array.isArray(probe.args) || !probe.expect) throw new Error(`contract ${contract.id} has an invalid probe`);
@@ -33,7 +36,8 @@ export function evaluate(manifest, { cwd, run = runProbe } = {}) {
   validateManifest(manifest);
   const results = new Map();
   for (const contract of manifest.contracts) {
-    if ((contract.prerequisites ?? []).some((id) => results.get(id)?.status !== 'owned')) results.set(contract.id, { contract, status: 'blocked' });
+    if (contract.owner === 'typescript') results.set(contract.id, { contract, status: 'gap' });
+    else if ((contract.prerequisites ?? []).some((id) => results.get(id)?.status !== 'owned')) results.set(contract.id, { contract, status: 'blocked' });
     else results.set(contract.id, { contract, status: contract.probes.every((probe) => run(probe, cwd)) ? 'owned' : 'failed' });
   }
   return results;
