@@ -354,10 +354,7 @@ export async function mountPlecApplication(
               (ir.inputs ?? []).length === 1
                 ? ir.strings[ir.inputs[0]!.name]!
                 : id;
-            return [
-              inputId,
-              adaptLiveCollection(inputId, collection),
-            ];
+            return [inputId, adaptLiveCollection(inputId, collection)];
           },
         ),
       ),
@@ -538,7 +535,9 @@ export async function startPlecRouter(
   markPlecTiming('plec:mount-end');
 
   // Mount islands for the initial root graph
-  const rootGraph = graphs.find((g: any) => g.graphId === manifest.rootGraphId);
+  const rootGraph = graphs.find(
+    (g: any) => g.graphId === manifest.rootGraphId,
+  );
   const disposeIslands = rootGraph
     ? mountIslands(options.root, rootGraph, options.islands ?? {})
     : [];
@@ -699,9 +698,12 @@ function mountIslands(
 
   // SVG islands (cached)
   for (const island of (ir.islands ?? []).filter(
-    (i: any) => (registry[i.componentId] as any)?.__plecSvgIcon === true,
+    (i: any) =>
+      (registry[i.componentId] as any)?.__plecSvgIcon === true,
   )) {
-    const Icon = registry[island.componentId] as unknown as SvgIconFunction;
+    const Icon = registry[
+      island.componentId
+    ] as unknown as SvgIconFunction;
     const placeholder = root.querySelector<HTMLElement>(
       `[data-runtime-node="${island.placeholderNodeId}"]`,
     );
@@ -729,7 +731,8 @@ function mountIslands(
 
   // Component islands (existing logic)
   for (const island of (ir.islands ?? []).filter(
-    (i: any) => (registry[i.componentId] as any)?.__plecSvgIcon !== true,
+    (i: any) =>
+      (registry[i.componentId] as any)?.__plecSvgIcon !== true,
   )) {
     const mount = registry[island.componentId];
     const placeholder = root.querySelector<HTMLElement>(
@@ -893,13 +896,12 @@ function toRuntimeDelta<Row extends object>(
         type: 'update',
         inputId,
         rowKey,
-        changes:
-          change.changes
-            ? { ...change.changes }
-            : diff(
-                change.previousValue as Record<string, unknown>,
-                change.value as Record<string, unknown>,
-              ),
+        changes: change.changes
+          ? { ...change.changes }
+          : diff(
+              change.previousValue as Record<string, unknown>,
+              change.value as Record<string, unknown>,
+            ),
       };
     case 'delete':
       return { type: 'remove', inputId, rowKey };

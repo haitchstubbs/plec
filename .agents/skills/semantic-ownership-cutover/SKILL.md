@@ -21,7 +21,9 @@ The skill directory should contain:
 ```text
 <skill-directory>/
 ├── SKILL.md
-└── KNOWLEDGE.md
+├── KNOWLEDGE.md
+├── cutover-contracts.json
+└── cutover-progress.mjs
 ```
 
 `SKILL.md` defines the method.
@@ -45,6 +47,39 @@ existing runtime contract
 and leaves one fewer semantic decision owned by the TypeScript compiler.
 Prefer a larger connected slice when splitting it would require temporary shims, duplicated semantic decisions, lossy translations, throwaway IR shapes, or an immediately superseded intermediate architecture.
 Do not expand scope merely because adjacent syntax is easy to support.
+
+## Measurable cutover progress
+
+`cutover-contracts.json` is the fixed cutover denominator. Each weighted contract
+requires source, HIR, IR, runtime, and browser proof. Its probes must verify a
+Rust-produced artifact; representation, snapshots, TypeScript-produced JSON, and
+agent judgement never earn partial ownership credit.
+
+Run from repository root:
+
+```text
+node .agents/skills/semantic-ownership-cutover/cutover-progress.mjs
+node .agents/skills/semantic-ownership-cutover/cutover-progress.mjs --targets route-aware-async-actions
+```
+
+The report is authoritative for Rust-owned percentage, cutover remaining,
+failed/blocked contracts, and the maximum points a target slice can retire.
+The denominator is frozen. Add, remove, or reweight a contract only with a
+`corrections` entry containing repository evidence; never redefine scope to
+improve the score.
+
+## Endgame mode
+
+When the report leaves only a few TypeScript-authoritative ownership boundaries,
+recommend one capstone rather than a menu of small slices. Combine adjacent work
+when it shares action frames, async continuation/result ownership, route or
+structural disposal, identity, dependency representation, or an HIR-to-IR loss
+boundary. Reject a split if the next slice would replace its IR, frame,
+lifecycle, validation contract, or prevent source-to-browser proof.
+
+Investigate failed contracts and their declared prerequisites first. The next
+frontier is the highest-weight unowned dependency-ready contract or capstone,
+not a fresh capability inventory.
 
 ## Persistent knowledge protocol
 
@@ -357,7 +392,7 @@ A useful heuristic:
 > If the first slice introduces a representation that the next slice must immediately replace, combine them.
 > Split semantics when each slice leaves behind a stable, independently useful execution contract.
 
-8. Score candidate clusters
+8. Select and score the capstone
    Evaluate candidates against:
    Semantic coherence
    Does the slice establish one understandable execution model?
@@ -374,6 +409,10 @@ A useful heuristic:
    Temporary architecture cost
    Would cutting it smaller require throwaway schema, compatibility logic, duplicated lowering, or knowingly incomplete semantics?
    Prefer high coherence, leverage, and provability over minimum line count.
+   Run `cutover-progress.mjs` before selection. Name manifest target IDs,
+   current remaining percentage, planned percentage-point delta, and projected
+   remaining percentage. In endgame mode choose one capstone; mention an
+   alternative only when it is a concrete blocker.
 9. Trace the selected contract end to end
    For the preferred candidate, trace every required semantic invariant through:
 
@@ -405,14 +444,16 @@ route replacement disposes previous route-owned resources.
 Where useful, assert emitted runtime/DOM operations in addition to final DOM state. 11. Define explicit deferrals
 List adjacent semantics intentionally left TypeScript-authoritative.
 A deferral is valid when it has an independent semantic boundary.
-A deferral is suspicious when the selected slice cannot be correct without emulating or duplicating it. 12. Persist the new state
+A deferral is suspicious when the selected slice cannot be correct without emulating or duplicating it. 12. Persist and measure the new state
 Before finishing:
 Compare findings with `KNOWLEDGE.md`.
 Update only durable new facts and changed facts.
 Remove or replace superseded facts.
 Invoke caveman to compress the result.
 Ensure the next agent can understand the new frontier without repeating this discovery pass.
-A discovery pass is incomplete until the persistent knowledge state has been updated.
+Run target probes and `cutover-progress.mjs` again. A cutover is incomplete
+until score changes through passing probes and persistent knowledge records only
+durable baseline/result, not raw logs.
 Architectural guardrails
 HIR must remain semantic rather than a mirror of runtime IR.
 Do not make HIR depend on executable IR details solely to ease lowering.
@@ -455,17 +496,13 @@ Summarize only graph observations relevant to the candidate chunks.
 Name representative artifacts when useful.
 If graphs are absent or stale, say so.
 Candidate chunks
-Give the strongest 2–4 candidate semantic clusters.
-For each explain:
-semantic boundary;
-current information-loss boundary;
-shared runtime invariants;
-architectural leverage;
-why it should or should not be split further.
+Name selected manifest target IDs and only blockers that could prevent the
+capstone. Explain semantic boundary, current information-loss boundary, shared
+runtime invariants, architectural leverage, and why it cannot be split.
 Recommended cutover
 Choose one candidate and state the semantic ownership boundary that moves to Rust.
-Prefer a decisive recommendation.
-Do not default to the smallest patch.
+Include computed current remaining percentage, planned percentage-point delta,
+and projected post-slice remaining percentage. Do not default to the smallest patch.
 Contract changes
 List required HIR, IR, serialization, runtime, and validation changes as concepts and invariants.
 Avoid speculative file-by-file implementation plans.
@@ -476,6 +513,9 @@ List adjacent semantics that remain TypeScript-authoritative after the slice.
 Knowledge update
 State the durable facts added, changed, or removed from `KNOWLEDGE.md`.
 Do not dump the file contents unless requested.
+Score report
+Include owned/total weight, remaining percentage, target IDs, planned delta,
+and each failed or blocked contract. Do not estimate these values.
 Completion condition
 Finish with:
 

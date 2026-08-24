@@ -55,7 +55,9 @@ describe('compiled browser adapter', () => {
   });
 
   it('adapts live collection changes into runtime deltas', () => {
-    let notify!: (changes: LiveCollectionChange<{ id: string; title: string }>[]) => void;
+    let notify!: (
+      changes: LiveCollectionChange<{ id: string; title: string }>[],
+    ) => void;
     const input = adaptLiveCollection('todos', {
       toArray: [{ id: 'a', title: 'A' }],
       subscribeChanges: (listener) => {
@@ -67,17 +69,47 @@ describe('compiled browser adapter', () => {
     input.subscribeDeltas(receive);
 
     notify([
-      { type: 'insert', key: 'b', value: { id: 'b', title: 'B' }, beforeKey: null },
-      { type: 'update', key: 'a', value: { id: 'a', title: 'A2' }, previousValue: { id: 'a', title: 'A' } },
+      {
+        type: 'insert',
+        key: 'b',
+        value: { id: 'b', title: 'B' },
+        beforeKey: null,
+      },
+      {
+        type: 'update',
+        key: 'a',
+        value: { id: 'a', title: 'A2' },
+        previousValue: { id: 'a', title: 'A' },
+      },
       { type: 'move', key: 'b', beforeKey: 'a' },
-      { type: 'delete', key: 'a', previousValue: { id: 'a', title: 'A2' } },
+      {
+        type: 'delete',
+        key: 'a',
+        previousValue: { id: 'a', title: 'A2' },
+      },
     ]);
 
     expect(input.getSnapshot()).toEqual([{ id: 'a', title: 'A' }]);
     expect(receive).toHaveBeenCalledWith([
-      { type: 'insert', inputId: 'todos', rowKey: 'b', row: { id: 'b', title: 'B' }, beforeRowKey: null },
-      { type: 'update', inputId: 'todos', rowKey: 'a', changes: { title: 'A2' } },
-      { type: 'move', inputId: 'todos', rowKey: 'b', beforeRowKey: 'a' },
+      {
+        type: 'insert',
+        inputId: 'todos',
+        rowKey: 'b',
+        row: { id: 'b', title: 'B' },
+        beforeRowKey: null,
+      },
+      {
+        type: 'update',
+        inputId: 'todos',
+        rowKey: 'a',
+        changes: { title: 'A2' },
+      },
+      {
+        type: 'move',
+        inputId: 'todos',
+        rowKey: 'b',
+        beforeRowKey: 'a',
+      },
       { type: 'remove', inputId: 'todos', rowKey: 'a' },
     ]);
   });
