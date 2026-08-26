@@ -2003,7 +2003,6 @@ __metadata:
     playwright: "npm:^1.55.0"
     plec: "workspace:*"
     plec-browser: "workspace:*"
-    plec-compiler: "workspace:*"
     tailwindcss: "npm:^4.3.3"
     typescript: "npm:^7.0.2"
     vitest: "npm:^3.2.4"
@@ -4394,7 +4393,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"plec-compiler@workspace:*, plec-compiler@workspace:packages/plec-compiler":
+"plec-compiler@workspace:packages/plec-compiler":
   version: 0.0.0-use.local
   resolution: "plec-compiler@workspace:packages/plec-compiler"
   dependencies:

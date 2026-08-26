@@ -92,7 +92,7 @@ const rustArtifacts = JSON.parse(
 await Promise.all(
   rustArtifacts.graphs.map(({ graphId, graph }) =>
     writeFile(
-      path.join(graphsDir, `${graphId}.json`),
+      path.join(graphsDir, graphId.replace(/[\/\\]/g, '--').replace('#', '--') + '.json'),
       `${JSON.stringify(graph, null, 2)}\n`,
     ),
   ),
