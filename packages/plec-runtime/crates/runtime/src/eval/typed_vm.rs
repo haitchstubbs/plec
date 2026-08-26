@@ -48,6 +48,9 @@ pub(crate) fn typed_eval_frame(
                     .cloned()
                     .unwrap_or(RuntimeValue::Null),
             ),
+            TypedExpressionInstruction::LoadRowRecord => {
+                stack.push(RuntimeValue::Record(row.cloned().unwrap_or_default()))
+            }
             TypedExpressionInstruction::LoadRowField { field } => {
                 let field = app.strings.get(*field).map(String::as_str).unwrap_or("");
                 stack.push(if field.is_empty() {
@@ -130,6 +133,7 @@ pub(crate) fn typed_eval_frame(
                         "currentYear" => Some(RuntimeValue::Number(
                             js_sys::Date::new_0().get_full_year() as f64,
                         )),
+                        "loaderData" => app.host_inputs.get("loaderData").cloned(),
                         _ => None,
                     })
                     .unwrap_or(RuntimeValue::Null);
@@ -150,6 +154,35 @@ pub(crate) fn typed_eval_frame(
                     RuntimeValue::String(value) if field == "length" => {
                         RuntimeValue::Number(value.chars().count() as f64)
                     }
+                    _ => RuntimeValue::Null,
+                });
+            }
+            TypedExpressionInstruction::Index => {
+                let key = stack
+                    .pop()
+                    .ok_or_else(|| JsValue::from_str("expression stack underflow: index key"))?;
+                let object = stack
+                    .pop()
+                    .ok_or_else(|| JsValue::from_str("expression stack underflow: index object"))?;
+                let key = match key {
+                    RuntimeValue::String(value) => value,
+                    RuntimeValue::Number(value) if value.is_finite() && value.fract() == 0.0 => value.to_string(),
+                    _ => String::new(),
+                };
+                stack.push(match object {
+                    RuntimeValue::Record(value) => value.get(&key).cloned().unwrap_or(RuntimeValue::Null),
+                    RuntimeValue::Array(value) => key
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|index| value.get(index))
+                        .cloned()
+                        .unwrap_or(RuntimeValue::Null),
+                    RuntimeValue::String(value) => key
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|index| value.chars().nth(index))
+                        .map(|value| RuntimeValue::String(value.to_string()))
+                        .unwrap_or(RuntimeValue::Null),
                     _ => RuntimeValue::Null,
                 });
             }
@@ -206,6 +239,10 @@ pub(crate) fn typed_eval_frame(
                         ))
                         .into(),
                     ),
+                    "jsonStringify" => RuntimeValue::String(
+                        serde_json::to_string(parts.first().unwrap_or(&RuntimeValue::Null))
+                            .unwrap_or_default(),
+                    ),
                     "includes" => RuntimeValue::Bool(
                         typed_value_string(parts.first().unwrap_or(&RuntimeValue::Null)).contains(
                             &typed_value_string(parts.get(1).unwrap_or(&RuntimeValue::Null)),
@@ -233,7 +270,7 @@ pub(crate) fn typed_eval_frame(
                 }
                 stack.push(RuntimeValue::Array(output));
             }
-            TypedExpressionInstruction::MakeRecord { fields } => {
+            TypedExpressionInstruction::MakeRecord { fields, spreads } => {
                 if stack.len() < fields.len() {
                     return Err(JsValue::from_str("expression stack underflow: makeRecord"));
                 }
@@ -241,13 +278,28 @@ pub(crate) fn typed_eval_frame(
                     .filter_map(|_| stack.pop())
                     .collect::<Vec<_>>();
                 values.reverse();
-                let record = fields
-                    .iter()
-                    .zip(values)
-                    .filter_map(|(field, value)| {
-                        app.strings.get(*field).cloned().map(|field| (field, value))
-                    })
-                    .collect();
+                let mut record = HashMap::new();
+                for (index, (field, value)) in fields.iter().zip(values).enumerate() {
+                    if spreads.get(index).copied().unwrap_or(false) {
+                        if let RuntimeValue::Record(values) = value {
+                            record.extend(values);
+                        }
+                    } else if let Some(field) = app.strings.get(*field) {
+                        record.insert(field.clone(), value);
+                    }
+                }
+                stack.push(RuntimeValue::Record(record));
+            }
+            TypedExpressionInstruction::OmitFields { fields } => {
+                let value = stack.pop().ok_or_else(|| {
+                    JsValue::from_str("expression stack underflow: omitFields")
+                })?;
+                let mut record = value.record().cloned().unwrap_or_default();
+                for field in fields {
+                    if let Some(name) = app.strings.get(*field) {
+                        record.remove(name);
+                    }
+                }
                 stack.push(RuntimeValue::Record(record));
             }
             TypedExpressionInstruction::Binary { kind } => {
@@ -260,6 +312,11 @@ pub(crate) fn typed_eval_frame(
                 let result = match kind.as_str() {
                     "equal" => RuntimeValue::Bool(left == right),
                     "notEqual" => RuntimeValue::Bool(left != right),
+                    "instanceofError" => RuntimeValue::Bool(matches!(
+                        left,
+                        RuntimeValue::Record(ref value)
+                            if value.contains_key("kind") || value.contains_key("message")
+                    )),
                     "and" => {
                         if typed_truthy(&left) {
                             right
@@ -291,6 +348,13 @@ pub(crate) fn typed_eval_frame(
                             typed_value_string(&right)
                         )),
                     },
+                    "subtract" => RuntimeValue::Number(left.number() - right.number()),
+                    "multiply" => RuntimeValue::Number(left.number() * right.number()),
+                    "divide" => RuntimeValue::Number(left.number() / right.number()),
+                    "greater" => RuntimeValue::Bool(left.number() > right.number()),
+                    "greaterEqual" => RuntimeValue::Bool(left.number() >= right.number()),
+                    "less" => RuntimeValue::Bool(left.number() < right.number()),
+                    "lessEqual" => RuntimeValue::Bool(left.number() <= right.number()),
                     _ => RuntimeValue::Null,
                 };
                 stack.push(result);
@@ -414,5 +478,20 @@ mod tests {
             typed_eval(&app, 0, &[], None, 0).unwrap(),
             RuntimeValue::Number(1.0)
         );
+    }
+
+    #[test]
+    fn computed_row_records_and_operators_are_executable() {
+        let app = serde_json::from_value(serde_json::json!({
+            "version": "0.10", "rootNode": 0, "strings": ["count"],
+            "constants": [2.0], "nodes": [{"op": "element", "tag": 0}],
+            "expressions": [{"instructions": [
+                {"op": "loadRowRecord"}, {"op": "constant", "constant": 0},
+                {"op": "index"}, {"op": "constant", "constant": 0},
+                {"op": "binary", "kind": "greaterEqual"}, {"op": "return"}
+            ]}]
+        })).unwrap();
+        let row = HashMap::from([("2".into(), RuntimeValue::Number(3.0))]);
+        assert_eq!(typed_eval(&app, 0, &[], Some(&row), 0).unwrap(), RuntimeValue::Bool(true));
     }
 }

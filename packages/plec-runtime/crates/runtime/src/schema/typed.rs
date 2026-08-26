@@ -33,6 +33,10 @@ pub struct TypedApplication {
     #[serde(default)]
     pub host_refs: Vec<TypedHostRef>,
     #[serde(default)]
+    pub reactions: Vec<TypedReaction>,
+    #[serde(default)]
+    pub listeners: Vec<TypedGlobalListener>,
+    #[serde(default)]
     pub parameters: Vec<TypedComponentParameter>,
     pub route_error_state: Option<usize>,
     #[serde(default)]
@@ -53,6 +57,8 @@ pub struct TypedApplication {
     pub host_inputs: HashMap<String, RuntimeValue>,
     #[serde(skip)]
     pub runtime_props: Vec<RuntimeValue>,
+    #[serde(skip)]
+    pub runtime_component_props: Vec<Option<usize>>,
     #[serde(skip)]
     pub ref_values: Vec<RuntimeValue>,
 }
@@ -124,12 +130,17 @@ impl TypedComponentApplication {
                                 == Some(name.as_str())
                         });
                         if expected.is_none()
-                            || expected
-                                .is_some_and(|parameter| parameter.callable != prop.callable())
+                            || expected.is_some_and(|parameter| {
+                                parameter.callable != prop.callable()
+                                    || parameter.component != matches!(prop, TypedComponentProp::Component { .. })
+                            })
                             || !prop.valid(component)
                             || !supplied.insert(name.clone())
                         {
                             return Err(JsValue::from_str("invalid component prop"));
+                        }
+                        if matches!(prop, TypedComponentProp::Component { component: target, .. } if *target >= self.components.len()) {
+                            return Err(JsValue::from_str("component prop target out of range"));
                         }
                     }
                     if target
@@ -149,6 +160,12 @@ impl TypedComponentApplication {
                         })
                     {
                         return Err(JsValue::from_str("missing component prop"));
+                    }
+                } else if let TypedNode::DynamicComponent { prop, props, children, .. } = node {
+                    if !component.parameters.get(*prop).is_some_and(|parameter| parameter.component)
+                        || children.iter().any(|child| *child >= component.nodes.len())
+                        || props.iter().any(|prop| !prop.valid(component)) {
+                        return Err(JsValue::from_str("invalid dynamic component"));
                     }
                 }
             }
@@ -180,12 +197,15 @@ fn validate_component_slot_target(
 pub struct TypedComponentParameter {
     pub name: usize,
     pub callable: bool,
+    #[serde(default)]
+    pub component: bool,
 }
 
 #[derive(Clone)]
 pub enum TypedComponentProp {
     Value { name: usize, expression: usize },
     Callable { name: usize, action: usize },
+    Component { name: usize, component: usize },
 }
 
 impl<'de> Deserialize<'de> for TypedComponentProp {
@@ -196,17 +216,19 @@ impl<'de> Deserialize<'de> for TypedComponentProp {
             name: usize,
             expression: Option<usize>,
             action: Option<usize>,
+            component: Option<usize>,
         }
         let raw = Raw::deserialize(deserializer)?;
-        match (raw.kind.as_str(), raw.expression, raw.action) {
-            ("value", Some(expression), None) => Ok(Self::Value {
+        match (raw.kind.as_str(), raw.expression, raw.action, raw.component) {
+            ("value", Some(expression), None, None) => Ok(Self::Value {
                 name: raw.name,
                 expression,
             }),
-            ("callable", None, Some(action)) => Ok(Self::Callable {
+            ("callable", None, Some(action), None) => Ok(Self::Callable {
                 name: raw.name,
                 action,
             }),
+            ("component", None, None, Some(component)) => Ok(Self::Component { name: raw.name, component }),
             _ => Err(serde::de::Error::custom("invalid component prop")),
         }
     }
@@ -215,7 +237,7 @@ impl<'de> Deserialize<'de> for TypedComponentProp {
 impl TypedComponentProp {
     pub fn name(&self) -> usize {
         match self {
-            Self::Value { name, .. } | Self::Callable { name, .. } => *name,
+            Self::Value { name, .. } | Self::Callable { name, .. } | Self::Component { name, .. } => *name,
         }
     }
     pub fn callable(&self) -> bool {
@@ -225,6 +247,7 @@ impl TypedComponentProp {
         match self {
             Self::Value { expression, .. } => *expression < app.expressions.len(),
             Self::Callable { action, .. } => *action < app.actions.len(),
+            Self::Component { component, .. } => *component < usize::MAX,
         }
     }
 }
@@ -300,8 +323,20 @@ pub enum TypedActionInstruction {
     StoreState {
         state: usize,
     },
+    StoreFrame {
+        slot: usize,
+    },
     StoreRef { reference: usize },
+    CaptureActiveElement { reference: usize },
+    FocusHostRef { reference: usize },
+    FocusRef { reference: usize },
+    PreventDefault,
     CallProp {
+        prop: usize,
+        #[serde(default)]
+        arguments: Vec<usize>,
+    },
+    CallPropOptional {
         prop: usize,
         #[serde(default)]
         arguments: Vec<usize>,
@@ -312,12 +347,24 @@ pub enum TypedActionInstruction {
         key: usize,
         value: Option<usize>,
     },
-    PreventDefault,
     StoreHostRef {
         r#ref: usize,
     },
     Call {
         action: usize,
+        #[serde(default)]
+        arguments: Vec<usize>,
+        #[serde(rename = "successPc")]
+        success_pc: Option<usize>,
+        #[serde(rename = "failurePc")]
+        failure_pc: Option<usize>,
+        #[serde(rename = "resultSlot")]
+        result_slot: Option<usize>,
+        #[serde(rename = "errorSlot")]
+        error_slot: Option<usize>,
+    },
+    CallFrame {
+        parameter: usize,
         #[serde(default)]
         arguments: Vec<usize>,
         #[serde(rename = "successPc")]
@@ -421,6 +468,8 @@ fn default_true() -> bool {
 pub enum TypedNode {
     Element {
         tag: usize,
+        #[serde(default = "html_namespace")]
+        namespace: String,
         parent: Option<usize>,
         #[serde(default)]
         children: Vec<usize>,
@@ -449,10 +498,19 @@ pub enum TypedNode {
         #[serde(default)]
         children: Vec<usize>,
     },
+    DynamicComponent {
+        prop: usize,
+        parent: Option<usize>,
+        #[serde(default)]
+        props: Vec<TypedComponentProp>,
+        #[serde(default)]
+        children: Vec<usize>,
+    },
     Slot {
         parent: Option<usize>,
     },
 }
+fn html_namespace() -> String { "html".into() }
 
 #[derive(Clone, Deserialize)]
 pub struct TypedText {
@@ -476,10 +534,12 @@ pub struct TypedPropProgram {
 
 #[derive(Clone, Deserialize)]
 pub struct TypedPropWrite {
-    pub name: usize,
+    pub name: Option<usize>,
     pub kind: String,
     pub constant: Option<usize>,
     pub expression: Option<usize>,
+    #[serde(default)]
+    pub spread: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -500,6 +560,15 @@ pub struct TypedStateSlot {
 pub struct TypedRefSlot { pub initial_expression: usize }
 #[derive(Clone, Deserialize)]
 pub struct TypedHostRef {}
+#[derive(Clone, Deserialize)]
+pub struct TypedReaction {
+    pub dependencies: Vec<usize>,
+    pub action: usize,
+    #[serde(default)]
+    pub cleanup_action: Option<usize>,
+}
+#[derive(Clone, Deserialize)]
+pub struct TypedGlobalListener { pub source: String, pub event: usize, pub action: usize }
 
 #[derive(Clone, Deserialize)]
 pub struct TypedProgram {
@@ -519,6 +588,7 @@ pub enum TypedExpressionInstruction {
     LoadProp {
         prop: usize,
     },
+    LoadRowRecord,
     LoadRowField {
         field: usize,
     },
@@ -553,15 +623,24 @@ pub enum TypedExpressionInstruction {
     },
     MakeRecord {
         fields: Vec<usize>,
+        #[serde(default)]
+        spreads: Vec<bool>,
+    },
+    OmitFields {
+        fields: Vec<usize>,
     },
     Filter {
         predicate: usize,
+        #[serde(rename = "item_slot", alias = "itemSlot")]
         item_slot: usize,
+        #[serde(rename = "index_slot", alias = "indexSlot")]
         index_slot: Option<usize>,
     },
     Map {
         mapper: usize,
+        #[serde(rename = "item_slot", alias = "itemSlot")]
         item_slot: usize,
+        #[serde(rename = "index_slot", alias = "indexSlot")]
         index_slot: Option<usize>,
     },
     Jump {
@@ -711,7 +790,8 @@ pub fn validate_typed_event_contract(
 fn supported_event_field(name: &str) -> bool {
     matches!(
         name,
-        "type"
+        "event"
+            | "type"
             | "value"
             | "checked"
             | "rowKey"
@@ -794,6 +874,16 @@ impl TypedApplication {
         for reference in &self.ref_slots {
             if reference.initial_expression >= self.expressions.len() {
                 return Err("ref expression handle out of range");
+            }
+        }
+        for reaction in &self.reactions {
+            if reaction.dependencies.is_empty() || reaction.dependencies.iter().any(|value| *value >= self.expressions.len()) || reaction.action >= self.actions.len() || reaction.cleanup_action.is_some_and(|action| action >= self.actions.len()) {
+                return Err("invalid reaction");
+            }
+        }
+        for listener in &self.listeners {
+            if !matches!(listener.source.as_str(), "window" | "document") || listener.event >= self.strings.len() || listener.action >= self.actions.len() {
+                return Err("invalid global listener");
             }
         }
         for node in &self.nodes {
@@ -891,6 +981,11 @@ impl TypedApplication {
                     {
                         return Err("action ref handle out of range")
                     }
+                    TypedActionInstruction::CaptureActiveElement { reference }
+                    | TypedActionInstruction::FocusRef { reference }
+                        if *reference >= self.ref_slots.len() => return Err("action ref handle out of range"),
+                    TypedActionInstruction::FocusHostRef { reference }
+                        if *reference >= self.host_refs.len() => return Err("action host ref handle out of range"),
                     TypedActionInstruction::CallProp { prop, arguments }
                         if self
                             .parameters
@@ -941,6 +1036,42 @@ impl TypedApplication {
                                 .unwrap_or(false)
                         {
                             return Err("invalid action call");
+                        }
+                    }
+                    TypedActionInstruction::CallFrame {
+                        parameter,
+                        arguments,
+                        success_pc,
+                        failure_pc,
+                        result_slot,
+                        error_slot,
+                    } => {
+                        let continuation_fields = [
+                            success_pc.is_some(),
+                            failure_pc.is_some(),
+                            result_slot.is_some(),
+                            error_slot.is_some(),
+                        ];
+                        if continuation_fields.iter().any(|present| *present)
+                            && continuation_fields.iter().any(|present| !*present)
+                            || *parameter >= action.frame_slots
+                            || arguments
+                                .iter()
+                                .any(|expression| *expression >= self.expressions.len())
+                            || success_pc
+                                .map(|pc| pc >= action.instructions.len())
+                                .unwrap_or(false)
+                            || failure_pc
+                                .map(|pc| pc >= action.instructions.len())
+                                .unwrap_or(false)
+                            || result_slot
+                                .map(|slot| slot >= action.frame_slots)
+                                .unwrap_or(false)
+                            || error_slot
+                                .map(|slot| slot >= action.frame_slots)
+                                .unwrap_or(false)
+                        {
+                            return Err("invalid action callFrame");
                         }
                     }
                     TypedActionInstruction::Jump { target }
@@ -1164,6 +1295,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(app.validate_contract(), Err("invalid action call"));
+    }
+
+    #[test]
+    fn typed_decoder_validates_call_frame_parameter_as_an_action_slot() {
+        let mut app = typed_action_artifact(
+            serde_json::json!({
+                "op":"callFrame", "parameter":1, "arguments":[],
+                "successPc":1, "failurePc":1, "resultSlot":2, "errorSlot":3
+            }),
+            "collection",
+        );
+        app.actions[0].frame_slots = 4;
+        app.actions[0].parameter_slots = vec![0, 1];
+        app.actions[0]
+            .instructions
+            .push(serde_json::from_value(serde_json::json!({"op":"return"})).unwrap());
+        app.actions.push(TypedAction {
+            frame_slots: 0,
+            parameter_slots: vec![],
+            loader_result_state: None,
+            route_loader: false,
+            route_retry: false,
+            instructions: vec![serde_json::from_value(serde_json::json!({"op":"return"}))
+                .unwrap()],
+        });
+
+        assert!(app.validate_contract().is_ok());
+
+        if let TypedActionInstruction::CallFrame { parameter, .. } =
+            &mut app.actions[0].instructions[0]
+        {
+            *parameter = 4;
+        } else {
+            panic!("expected callFrame");
+        }
+        assert_eq!(app.validate_contract(), Err("invalid action callFrame"));
     }
 
     #[test]

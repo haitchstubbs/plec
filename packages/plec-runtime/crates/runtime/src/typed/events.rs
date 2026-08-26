@@ -1,5 +1,7 @@
 use crate::dom::listeners::*;
 use crate::runtime::lifecycle::*;
+use crate::schema::typed::TypedActionInstruction;
+use crate::typed::runtime::TypedRoutePhase;
 
 pub(crate) struct TypedListener {
     pub(crate) listener: Listener,
@@ -12,6 +14,41 @@ pub(crate) struct TypedListener {
     /// executable artifact: graph definitions are immutable while listeners
     /// belong to concrete DOM instances.
     pub(crate) owner: TypedListenerOwner,
+}
+pub(crate) struct TypedGlobalListenerHandle {
+    pub(crate) target: EventTarget,
+    pub(crate) event_type: String,
+    pub(crate) callback: Closure<dyn FnMut(Event)>,
+}
+
+impl PlecRuntime {
+    pub(crate) fn install_typed_global_listeners(&self) -> Result<(), JsValue> {
+        let candidates = self.typed.borrow().iter().map(|(id, instance)| (id.clone(), instance.runtime.app.listeners.clone())).collect::<Vec<_>>();
+        for (instance_id, listeners) in candidates {
+            for listener in listeners {
+                let target: EventTarget = match listener.source.as_str() {
+                    "window" => web_sys::window().ok_or_else(|| JsValue::from_str("window unavailable"))?.into(),
+                    "document" => web_sys::window().ok_or_else(|| JsValue::from_str("window unavailable"))?.document().ok_or_else(|| JsValue::from_str("document unavailable"))?.into(),
+                    _ => continue,
+                };
+                let event_type = self.typed.borrow().get(&instance_id).and_then(|value| value.runtime.app.strings.get(listener.event)).cloned().ok_or_else(|| JsValue::from_str("listener event out of range"))?;
+                let already = self.typed.borrow().get(&instance_id).is_some_and(|value| value.runtime.global_listeners.iter().any(|entry| entry.event_type == event_type));
+                if already { continue; }
+                let runtime = self.clone(); let id = instance_id.clone(); let action = listener.action;
+                let callback = Closure::wrap(Box::new(move |event: Event| {
+                    let value = RuntimeValue::Record([
+                        ("key".into(), event.dyn_ref::<KeyboardEvent>().map(|e| RuntimeValue::String(e.key())).unwrap_or(RuntimeValue::Null)),
+                        ("metaKey".into(), RuntimeValue::Bool(event.dyn_ref::<KeyboardEvent>().map(|e| e.meta_key()).unwrap_or(false))),
+                        ("ctrlKey".into(), RuntimeValue::Bool(event.dyn_ref::<KeyboardEvent>().map(|e| e.ctrl_key()).unwrap_or(false))),
+                    ].into_iter().collect());
+                    if let Ok(mut typed) = runtime.typed.try_borrow_mut() { if let Some(instance) = typed.get_mut(&id) { let _ = instance.runtime.execute_action_with_frame(action, &[(0, value)], None, Some(&event), &mut UpdateMetrics::default()); } }
+                }) as Box<dyn FnMut(Event)>);
+                target.add_event_listener_with_callback(&event_type, callback.as_ref().unchecked_ref())?;
+                if let Some(instance) = self.typed.borrow_mut().get_mut(&instance_id) { instance.runtime.global_listeners.push(TypedGlobalListenerHandle { target, event_type, callback }); }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -236,10 +273,10 @@ impl PlecRuntime {
         fields: &[TypedEventField],
         event: Event,
     ) -> Result<(), JsValue> {
-        let target = event
+        let current_target = event
             .current_target()
-            .or_else(|| event.target())
             .and_then(|value| value.dyn_into::<Element>().ok());
+        let target = event.target().and_then(|value| value.dyn_into::<Element>().ok());
         let values = {
             let Ok(typed) = self.typed.try_borrow() else {
                 return Ok(());
@@ -260,6 +297,7 @@ impl PlecRuntime {
                             })?,
                             &event,
                             target.as_ref(),
+                            current_target.as_ref(),
                         )?,
                     ))
                 })
@@ -342,10 +380,31 @@ impl PlecRuntime {
             .try_borrow()
             .ok()
             .and_then(|typed| {
-                typed
-                    .get(instance_id)
-                    .and_then(|typed| typed.runtime.app.actions.get(action))
-                    .map(|action| action.route_retry)
+                typed.get(instance_id).and_then(|instance| {
+                    let app = &instance.runtime.app;
+                    let in_error_phase = instance
+                        .route_state
+                        .as_ref()
+                        .is_some_and(|state| state.phase == TypedRoutePhase::Error);
+                    app.actions.get(action).map(|action| {
+                        action.route_retry
+                            || (in_error_phase
+                                && action.instructions.iter().any(|instruction| {
+                                    let prop = match instruction {
+                                        TypedActionInstruction::CallProp { prop, .. }
+                                        | TypedActionInstruction::CallPropOptional { prop, .. } => *prop,
+                                        _ => return false,
+                                    };
+                                    app.parameters.get(prop).is_some_and(|parameter| {
+                                        parameter.callable
+                                            && app
+                                                .strings
+                                                .get(parameter.name)
+                                                .is_some_and(|name| name == "retry")
+                                    })
+                                }))
+                    })
+                })
             })
             .unwrap_or(false);
         if route_retry {
@@ -409,6 +468,8 @@ impl PlecRuntime {
             .get_mut(instance_id)
             .map(|instance| std::mem::take(&mut instance.runtime.callback_requests))
             .unwrap_or_default();
+        #[cfg(feature = "fetch")]
+        let mut pending_fetches = Vec::new();
         for callback in callbacks {
             let Some(mut typed) = self.typed.try_borrow_mut().ok() else {
                 continue;
@@ -439,6 +500,19 @@ impl PlecRuntime {
                 None,
                 &mut metrics,
             )?;
+            #[cfg(feature = "fetch")]
+            pending_fetches.extend(
+                parent
+                    .runtime
+                    .take_pending_fetches()
+                    .into_iter()
+                    .map(|request| (callback.parent_id.clone(), request)),
+            );
+        }
+        #[cfg(feature = "fetch")]
+        for (parent_id, mut request) in pending_fetches {
+            request.instance_id = parent_id;
+            self.start_typed_fetch(request)?;
         }
         self.flush_component_work()?;
         self.install_typed_event_listeners()?;
@@ -450,8 +524,15 @@ pub(crate) fn typed_event_field(
     name: &str,
     event: &Event,
     target: Option<&Element>,
+    current_target: Option<&Element>,
 ) -> Result<RuntimeValue, JsValue> {
     match name {
+        "event" => Ok(RuntimeValue::Record(std::collections::HashMap::from([
+            ("target".into(), typed_event_element(target)),
+            ("currentTarget".into(), typed_event_element(current_target)),
+            ("key".into(), event.clone().dyn_into::<KeyboardEvent>().map(|key| RuntimeValue::String(key.key())).unwrap_or(RuntimeValue::Null)),
+            ("type".into(), RuntimeValue::String(event.type_())),
+        ]))),
         "type" => Ok(RuntimeValue::String(event.type_())),
         "value" => target
             .and_then(|element| element.clone().dyn_into::<HtmlInputElement>().ok())
@@ -516,6 +597,20 @@ pub(crate) fn typed_event_field(
     }
 }
 
+fn typed_event_element(element: Option<&Element>) -> RuntimeValue {
+    let Some(element) = element else { return RuntimeValue::Null; };
+    let value = element
+        .clone()
+        .dyn_into::<HtmlInputElement>()
+        .ok()
+        .map(|input| RuntimeValue::Record(std::collections::HashMap::from([
+            ("value".into(), RuntimeValue::String(input.value())),
+            ("checked".into(), RuntimeValue::Bool(input.checked())),
+        ])))
+        .unwrap_or(RuntimeValue::Record(std::collections::HashMap::new()));
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,5 +656,10 @@ mod tests {
         assert!(!owner.is_live_with(&|_, _, _| false, &current_conditional));
         assert!(!owner.is_live_with(&current_row, &|_, _, _| false));
         assert!(TypedListenerOwner::Static.is_live_with(&|_, _, _| false, &|_, _, _| false));
+    }
+
+    #[test]
+    fn event_record_preserves_distinct_missing_dom_sources() {
+        assert_eq!(typed_event_element(None), RuntimeValue::Null);
     }
 }

@@ -1036,7 +1036,7 @@ fn rust_component_registry_routes_without_legacy_renderer() {
     let root = mount_root();
     runtime
         .register_graph(
-            "ignored".into(),
+            "rust-component.tsx#App".into(),
             serde_wasm_bindgen::to_value(&rust_component_artifact()).unwrap(),
         )
         .unwrap();
