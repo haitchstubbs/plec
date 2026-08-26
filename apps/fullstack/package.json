@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch dist/server.mjs",
+    "dev": "yarn dev:rebuild",
     "dev:rebuild": "yarn check:no-react && yarn --cwd ../.. exec turbo run build --filter=@wasm-runtime/fullstack && node --watch dist/server.mjs",
     "build": "yarn check:no-react && node scripts/build.mjs",
     "bench:navigation": "node scripts/bench-navigation.mjs",

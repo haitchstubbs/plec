@@ -39,9 +39,10 @@ async function assertArtifacts() {
     ),
   ]);
   for (const id of graphIds) {
+    const graphFile = id.replace(/[\/\\]/g, '--').replace('#', '--');
     const graph = JSON.parse(
       await readFile(
-        path.join(publicDir, 'graphs', `${id}.json`),
+        path.join(publicDir, 'graphs', `${graphFile}.json`),
         'utf8',
       ),
     );
@@ -97,6 +98,67 @@ async function waitForMount(page) {
       window.__plecPerformance?.snapshot().marks['plec:mount-end'] !==
       undefined,
   );
+}
+
+async function homeLayoutAndSidebar(browser) {
+  const desktop = await browser.newContext({
+    viewport: { width: 1280, height: 720 },
+  });
+  const desktopPage = await desktop.newPage();
+  const desktopDone = watch(desktopPage);
+  try {
+    await desktopPage.goto(origin, { waitUntil: 'domcontentloaded' });
+    await desktopPage
+      .getByRole('heading', {
+        name: 'TSX enters as source. Plec owns the resulting DOM.',
+      })
+      .waitFor();
+    assert.equal(
+      await desktopPage.getByRole('navigation', { name: 'Breadcrumb' }).count(),
+      1,
+      'the persistent layout should render one breadcrumb',
+    );
+    assert.equal(
+      await desktopPage
+        .getByRole('navigation', { name: 'Primary navigation' })
+        .getByRole('link', { name: 'Test' })
+        .locator('svg')
+        .getAttribute('class'),
+      'size-4 shrink-0',
+      'a dynamic icon must receive its className props',
+    );
+    await desktopPage.getByRole('button', { name: 'Toggle sidebar' }).click();
+    await desktopPage
+      .locator('[data-collapsed]')
+      .first()
+      .waitFor({ state: 'attached' });
+    assert.equal(
+      await desktopPage.locator('[data-collapsed]').first().getAttribute('data-collapsed'),
+      'true',
+      'the desktop control should collapse the desktop sidebar',
+    );
+    desktopDone();
+  } finally {
+    await desktop.close();
+  }
+
+  const mobile = await browser.newContext({
+    viewport: { width: 640, height: 720 },
+  });
+  const mobilePage = await mobile.newPage();
+  const mobileDone = watch(mobilePage);
+  try {
+    await mobilePage.goto(origin, { waitUntil: 'domcontentloaded' });
+    await mobilePage.getByRole('button', { name: 'Toggle navigation' }).click();
+    assert.equal(
+      await mobilePage.locator('[data-mobile-open]').first().getAttribute('data-mobile-open'),
+      'true',
+      'the mobile control should open the navigation drawer',
+    );
+    mobileDone();
+  } finally {
+    await mobile.close();
+  }
 }
 
 async function loaderPendingThenSuccess(browser) {
@@ -237,8 +299,13 @@ async function todoActions(browser) {
       .filter({ hasText: 'Acceptance todo' })
       .getAttribute('data-runtime-row-key');
     let row = page.locator(`[data-runtime-row-key="${rowKey}"]`);
-    await row.locator('input').check();
-    await row.locator('input').waitFor();
+    await row.locator('input').click();
+    // The row renders `Mark {title} open` once completed (routes/todos.tsx).
+    await page
+      .getByRole('checkbox', {
+        name: 'Mark Acceptance todo open',
+      })
+      .waitFor();
     await row.locator('button', { hasText: 'Edit' }).click();
     const rename = row.locator('input:not([type="checkbox"])');
     await rename.fill('Renamed acceptance todo');
@@ -270,6 +337,7 @@ async function main() {
     executablePath: process.env.PLEC_CHROME_EXECUTABLE,
   });
   try {
+    await homeLayoutAndSidebar(browser);
     await loaderPendingThenSuccess(browser);
     await loaderErrorThenRetry(browser);
     await todoActions(browser);
