@@ -606,7 +606,7 @@ pub fn resolve_component(
     name: &str,
 ) -> Option<ResolvedSymbol> {
     let symbol = resolve_local_symbol(graph, module_id, name)?;
-    if matches!(symbol.kind, SymbolKind::Function) {
+    if matches!(symbol.kind, SymbolKind::Function | SymbolKind::Variable) {
         Some(symbol)
     } else {
         None
