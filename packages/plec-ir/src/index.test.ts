@@ -171,27 +171,64 @@ describe('generic structural IR', () => {
   it('accepts only executable typed action operations', () => {
     const ir = validateApplicationIr({
       ...base,
-      actions: [{
-        id: 'a1',
-        parameters: [{ name: 'event', type: 'event' }],
-        captures: ['s1'],
-        operations: [{
-          kind: 'if',
-          test: { kind: 'literal', value: true },
-          consequent: [{ kind: 'set-state', stateSlotId: 's1', value: { kind: 'literal', value: true } }],
-          alternate: [],
-        }],
-      }],
+      actions: [
+        {
+          id: 'a1',
+          parameters: [{ name: 'event', type: 'event' }],
+          captures: ['s1'],
+          operations: [
+            {
+              kind: 'if',
+              test: { kind: 'literal', value: true },
+              consequent: [
+                {
+                  kind: 'set-state',
+                  stateSlotId: 's1',
+                  value: { kind: 'literal', value: true },
+                },
+              ],
+              alternate: [],
+            },
+          ],
+        },
+      ],
     });
     expect(ir.actions[0]?.operations[0]?.kind).toBe('if');
-    expect(() => validateApplicationIr({
-      ...base,
-      actions: [{ id: 'a1', operations: [{ kind: 'javascript', source: '() => {}' }] }],
-    })).toThrow();
+    expect(() =>
+      validateApplicationIr({
+        ...base,
+        actions: [
+          {
+            id: 'a1',
+            operations: [{ kind: 'javascript', source: '() => {}' }],
+          },
+        ],
+      }),
+    ).toThrow();
   });
 });
 
 describe('static application renderer', () => {
+  it('accepts 0.10 component graphs without legacy rootElementId fields', () => {
+    const ir = validateApplicationIr({
+      version: '0.10',
+      rootComponent: 0,
+      components: [
+        {
+          id: 'src/routes/todos.tsx#TodosPage',
+          rootNode: 0,
+          strings: ['hello'],
+          constants: [],
+          nodes: [
+            { op: 'element', tag: 0, parent: null, children: [] },
+          ],
+        },
+      ],
+    });
+    expect(ir.version).toBe('0.10');
+    expect(renderStaticApplication(ir as any)).toBe('');
+  });
+
   it('renders static nodes and host bindings while omitting query rows', () => {
     const ir = validateApplicationIr({
       version: '0.8',
