@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findInPath, isWindows } from './utils.js';
 
 /**
@@ -199,7 +199,10 @@ async function findWasmTools() {
 }
 
 // CLI interface for direct execution
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+) {
   const args = process.argv.slice(2);
 
   if (args.length === 0) {
