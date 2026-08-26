@@ -5,6 +5,11 @@ pub enum HirProp {
     Static { name: String, value: String },
     Expression { name: String, value: ExprId },
     Callable { name: String, callable: HirCallable },
+    /// A graph component handle.  Components deliberately cannot flow through
+    /// the serializable expression/value language.
+    Component { name: String, target: ComponentId },
+    /// A component's single declared props bag forwarded to an intrinsic node.
+    Spread { value: ExprId },
 }
 
 /// DOM event binding on an intrinsic element.
@@ -39,6 +44,10 @@ pub struct HirElement {
     pub events: Vec<HirEventBinding>,
     /// This is intentionally not a prop: host ownership is structural.
     pub host_ref: Option<BindingId>,
+    /// Compiler-recognised route mount host. The ID is part of the route
+    /// manifest contract and therefore must point at the authored Outlet node,
+    /// not a component root fallback.
+    pub route_outlet: Option<String>,
     pub children: Vec<NodeId>,
     pub span: SourceSpan,
 }
@@ -62,10 +71,17 @@ pub struct HirComponentCall {
     pub id: NodeId,
     /// Canonical defining component identity. The call-site span remains on
     /// this node, so source and target identity are intentionally separate.
-    pub target: ComponentId,
+    pub target: HirComponentTarget,
     pub props: Vec<HirProp>,
     pub children: Vec<NodeId>,
     pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirComponentTarget {
+    Static(ComponentId),
+    /// A component-valued parameter, selected by the caller at mount time.
+    Prop(BindingId),
 }
 
 #[derive(Debug, Clone, PartialEq)]

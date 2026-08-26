@@ -6,13 +6,13 @@ pub use span::SourceSpan;
 
 // Expressions
 pub use expr::{
-    HirBinaryOp, HirCallable, HirExpr, HirExprNode, HirLogicalOp, HirTemplatePart, HirUnaryOp,
+    HirArrayItem, HirBinaryOp, HirCallable, HirExpr, HirExprNode, HirLogicalOp, HirObjectItem, HirTemplatePart, HirUnaryOp,
     HirValue,
 };
 
 // Nodes
 pub use node::{
-    HirComponentCall, HirConditional, HirElement, HirEventBinding, HirForEach, HirFragment,
+    HirComponentCall, HirComponentTarget, HirConditional, HirElement, HirEventBinding, HirForEach, HirFragment,
     HirNode, HirProp, HirSlot, HirText,
 };
 
@@ -20,7 +20,7 @@ pub use node::{
 pub use component::{HirApplication, HirComponent, HirRoute, HirRouteApplication};
 pub use component::{
     HirBinding, HirBindingKind, HirCallableBody, HirCallableDecl, HirInput, HirLocal, HirParameter,
-    HirParameterSource, HirRefSlot, HirState, HirStmt,
+    HirParameterSource, HirReaction, HirListener, HirRefSlot, HirState, HirStmt,
 };
 
 mod component;
@@ -76,6 +76,8 @@ mod tests {
                     value: "card".to_string(),
                 }],
                 events: vec![],
+                host_ref: None,
+                route_outlet: None,
                 children: vec![NodeId(0), NodeId(1)],
                 span: SourceSpan::new("App.tsx", 0, 50),
             }),
@@ -88,6 +90,9 @@ mod tests {
             bindings: vec![],
             locals: vec![],
             states: vec![],
+            ref_slots: vec![],
+            reactions: vec![],
+            listeners: vec![],
             callables: vec![],
             root_nodes: vec![NodeId(2)],
             nodes,

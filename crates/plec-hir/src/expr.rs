@@ -68,6 +68,22 @@ pub enum HirTemplatePart {
     Expression(ExprId),
 }
 
+/// Array literals retain whether each source entry was spread so the
+/// executable VM can preserve JavaScript's ordered flattening semantics.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirArrayItem {
+    Value(ExprId),
+    Spread(ExprId),
+}
+
+/// Object literals retain ordered spread entries so runtime construction keeps
+/// JavaScript's source-order, last-write-wins semantics.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirObjectItem {
+    Property { name: String, value: ExprId },
+    Spread(ExprId),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirExpr {
     Literal(HirValue),
@@ -85,6 +101,13 @@ pub enum HirExpr {
     Member {
         object: ExprId,
         property: String,
+    },
+    /// A serializable dynamic lookup. `optional` has the same nullish result
+    /// contract as a missing field; it never exposes a browser object.
+    ComputedMember {
+        object: ExprId,
+        property: ExprId,
+        optional: bool,
     },
     Unary {
         op: HirUnaryOp,
@@ -108,8 +131,25 @@ pub enum HirExpr {
     Template {
         parts: Vec<HirTemplatePart>,
     },
-    Array(Vec<ExprId>),
-    Object(Vec<(String, ExprId)>),
+    Array(Vec<HirArrayItem>),
+    Object(Vec<HirObjectItem>),
+    /// Object-rest destructuring over the serializable value graph. The
+    /// compiler records the consumed property names so forwarding never leaks
+    /// a destructured prop back to an intrinsic or component call.
+    ObjectWithout {
+        object: ExprId,
+        excluded: Vec<String>,
+    },
+    /// Pure collection transforms. Their callback body runs with the current
+    /// serializable item as the row record; no JavaScript function escapes
+    /// into the executable graph.
+    Map { source: ExprId, mapper: ExprId },
+    Filter { source: ExprId, predicate: ExprId },
+    /// A finite pure value operation implemented by the executable VM.
+    Builtin {
+        kind: String,
+        args: Vec<ExprId>,
+    },
     Call {
         callee: ExprId,
         args: Vec<ExprId>,
