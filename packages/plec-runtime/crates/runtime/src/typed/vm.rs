@@ -7,6 +7,8 @@ use crate::typed::cookie::*;
 #[cfg(feature = "fetch")]
 use crate::typed::fetch::*;
 use crate::typed::runtime::*;
+use wasm_bindgen::JsCast;
+use web_sys::HtmlElement;
 
 #[derive(Clone)]
 pub(crate) struct TypedActionFrame {
@@ -114,7 +116,7 @@ impl TypedRuntime {
         'run: loop {
             let action = continuation.current.action;
             let mut pc = continuation.current.pc;
-            let frame = continuation.current.frame.clone();
+            let mut frame = continuation.current.frame.clone();
             let event = continuation.current.event.clone();
             let row = continuation.current.row.clone();
             let program = self
@@ -147,10 +149,36 @@ impl TypedRuntime {
                         self.states[state] = value;
                         self.refresh_state(state, metrics)?;
                     }
+                    TypedActionInstruction::StoreFrame { slot } => {
+                        let value = stack.pop().ok_or_else(|| {
+                            JsValue::from_str("action stack underflow: storeFrame")
+                        })?;
+                        if slot >= frame.len() {
+                            return Err(JsValue::from_str("action frame slot out of range"));
+                        }
+                        frame[slot] = value;
+                    }
                     TypedActionInstruction::StoreRef { reference } => {
                         let value = stack.pop().ok_or_else(|| JsValue::from_str("action stack underflow: storeRef"))?;
                         let slot = self.app.ref_values.get_mut(reference).ok_or_else(|| JsValue::from_str("ref handle out of range"))?;
                         *slot = value;
+                    }
+                    TypedActionInstruction::CaptureActiveElement { reference } => {
+                        let slot = self.focus_refs.get_mut(reference).ok_or_else(|| JsValue::from_str("focus ref handle out of range"))?;
+                        *slot = document()?.active_element();
+                    }
+                    TypedActionInstruction::FocusHostRef { reference } => {
+                        if let Some(node) = self.host_ref_nodes.get(reference).and_then(Option::as_ref) {
+                            if let Some(element) = node.dyn_ref::<HtmlElement>() { let _ = element.focus(); }
+                        }
+                    }
+                    TypedActionInstruction::FocusRef { reference } => {
+                        if let Some(element) = self.focus_refs.get(reference).and_then(Option::as_ref) {
+                            if element.is_connected() { if let Some(element) = element.dyn_ref::<HtmlElement>() { let _ = element.focus(); } }
+                        }
+                    }
+                    TypedActionInstruction::PreventDefault => {
+                        if let Some(event) = native_event { event.prevent_default(); }
                     }
                     TypedActionInstruction::CallProp { prop, arguments } => {
                         let mut callback = self
@@ -174,10 +202,26 @@ impl TypedRuntime {
                             .collect::<Result<Vec<_>, _>>()?;
                         self.callback_requests.push(callback);
                     }
-                    TypedActionInstruction::PreventDefault => {
-                        if let Some(event) = native_event {
-                            event.prevent_default();
-                        }
+                    TypedActionInstruction::CallPropOptional { prop, arguments } => {
+                        let Some(mut callback) = self.callbacks.get(prop).and_then(Clone::clone) else {
+                            pc += 1;
+                            continue;
+                        };
+                        callback.arguments = arguments
+                            .into_iter()
+                            .map(|expression| {
+                                typed_eval_frame(
+                                    &self.app,
+                                    expression,
+                                    &self.states,
+                                    row.as_ref(),
+                                    0,
+                                    &frame,
+                                    &event,
+                                )
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        self.callback_requests.push(callback);
                     }
                     TypedActionInstruction::StoreHostRef { r#ref } => {
                         let name = self
@@ -276,6 +320,84 @@ impl TypedRuntime {
                                 metrics,
                             )?,
                             _ => return Err(JsValue::from_str("partial action call continuation")),
+                        }
+                    }
+                    TypedActionInstruction::CallFrame {
+                        parameter,
+                        arguments,
+                        success_pc,
+                        failure_pc,
+                        result_slot,
+                        error_slot,
+                    } => {
+                        let RuntimeValue::Number(target) = frame.get(parameter).cloned().unwrap_or(RuntimeValue::Null) else {
+                            return Err(JsValue::from_str("callFrame parameter must be an action handle"));
+                        };
+                        let target = target as usize;
+                        let target_program = self
+                            .app
+                            .actions
+                            .get(target)
+                            .cloned()
+                            .ok_or_else(|| JsValue::from_str("callFrame action handle out of range"))?;
+                        if arguments.len() != target_program.parameter_slots.len() {
+                            return Err(JsValue::from_str("callFrame action arity mismatch"));
+                        }
+                        let mut child = vec![RuntimeValue::Null; target_program.frame_slots];
+                        for (expression, slot) in
+                            arguments.into_iter().zip(target_program.parameter_slots)
+                        {
+                            child[slot] = typed_eval_frame(
+                                &self.app,
+                                expression,
+                                &self.states,
+                                row.as_ref(),
+                                0,
+                                &frame,
+                                &event,
+                            )?;
+                        }
+                        match (success_pc, failure_pc, result_slot, error_slot) {
+                            (
+                                Some(success_pc),
+                                Some(failure_pc),
+                                Some(result_slot),
+                                Some(error_slot),
+                            ) => {
+                                continuation.callers.push(TypedCallerContinuation {
+                                    frame: TypedActionFrame {
+                                        action,
+                                        pc: pc + 1,
+                                        stack: stack.clone(),
+                                        frame: frame.clone(),
+                                        event: event.clone(),
+                                        row: row.clone(),
+                                    },
+                                    success_pc,
+                                    failure_pc,
+                                    result_slot,
+                                    error_slot,
+                                });
+                                continuation.current = TypedActionFrame {
+                                    action: target,
+                                    pc: 0,
+                                    stack: Vec::new(),
+                                    frame: child,
+                                    event: event.clone(),
+                                    row: row.clone(),
+                                };
+                                continue 'run;
+                            }
+                            (None, None, None, None) => self.execute_action_at(
+                                target,
+                                0,
+                                child,
+                                &event,
+                                row.clone(),
+                                native_event,
+                                metrics,
+                            )?,
+                            _ => return Err(JsValue::from_str("partial action callFrame continuation")),
                         }
                     }
                     TypedActionInstruction::CollectionMutation {
@@ -423,7 +545,13 @@ impl TypedRuntime {
                                         &frame,
                                         &event,
                                     )
-                                    .and_then(|value| value.json_body())
+                                    .and_then(|value| match value {
+                                        // JSON.stringify already produces a fetch-ready string.
+                                        // Encoding it again turns `{\"title\":\"Plec\"}` into a JSON
+                                        // string literal, which APIs correctly reject as a non-object body.
+                                        RuntimeValue::String(value) => Ok(value),
+                                        value => value.json_body(),
+                                    })
                                 })
                                 .transpose()?;
                             continuation.current = TypedActionFrame {
@@ -529,6 +657,117 @@ impl TypedRuntime {
             }
             return Ok(());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::typed::TypedApplication;
+    use serde_json::json;
+
+    fn call_frame_application() -> TypedApplication {
+        serde_json::from_value(json!({
+            "rootNode": 0,
+            "strings": ["div"],
+            "constants": [null, "success", "failure"],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "stateSlots": [{"initialExpression": 0, "frameSlot": 0}],
+            "expressions": [
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 1}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 2}, {"op": "return"}]}
+            ],
+            "actions": [
+                {
+                    "frameSlots": 4,
+                    "instructions": [
+                        {"op": "callFrame", "parameter": 1, "arguments": [], "successPc": 1, "failurePc": 4, "resultSlot": 2, "errorSlot": 3},
+                        {"op": "evaluate", "expression": 1},
+                        {"op": "storeState", "state": 0},
+                        {"op": "return"},
+                        {"op": "evaluate", "expression": 2},
+                        {"op": "storeState", "state": 0},
+                        {"op": "return"}
+                    ]
+                },
+                {"instructions": [{"op": "return", "value": 1}]},
+                {"instructions": [{"op": "return", "outcome": "failure", "value": 2}]}
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn call_frame_executes_action_handles_from_frame_slots_with_both_continuations() {
+        let mut runtime = TypedRuntime::new(call_frame_application()).unwrap();
+        let mut metrics = UpdateMetrics::default();
+
+        runtime
+            .execute_action_with_frame(
+                0,
+                &[(1, RuntimeValue::Number(1.0))],
+                None,
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        assert!(matches!(runtime.states[0], RuntimeValue::String(ref value) if value == "success"));
+
+        runtime
+            .execute_action_with_frame(
+                0,
+                &[(1, RuntimeValue::Number(2.0))],
+                None,
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        assert!(matches!(runtime.states[0], RuntimeValue::String(ref value) if value == "failure"));
+    }
+
+    #[test]
+    fn fetch_uses_json_stringify_results_as_raw_request_bodies() {
+        let app: TypedApplication = serde_json::from_value(json!({
+            "rootNode": 0,
+            "strings": ["div", "title"],
+            "constants": ["/todos", "Plec"],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "expressions": [
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+                {"instructions": [
+                    {"op": "constant", "constant": 1},
+                    {"op": "makeRecord", "fields": [1]},
+                    {"op": "string", "kind": "jsonStringify", "count": 1},
+                    {"op": "return"}
+                ]}
+            ],
+            "actions": [{
+                "frameSlots": 2,
+                "instructions": [
+                    {"op": "capabilityRequest", "capability": "fetch", "request": {
+                        "url": 0,
+                        "method": "POST",
+                        "body": 1,
+                        "decode": "responseJson",
+                        "requireOk": true
+                    }, "successPc": 1, "failurePc": 2, "resultSlot": 0, "errorSlot": 1},
+                    {"op": "return"},
+                    {"op": "return", "outcome": "failure"}
+                ]
+            }]
+        }))
+        .unwrap();
+        let mut runtime = TypedRuntime::new(app).unwrap();
+        let mut metrics = UpdateMetrics::default();
+
+        runtime
+            .execute_action_with_frame(0, &[], None, None, &mut metrics)
+            .unwrap();
+
+        let requests = runtime.take_pending_fetches();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].body.as_deref(), Some(r#"{"title":"Plec"}"#));
     }
 }
 
@@ -650,6 +889,9 @@ impl TypedRuntime {
                     .prop_programs
                     .get(*handle)
                     .map(|program| program.target),
+                // Component-call targets have no direct DOM write here; the row
+                // scan below queues their prop refreshes through the owner row.
+                "component" => Some(*handle),
                 _ => None,
             })
         {
@@ -703,13 +945,11 @@ impl TypedRuntime {
                                     .cloned()
                                     .unwrap_or_default(),
                             };
-                            typed_apply_value(
-                                &self.app,
-                                &write.kind,
-                                Some(write.name),
-                                &node,
-                                value,
-                            )?;
+                            if write.spread {
+                                typed_apply_spread(&self.app, &write.kind, &node, value)?;
+                            } else {
+                                typed_apply_value(&self.app, &write.kind, write.name, &node, value)?;
+                            }
                             metrics.dom_operations += 1;
                         }
                     }
@@ -721,6 +961,30 @@ impl TypedRuntime {
         }
         // ponytail: scans mounted calls; index component dependency edges if profiles require it.
         self.queue_static_component_refreshes()?;
+        self.queue_reactions_from("state", state);
+        self.drain_reactions(metrics)?;
+        Ok(())
+    }
+
+    fn queue_reactions_from(&mut self, kind: &str, handle: usize) {
+        for edge in &self.app.dependency_edges {
+            if edge.source.kind == kind && edge.source.handle == handle && edge.target.kind == "reaction" && !self.pending_reactions.contains(&edge.target.handle) {
+                self.pending_reactions.push(edge.target.handle);
+            }
+        }
+    }
+
+    fn drain_reactions(&mut self, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
+        while let Some(reaction) = self.pending_reactions.first().copied() {
+            self.pending_reactions.remove(0);
+            let reaction_def = self.app.reactions.get(reaction).cloned().ok_or_else(|| JsValue::from_str("reaction handle out of range"))?;
+            if reaction_def.dependencies.iter().any(|dependency| *dependency >= self.app.expressions.len()) { return Err(JsValue::from_str("reaction dependency out of range")); }
+            if let Some(cleanup) = self.reaction_cleanups.get_mut(reaction).and_then(Option::take) {
+                self.execute_action(cleanup, &[], None, None, metrics)?;
+            }
+            self.execute_action(reaction_def.action, &[], None, None, metrics)?;
+            if let Some(slot) = self.reaction_cleanups.get_mut(reaction) { *slot = reaction_def.cleanup_action; }
+        }
         Ok(())
     }
 
@@ -776,13 +1040,11 @@ impl TypedRuntime {
                                             .cloned()
                                     })
                                     .unwrap_or_default();
-                                typed_apply_value(
-                                    &self.app,
-                                    &write.kind,
-                                    Some(write.name),
-                                    &node,
-                                    value,
-                                )?;
+                                if write.spread {
+                                    typed_apply_spread(&self.app, &write.kind, &node, value)?;
+                                } else {
+                                    typed_apply_value(&self.app, &write.kind, write.name, &node, value)?;
+                                }
                                 metrics.dom_operations += 1;
                             }
                         }
@@ -796,6 +1058,8 @@ impl TypedRuntime {
             }
         }
         self.queue_static_component_refreshes()?;
+        self.queue_reactions_from("prop", prop);
+        self.drain_reactions(metrics)?;
         Ok(())
     }
 }
