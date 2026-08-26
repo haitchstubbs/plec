@@ -1,6 +1,8 @@
 use serde::Serialize;
 
-pub const VERSION: &str = "0.9";
+pub const VERSION: &str = "0.10";
+// The component graph schema is still in its 0.10 development window.  Keep
+// additions in this contract until it is deliberately released.
 pub const COMPONENT_VERSION: &str = "0.10";
 
 /// A separately-versioned component application.  Component definitions keep
@@ -69,6 +71,10 @@ pub struct ExecutableComponent {
     pub ref_slots: Vec<RefSlot>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub host_refs: Vec<HostRef>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub reactions: Vec<Reaction>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub listeners: Vec<Listener>,
     pub parameters: Vec<ComponentParameter>,
     pub expressions: Vec<ExpressionProgram>,
     pub actions: Vec<ActionProgram>,
@@ -82,6 +88,8 @@ pub struct ExecutableComponent {
 pub struct ComponentParameter {
     pub name: usize,
     pub callable: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub component: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -89,6 +97,7 @@ pub struct ComponentParameter {
 pub enum ComponentProp {
     Value { name: usize, expression: usize },
     Callable { name: usize, action: usize },
+    Component { name: usize, component: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -113,6 +122,10 @@ pub struct ExecutableApplication {
     pub ref_slots: Vec<RefSlot>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub host_refs: Vec<HostRef>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub reactions: Vec<Reaction>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub listeners: Vec<Listener>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub parameters: Vec<ComponentParameter>,
     pub expressions: Vec<ExpressionProgram>,
@@ -141,6 +154,8 @@ impl Default for ExecutableApplication {
             state_slots: vec![],
             ref_slots: vec![],
             host_refs: vec![],
+            reactions: vec![],
+            listeners: vec![],
             parameters: vec![],
             expressions: vec![],
             actions: vec![],
@@ -167,6 +182,8 @@ pub enum Value {
 pub enum Node {
     Element {
         tag: usize,
+        #[serde(skip_serializing_if = "is_html_namespace")]
+        namespace: &'static str,
         parent: Option<usize>,
         children: Vec<usize>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -193,11 +210,23 @@ pub enum Node {
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
         children: Vec<usize>,
     },
+    /// A component whose graph definition comes from a component-valued prop.
+    DynamicComponent {
+        prop: usize,
+        parent: Option<usize>,
+        props: Vec<ComponentProp>,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        children: Vec<usize>,
+    },
     /// Insertion range for the implicit `children` prop. The content belongs
     /// to the caller, not the component definition which declares this node.
     Slot {
         parent: Option<usize>,
     },
+}
+
+fn is_html_namespace(value: &&'static str) -> bool {
+    *value == "html"
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Text {
@@ -222,12 +251,15 @@ pub struct PropProgram {
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PropWrite {
-    pub name: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<usize>,
     pub kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub constant: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expression: Option<usize>,
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub spread: bool,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Event {
@@ -284,6 +316,11 @@ pub struct RefSlot { pub initial_expression: usize }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HostRef {}
 #[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Reaction { pub dependencies: Vec<usize>, pub action: usize, #[serde(skip_serializing_if = "Option::is_none")] pub cleanup_action: Option<usize> }
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Listener { pub source: &'static str, pub event: usize, pub action: usize }
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ExpressionProgram {
     pub instructions: Vec<ExpressionInstruction>,
 }
@@ -296,13 +333,39 @@ pub enum ExpressionInstruction {
     LoadProp { prop: usize },
     LoadFrame { slot: usize },
     LoadHost { host: usize },
+    /// The whole serializable loop row. This is distinct from a field read so
+    /// computed row access and row spreads retain their normal value-graph
+    /// semantics.
+    LoadRowRecord,
     LoadRowField { field: usize },
     Field { field: usize },
+    Index,
     Unary { kind: &'static str },
     Binary { kind: &'static str },
     String { kind: &'static str, count: usize },
-    MakeArray { count: usize },
-    MakeRecord { fields: Vec<usize> },
+    MakeArray {
+        count: usize,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        spreads: Vec<bool>,
+    },
+    MakeRecord {
+        fields: Vec<usize>,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        spreads: Vec<bool>,
+    },
+    OmitFields { fields: Vec<usize> },
+    Map {
+        mapper: usize,
+        item_slot: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        index_slot: Option<usize>,
+    },
+    Filter {
+        predicate: usize,
+        item_slot: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        index_slot: Option<usize>,
+    },
     Jump { target: usize },
     JumpIfFalse { target: usize },
     Return,
@@ -337,8 +400,20 @@ pub enum ActionInstruction {
     StoreState {
         state: usize,
     },
+    StoreFrame {
+        slot: usize,
+    },
     StoreRef { reference: usize },
+    CaptureActiveElement { reference: usize },
+    FocusHostRef { reference: usize },
+    FocusRef { reference: usize },
+    PreventDefault,
     CallProp {
+        prop: usize,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        arguments: Vec<usize>,
+    },
+    CallPropOptional {
         prop: usize,
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
         arguments: Vec<usize>,
@@ -366,6 +441,19 @@ pub enum ActionInstruction {
     },
     Call {
         action: usize,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        arguments: Vec<usize>,
+        #[serde(rename = "successPc", skip_serializing_if = "Option::is_none")]
+        success_pc: Option<usize>,
+        #[serde(rename = "failurePc", skip_serializing_if = "Option::is_none")]
+        failure_pc: Option<usize>,
+        #[serde(rename = "resultSlot", skip_serializing_if = "Option::is_none")]
+        result_slot: Option<usize>,
+        #[serde(rename = "errorSlot", skip_serializing_if = "Option::is_none")]
+        error_slot: Option<usize>,
+    },
+    CallFrame {
+        parameter: usize,
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
         arguments: Vec<usize>,
         #[serde(rename = "successPc", skip_serializing_if = "Option::is_none")]
@@ -414,6 +502,10 @@ pub enum CapabilityRequest {
     Fetch {
         url: usize,
         method: &'static str,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        headers: Vec<FetchHeader>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body: Option<usize>,
         decode: &'static str,
         #[serde(rename = "requireOk")]
         require_ok: bool,
@@ -429,9 +521,14 @@ pub enum CapabilityRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         secure: Option<bool>,
         expiry: &'static str,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "maxAge", skip_serializing_if = "Option::is_none")]
         max_age: Option<i64>,
     },
+}
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FetchHeader {
+    pub name: usize,
+    pub value: usize,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

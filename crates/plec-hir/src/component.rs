@@ -1,4 +1,4 @@
-use crate::{BindingId, ComponentId, ExprId, HirExprNode, HirNode, NodeId, SourceSpan};
+use crate::{BindingId, ComponentId, ExprId, HirCallable, HirExprNode, HirNode, NodeId, SourceSpan};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirBinding {
@@ -74,6 +74,24 @@ pub struct HirRefSlot {
     pub span: SourceSpan,
 }
 
+/// A stable dependency-driven actor. Unlike React effects, this is never
+/// mounted implicitly: the runtime schedules it only from declared edges.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirReaction {
+    pub dependencies: Vec<ExprId>,
+    pub body: HirCallableBody,
+    pub cleanup: Option<HirCallableBody>,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirListener {
+    pub source: String,
+    pub event: String,
+    pub callable: HirCallable,
+    pub span: SourceSpan,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirCallableDecl {
     pub binding: BindingId,
@@ -90,6 +108,10 @@ pub enum HirCallableBody {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirStmt {
+    CaptureActiveElement { reference: BindingId, span: SourceSpan },
+    FocusHostRef { reference: BindingId, optional: bool, span: SourceSpan },
+    FocusRef { reference: BindingId, optional: bool, span: SourceSpan },
+    PreventDefault { span: SourceSpan },
     /// Browser-owned cookie access. Names and options are intentionally static
     /// so a graph declares its complete capability surface before execution.
     AwaitCookie {
@@ -109,6 +131,8 @@ pub enum HirStmt {
         target: Option<BindingId>,
         url: ExprId,
         method: String,
+        headers: Vec<(String, ExprId)>,
+        body: Option<ExprId>,
         decode: String,
         span: SourceSpan,
     },
@@ -138,6 +162,13 @@ pub enum HirStmt {
         value: ExprId,
         span: SourceSpan,
     },
+    /// An awaited response body is already buffered by the fetch capability;
+    /// the source `await response.json()` only selects that serializable body.
+    AsyncAssign {
+        target: BindingId,
+        value: ExprId,
+        span: SourceSpan,
+    },
     If {
         test: ExprId,
         consequent: Vec<HirStmt>,
@@ -148,7 +179,17 @@ pub enum HirStmt {
         value: Option<ExprId>,
         span: SourceSpan,
     },
+    Throw {
+        value: ExprId,
+        span: SourceSpan,
+    },
+    OptionalCall {
+        callee: BindingId,
+        arguments: Vec<ExprId>,
+        span: SourceSpan,
+    },
 }
+
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirComponent {
@@ -159,6 +200,8 @@ pub struct HirComponent {
     pub locals: Vec<HirLocal>,
     pub states: Vec<HirState>,
     pub ref_slots: Vec<HirRefSlot>,
+    pub reactions: Vec<HirReaction>,
+    pub listeners: Vec<HirListener>,
     pub callables: Vec<HirCallableDecl>,
     pub root_nodes: Vec<NodeId>,
     pub nodes: Vec<HirNode>,
@@ -204,6 +247,8 @@ impl HirComponent {
             locals: Vec::new(),
             states: Vec::new(),
             ref_slots: Vec::new(),
+            reactions: Vec::new(),
+            listeners: Vec::new(),
             callables: Vec::new(),
             root_nodes: Vec::new(),
             nodes: Vec::new(),
