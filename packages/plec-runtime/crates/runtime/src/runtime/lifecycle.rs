@@ -135,7 +135,7 @@ impl PlecRuntime {
             );
             return Ok(());
         }
-        if matches!(value.get("version").and_then(Value::as_str), Some("0.10")) {
+        if value.get("version").and_then(Value::as_str) == Some("0.10") {
             let application: TypedComponentApplication =
                 serde_json::from_value(value).map_err(error)?;
             application.validate()?;
@@ -163,10 +163,10 @@ impl PlecRuntime {
             );
             return Ok(());
         }
-        let application: Application = serde_wasm_bindgen::from_value(ir).map_err(error)?;
-        if application.version != "0.8" {
+        if value.get("version").and_then(Value::as_str) != Some("0.8") {
             return Err(JsValue::from_str("unsupported application IR version"));
         }
+        let application: Application = serde_wasm_bindgen::from_value(ir).map_err(error)?;
         // The historical single-graph API remains a thin adapter for existing
         // callers. It is a registry entry, never runtime-global execution state.
         self.registry
@@ -224,10 +224,10 @@ impl PlecRuntime {
             self.typed_registry.borrow_mut().insert(graph_id, app);
             return Ok(());
         }
-        let application: Application = serde_wasm_bindgen::from_value(ir).map_err(error)?;
-        if application.version != "0.8" {
+        if value.get("version").and_then(Value::as_str) != Some("0.8") {
             return Err(JsValue::from_str("unsupported application IR version"));
         }
+        let application: Application = serde_wasm_bindgen::from_value(ir).map_err(error)?;
         self.registry.borrow_mut().insert(graph_id, application);
         Ok(())
     }

@@ -48,6 +48,7 @@ pub(crate) struct TypedComponentRequest {
     pub(crate) component: usize,
     pub(crate) props: HashMap<String, RuntimeValue>,
     pub(crate) callbacks: HashMap<String, TypedCallbackSpec>,
+    pub(crate) component_props: HashMap<String, usize>,
     pub(crate) children: Vec<usize>,
     pub(crate) row_context: Option<TypedRowContext>,
     pub(crate) parent: Node,
@@ -87,16 +88,48 @@ pub(crate) struct TypedComponentRefresh {
     pub(crate) props: HashMap<String, RuntimeValue>,
 }
 
+/// Component-valued props are resolved only when their concrete target is
+/// mounted. A library component using a direct `(props)` parameter therefore
+/// needs the complete named value-prop record rather than a lookup by the
+/// synthetic `__plec_props` name.
+fn component_runtime_props(
+    app: &TypedApplication,
+    props: &HashMap<String, RuntimeValue>,
+) -> Result<Vec<RuntimeValue>, JsValue> {
+    app.parameters
+        .iter()
+        .map(|parameter| {
+            let name = app
+                .strings
+                .get(parameter.name)
+                .ok_or_else(|| JsValue::from_str("component parameter handle out of range"))?;
+            if name == "__plec_props" {
+                Ok(props
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| RuntimeValue::Record(props.clone())))
+            } else {
+                Ok(props.get(name).cloned().unwrap_or(RuntimeValue::Null))
+            }
+        })
+        .collect()
+}
+
 pub(crate) struct TypedRuntime {
     pub(crate) app: TypedApplication,
     pub(crate) root: Option<Element>,
     pub(crate) nodes: HashMap<usize, Node>,
     pub(crate) states: Vec<RuntimeValue>,
     pub(crate) host_ref_nodes: Vec<Option<Node>>,
+    /// DOM objects live only in these opaque focus slots, never RuntimeValue.
+    pub(crate) focus_refs: Vec<Option<Element>>,
+    pub(crate) pending_reactions: Vec<usize>,
+    pub(crate) reaction_cleanups: Vec<Option<usize>>,
     pub(crate) collections: HashMap<usize, TypedCollection>,
     pub(crate) loops: HashMap<usize, TypedLoopRows>,
     pub(crate) conditionals: HashMap<usize, TypedConditionalRegion>,
     pub(crate) listeners: Vec<TypedListener>,
+    pub(crate) global_listeners: Vec<TypedGlobalListenerHandle>,
     pub(crate) listener_requests: Vec<TypedListenerRequest>,
     pub(crate) component_requests: Vec<TypedComponentRequest>,
     pub(crate) slot_requests: Vec<TypedSlotRequest>,
@@ -257,6 +290,7 @@ impl PlecRuntime {
         };
         self.flush_component_work()?;
         self.install_typed_event_listeners()?;
+        self.install_typed_global_listeners()?;
         serde_wasm_bindgen::to_value(&metrics).map_err(error)
     }
 }
@@ -300,32 +334,14 @@ impl PlecRuntime {
                 for child in children {
                     let mut typed = self.typed.borrow_mut();
                     let instance = typed.get_mut(&child).expect("component instance exists");
-                    let values = instance
-                        .runtime
-                        .app
-                        .parameters
-                        .iter()
-                        .map(|parameter| {
-                            let name = instance
-                                .runtime
-                                .app
-                                .strings
-                                .get(parameter.name)
-                                .ok_or_else(|| {
-                                    JsValue::from_str("component parameter handle out of range")
-                                })?;
-                            Ok(refresh
-                                .props
-                                .get(name)
-                                .cloned()
-                                .unwrap_or(RuntimeValue::Null))
-                        })
-                        .collect::<Result<Vec<_>, JsValue>>()?;
-                    let changed = instance.runtime.app.runtime_props != values;
+                    let values = component_runtime_props(&instance.runtime.app, &refresh.props)?;
+                    let changed = (0..instance.runtime.app.parameters.len())
+                        .filter(|prop| instance.runtime.app.runtime_props.get(*prop) != values.get(*prop))
+                        .collect::<Vec<_>>();
                     instance.runtime.app.runtime_props = values;
-                    if changed {
+                    if !changed.is_empty() {
                         let mut metrics = UpdateMetrics::default();
-                        for prop in 0..instance.runtime.app.parameters.len() {
+                        for prop in changed {
                             instance.runtime.refresh_prop(prop, &mut metrics)?;
                         }
                     }
@@ -393,18 +409,15 @@ impl PlecRuntime {
                     .get(request.component)
                     .ok_or_else(|| JsValue::from_str("component target out of range"))?
                     .clone();
-                app.runtime_props = app
+                app.runtime_props = component_runtime_props(&app, &request.props)?;
+                app.runtime_component_props = app
                     .parameters
                     .iter()
                     .map(|parameter| {
                         let name = app.strings.get(parameter.name).ok_or_else(|| {
                             JsValue::from_str("component parameter handle out of range")
                         })?;
-                        Ok(request
-                            .props
-                            .get(name)
-                            .cloned()
-                            .unwrap_or(RuntimeValue::Null))
+                        Ok(request.component_props.get(name).copied())
                     })
                     .collect::<Result<Vec<_>, JsValue>>()?;
                 let mut runtime = TypedRuntime::new(app)?;
@@ -428,6 +441,15 @@ impl PlecRuntime {
                 runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
                 runtime.graph_generation = self.next_typed_generation();
                 runtime.mount_before(&request.parent, &request.end)?;
+                if let Some(row) = request.row_context.as_ref() {
+                    if let Some(element) = runtime
+                        .nodes
+                        .get(&runtime.app.root_node)
+                        .and_then(|node| node.dyn_ref::<Element>())
+                    {
+                        element.set_attribute("data-runtime-row-key", &row.row_key)?;
+                    }
+                }
                 if !request.children.is_empty() && !runtime.slot_requests.is_empty() {
                     let slot = runtime.slot_requests.pop().expect("slot exists");
                     if !runtime.slot_requests.is_empty() {
@@ -590,11 +612,11 @@ impl PlecRuntime {
 
 impl TypedRuntime {
     pub(crate) fn set_route_error(&mut self, error: RuntimeValue) -> Result<(), JsValue> {
-        let state = self
-            .app
-            .route_error_state
-            .ok_or_else(|| JsValue::from_str("typed error graph has no route error state"))?;
-        self.states[state] = error;
+        // Error components may render a fixed fallback and not consume the
+        // route error value. In that case there is no state slot to populate.
+        if let Some(state) = self.app.route_error_state {
+            self.states[state] = error;
+        }
         Ok(())
     }
 
@@ -621,16 +643,22 @@ impl TypedRuntime {
         }
         app.ref_values = app.ref_slots.iter().map(|slot| typed_eval(&app, slot.initial_expression, &[], None, 0)).collect::<Result<Vec<_>, _>>()?;
         let host_ref_nodes = vec![None; app.host_refs.len()];
+        let focus_refs = vec![None; app.ref_slots.len()];
+        let reaction_cleanups = vec![None; app.reactions.len()];
         Ok(Self {
             app,
             root: None,
             nodes: HashMap::new(),
             states,
             host_ref_nodes,
+            focus_refs,
+            pending_reactions: Vec::new(),
+            reaction_cleanups,
             loops: HashMap::new(),
             conditionals: HashMap::new(),
             collections: HashMap::new(),
             listeners: Vec::new(),
+            global_listeners: Vec::new(),
             listener_requests: Vec::new(),
             component_requests: Vec::new(),
             slot_requests: Vec::new(),
@@ -669,14 +697,17 @@ impl TypedRuntime {
         row: Option<&HashMap<String, RuntimeValue>>,
     ) -> Result<(), JsValue> {
         for (call, start) in nodes {
-            let Some(TypedNode::Component { props, .. }) = self.app.nodes.get(call).cloned() else {
+            let Some(props) = self.app.nodes.get(call).cloned().and_then(|node| match node {
+                TypedNode::Component { props, .. } | TypedNode::DynamicComponent { props, .. } => Some(props),
+                _ => None,
+            }) else {
                 continue;
             };
             let props = props
                 .into_iter()
                 .filter_map(|prop| match prop {
                     TypedComponentProp::Value { name, expression } => Some((name, expression)),
-                    TypedComponentProp::Callable { .. } => None,
+                    TypedComponentProp::Callable { .. } | TypedComponentProp::Component { .. } => None,
                 })
                 .map(|(name, expression)| {
                     let name = self
@@ -722,17 +753,17 @@ impl TypedRuntime {
         self.conditionals.clear();
         self.listener_requests.clear();
         let doc = document()?;
-        let node = self.instantiate_node(
+        let root_node: Node = root.clone().into();
+        self.instantiate_node(
             &doc,
             self.app.root_node,
-            None,
+            Some(&root_node),
             None,
             0,
             None,
             &mut HashMap::new(),
             &mut HashMap::new(),
         )?;
-        root.append_child(&node)?;
         self.root = Some(root);
         self.apply_static_bindings()?;
         self.queue_static_listeners();
@@ -757,14 +788,25 @@ impl TypedRuntime {
         let node = self.instantiate_node(
             &doc,
             self.app.root_node,
-            None,
+            Some(parent),
             None,
             0,
             None,
             &mut HashMap::new(),
             &mut HashMap::new(),
         )?;
-        parent.insert_before(&node, Some(end))?;
+        if matches!(
+            self.app.nodes.get(self.app.root_node),
+            Some(TypedNode::Component { .. } | TypedNode::DynamicComponent { .. })
+        ) {
+            let component_end = node
+                .next_sibling()
+                .ok_or_else(|| JsValue::from_str("root component end missing"))?;
+            parent.insert_before(&node, Some(end))?;
+            parent.insert_before(&component_end, Some(end))?;
+        } else {
+            parent.insert_before(&node, Some(end))?;
+        }
         self.apply_static_bindings()?;
         self.queue_static_listeners();
         Ok(())
@@ -883,6 +925,9 @@ impl TypedRuntime {
                 listener.callback.as_ref().unchecked_ref(),
             );
         }
+        for listener in self.global_listeners.drain(..) {
+            let _ = listener.target.remove_event_listener_with_callback(&listener.event_type, listener.callback.as_ref().unchecked_ref());
+        }
         self.listener_requests.clear();
     }
 }
@@ -998,17 +1043,13 @@ impl TypedRuntime {
             .ok_or_else(|| JsValue::from_str("node handle out of range"))?
             .clone()
         {
-            TypedNode::Element { tag, children, host_ref, .. } => {
+            TypedNode::Element { tag, namespace, children, host_ref, .. } => {
                 let tag = self
                     .app
                     .strings
                     .get(tag)
                     .ok_or_else(|| JsValue::from_str("tag handle out of range"))?;
-                let element = if [
-                    "svg", "path", "circle", "rect", "line", "polyline", "polygon", "ellipse", "g",
-                ]
-                .contains(&tag.as_str())
-                {
+                let element = if namespace == "svg" {
                     doc.create_element_ns(Some("http://www.w3.org/2000/svg"), tag)?
                 } else {
                     doc.create_element(tag)?
@@ -1070,6 +1111,33 @@ impl TypedRuntime {
                 )?;
                 Ok(marker)
             }
+            TypedNode::DynamicComponent { prop, props, children, .. } => {
+                let parent = parent.ok_or_else(|| JsValue::from_str("component parent missing"))?;
+                let start: Node = doc.create_comment(&format!("plec:component:{index}")).into();
+                let end: Node = doc.create_comment(&format!("plec:component-end:{index}")).into();
+                parent.append_child(&start)?;
+                parent.append_child(&end)?;
+                let Some(component) = self.app.runtime_component_props.get(prop).and_then(|value| *value) else {
+                    if row.is_some() { local.insert(index, start.clone()); } else { self.nodes.insert(index, start.clone()); }
+                    return Ok(start);
+                };
+                let mut values = HashMap::new();
+                let mut callbacks = HashMap::new();
+                let mut component_props = HashMap::new();
+                for prop in props {
+                    let name = self.app.strings.get(prop.name()).ok_or_else(|| JsValue::from_str("component prop name out of range"))?.clone();
+                    match prop {
+                        TypedComponentProp::Value { expression, .. } => { values.insert(name, typed_eval(&self.app, expression, &self.states, row, row_index)?); }
+                        TypedComponentProp::Callable { action, .. } => { callbacks.insert(name, TypedCallbackSpec { action, row: row.cloned() }); }
+                        TypedComponentProp::Component { component, .. } => { component_props.insert(name, component); }
+                    }
+                }
+                let key = format!("{index}:{}", self.next_component_instance);
+                self.next_component_instance += 1;
+                self.component_requests.push(TypedComponentRequest { call: index, component, props: values, callbacks, component_props, children, row_context: row_context.cloned(), parent: parent.clone(), start: start.clone(), end, key });
+                if row.is_some() { local.insert(index, start.clone()); } else { self.nodes.insert(index, start.clone()); }
+                Ok(start)
+            }
             TypedNode::Component {
                 component,
                 props,
@@ -1087,6 +1155,7 @@ impl TypedRuntime {
                 parent.append_child(&end)?;
                 let mut values = HashMap::new();
                 let mut callbacks = HashMap::new();
+                let mut component_props = HashMap::new();
                 for prop in props {
                     let name = self
                         .app
@@ -1110,6 +1179,9 @@ impl TypedRuntime {
                                 },
                             );
                         }
+                        TypedComponentProp::Component { component, .. } => {
+                            component_props.insert(name, component);
+                        }
                     }
                 }
                 let key = format!("{index}:{}", self.next_component_instance);
@@ -1119,6 +1191,7 @@ impl TypedRuntime {
                     component,
                     props: values,
                     callbacks,
+                    component_props,
                     children,
                     row_context: row_context.cloned(),
                     parent: parent.clone(),
@@ -1417,7 +1490,11 @@ impl TypedRuntime {
                         .cloned()
                         .unwrap_or_default(),
                 };
-                typed_apply_value(&self.app, &write.kind, Some(write.name), node, value)?;
+                if write.spread {
+                    typed_apply_spread(&self.app, &write.kind, node, value)?;
+                } else {
+                    typed_apply_value(&self.app, &write.kind, write.name, node, value)?;
+                }
             }
         }
         Ok(())
@@ -1646,6 +1723,8 @@ impl TypedRuntime {
 impl TypedRuntime {
     pub(crate) fn clear_host_refs(&mut self) {
         self.host_ref_nodes.fill(None);
+        self.focus_refs.fill(None);
+        self.pending_reactions.clear();
     }
     pub(crate) fn insert_typed_row(
         &mut self,
@@ -1798,7 +1877,11 @@ impl TypedRuntime {
                             .cloned()
                             .unwrap_or_default(),
                     };
-                    typed_apply_value(&self.app, &write.kind, Some(write.name), node, value)?;
+                    if write.spread {
+                        typed_apply_spread(&self.app, &write.kind, node, value)?;
+                    } else {
+                        typed_apply_value(&self.app, &write.kind, write.name, node, value)?;
+                    }
                 }
             }
         }
@@ -1995,7 +2078,11 @@ impl TypedRuntime {
                         .cloned()
                         .unwrap_or_default(),
                 };
-                typed_apply_value(&self.app, &write.kind, Some(write.name), node, value)?;
+                if write.spread {
+                    typed_apply_spread(&self.app, &write.kind, node, value)?;
+                } else {
+                    typed_apply_value(&self.app, &write.kind, write.name, node, value)?;
+                }
             }
         }
         Ok(())

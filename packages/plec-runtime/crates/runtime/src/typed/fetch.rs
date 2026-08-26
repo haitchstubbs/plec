@@ -121,13 +121,12 @@ impl PlecRuntime {
         if let Some(body) = &pending.body {
             init.set_body(&JsValue::from_str(body));
         }
-        let request = Request::new_with_str_and_init(&pending.url, &init)?;
         // Start the browser request before yielding. Disposal can then abort an
         // in-flight promise even when it happens in the same event turn.
-        let fetch = window()?.fetch_with_request(&request);
+        let request = window()?.fetch_with_str_and_init(&pending.url, &init);
         let runtime = self.clone();
         spawn_local(async move {
-            let result = match JsFuture::from(fetch).await {
+            let result = match JsFuture::from(request).await {
                 Ok(value) => match value.dyn_into::<Response>() {
                     Ok(response) if pending.require_ok && !response.ok() => {
                         Err(http_failure(response, &pending.url).await)
@@ -177,6 +176,52 @@ impl PlecRuntime {
                                 &pending.url,
                             )),
                         },
+                        "responseJson" => {
+                            let ok = response.ok();
+                            let status = response.status();
+                            // 204/205 carry no body; `body` is null so
+                            // `{ok,status,body}` still reaches the action.
+                            // Drain via text() so the browser never flags the
+                            // request as abandoned mid-response.
+                            if status == 204 || status == 205 {
+                                if let Ok(empty) = response.text() {
+                                    let _ = JsFuture::from(empty).await;
+                                }
+                                Ok(RuntimeValue::Record(std::collections::HashMap::from([
+                                    ("ok".into(), RuntimeValue::Bool(ok)),
+                                    ("status".into(), RuntimeValue::Number(status as f64)),
+                                    ("body".into(), RuntimeValue::Null),
+                                ])))
+                            } else {
+                                match response.json() {
+                                    Ok(body) => JsFuture::from(body)
+                                        .await
+                                        .map_err(|error| {
+                                            failure(
+                                                "decode",
+                                                error.as_string().unwrap_or_else(|| {
+                                                    "response JSON decode failed".into()
+                                                }),
+                                                &pending.url,
+                                            )
+                                        })
+                                        .and_then(|value| {
+                                            serde_wasm_bindgen::from_value(value).map(|body| {
+                                                RuntimeValue::Record(std::collections::HashMap::from([
+                                                    ("ok".into(), RuntimeValue::Bool(ok)),
+                                                    ("status".into(), RuntimeValue::Number(status as f64)),
+                                                    ("body".into(), body),
+                                                ]))
+                                            }).map_err(|error| failure("decode", error.to_string(), &pending.url))
+                                        }),
+                                    Err(error) => Err(failure(
+                                        "decode",
+                                        error.as_string().unwrap_or_else(|| "response JSON unavailable".into()),
+                                        &pending.url,
+                                    )),
+                                }
+                            }
+                        }
                         _ => match response.json() {
                             Ok(body) => JsFuture::from(body)
                                 .await
@@ -320,6 +365,10 @@ impl PlecRuntime {
             request.instance_id = instance_id.clone();
             self.start_typed_fetch(request)?;
         }
+        self.mount_component_requests()?;
+        // Continuation state writes queue row component refreshes; without this
+        // drain the child components keep their pre-fetch props forever.
+        self.flush_component_work()?;
         self.install_typed_event_listeners()?;
         Ok(())
     }
@@ -338,6 +387,26 @@ impl PlecRuntime {
                 }
             }
             Ok(value) => {
+                // Route loader data is an explicit host input to the normal
+                // route graph. It never crosses the VM as a browser Response.
+                // `responseJson` decodes actions receive an {ok,status,body}
+                // envelope so they can branch on transport outcome themselves;
+                // loader consumers asked for the payload alone, so export the
+                // unwrapped body here.
+                let exported = match &value {
+                    RuntimeValue::Record(record)
+                        if record.len() == 3
+                            && record.contains_key("ok")
+                            && record.contains_key("status")
+                            && record.contains_key("body") =>
+                    {
+                        record.get("body").cloned().unwrap_or_else(|| value.clone())
+                    }
+                    _ => value.clone(),
+                };
+                self.typed_host_inputs
+                    .borrow_mut()
+                    .insert("loaderData".into(), exported);
                 let restore = {
                     let mut typed = self.typed.borrow_mut();
                     let instance = match typed.get_mut(&instance_id) {

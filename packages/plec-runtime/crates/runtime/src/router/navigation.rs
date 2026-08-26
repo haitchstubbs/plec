@@ -4,6 +4,7 @@ use crate::schema::delta::RuntimeValue;
 use crate::schema::routing::RouteManifestEntry;
 use crate::typed::runtime::*;
 use std::collections::HashMap;
+use js_sys::{Object, Reflect};
 use web_sys::{CustomEvent, CustomEventInit};
 
 #[derive(Clone)]
@@ -105,8 +106,7 @@ impl PlecRuntime {
     }
 
     pub(crate) fn validate_typed_manifest(&self, manifest: &RouteManifest) -> Result<(), JsValue> {
-        let registry = self.typed_registry.borrow();
-        if !registry.contains_key(&manifest.root_graph_id) {
+        if !self.has_typed_graph(&manifest.root_graph_id) {
             return Err(JsValue::from_str("typed root graph is not registered"));
         }
         let mut routes = HashMap::new();
@@ -116,21 +116,13 @@ impl PlecRuntime {
                     "typed route manifest has duplicate route id",
                 ));
             }
-            if !registry.contains_key(&route.graph_id) {
-                return Err(JsValue::from_str("typed route graph is not registered"));
-            }
-            for graph_id in [&route.pending_graph_id, &route.error_graph_id]
-                .into_iter()
-                .flatten()
-            {
-                if !registry.contains_key(graph_id) {
-                    return Err(JsValue::from_str(
-                        "typed route phase graph is not registered",
-                    ));
-                }
-            }
-            if let Some(action) = route.loader_action {
-                let graph = registry.get(&route.graph_id).expect("checked above");
+            // Route phase graphs are fetched on demand. Validate their
+            // executable details when an artifact is already registered, and
+            // otherwise defer the check until that graph is mounted.
+            if let (Some(action), Some(graph)) = (
+                route.loader_action,
+                self.typed_graph_application(&route.graph_id),
+            ) {
                 if !graph
                     .actions
                     .get(action)
@@ -150,16 +142,16 @@ impl PlecRuntime {
                     .as_str(),
                 None => manifest.root_graph_id.as_str(),
             };
-            if !registry
-                .get(parent_graph)
-                .expect("checked above")
-                .route_outlets
-                .iter()
-                .any(|outlet| outlet.id == route.outlet_id)
-            {
-                return Err(JsValue::from_str(
-                    "typed route parent does not declare its outlet",
-                ));
+            if let Some(parent) = self.typed_graph_application(parent_graph) {
+                if !parent
+                    .route_outlets
+                    .iter()
+                    .any(|outlet| outlet.id == route.outlet_id)
+                {
+                    return Err(JsValue::from_str(
+                        "typed route parent does not declare its outlet",
+                    ));
+                }
             }
         }
         Ok(())
@@ -213,6 +205,23 @@ impl PlecRuntime {
                 self.request_typed_graph(&route.graph_id)?;
                 return Ok(());
             }
+            // A loader can transition to either phase as soon as its fetch
+            // settles. Load those immutable graphs before starting the loader
+            // so a pending/error transition never races lazy graph delivery.
+            if route.loader_action.is_some() {
+                for graph_id in [
+                    route.pending_graph_id.as_deref(),
+                    route.error_graph_id.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if !self.has_typed_graph(graph_id) {
+                        self.request_typed_graph(graph_id)?;
+                        return Ok(());
+                    }
+                }
+            }
             let match_key = typed_match_key(&route.id, &matched.params, &location);
             let current = self.typed.borrow().iter().find_map(|(id, entry)| {
                 (entry.parent_id.as_deref() == Some(parent_id.as_str())
@@ -261,14 +270,25 @@ impl PlecRuntime {
             || self.typed_registry.borrow().contains_key(graph_id)
     }
 
+    fn typed_graph_application(&self, graph_id: &str) -> Option<TypedApplication> {
+        if let Some(graph) = self.typed_component_registry.borrow().get(graph_id).cloned() {
+            return graph.components.get(graph.root_component).cloned();
+        }
+        self.typed_registry.borrow().get(graph_id).cloned()
+    }
+
     /// URL resolution deliberately remains at the browser boundary.  WASM
     /// only asks for a graph identity and resumes the same location once the
     /// adapter registers the fetched immutable artifact.
     fn request_typed_graph(&self, graph_id: &str) -> Result<(), JsValue> {
         let init = CustomEventInit::new();
-        init.set_detail(&serde_wasm_bindgen::to_value(
-            &serde_json::json!({ "graphId": graph_id }),
-        ).map_err(error)?);
+        let detail = Object::new();
+        Reflect::set(
+            &detail,
+            &JsValue::from_str("graphId"),
+            &JsValue::from_str(graph_id),
+        )?;
+        init.set_detail(&detail);
         let event = CustomEvent::new_with_event_init_dict("plec:graph-needed", &init)?;
         window()?.dispatch_event(&event)?;
         Ok(())
@@ -570,19 +590,25 @@ impl PlecRuntime {
                 .ok_or_else(|| JsValue::from_str("typed route is not mounted"))?
         };
         next.mount(root)?;
-        let mut typed = self.typed.borrow_mut();
-        let instance = typed
-            .get_mut(id)
-            .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
-        let old = std::mem::replace(&mut instance.runtime, next);
-        instance.graph_id = graph_id.into();
-        if preserve_loader {
-            instance.loader_runtime = Some(old);
-        } else {
-            let mut old = old;
-            old.invalidate_fetches();
+        {
+            let mut typed = self.typed.borrow_mut();
+            let instance = typed
+                .get_mut(id)
+                .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
+            let old = std::mem::replace(&mut instance.runtime, next);
+            instance.graph_id = graph_id.into();
+            if preserve_loader {
+                instance.loader_runtime = Some(old);
+            } else {
+                let mut old = old;
+                old.invalidate_fetches();
+            }
         }
-        Ok(())
+        // Phase graphs can start with a component call (for example, the shared
+        // page frame), so drain the new runtime's component requests after it is
+        // registered just like an initial graph mount.
+        self.mount_component_requests()?;
+        self.install_typed_event_listeners()
     }
 
     pub(crate) fn retry_typed_route(&self, id: &str) -> Result<(), JsValue> {
@@ -618,30 +644,37 @@ impl PlecRuntime {
     }
 
     pub(crate) fn restore_typed_route_normal(&self, id: &str) -> Result<(), JsValue> {
-        let mut typed = self.typed.borrow_mut();
-        let instance = typed
-            .get_mut(id)
-            .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
-        let mut loader = instance
-            .loader_runtime
-            .take()
-            .ok_or_else(|| JsValue::from_str("typed route loader runtime missing"))?;
-        let root = instance
-            .runtime
-            .root
-            .clone()
-            .ok_or_else(|| JsValue::from_str("typed route is not mounted"))?;
-        instance.runtime.clear_listeners();
-        loader.mount(root)?;
-        let mut previous = std::mem::replace(&mut instance.runtime, loader);
-        previous.invalidate_fetches();
-        instance.graph_id = instance
-            .route_state
-            .as_ref()
-            .unwrap()
-            .normal_graph_id
-            .clone();
-        instance.route_state.as_mut().unwrap().phase = TypedRoutePhase::Normal;
+        {
+            let mut typed = self.typed.borrow_mut();
+            let instance = typed
+                .get_mut(id)
+                .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
+            let mut loader = instance
+                .loader_runtime
+                .take()
+                .ok_or_else(|| JsValue::from_str("typed route loader runtime missing"))?;
+            let root = instance
+                .runtime
+                .root
+                .clone()
+                .ok_or_else(|| JsValue::from_str("typed route is not mounted"))?;
+            instance.runtime.clear_listeners();
+            // Loader data is a host input: state initializers such as
+            // loadHost("loaderData") only re-evaluate when host inputs are
+            // (re)applied, so seed the graph before its first paint.
+            loader.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+            loader.mount(root)?;
+            let mut previous = std::mem::replace(&mut instance.runtime, loader);
+            previous.invalidate_fetches();
+            instance.graph_id = instance
+                .route_state
+                .as_ref()
+                .unwrap()
+                .normal_graph_id
+                .clone();
+            instance.route_state.as_mut().unwrap().phase = TypedRoutePhase::Normal;
+        }
+        self.mount_component_requests()?;
         Ok(())
     }
 
@@ -818,10 +851,16 @@ fn typed_route_chain_from(
             .iter()
             .find(|route| route.parent_id.as_deref() == parent && route.path.is_empty())
         {
-            return Some(vec![TypedRouteMatch {
+            let mut branch = vec![TypedRouteMatch {
                 route: route.clone(),
-                params,
-            }]);
+                params: params.clone(),
+            }];
+            if let Some(mut child) =
+                typed_route_chain_from(manifest, Some(&route.id), parts, offset, params)
+            {
+                branch.append(&mut child);
+            }
+            return Some(branch);
         }
     }
     manifest
@@ -943,6 +982,26 @@ mod tests {
         assert_eq!(
             typed_route_chain(&manifest, "/projects/new")[1].route.id,
             "new"
+        );
+    }
+
+    #[test]
+    fn typed_matching_descends_through_pathless_index_routes() {
+        let manifest = RouteManifest {
+            version: Some(3),
+            root_graph_id: "root".into(),
+            routes: vec![
+                route("layout", None, ""),
+                route("home", Some("layout"), ""),
+            ],
+        };
+        let matched = typed_route_chain(&manifest, "/");
+        assert_eq!(
+            matched
+                .iter()
+                .map(|matched| matched.route.id.as_str())
+                .collect::<Vec<_>>(),
+            ["layout", "home"]
         );
     }
 
