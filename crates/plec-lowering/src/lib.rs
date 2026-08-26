@@ -37,6 +37,8 @@ mod tests {
                 tag: "div".into(),
                 props: vec![],
                 events: vec![],
+                host_ref: None,
+                route_outlet: None,
                 children: vec![NodeId(1)],
                 span: span.clone(),
             }))
@@ -51,5 +53,19 @@ mod tests {
 
         assert!(matches!(executable.nodes[0], Node::Element { .. }));
         assert_eq!(executable.texts[0].value.as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn preserves_the_authored_route_outlet_node() {
+        let span = SourceSpan::new("test.tsx", 0, 0);
+        let component = HirComponent::new(ComponentId::new("test.tsx", "Layout"), span.clone())
+            .with_node(HirNode::Element(HirElement {
+                id: NodeId(0), tag: "div".into(), props: vec![], events: vec![], host_ref: None,
+                route_outlet: Some("main".into()), children: vec![], span,
+            }))
+            .with_root_node(NodeId(0));
+        let executable = lower_component_to_executable(&component).unwrap();
+        assert_eq!(executable.route_outlets[0].id, "main");
+        assert_eq!(executable.route_outlets[0].node, 0);
     }
 }

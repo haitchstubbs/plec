@@ -5,7 +5,9 @@ use plec_ir::{CookieCapability, ExecutableApplication, HostSlot, Value};
 
 use crate::LoweringError;
 
-pub(crate) type ComponentTargets = HashMap<ComponentId, (usize, Vec<(String, bool)>, bool)>;
+/// component index, declared props (name, callable, component), children slot,
+/// direct props-bag parameter.
+pub(crate) type ComponentTargets = HashMap<ComponentId, (usize, Vec<(String, bool, bool)>, bool, bool)>;
 
 pub(crate) struct Ctx<'a> {
     pub(crate) component: &'a HirComponent,
@@ -22,6 +24,7 @@ pub(crate) struct Ctx<'a> {
     pub(crate) callback_props: HashMap<BindingId, usize>,
     pub(crate) action_parameters: HashMap<BindingId, usize>,
     pub(crate) async_slots: HashMap<BindingId, usize>,
+    pub(crate) try_failure_relays: Vec<(usize, usize, usize, usize)>,
     pub(crate) targets: Option<&'a ComponentTargets>,
     pub(crate) locals: HashMap<BindingId, plec_hir::ExprId>,
     pub(crate) active_locals: Vec<BindingId>,
@@ -44,6 +47,7 @@ impl<'a> Ctx<'a> {
             callback_props: HashMap::new(),
             action_parameters: HashMap::new(),
             async_slots: HashMap::new(),
+            try_failure_relays: vec![],
             targets,
             locals: component
                 .locals
