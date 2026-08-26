@@ -2,10 +2,11 @@ use crate::component_discovery::{
     ComponentDeclaration, ReturnedComponentExpression, RootComponent,
 };
 use plec_hir::{
-    BindingId, ComponentId, ExprId, HirApplication, HirBinaryOp, HirBinding, HirBindingKind,
-    HirCallable, HirCallableBody, HirCallableDecl, HirComponent, HirComponentCall, HirConditional,
+    BindingId, ComponentId, ExprId, HirApplication, HirArrayItem, HirBinaryOp, HirBinding, HirBindingKind, HirObjectItem,
+    HirCallable, HirCallableBody, HirCallableDecl, HirComponent, HirComponentCall, HirComponentTarget, HirConditional,
     HirElement, HirEventBinding, HirExpr, HirExprNode, HirForEach, HirFragment, HirInput, HirLocal,
     HirLogicalOp, HirNode, HirParameter, HirParameterSource, HirProp, HirSlot, HirState, HirStmt,
+    HirReaction, HirListener,
     HirTemplatePart, HirText, HirUnaryOp, HirValue, HirRefSlot, NodeId, SourceSpan,
 };
 use plec_sema::{resolve_component, ComponentPropKind, SemanticGraph};
@@ -13,7 +14,7 @@ use swc_common::{Span, Spanned};
 use swc_ecma_ast::{
     ArrowFunctionBody, BinaryOp, Callee, Decl, Expr, Function, JSXAttr, JSXAttrName,
     JSXAttrOrSpread, JSXAttrValue, JSXElement, JSXElementName, JSXExpr, JSXFragment, JSXObject,
-    Lit, Pat, Prop, PropName, PropOrSpread, Stmt, VarDeclKind,
+    Lit, Pat, Prop, PropName, PropOrSpread, Stmt, TsFnOrConstructorType, TsType, VarDeclKind,
 };
 
 /// Normalize JSX event name to DOM event name.
@@ -91,6 +92,29 @@ fn lower_callable(
             let binding = ctx.resolve_binding(&ident.sym)?;
             if ctx.is_callable_binding(binding) {
                 Ok(Some(HirCallable::Reference { binding }))
+            } else if let Some(state) = ctx.setter_state(binding) {
+                let span = source_span_from_swc(ident.span, ctx.module_id);
+                ctx.push_scope();
+                let parameter = ctx.declare_binding(
+                    format!("__plec_setter_value_{}", ctx.bindings.len()),
+                    HirBindingKind::Parameter { callable: false },
+                    span.clone(),
+                )?;
+                let value = ctx.alloc_expr_id();
+                ctx.add_expression(HirExprNode::new(
+                    value,
+                    HirExpr::Binding(parameter),
+                    span.clone(),
+                ));
+                ctx.pop_scope();
+                Ok(Some(HirCallable::Inline {
+                    parameters: vec![parameter],
+                    body: HirCallableBody::Block(vec![HirStmt::StateUpdate {
+                        state,
+                        value,
+                        span,
+                    }]),
+                }))
             } else {
                 Err(format!("'{}' is not a callable binding", ident.sym))
             }
@@ -101,15 +125,18 @@ fn lower_callable(
         }
         Expr::Cond(cond) => {
             let test_id = lower_expression(&cond.test, ctx)?;
-            let consequent = lower_callable(&cond.cons, policy, ctx)?
-                .ok_or("Conditional consequent must be callable")?;
-            let alternate = lower_callable(&cond.alt, policy, ctx)?
-                .ok_or("Conditional alternate must be callable")?;
-            Ok(Some(HirCallable::Conditional {
-                test: test_id,
-                consequent: Box::new(consequent),
-                alternate: Box::new(alternate),
-            }))
+            let consequent = lower_callable(&cond.cons, policy, ctx)?;
+            let alternate = lower_callable(&cond.alt, policy, ctx)?;
+            match (consequent, alternate) {
+                (Some(consequent), Some(alternate)) => Ok(Some(HirCallable::Conditional {
+                    test: test_id,
+                    consequent: Box::new(consequent),
+                    alternate: Box::new(alternate),
+                })),
+                (None, None) if matches!(policy, CallablePolicy::InlineOnly) => Ok(None),
+                (None, _) => Err("Conditional consequent must be callable".into()),
+                (_, None) => Err("Conditional alternate must be callable".into()),
+            }
         }
         _ if matches!(policy, CallablePolicy::CallableValue) => Err(
             "Callable values must be resolved identifiers, inline arrows, or conditionals"
@@ -135,7 +162,12 @@ struct HirLoweringCtx<'a> {
     locals: Vec<HirLocal>,
     states: Vec<HirState>,
     ref_slots: Vec<HirRefSlot>,
+    reactions: Vec<HirReaction>,
+    listeners: Vec<HirListener>,
     callables: Vec<HirCallableDecl>,
+    component_aliases: std::collections::HashMap<String, ComponentId>,
+    component_selectors: std::collections::HashMap<String, (ExprId, ComponentId, ComponentId)>,
+    loader_data_binding: Option<BindingId>,
     scopes: Vec<std::collections::HashMap<String, BindingId>>,
     semantic_graph: &'a SemanticGraph,
     module_id: &'a str,
@@ -155,7 +187,12 @@ impl<'a> HirLoweringCtx<'a> {
             locals: Vec::new(),
             states: Vec::new(),
             ref_slots: Vec::new(),
+            reactions: Vec::new(),
+            listeners: Vec::new(),
             callables: Vec::new(),
+            component_aliases: std::collections::HashMap::new(),
+            component_selectors: std::collections::HashMap::new(),
+            loader_data_binding: None,
             scopes: vec![std::collections::HashMap::new()],
             semantic_graph,
             module_id,
@@ -272,6 +309,8 @@ pub fn lower_root_component(
         locals: ctx.locals,
         states: ctx.states,
         ref_slots: ctx.ref_slots,
+        reactions: ctx.reactions,
+        listeners: ctx.listeners,
         callables: ctx.callables,
         root_nodes: vec![root_node_id],
         nodes: ctx.nodes,
@@ -307,9 +346,19 @@ pub fn lower_application(
         let targets = component
             .nodes
             .iter()
-            .filter_map(|node| match node {
-                HirNode::Component(call) => Some(call.target.clone()),
-                _ => None,
+            .flat_map(|node| match node {
+                HirNode::Component(call) => {
+                    let mut targets = Vec::new();
+                    if let HirComponentTarget::Static(target) = &call.target {
+                        targets.push(target.clone());
+                    }
+                    targets.extend(call.props.iter().filter_map(|prop| match prop {
+                        HirProp::Component { target, .. } => Some(target.clone()),
+                        _ => None,
+                    }));
+                    targets
+                }
+                _ => Vec::new(),
             })
             .collect::<Vec<_>>();
         components.push(component);
@@ -385,6 +434,7 @@ fn lower_component_program(
                 lower_function_callable(function.ident.sym.to_string(), &function.function, ctx)?
             }
             Stmt::Decl(Decl::Var(var)) => lower_component_var(var, ctx)?,
+            Stmt::Expr(expression) => lower_component_primitive(expression.expr.as_ref(), ctx)?,
             Stmt::Return(_) => {}
             unsupported => return Err(format!("Unsupported component statement: {unsupported:?}")),
         }
@@ -442,6 +492,83 @@ fn lower_component_patterns(
             });
         }
         Pat::Object(object) => {
+            let rest = object.props.iter().find_map(|prop| match prop {
+                swc_ecma_ast::ObjectPatProp::Rest(rest) => Some(rest),
+                _ => None,
+            });
+            if let Some(rest) = rest {
+                // A rest pattern is represented as one direct prop bag plus
+                // ordinary local reads. This preserves a complete source-order
+                // record for `{ ...props }` forwarding without inventing a JS
+                // object runtime.
+                let Pat::Ident(rest_ident) = rest.arg.as_ref() else {
+                    return Err("Nested component rest patterns are unsupported".into());
+                };
+                let span = source_span_from_swc(rest_ident.id.span, ctx.module_id);
+                let bag = ctx.declare_binding(
+                    "__plec_props".into(),
+                    HirBindingKind::Parameter { callable: false },
+                    span.clone(),
+                )?;
+                ctx.parameters.push(HirParameter {
+                    binding: bag,
+                    source: HirParameterSource::Direct,
+                    span: span.clone(),
+                });
+                let bag_expr = ctx.alloc_expr_id();
+                ctx.add_expression(HirExprNode::new(
+                    bag_expr,
+                    HirExpr::Binding(bag),
+                    span.clone(),
+                ));
+                let mut excluded = Vec::new();
+                for prop in &object.props {
+                    match prop {
+                        swc_ecma_ast::ObjectPatProp::KeyValue(key_value) => {
+                            let name = match &key_value.key {
+                                swc_ecma_ast::PropName::Ident(key) => key.sym.to_string(),
+                                _ => return Err("Component props must use identifier keys".to_string()),
+                            };
+                            let Pat::Ident(local) = key_value.value.as_ref() else {
+                                return Err("Nested component prop patterns are unsupported".to_string());
+                            };
+                            excluded.push(name.clone());
+                            let local_span = source_span_from_swc(local.id.span, ctx.module_id);
+                            let value = ctx.alloc_expr_id();
+                            ctx.add_expression(HirExprNode::new(value, HirExpr::Member {
+                                object: bag_expr,
+                                property: name,
+                            }, local_span.clone()));
+                            let binding = ctx.declare_binding(local.id.sym.to_string(), HirBindingKind::Local, local_span.clone())?;
+                            ctx.locals.push(HirLocal { binding, initializer: value, span: local_span });
+                        }
+                        swc_ecma_ast::ObjectPatProp::Assign(assign) => {
+                            if assign.value.is_some() {
+                                return Err(format!("Default component parameter '{}' is unsupported", assign.key.sym));
+                            }
+                            let name = assign.key.sym.to_string();
+                            excluded.push(name.clone());
+                            let local_span = source_span_from_swc(assign.key.span, ctx.module_id);
+                            let value = ctx.alloc_expr_id();
+                            ctx.add_expression(HirExprNode::new(value, HirExpr::Member {
+                                object: bag_expr,
+                                property: name.clone(),
+                            }, local_span.clone()));
+                            let binding = ctx.declare_binding(name, HirBindingKind::Local, local_span.clone())?;
+                            ctx.locals.push(HirLocal { binding, initializer: value, span: local_span });
+                        }
+                        swc_ecma_ast::ObjectPatProp::Rest(_) => {}
+                    }
+                }
+                let rest_expr = ctx.alloc_expr_id();
+                ctx.add_expression(HirExprNode::new(rest_expr, HirExpr::ObjectWithout {
+                    object: bag_expr,
+                    excluded,
+                }, span.clone()));
+                let binding = ctx.declare_binding(rest_ident.id.sym.to_string(), HirBindingKind::Local, span.clone())?;
+                ctx.locals.push(HirLocal { binding, initializer: rest_expr, span });
+                return Ok(());
+            }
             for prop in &object.props {
                 let swc_ecma_ast::ObjectPatProp::KeyValue(key_value) = prop else {
                     if let swc_ecma_ast::ObjectPatProp::Assign(assign) = prop {
@@ -467,7 +594,7 @@ fn lower_component_patterns(
                         });
                         continue;
                     }
-                    return Err("Unsupported component parameter pattern".to_string());
+                    return Err(format!("Unsupported component parameter pattern in {component_name}"));
                 };
                 let name = match &key_value.key {
                     swc_ecma_ast::PropName::Ident(key) => key.sym.to_string(),
@@ -491,7 +618,7 @@ fn lower_component_patterns(
                 });
             }
         }
-        _ => return Err("Unsupported component parameter pattern".to_string()),
+        _ => return Err(format!("Unsupported component parameter pattern in {component_name}")),
     }
     Ok(())
 }
@@ -508,6 +635,44 @@ fn lower_component_var(
         .init
         .as_deref()
         .ok_or("Component declaration requires an initializer")?;
+    if let (Pat::Ident(alias), Expr::Ident(target)) = (&declarator.name, init) {
+        if let Some(symbol) = resolve_component(ctx.semantic_graph, ctx.module_id, &target.sym) {
+            ctx.component_aliases.insert(
+                alias.id.sym.to_string(),
+                ComponentId::new(symbol.module_id, symbol.local_name),
+            );
+            return Ok(());
+        }
+    }
+    if let (Pat::Ident(alias), Expr::Cond(selector)) = (&declarator.name, init) {
+        if let (Expr::Ident(consequent), Expr::Ident(alternate)) =
+            (selector.cons.as_ref(), selector.alt.as_ref())
+        {
+            let test = lower_expression(&selector.test, ctx)?;
+            ctx.component_selectors.insert(
+                alias.id.sym.to_string(),
+                (
+                    test,
+                    ComponentId::new(ctx.module_id, consequent.sym.to_string()),
+                    ComponentId::new(ctx.module_id, alternate.sym.to_string()),
+                ),
+            );
+            return Ok(());
+        }
+        let resolve = |expression: &Expr, ctx: &HirLoweringCtx<'_>| match expression {
+            Expr::Ident(ident) => resolve_component(ctx.semantic_graph, ctx.module_id, &ident.sym)
+                .map(|symbol| ComponentId::new(symbol.module_id, symbol.local_name))
+                .or_else(|| ctx.component_aliases.get(&ident.sym.to_string()).cloned())
+                .or_else(|| ident.sym.chars().next().is_some_and(char::is_uppercase)
+                    .then(|| ComponentId::new(ctx.module_id, ident.sym.to_string()))),
+            _ => None,
+        };
+        if let (Some(consequent), Some(alternate)) = (resolve(&selector.cons, ctx), resolve(&selector.alt, ctx)) {
+            let test = lower_expression(&selector.test, ctx)?;
+            ctx.component_selectors.insert(alias.id.sym.to_string(), (test, consequent, alternate));
+            return Ok(());
+        }
+    }
     match &declarator.name {
         Pat::Array(array) => lower_state_declaration(
             array,
@@ -740,7 +905,31 @@ fn lower_arrow_callable(
                         } else { return Err("only ref.current assignment is supported".into()); }
                     } else { return Err("only ref.current assignment is supported".into()); }
                 } else { return Err("only ref.current assignment is supported".into()); }
-            } else { HirCallableBody::Expression(lower_expression(expr, ctx)?) }
+            } else if let Expr::Call(call) = expr.as_ref() {
+                if let Callee::Expr(callee) = &call.callee {
+                    if let Expr::Ident(setter) = callee.as_ref() {
+                        let binding = ctx.resolve_binding(&setter.sym)?;
+                        if let Some(state) = ctx.setter_state(binding) {
+                            if call.args.len() != 1 || call.args[0].spread.is_some() {
+                                return Err("State setters require one non-spread value".into());
+                            }
+                            HirCallableBody::Block(vec![HirStmt::StateUpdate {
+                                state,
+                                value: lower_state_update_value(&call.args[0].expr, state, ctx)?,
+                                span: source_span_from_swc(call.span, ctx.module_id),
+                            }])
+                        } else {
+                            HirCallableBody::Expression(lower_expression(expr, ctx)?)
+                        }
+                    } else {
+                        HirCallableBody::Expression(lower_expression(expr, ctx)?)
+                    }
+                } else {
+                    HirCallableBody::Expression(lower_expression(expr, ctx)?)
+                }
+            } else {
+                HirCallableBody::Expression(lower_expression(expr, ctx)?)
+            }
         }
         ArrowFunctionBody::FunctionBody(body) => {
             HirCallableBody::Block(lower_callable_statements(&body.stmts, ctx)?)
@@ -758,9 +947,16 @@ fn lower_callable_parameter(
         return Err("Callable parameters must be identifiers".to_string());
     };
     let span = source_span_from_swc(ident.id.span, ctx.module_id);
+    let callable = matches!(
+        ident
+            .type_ann
+            .as_deref()
+            .map(|annotation| annotation.type_ann.as_ref()),
+        Some(TsType::TsFnOrConstructorType(TsFnOrConstructorType::TsFnType(_)))
+    );
     ctx.declare_binding(
         ident.id.sym.to_string(),
-        HirBindingKind::Parameter { callable: false },
+        HirBindingKind::Parameter { callable },
         span,
     )
 }
@@ -787,41 +983,46 @@ fn lower_awaited_call(
     let Callee::Expr(callee) = &call.callee else {
         return Err("await must call fetch or a local action".into());
     };
+    if let Expr::Member(member) = callee.as_ref() {
+        if matches!(&member.prop, swc_ecma_ast::MemberProp::Ident(name) if name.sym == "json" || name.sym == "text")
+            && call.args.is_empty()
+        {
+            let target = target.ok_or("awaited response body must be assigned")?;
+            let object = lower_expression(&member.obj, ctx)?;
+            let value = ctx.alloc_expr_id();
+            ctx.add_expression(HirExprNode::new(
+                value,
+                HirExpr::Member { object, property: "body".into() },
+                span.clone(),
+            ));
+            return Ok(HirStmt::AsyncAssign { target, value, span });
+        }
+    }
     if let Some(cookie) = lower_cookie_call(call, target, span.clone(), ctx)? {
         return Ok(cookie);
     }
     if matches!(callee.as_ref(), Expr::Ident(ident) if ident.sym == *"fetch") {
-        if call.args.is_empty()
-            || call.args.len() > 2
-            || call.args.iter().any(|arg| arg.spread.is_some())
-        {
-            return Err("fetch requires a URL and optional static method".into());
-        }
-        let method = match call.args.get(1).map(|arg| arg.expr.as_ref()) {
-            None => "GET".to_string(),
-            Some(Expr::Object(options)) => options.props.iter().find_map(|prop| match prop {
-                swc_ecma_ast::PropOrSpread::Prop(prop) => match prop.as_ref() {
-                    swc_ecma_ast::Prop::KeyValue(value)
-                        if matches!(&value.key, swc_ecma_ast::PropName::Ident(key) if key.sym == *"method") =>
-                    match value.value.as_ref() {
-                        Expr::Lit(Lit::Str(value)) => Some(value.value.to_string_lossy().into_owned()),
-                        _ => None,
-                    },
-                    _ => None,
-                },
+        return lower_awaited_fetch(call, target, span, ctx);
+    }
+    // A local async helper may receive a finite inline callback such as
+    // `request("create", () => fetch(...))`. The callback never escapes the
+    // graph, so lower its known fetch continuation directly instead of treating
+    // it as an arbitrary JavaScript function value.
+    if let Some(fetch) = call.args.iter().find_map(|argument| match argument.expr.as_ref() {
+        Expr::Arrow(arrow) if arrow.params.is_empty() => match arrow.body.as_ref() {
+            ArrowFunctionBody::Expr(body) => match body.as_ref() {
+                Expr::Call(fetch)
+                    if matches!(&fetch.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(ident) if ident.sym == *"fetch")) =>
+                {
+                    Some(fetch)
+                }
                 _ => None,
-            }).unwrap_or_else(|| "GET".to_string()),
-            _ => return Err("fetch options must be a static object".into()),
-        };
-        return Ok(HirStmt::AwaitFetch {
-            target,
-            url: lower_expression(&call.args[0].expr, ctx)?,
-            method,
-            // A returned route-loader value remains the existing text contract;
-            // bound async values are decoded before their continuation resumes.
-            decode: if target.is_some() { "json" } else { "text" }.to_string(),
-            span,
-        });
+            },
+            ArrowFunctionBody::FunctionBody(_) => None,
+        },
+        _ => None,
+    }) {
+        return lower_awaited_fetch(fetch, target, span, ctx);
     }
     let Expr::Ident(callee) = callee.as_ref() else {
         return Err("await must call fetch or a local action".into());
@@ -840,6 +1041,136 @@ fn lower_awaited_call(
             .collect::<Result<_, _>>()?,
         span,
     })
+}
+
+fn lower_awaited_fetch(
+    call: &swc_ecma_ast::CallExpr,
+    target: Option<BindingId>,
+    span: SourceSpan,
+    ctx: &mut HirLoweringCtx<'_>,
+) -> Result<HirStmt, String> {
+    if call.args.is_empty() || call.args.len() > 2 || call.args.iter().any(|arg| arg.spread.is_some()) {
+        return Err("fetch requires a URL and optional static method".into());
+    }
+    let mut method = "GET".to_string();
+    let mut headers = Vec::new();
+    let mut body = None;
+    if let Some(options) = call.args.get(1) {
+        let Expr::Object(options) = options.expr.as_ref() else {
+            return Err("fetch options must be a static object".into());
+        };
+        for option in &options.props {
+            let swc_ecma_ast::PropOrSpread::Prop(option) = option else {
+                return Err("fetch options cannot use object spread".into());
+            };
+            let swc_ecma_ast::Prop::KeyValue(option) = option.as_ref() else {
+                return Err("fetch options must use named properties".into());
+            };
+            let name = match &option.key {
+                swc_ecma_ast::PropName::Ident(name) => name.sym.to_string(),
+                swc_ecma_ast::PropName::Str(name) => name.value.to_string_lossy().into_owned(),
+                _ => return Err("fetch option names must be static".into()),
+            };
+            match name.as_str() {
+                "method" => match option.value.as_ref() {
+                    Expr::Lit(Lit::Str(value)) => method = value.value.to_string_lossy().into_owned(),
+                    _ => return Err("fetch method must be a static string".into()),
+                },
+                "headers" => {
+                    let Expr::Object(object) = option.value.as_ref() else {
+                        return Err("fetch headers must be a static object".into());
+                    };
+                    for header in &object.props {
+                        let swc_ecma_ast::PropOrSpread::Prop(header) = header else {
+                            return Err("fetch headers cannot use object spread".into());
+                        };
+                        let swc_ecma_ast::Prop::KeyValue(header) = header.as_ref() else {
+                            return Err("fetch headers must use named properties".into());
+                        };
+                        let header_name = match &header.key {
+                            swc_ecma_ast::PropName::Ident(name) => name.sym.to_string(),
+                            swc_ecma_ast::PropName::Str(name) => name.value.to_string_lossy().into_owned(),
+                            _ => return Err("fetch header names must be static".into()),
+                        };
+                        headers.push((header_name, lower_expression(&header.value, ctx)?));
+                    }
+                }
+                "body" => body = Some(lower_expression(&option.value, ctx)?),
+                // Signals are attached by the browser runtime's capability lifecycle.
+                "signal" => {}
+                _ => return Err(format!("unsupported fetch option '{name}'")),
+            }
+        }
+    }
+    Ok(HirStmt::AwaitFetch {
+        target,
+        url: lower_expression(&call.args[0].expr, ctx)?,
+        method,
+        headers,
+        body,
+        decode: if target.is_some() { "responseJson" } else { "text" }.to_string(),
+        span,
+    })
+}
+
+fn lower_component_primitive(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<(), String> {
+    let Expr::Call(call) = expr else { return Err("Only useReaction and useListener calls are valid component expressions".into()) };
+    let Callee::Expr(callee) = &call.callee else { return Err("Unsupported component call".into()) };
+    let Expr::Ident(name) = callee.as_ref() else { return Err("Unsupported component call".into()) };
+    let span = source_span_from_swc(call.span, ctx.module_id);
+    if name.sym == *"useEffect" { return Err("useEffect is unsupported; use useReaction or useListener".into()) }
+    if name.sym == *"useReaction" {
+        if call.args.len() != 2 || call.args.iter().any(|arg| arg.spread.is_some()) { return Err("useReaction requires a callback and a non-empty static dependency array".into()) }
+        let Expr::Arrow(callback) = call.args[0].expr.as_ref() else { return Err("useReaction callback must be an inline arrow".into()) };
+        if !callback.params.is_empty() { return Err("useReaction callback cannot accept parameters".into()) }
+        let Expr::Array(deps) = call.args[1].expr.as_ref() else { return Err("useReaction dependencies must be a static non-empty array".into()) };
+        if deps.elems.is_empty() { return Err("useReaction requires at least one dependency".into()) }
+        let dependencies = deps.elems.iter().map(|dep| {
+            let dep = dep.as_ref().ok_or("useReaction dependencies cannot contain holes")?;
+            if dep.spread.is_some() { return Err("useReaction dependencies cannot use spread".into()) }
+            lower_expression(&dep.expr, ctx)
+        }).collect::<Result<Vec<_>, String>>()?;
+        let (body, cleanup) = lower_reaction_callback(callback, ctx)?;
+        ctx.reactions.push(HirReaction { dependencies, body, cleanup, span });
+        return Ok(());
+    }
+    if name.sym == *"useListener" {
+        if call.args.len() != 3 || call.args.iter().any(|arg| arg.spread.is_some()) { return Err("useListener requires target, static event name, and handler".into()) }
+        let Expr::Ident(source) = call.args[0].expr.as_ref() else { return Err("useListener target must be window or document".into()) };
+        if !matches!(source.sym.as_ref(), "window" | "document") { return Err("useListener target must be window or document".into()) }
+        let Expr::Lit(Lit::Str(event)) = call.args[1].expr.as_ref() else { return Err("useListener event name must be static".into()) };
+        let callable = lower_callable(&call.args[2].expr, CallablePolicy::CallableValue, ctx)?
+            .ok_or("useListener handler must be callable")?;
+        ctx.listeners.push(HirListener { source: source.sym.to_string(), event: event.value.to_string_lossy().into_owned(), callable, span });
+        return Ok(());
+    }
+    Err(format!("Unsupported component primitive '{}'", name.sym))
+}
+
+fn lower_reaction_callback(
+    callback: &swc_ecma_ast::ArrowExpr,
+    ctx: &mut HirLoweringCtx<'_>,
+) -> Result<(HirCallableBody, Option<HirCallableBody>), String> {
+    if !callback.params.is_empty() { return Err("useReaction callback cannot accept parameters".into()) }
+    let ArrowFunctionBody::FunctionBody(block) = callback.body.as_ref() else {
+        return Err("useReaction callback requires a block body".into());
+    };
+    ctx.push_scope();
+    let mut statements = Vec::new();
+    let mut cleanup = None;
+    for (index, statement) in block.stmts.iter().enumerate() {
+        if let Stmt::Return(returned) = statement {
+            if index + 1 != block.stmts.len() { ctx.pop_scope(); return Err("useReaction cleanup must be the final return".into()); }
+            let Some(Expr::Arrow(cleanup_arrow)) = returned.arg.as_deref() else { ctx.pop_scope(); return Err("useReaction may return only a cleanup arrow".into()); };
+            let (parameters, body) = lower_arrow_callable(cleanup_arrow, ctx)?;
+            if !parameters.is_empty() { ctx.pop_scope(); return Err("useReaction cleanup cannot accept parameters".into()); }
+            cleanup = Some(body);
+        } else {
+            statements.push(lower_callable_statement(statement, ctx)?);
+        }
+    }
+    ctx.pop_scope();
+    Ok((HirCallableBody::Block(statements), cleanup))
 }
 
 fn lower_cookie_call(
@@ -931,16 +1262,30 @@ fn lower_async_variable(
     let Pat::Ident(name) = &declaration.name else {
         return Err("async result declarations require an identifier".into());
     };
-    let Some(Expr::Await(awaited)) = declaration.init.as_deref() else {
-        return Err("callable declarations are unsupported".into());
-    };
     let span = source_span_from_swc(var.span, ctx.module_id);
     let target = ctx.declare_binding(
         name.id.sym.to_string(),
         HirBindingKind::AsyncValue,
         source_span_from_swc(name.id.span, ctx.module_id),
     )?;
-    lower_awaited_call(awaited, Some(target), span, ctx)
+    match declaration.init.as_deref().map(erase_type_assertions) {
+        Some(Expr::Await(awaited)) => lower_awaited_call(awaited, Some(target), span, ctx),
+        Some(initializer) => Ok(HirStmt::AsyncAssign {
+            target,
+            value: lower_expression(initializer, ctx)?,
+            span,
+        }),
+        None => Err("callable declarations require an initializer".into()),
+    }
+}
+
+fn erase_type_assertions(expression: &Expr) -> &Expr {
+    match expression {
+        Expr::TsAs(assertion) => erase_type_assertions(&assertion.expr),
+        Expr::TsTypeAssertion(assertion) => erase_type_assertions(&assertion.expr),
+        Expr::Paren(parenthesized) => erase_type_assertions(&parenthesized.expr),
+        expression => expression,
+    }
 }
 
 fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result<HirStmt, String> {
@@ -954,6 +1299,9 @@ fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result
                         if property.sym == *"current" {
                             let binding = ctx.resolve_binding(&reference.sym)?;
                             if matches!(ctx.bindings[binding.0 as usize].kind, HirBindingKind::RefSlot) {
+                                if matches!(assign.right.as_ref(), Expr::Member(right) if matches!(right.obj.as_ref(), Expr::Ident(document) if document.sym == *"document") && matches!(right.prop, swc_ecma_ast::MemberProp::Ident(ref property) if property.sym == *"activeElement")) {
+                                    return Ok(HirStmt::CaptureActiveElement { reference: binding, span });
+                                }
                                 return Ok(HirStmt::RefUpdate { reference: binding, value: lower_expression(&assign.right, ctx)?, span });
                             }
                             if matches!(ctx.bindings[binding.0 as usize].kind, HirBindingKind::HostRef) { return Err("hostRef.current is lifecycle-owned and cannot be assigned".into()); }
@@ -969,12 +1317,63 @@ fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result
                 Expr::Unary(unary) if matches!(unary.op, swc_ecma_ast::UnaryOp::Void) => unary.arg.as_ref(),
                 expression => expression,
             };
+            // SWC wraps `ref.current?.focus()` in nested OptChain nodes rather
+            // than a normal CallExpr.  It is still the one typed focus primitive
+            // we permit; keep it out of ordinary expression lowering.
+            if let Some(reference) = optional_focus_reference(expression, ctx)? {
+                return match ctx.bindings[reference.0 as usize].kind {
+                    HirBindingKind::HostRef => Ok(HirStmt::FocusHostRef { reference, optional: true, span }),
+                    HirBindingKind::RefSlot => Ok(HirStmt::FocusRef { reference, optional: true, span }),
+                    _ => Err("focus() requires a useHostRef or captured active-element ref".into()),
+                };
+            }
+            if let Expr::OptChain(chain) = expression {
+                if let swc_ecma_ast::OptChainBase::Call(call) = chain.base.as_ref() {
+                    if let Expr::Ident(callee) = call.callee.as_ref() {
+                        let binding = ctx.resolve_binding(&callee.sym)?;
+                        if ctx.is_callable_binding(binding)
+                            && call.args.iter().all(|argument| argument.spread.is_none())
+                        {
+                            return Ok(HirStmt::OptionalCall {
+                                callee: binding,
+                                arguments: call
+                                    .args
+                                    .iter()
+                                    .map(|argument| lower_expression(&argument.expr, ctx))
+                                    .collect::<Result<Vec<_>, _>>()?,
+                                span,
+                            });
+                        }
+                    }
+                }
+            }
             if let Expr::Call(call) = expression {
+                if let Callee::Expr(callee) = &call.callee {
+                    if let Expr::Member(method) = callee.as_ref() {
+                        if matches!(&method.prop, swc_ecma_ast::MemberProp::Ident(name) if name.sym == *"preventDefault") && call.args.is_empty() {
+                            return Ok(HirStmt::PreventDefault { span });
+                        }
+                        if matches!(&method.prop, swc_ecma_ast::MemberProp::Ident(name) if name.sym == *"focus") && call.args.is_empty() {
+                            if let Expr::Member(current) = method.obj.as_ref() {
+                                if let (Expr::Ident(reference), swc_ecma_ast::MemberProp::Ident(property)) = (current.obj.as_ref(), &current.prop) {
+                                    if property.sym == *"current" {
+                                        let binding = ctx.resolve_binding(&reference.sym)?;
+                                        return match ctx.bindings[binding.0 as usize].kind {
+                                            HirBindingKind::HostRef => Ok(HirStmt::FocusHostRef { reference: binding, optional: true, span }),
+                                            HirBindingKind::RefSlot => Ok(HirStmt::FocusRef { reference: binding, optional: true, span }),
+                                            _ => Err("focus() requires a useHostRef or captured active-element ref".into()),
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(cookie) = lower_cookie_call(call, None, span.clone(), ctx)? {
                     return Ok(cookie);
                 }
             }
-            if let Expr::Call(call) = expr_stmt.expr.as_ref() {
+            if let Expr::Call(call) = expression {
                 if let Callee::Expr(callee) = &call.callee {
                     if let Expr::Ident(ident) = callee.as_ref() {
                         let binding = ctx.resolve_binding(&ident.sym)?;
@@ -984,17 +1383,18 @@ fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result
                                     "State setters require one non-spread value".to_string()
                                 );
                             }
-                            if matches!(call.args[0].expr.as_ref(), Expr::Arrow(_)) {
-                                return Err("State updater callbacks are unsupported".to_string());
-                            }
-                            let value = lower_expression(&call.args[0].expr, ctx)?;
+                            let value = lower_state_update_value(
+                                call.args[0].expr.as_ref(),
+                                state,
+                                ctx,
+                            )?;
                             return Ok(HirStmt::StateUpdate { state, value, span });
                         }
                     }
                 }
             }
             Ok(HirStmt::Expression {
-                expression: lower_expression(&expr_stmt.expr, ctx)?,
+                expression: lower_expression(expression, ctx)?,
                 span,
             })
         }
@@ -1027,6 +1427,13 @@ fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result
                 span,
             })
         }
+        Stmt::Throw(throw_stmt) => Ok(HirStmt::Throw {
+            value: lower_expression(
+                throw_stmt.arg.as_ref(),
+                ctx,
+            )?,
+            span,
+        }),
         Stmt::Try(try_stmt) => {
             let body = lower_callable_statements(&try_stmt.block.stmts, ctx)?;
             let catch = try_stmt
@@ -1064,6 +1471,70 @@ fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result
         }
         unsupported => Err(format!("Unsupported callable statement: {unsupported:?}")),
     }
+}
+
+/// React-style functional setters are lowered as a pure expression whose
+/// updater parameter is an alias of the state slot.  The action VM evaluates
+/// that expression immediately before StoreState, preserving the atomic
+/// read-modify-write behavior without serializing a closure.
+fn lower_state_update_value(
+    value: &Expr,
+    state: BindingId,
+    ctx: &mut HirLoweringCtx<'_>,
+) -> Result<ExprId, String> {
+    let Expr::Arrow(updater) = value else {
+        return lower_expression(value, ctx);
+    };
+    if updater.params.len() != 1 {
+        return Err("State updater callbacks require one identifier parameter".into());
+    }
+    let Pat::Ident(parameter) = &updater.params[0] else {
+        return Err("State updater callbacks require one identifier parameter".into());
+    };
+    let expression = match updater.body.as_ref() {
+        ArrowFunctionBody::Expr(expression) => expression.as_ref(),
+        ArrowFunctionBody::FunctionBody(body) if body.stmts.len() == 1 => match &body.stmts[0] {
+            Stmt::Return(returned) => returned
+                .arg
+                .as_deref()
+                .ok_or("State updater return requires a value")?,
+            _ => return Err("State updater blocks must contain one return expression".into()),
+        },
+        ArrowFunctionBody::FunctionBody(_) => {
+            return Err("State updater blocks must contain one return expression".into())
+        }
+    };
+    ctx.push_scope();
+    ctx.scopes
+        .last_mut()
+        .expect("scope stack is never empty")
+        .insert(parameter.id.sym.to_string(), state);
+    let lowered = lower_expression(expression, ctx);
+    ctx.pop_scope();
+    lowered
+}
+
+/// Returns the reference targeted by the only supported optional call form:
+/// `ref.current?.focus()`.  Optional browser values never enter the normal
+/// expression/value VM.
+fn optional_focus_reference(
+    expr: &Expr,
+    ctx: &HirLoweringCtx<'_>,
+) -> Result<Option<BindingId>, String> {
+    let Expr::OptChain(outer) = expr else { return Ok(None) };
+    let swc_ecma_ast::OptChainBase::Call(call) = outer.base.as_ref() else { return Ok(None) };
+    if !call.args.is_empty() { return Ok(None) }
+    let Expr::OptChain(inner) = call.callee.as_ref() else { return Ok(None) };
+    if !inner.optional { return Ok(None) }
+    let swc_ecma_ast::OptChainBase::Member(method) = inner.base.as_ref() else { return Ok(None) };
+    if !matches!(&method.prop, swc_ecma_ast::MemberProp::Ident(name) if name.sym == *"focus") {
+        return Ok(None);
+    }
+    let Expr::Member(current) = method.obj.as_ref() else { return Ok(None) };
+    let (Expr::Ident(reference), swc_ecma_ast::MemberProp::Ident(property)) =
+        (current.obj.as_ref(), &current.prop) else { return Ok(None) };
+    if property.sym != *"current" { return Ok(None) }
+    Ok(Some(ctx.resolve_binding(&reference.sym)?))
 }
 
 fn lower_statement_branch(
@@ -1132,18 +1603,42 @@ fn lower_jsx_element_with_consumed_key(
         }
     };
 
-    let target = if is_custom {
-        let symbol =
-            resolve_component(ctx.semantic_graph, ctx.module_id, &tag_name).ok_or_else(|| {
-                format!(
-                    "Unresolved component '{tag_name}' in module '{}'",
-                    ctx.module_id
-                )
-            })?;
-        Some(ComponentId::new(symbol.module_id, symbol.local_name))
+    // Router primitives are compiler-recognised syntax. They deliberately
+    // lower as intrinsic DOM anchors/outlet hosts rather than pulling the
+    // TypeScript compatibility component into the application graph.
+    let resolved_component = is_custom
+        .then(|| resolve_component(ctx.semantic_graph, ctx.module_id, &tag_name))
+        .flatten();
+    let router_link = resolved_component
+        .as_ref()
+        .is_some_and(|symbol| symbol.local_name == "Link");
+    let router_outlet = resolved_component
+        .as_ref()
+        .is_some_and(|symbol| symbol.local_name == "Outlet");
+    let target = if is_custom && !router_link && !router_outlet {
+        if ctx.component_selectors.contains_key(&tag_name) {
+            None
+        } else if let Some(symbol) = resolved_component {
+            Some(HirComponentTarget::Static(ComponentId::new(symbol.module_id, symbol.local_name)))
+        } else if let Some(target) = ctx.component_aliases.get(&tag_name) {
+            Some(HirComponentTarget::Static(target.clone()))
+        } else if let Ok(binding) = ctx.resolve_binding(&tag_name) {
+            if matches!(ctx.bindings[binding.0 as usize].kind, HirBindingKind::Parameter { callable: false }) {
+                Some(HirComponentTarget::Prop(binding))
+            } else {
+                return Err(format!("'{tag_name}' is not a component-valued prop"));
+            }
+        } else {
+            return Err(format!("Unresolved component '{tag_name}' in module '{}'", ctx.module_id));
+        }
     } else {
         None
     };
+    let static_target = match target.as_ref() {
+        Some(HirComponentTarget::Static(target)) => Some(target),
+        _ => None,
+    };
+    let selector_target = ctx.component_selectors.get(&tag_name).cloned();
 
     let mut props = Vec::new();
     let mut events = Vec::new();
@@ -1160,11 +1655,41 @@ fn lower_jsx_element_with_consumed_key(
                 let binding = ctx.resolve_binding(&ident.sym)?;
                 if !matches!(ctx.bindings[binding.0 as usize].kind, HirBindingKind::HostRef) { return Err("intrinsic ref requires useHostRef()".into()); }
                 if host_ref.replace(binding).is_some() { return Err("intrinsic elements support one ref".into()); }
-            } else { lower_jsx_attr(attr, ctx, &mut props, target.as_ref(), &mut events)?; }
-        } else {
-            return Err("JSX spread attributes are not supported by structural HIR".to_string());
+            } else {
+                lower_jsx_attr(attr, ctx, &mut props, static_target, &mut events)?;
+                if router_link && jsx_attr_name(attr).as_deref() == Some("to") {
+                    if let Some(prop) = props.last_mut() {
+                        match prop {
+                            HirProp::Static { name, .. }
+                            | HirProp::Expression { name, .. }
+                            | HirProp::Callable { name, .. }
+                            | HirProp::Component { name, .. } => *name = "href".into(),
+                            HirProp::Spread { .. } => unreachable!("attributes do not lower to spreads"),
+                        }
+                    }
+                }
+            }
+        } else if let JSXAttrOrSpread::SpreadElement(spread) = attr_or_spread {
+            // Spread is a serializable value-graph operation. Component calls
+            // retain it until target lowering verifies that the target accepts
+            // a direct props bag; intrinsic writes use the prop program.
+            props.push(HirProp::Spread {
+                value: lower_expression(&spread.expr, ctx)?,
+            });
         }
     }
+
+    let route_outlet = if router_outlet {
+        match props.iter().find_map(|prop| match prop {
+            HirProp::Static { name, value } if name == "id" => Some(value.clone()),
+            _ => None,
+        }) {
+            Some(id) => Some(id),
+            None => Some("main".into()),
+        }
+    } else {
+        None
+    };
 
     let mut children = Vec::new();
     for child in &jsx.children {
@@ -1175,10 +1700,34 @@ fn lower_jsx_element_with_consumed_key(
 
     let node_id = ctx.alloc_node_id();
 
-    let node = if is_custom {
+    let node = if let Some((test, consequent, alternate)) = selector_target {
+        let consequent_id = ctx.alloc_node_id();
+        ctx.nodes.push(HirNode::Component(HirComponentCall {
+            id: consequent_id,
+            target: HirComponentTarget::Static(consequent),
+            props: props.clone(),
+            children: children.clone(),
+            span: span.clone(),
+        }));
+        let alternate_id = ctx.alloc_node_id();
+        ctx.nodes.push(HirNode::Component(HirComponentCall {
+            id: alternate_id,
+            target: HirComponentTarget::Static(alternate),
+            props,
+            children,
+            span: span.clone(),
+        }));
+        HirNode::Conditional(HirConditional {
+            id: node_id,
+            test,
+            consequent: vec![consequent_id],
+            alternate: vec![alternate_id],
+            span,
+        })
+    } else if let Some(target) = target {
         HirNode::Component(HirComponentCall {
             id: node_id,
-            target: target.expect("custom JSX elements have a target"),
+            target,
             props,
             children,
             span,
@@ -1186,10 +1735,11 @@ fn lower_jsx_element_with_consumed_key(
     } else {
         HirNode::Element(HirElement {
             id: node_id,
-            tag: tag_name,
+            tag: if router_link { "a".into() } else if router_outlet { "div".into() } else { tag_name },
             props,
             events,
             host_ref,
+            route_outlet,
             children,
             span,
         })
@@ -1262,6 +1812,19 @@ fn lower_jsx_attr(
                 if let Some(callable) = callable {
                     props.push(HirProp::Callable { name, callable });
                 } else {
+                    // Components travel in a dedicated graph-handle channel,
+                    // never through the serializable expression VM.
+                    if component_target.is_some() {
+                        if let Expr::Ident(ident) = expr.as_ref() {
+                            if let Some(symbol) = resolve_component(ctx.semantic_graph, ctx.module_id, &ident.sym) {
+                                props.push(HirProp::Component {
+                                    name,
+                                    target: ComponentId::new(symbol.module_id, symbol.local_name),
+                                });
+                                return Ok(());
+                            }
+                        }
+                    }
                     // Not a callable - regular expression prop
                     let expr_id = lower_expression(expr, ctx)?;
                     props.push(HirProp::Expression {
@@ -1626,6 +2189,33 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
     let span = span_from_expr(expr, ctx.module_id);
 
     let hir_expr = match expr {
+        Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref name) if name.sym == "useLoaderData"))) => {
+            if !call.args.is_empty() {
+                return Err("Route.useLoaderData() accepts no arguments".into());
+            }
+            let binding = if let Some(binding) = ctx.loader_data_binding {
+                binding
+            } else {
+                let span = source_span_from_swc(call.span, ctx.module_id);
+                let binding = ctx.declare_binding("__plec_loader_data".into(), HirBindingKind::Input { kind: "loaderData".into() }, span.clone())?;
+                ctx.inputs.push(HirInput { binding, name: "loaderData".into(), kind: "loaderData".into(), span });
+                ctx.loader_data_binding = Some(binding);
+                binding
+            };
+            HirExpr::Binding(binding)
+        }
+        Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.obj.as_ref(), Expr::Ident(object) if object.sym == "JSON") && matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref property) if property.sym == "stringify"))) => {
+            if call.args.len() != 1 || call.args[0].spread.is_some() {
+                return Err("JSON.stringify requires one non-spread argument".into());
+            }
+            HirExpr::Builtin { kind: "jsonStringify".into(), args: vec![lower_expression(&call.args[0].expr, ctx)?] }
+        }
+        Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(ident) if ident.sym == "encodeURIComponent")) => {
+            if call.args.len() != 1 || call.args[0].spread.is_some() {
+                return Err("encodeURIComponent requires one non-spread argument".into());
+            }
+            HirExpr::Builtin { kind: "encodeUriComponent".into(), args: vec![lower_expression(&call.args[0].expr, ctx)?] }
+        }
         Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.obj.as_ref(), Expr::Ident(object) if object.sym == "cookie") && matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref property) if property.sym == "getSync"))) =>
         {
             if call.args.len() != 1 || call.args[0].spread.is_some() {
@@ -1639,6 +2229,9 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
                 name: Some(name.value.to_string_lossy().into_owned()),
             }
         }
+        // The executable graph has one nullish representation.  `undefined`
+        // is only accepted as the unshadowed global spelling of that value.
+        Expr::Ident(ident) if ident.sym == *"undefined" => HirExpr::Literal(HirValue::Null),
         Expr::Ident(ident) => HirExpr::Binding(ctx.resolve_binding(&ident.sym)?),
 
         Expr::Lit(lit) => match lit {
@@ -1654,24 +2247,75 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
 
         Expr::Member(member) => {
             let object_id = lower_expression(&member.obj, ctx)?;
-            let property = match &member.prop {
-                swc_ecma_ast::MemberProp::Ident(ident) => ident.sym.to_string(),
-                swc_ecma_ast::MemberProp::Computed(_) => {
-                    return Err("Computed member properties not supported".to_string())
-                }
+            match &member.prop {
+                swc_ecma_ast::MemberProp::Computed(computed) => HirExpr::ComputedMember {
+                    object: object_id,
+                    property: lower_expression(&computed.expr, ctx)?,
+                    optional: false,
+                },
                 swc_ecma_ast::MemberProp::PrivateName(_) => {
                     return Err("Private member properties not supported".to_string())
                 }
-            };
-            if property == "current" {
-                if let HirExpr::Binding(binding) = ctx.expressions[object_id.0 as usize].expression {
-                    match ctx.bindings[binding.0 as usize].kind {
-                        HirBindingKind::RefSlot => HirExpr::RefCurrent { reference: binding },
-                        HirBindingKind::HostRef => HirExpr::HostRefCurrent { reference: binding },
-                        _ => HirExpr::Member { object: object_id, property },
+                swc_ecma_ast::MemberProp::Ident(ident) => {
+                    let property = ident.sym.to_string();
+                    if property == "current" {
+                        if let HirExpr::Binding(binding) = ctx.expressions[object_id.0 as usize].expression {
+                            match ctx.bindings[binding.0 as usize].kind {
+                                HirBindingKind::RefSlot => HirExpr::RefCurrent { reference: binding },
+                                HirBindingKind::HostRef => HirExpr::HostRefCurrent { reference: binding },
+                                _ => HirExpr::Member { object: object_id, property },
+                            }
+                        } else { HirExpr::Member { object: object_id, property } }
+                    } else { HirExpr::Member { object: object_id, property } }
+                }
+            }
+        }
+
+        // Optional reads are safe only for the existing non-computed member
+        // subset.  `Field` already maps a nullish/missing record to Null in the
+        // typed VM, so no DOM or host value escapes the expression boundary.
+        Expr::OptChain(chain) => match chain.base.as_ref() {
+            swc_ecma_ast::OptChainBase::Member(member) => {
+                let object_id = lower_expression(&member.obj, ctx)?;
+                match &member.prop {
+                    swc_ecma_ast::MemberProp::Ident(ident) => HirExpr::Member {
+                        object: object_id,
+                        property: ident.sym.to_string(),
+                    },
+                    swc_ecma_ast::MemberProp::Computed(computed) => {
+                        HirExpr::ComputedMember {
+                            object: object_id,
+                            property: lower_expression(&computed.expr, ctx)?,
+                            optional: true,
+                        }
                     }
-                } else { HirExpr::Member { object: object_id, property } }
-            } else { HirExpr::Member { object: object_id, property } }
+                    _ => return Err("Private optional member properties are not supported".to_string()),
+                }
+            }
+            swc_ecma_ast::OptChainBase::Call(_) => {
+                return Err("Optional calls are unsupported except ref.current?.focus()".to_string())
+            }
+        },
+
+        Expr::New(new) if matches!(new.callee.as_ref(), Expr::Ident(ident) if ident.sym == "Error") => {
+            let args = new.args.as_ref().ok_or("Error requires a message")?;
+            if args.len() > 1 || args.iter().any(|arg| arg.spread.is_some()) {
+                return Err("Error requires zero or one non-spread message".into());
+            }
+            let kind = ctx.alloc_expr_id();
+            ctx.add_expression(HirExprNode::new(kind, HirExpr::Literal(HirValue::String("Error".into())), span.clone()));
+            let message = match args.first() {
+                Some(argument) => lower_expression(&argument.expr, ctx)?,
+                None => {
+                    let id = ctx.alloc_expr_id();
+                    ctx.add_expression(HirExprNode::new(id, HirExpr::Literal(HirValue::String(String::new())), span.clone()));
+                    id
+                }
+            };
+            HirExpr::Object(vec![
+                HirObjectItem::Property { name: "name".into(), value: kind },
+                HirObjectItem::Property { name: "message".into(), value: message },
+            ])
         }
 
         Expr::Unary(unary) => {
@@ -1695,7 +2339,15 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
 
         Expr::Bin(bin) => {
             let left_id = lower_expression(&bin.left, ctx)?;
-            let right_id = lower_expression(&bin.right, ctx)?;
+            let right_id = if bin.op == BinaryOp::InstanceOf
+                && matches!(bin.right.as_ref(), Expr::Ident(ident) if ident.sym == "Error")
+            {
+                let id = ctx.alloc_expr_id();
+                ctx.add_expression(HirExprNode::new(id, HirExpr::Literal(HirValue::String("Error".into())), span.clone()));
+                id
+            } else {
+                lower_expression(&bin.right, ctx)?
+            };
 
             if is_logical_op(bin.op) {
                 let op = logical_op_from_swc(bin.op)?;
@@ -1743,10 +2395,12 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
             let mut items = Vec::new();
             for item in &array.elems {
                 let item = item.as_ref().ok_or("Array holes are not supported")?;
-                if item.spread.is_some() {
-                    return Err("Array spreads are not supported".to_string());
-                }
-                items.push(lower_expression(&item.expr, ctx)?);
+                let expression = lower_expression(&item.expr, ctx)?;
+                items.push(if item.spread.is_some() {
+                    HirArrayItem::Spread(expression)
+                } else {
+                    HirArrayItem::Value(expression)
+                });
             }
             HirExpr::Array(items)
         }
@@ -1769,11 +2423,11 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
                                 }
                             };
                             let value_id = lower_expression(&kv.value, ctx)?;
-                            props.push((key, value_id));
+                            props.push(HirObjectItem::Property { name: key, value: value_id });
                         }
                     }
-                    swc_ecma_ast::PropOrSpread::Spread(_) => {
-                        return Err("Spread properties not supported".to_string())
+                    swc_ecma_ast::PropOrSpread::Spread(spread) => {
+                        props.push(HirObjectItem::Spread(lower_expression(&spread.expr, ctx)?));
                     }
                 }
             }
@@ -1796,6 +2450,11 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
         }
 
         Expr::Call(call) => {
+            if let Some(transform) = lower_collection_transform(call, ctx)? {
+                transform
+            } else if let Some(builtin) = lower_value_builtin_call(call, ctx)? {
+                builtin
+            } else {
             let callee_expr = match &call.callee {
                 Callee::Expr(expr) => expr.as_ref(),
                 Callee::Super(_) => {
@@ -1820,6 +2479,7 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
                 callee: callee_id,
                 args,
             }
+            }
         }
 
         unsupported => return Err(format!("Unsupported expression: {unsupported:?}")),
@@ -1828,6 +2488,82 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
     let expr_id = ctx.alloc_expr_id();
     ctx.add_expression(HirExprNode::new(expr_id, hir_expr, span));
     Ok(expr_id)
+}
+
+fn lower_value_builtin_call(
+    call: &swc_ecma_ast::CallExpr,
+    ctx: &mut HirLoweringCtx<'_>,
+) -> Result<Option<HirExpr>, String> {
+    let Callee::Expr(callee) = &call.callee else { return Ok(None) };
+    let Expr::Member(member) = callee.as_ref() else { return Ok(None) };
+    let swc_ecma_ast::MemberProp::Ident(method) = &member.prop else { return Ok(None) };
+    let kind = match method.sym.as_ref() {
+        "trim" => "trim",
+        "toLowerCase" => "lower",
+        "toUpperCase" => "upper",
+        "includes" => "includes",
+        _ => return Ok(None),
+    };
+    let expected = if kind == "includes" { 1 } else { 0 };
+    if call.args.len() != expected || call.args.iter().any(|arg| arg.spread.is_some()) {
+        return Err(format!("{}.{} has unsupported arguments", "value", method.sym));
+    }
+    let mut args = vec![lower_expression(&member.obj, ctx)?];
+    args.extend(
+        call.args
+            .iter()
+            .map(|arg| lower_expression(&arg.expr, ctx))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    Ok(Some(HirExpr::Builtin { kind: kind.into(), args }))
+}
+
+fn lower_collection_transform(
+    call: &swc_ecma_ast::CallExpr,
+    ctx: &mut HirLoweringCtx<'_>,
+) -> Result<Option<HirExpr>, String> {
+    let Callee::Expr(callee) = &call.callee else { return Ok(None) };
+    let Expr::Member(member) = callee.as_ref() else { return Ok(None) };
+    let swc_ecma_ast::MemberProp::Ident(method) = &member.prop else { return Ok(None) };
+    if method.sym != *"map" && method.sym != *"filter" {
+        return Ok(None);
+    }
+    if call.args.len() != 1 || call.args[0].spread.is_some() {
+        return Err(format!("{}.{} requires one inline callback", "collection", method.sym));
+    }
+    let Expr::Arrow(callback) = call.args[0].expr.as_ref() else {
+        return Err(format!("collection.{} requires an inline arrow callback", method.sym));
+    };
+    if callback.params.len() != 1 {
+        return Err(format!("collection.{} callback requires one item parameter", method.sym));
+    }
+    let Pat::Ident(item) = &callback.params[0] else {
+        return Err("collection callbacks require an identifier item parameter".into());
+    };
+    let source = lower_expression(&member.obj, ctx)?;
+    ctx.push_scope();
+    ctx.declare_binding(
+        item.id.sym.to_string(),
+        HirBindingKind::LoopItem,
+        source_span_from_swc(item.id.span, ctx.module_id),
+    )?;
+    let body = match callback.body.as_ref() {
+        ArrowFunctionBody::Expr(expression) => lower_expression(expression, ctx)?,
+        ArrowFunctionBody::FunctionBody(body) if body.stmts.len() == 1 => match &body.stmts[0] {
+            Stmt::Return(returned) => lower_expression(
+                returned.arg.as_deref().ok_or("collection callback return requires a value")?,
+                ctx,
+            )?,
+            _ => return Err("collection callback blocks require one return expression".into()),
+        },
+        _ => return Err("collection callback blocks require one return expression".into()),
+    };
+    ctx.pop_scope();
+    Ok(Some(if method.sym == *"map" {
+        HirExpr::Map { source, mapper: body }
+    } else {
+        HirExpr::Filter { source, predicate: body }
+    }))
 }
 
 /// Convert SWC span to HIR SourceSpan.
@@ -2155,7 +2891,7 @@ mod tests {
 
         // Custom components start with uppercase, so they should be HirNode::Component
         if let HirNode::Component(comp) = &hir.nodes[hir.root_nodes[0].0 as usize] {
-            assert_eq!(comp.target, ComponentId::new("test.tsx", "Header"));
+            assert_eq!(comp.target, HirComponentTarget::Static(ComponentId::new("test.tsx", "Header")));
         } else {
             panic!("Expected component");
         }
@@ -2213,13 +2949,8 @@ mod tests {
             assert_eq!(el.events.len(), 1);
             let event = &el.events[0];
             assert_eq!(event.event, "input");
-            if let HirCallable::Inline {
-                parameters,
-                body: HirCallableBody::Expression(body),
-            } = &event.callable
-            {
+            if let HirCallable::Inline { parameters, .. } = &event.callable {
                 assert_eq!(parameters.len(), 1);
-                assert!(hir.expressions.iter().any(|e| e.id == *body));
             } else {
                 panic!("Expected Inline callable");
             }
@@ -2396,7 +3127,7 @@ mod tests {
 
         if let HirExpr::Object(props) = &obj_expr.unwrap().expression {
             assert_eq!(props.len(), 1);
-            assert_eq!(props[0].0, "id");
+            assert!(matches!(&props[0], HirObjectItem::Property { name, .. } if name == "id"));
         }
     }
 
@@ -2432,7 +3163,7 @@ mod tests {
         let component = hir
             .nodes
             .iter()
-            .find(|n| matches!(n, HirNode::Component(comp) if comp.target.local_name == "Child"));
+            .find(|n| matches!(n, HirNode::Component(comp) if matches!(&comp.target, HirComponentTarget::Static(target) if target.local_name == "Child")));
         assert!(component.is_some());
 
         if let HirNode::Component(comp) = component.unwrap() {
@@ -2467,7 +3198,7 @@ mod tests {
         let component = hir
             .nodes
             .iter()
-            .find(|n| matches!(n, HirNode::Component(comp) if comp.target.local_name == "Child"));
+            .find(|n| matches!(n, HirNode::Component(comp) if matches!(&comp.target, HirComponentTarget::Static(target) if target.local_name == "Child")));
         assert!(component.is_some());
 
         if let HirNode::Component(comp) = component.unwrap() {
@@ -2533,7 +3264,7 @@ mod tests {
         "#;
 
         let hir = build_and_lower(source).expect("lowering should succeed");
-        let component = hir.nodes.iter().find(|node| matches!(node, HirNode::Component(comp) if comp.target.local_name == "Child")).unwrap();
+        let component = hir.nodes.iter().find(|node| matches!(node, HirNode::Component(comp) if matches!(&comp.target, HirComponentTarget::Static(target) if target.local_name == "Child"))).unwrap();
         assert!(matches!(
             component,
             HirNode::Component(comp) if matches!(comp.props.first(), Some(HirProp::Callable { name, callable: HirCallable::Conditional { .. } }) if name == "onSave")
@@ -2592,13 +3323,8 @@ mod tests {
             assert_eq!(el.events.len(), 1);
             let event = &el.events[0];
             assert_eq!(event.event, "input");
-            if let HirCallable::Inline {
-                parameters,
-                body: HirCallableBody::Expression(body),
-            } = &event.callable
-            {
+            if let HirCallable::Inline { parameters, .. } = &event.callable {
                 assert_eq!(parameters.len(), 1);
-                assert!(hir.expressions.iter().any(|e| e.id == *body));
             } else {
                 panic!("Expected Inline callable");
             }
@@ -2693,7 +3419,7 @@ mod tests {
         let component = hir
             .nodes
             .iter()
-            .find(|n| matches!(n, HirNode::Component(comp) if comp.target.local_name == "TodoRow"));
+            .find(|n| matches!(n, HirNode::Component(comp) if matches!(&comp.target, HirComponentTarget::Static(target) if target.local_name == "TodoRow")));
         assert!(component.is_some());
 
         if let HirNode::Component(comp) = component.unwrap() {
@@ -2787,9 +3513,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_state_updater_callbacks_and_unknown_bindings() {
-        assert!(build_and_lower(r#"export function App() { const [count, setCount] = useState(0); function increment() { setCount(c => c + 1); } return <button onClick={increment}>{count}</button>; }"#)
-            .unwrap_err().contains("updater callbacks"));
+    fn lowers_functional_state_updaters_and_rejects_unknown_bindings() {
+        let hir = build_and_lower(r#"export function App() { const [count, setCount] = useState(0); function increment() { setCount(c => c + 1); } return <button onClick={increment}>{count}</button>; }"#)
+            .expect("functional updater should lower");
+        let action = hir.callables.iter().find(|callable| {
+            hir.bindings[callable.binding.0 as usize].name == "increment"
+        }).unwrap();
+        assert!(matches!(action.body, HirCallableBody::Block(ref statements) if matches!(statements.first(), Some(HirStmt::StateUpdate { .. }))));
         assert!(
             build_and_lower(r#"export function App() { return <div>{missing}</div>; }"#)
                 .unwrap_err()
@@ -2880,8 +3610,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert!(targets.contains(&ComponentId::new("src/primary.tsx", "Card")));
-        assert!(targets.contains(&ComponentId::new("src/secondary.tsx", "Card")));
+        assert!(targets.contains(&HirComponentTarget::Static(ComponentId::new("src/primary.tsx", "Card"))));
+        assert!(targets.contains(&HirComponentTarget::Static(ComponentId::new("src/secondary.tsx", "Card"))));
     }
 
     #[test]
@@ -2921,7 +3651,7 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(call.target, ComponentId::new("src/foo.tsx", "Foo"));
+        assert_eq!(call.target, HirComponentTarget::Static(ComponentId::new("src/foo.tsx", "Foo")));
     }
 
     #[test]
@@ -2933,22 +3663,164 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_structural_and_spread_paths() {
+    fn rejects_unsupported_structural_paths() {
         assert!(
             build_and_lower("export function App() { return <div>{left + right}</div>; }")
                 .unwrap_err()
                 .contains("Non-logical binary expressions")
         );
         assert!(
-            build_and_lower("export function App() { return <div {...props} />; }")
-                .unwrap_err()
-                .contains("spread attributes")
-        );
-        assert!(
             build_and_lower("export function App() { return <div>{...children}</div>; }")
                 .unwrap_err()
                 .contains("spread children")
         );
+    }
+
+    #[test]
+    fn lowers_direct_state_setters_as_component_callback_props() {
+        let hir = build_and_lower_with_name(
+            "function Child({ onChange }: { onChange: (value: string) => void }) { return <button />; } export function App() { const [title, setTitle] = useState(''); return <Child onChange={setTitle} />; }",
+            "App",
+        )
+        .unwrap();
+        assert!(hir.nodes.iter().any(|node| matches!(
+            node,
+            HirNode::Component(component)
+                if matches!(component.props.first(), Some(HirProp::Callable { callable: HirCallable::Inline { body, .. }, .. }) if matches!(body, HirCallableBody::Block(statements) if matches!(statements.first(), Some(HirStmt::StateUpdate { .. }))))
+        )));
+    }
+
+    #[test]
+    fn erases_void_for_known_local_calls_inside_action_branches() {
+        let hir = build_and_lower(
+            "export function App() { const [enabled, setEnabled] = useState(true); function save() {} return <button onClick={() => { if (enabled) void save(); }}>Save</button>; }",
+        )
+        .unwrap();
+        assert!(hir.nodes.iter().any(|node| matches!(node, HirNode::Element(_))));
+    }
+
+    #[test]
+    fn lowers_object_rest_props_for_intrinsic_forwarding() {
+        let hir = build_and_lower(
+            "export function Icon({ title, ...props }) { return <svg {...props}>{title}</svg>; }",
+        )
+        .unwrap();
+        assert!(hir
+            .expressions
+            .iter()
+            .any(|expression| matches!(expression.expression, HirExpr::ObjectWithout { .. })));
+        assert!(hir.nodes.iter().any(|node| matches!(node,
+            HirNode::Element(HirElement { props, .. }) if props.iter().any(|prop| matches!(prop, HirProp::Spread { .. }))
+        )));
+    }
+
+    #[test]
+    fn lowers_dynamic_fetch_headers_and_json_body() {
+        let hir = build_and_lower(
+            r#"export function App() {
+                const [title, setTitle] = useState('');
+                async function save() {
+                    await fetch('/todos', {
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({ title }),
+                    });
+                }
+                return <button onClick={save}>Save</button>;
+            }"#,
+        )
+        .unwrap();
+        let action = hir.callables.iter().find(|callable| {
+            hir.bindings[callable.binding.0 as usize].name == "save"
+        }).unwrap();
+        assert!(matches!(action.body,
+            HirCallableBody::Block(ref statements) if matches!(statements.first(), Some(HirStmt::AwaitFetch { headers, body: Some(_), .. }) if headers.len() == 1)
+        ));
+    }
+
+    #[test]
+    fn lowers_pure_map_and_filter_value_transforms() {
+        let hir = build_and_lower(
+            "export function App() { const [items, setItems] = useState([]); const visible = items.filter(item => item.title.toLowerCase().includes('a')); return <button onClick={() => setItems(values => values.map(item => ({ ...item, title: item.title.trim() })))}>{visible.length}</button>; }",
+        ).unwrap();
+        assert!(hir.expressions.iter().any(|expression| matches!(expression.expression, HirExpr::Filter { .. })));
+        assert!(hir.expressions.iter().any(|expression| matches!(expression.expression, HirExpr::Map { .. })));
+    }
+
+    #[test]
+    fn lowers_route_loader_data_as_a_typed_input() {
+        let hir = build_and_lower(
+            "export function Page() { const todos = Route.useLoaderData(); return <p>{todos.length}</p>; }",
+        ).unwrap();
+        assert!(hir.inputs.iter().any(|input| input.kind == "loaderData"));
+    }
+
+    #[test]
+    fn lowers_typed_error_guards_and_throw_values() {
+        let hir = build_and_lower(
+            "export function App() { async function save() { try { throw new Error('no'); } catch (error) { return error instanceof Error ? error.message : 'unknown'; } } return <button onClick={save}>Save</button>; }",
+        ).unwrap();
+        let action = hir.callables.iter().find(|callable| hir.bindings[callable.binding.0 as usize].name == "save").unwrap();
+        assert!(matches!(action.body, HirCallableBody::Block(ref statements) if matches!(statements.first(), Some(HirStmt::Try { body, .. }) if matches!(body.first(), Some(HirStmt::Throw { .. })) )));
+    }
+
+    #[test]
+    fn lowers_response_status_and_buffered_json_body() {
+        let hir = build_and_lower(
+            "type Todo = { id: string }; export function App() { async function load() { const response = await fetch('/todos'); if (!response.ok) throw new Error('no'); const todos = (await response.json()) as Todo[]; return todos; } return <button onClick={load}>Load</button>; }",
+        ).unwrap();
+        let action = hir.callables.iter().find(|callable| hir.bindings[callable.binding.0 as usize].name == "load").unwrap();
+        assert!(matches!(action.body, HirCallableBody::Block(ref statements) if statements.iter().any(|statement| matches!(statement, HirStmt::AsyncAssign { .. }))));
+    }
+
+    #[test]
+    fn lowers_function_typed_async_callback_parameters_and_local_values() {
+        let hir = build_and_lower(
+            "export function App() { async function request(label: string, action: () => Promise<Response>) { const normalized = label.trim(); const response = await action(); return normalized; } return <button onClick={request}>Run</button>; }",
+        )
+        .unwrap();
+        let action = hir
+            .callables
+            .iter()
+            .find(|callable| hir.bindings[callable.binding.0 as usize].name == "request")
+            .unwrap();
+        assert!(matches!(
+            hir.bindings[action.parameters[1].0 as usize].kind,
+            HirBindingKind::Parameter { callable: true }
+        ));
+        assert!(matches!(
+            action.body,
+            HirCallableBody::Block(ref statements)
+                if matches!(statements.first(), Some(HirStmt::AsyncAssign { .. }))
+                    && matches!(statements.get(1), Some(HirStmt::AwaitCall { .. }))
+        ));
+    }
+
+    #[test]
+    fn lowers_inline_fetch_callbacks_passed_to_local_async_helpers() {
+        let hir = build_and_lower(
+            "export function App() { async function request(action: () => Promise<Response>) { const result = await action(); return result; } async function save() { const response = await request(() => fetch('/todos', { method: 'POST', body: JSON.stringify({ title: 'Plec' }) })); return response; } return <button onClick={save}>Save</button>; }",
+        )
+        .unwrap();
+        let save = hir
+            .callables
+            .iter()
+            .find(|callable| hir.bindings[callable.binding.0 as usize].name == "save")
+            .unwrap();
+        assert!(matches!(
+            save.body,
+            HirCallableBody::Block(ref statements)
+                if matches!(statements.first(), Some(HirStmt::AwaitFetch { method, body: Some(_), .. }) if method == "POST")
+        ));
+    }
+
+    #[test]
+    fn lowers_a_finite_component_ternary_as_a_reactive_conditional() {
+        let hir = build_and_lower_with_name(
+            "function A() { return <p>A</p>; } function B() { return <p>B</p>; } export function App() { const [on, setOn] = useState(true); const Choice = on ? A : B; return <Choice />; }",
+            "App",
+        ).unwrap();
+        assert!(hir.nodes.iter().any(|node| matches!(node, HirNode::Conditional(_))));
     }
 
     #[test]

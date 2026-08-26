@@ -55,69 +55,79 @@ export function TodosPage() {
   );
   const openCount = todos.filter((todo) => !todo.completed).length;
 
-  async function request(
-    operation: string,
-    action: () => Promise<Response>,
-  ) {
-    setPending(operation);
+  async function createTodo(event: Event) {
+    event.preventDefault();
+    const nextTitle = title.trim();
+    if (!nextTitle) return;
+    setPending('create');
     setError(undefined);
     try {
-      const response = await action();
+      const response = await fetch('/api/todos', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: nextTitle }),
+      });
       if (!response.ok)
         throw new Error('The Todo API rejected this change.');
-      return response;
+      const todo = (await response.json()) as Todo;
+      setTodos((items) => [...items, todo]);
+      setTitle('');
     } catch (reason) {
       setError(
         reason instanceof Error
           ? reason.message
           : 'Could not update todo.',
       );
-      return undefined;
     } finally {
       setPending(undefined);
     }
   }
 
-  async function createTodo(event: Event) {
-    event.preventDefault();
-    const nextTitle = title.trim();
-    if (!nextTitle) return;
-    const response = await request('create', () =>
-      fetch('/api/todos', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: nextTitle }),
-      }),
-    );
-    if (!response) return;
-    const todo = (await response.json()) as Todo;
-    setTodos((items) => [...items, todo]);
-    setTitle('');
-  }
-
   async function updateTodo(todo: Todo, patch: TodoPatch) {
-    const response = await request(`update:${todo.id}`, () =>
-      fetch(`/api/todos/${encodeURIComponent(todo.id)}`, {
+    setPending(`update:${todo.id}`);
+    setError(undefined);
+    try {
+      const response = await fetch(`/api/todos/${encodeURIComponent(todo.id)}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(patch),
-      }),
-    );
-    if (!response) return;
-    const updated = (await response.json()) as Todo;
-    setTodos((items) =>
-      items.map((item) => (item.id === updated.id ? updated : item)),
-    );
+      });
+      if (!response.ok)
+        throw new Error('The Todo API rejected this change.');
+      const updated = (await response.json()) as Todo;
+      setTodos((items) =>
+        items.map((item) => (item.id === updated.id ? updated : item)),
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : 'Could not update todo.',
+      );
+    } finally {
+      setPending(undefined);
+    }
   }
 
   async function removeTodo(todo: Todo) {
-    const response = await request(`remove:${todo.id}`, () =>
-      fetch(`/api/todos/${encodeURIComponent(todo.id)}`, {
+    setPending(`remove:${todo.id}`);
+    setError(undefined);
+    try {
+      const response = await fetch(`/api/todos/${encodeURIComponent(todo.id)}`, {
         method: 'DELETE',
-      }),
-    );
-    if (response)
+      });
+      if (!response.ok)
+        throw new Error('The Todo API rejected this change.');
       setTodos((items) => items.filter((item) => item.id !== todo.id));
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : 'Could not update todo.',
+      );
+    } finally {
+      setPending(undefined);
+    }
   }
 
   return (

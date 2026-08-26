@@ -54,7 +54,7 @@ fn resolves_fullstack_imported_component_calls_to_canonical_targets() {
         .find_map(|node| match node {
             HirNode::Component(call)
                 if call.target
-                    == ComponentId::new("src/components/page-primitives.tsx", "PageFrame") =>
+                    == plec_hir::HirComponentTarget::Static(ComponentId::new("src/components/page-primitives.tsx", "PageFrame")) =>
             {
                 Some(call)
             }
@@ -62,6 +62,30 @@ fn resolves_fullstack_imported_component_calls_to_canonical_targets() {
         })
         .expect("PageFrame should resolve to its defining module and local symbol");
     assert_eq!(page_frame.span.module_id, "src/routes/todos.tsx");
+}
+
+#[test]
+fn lowers_the_fullstack_todos_page_through_the_rust_pipeline() {
+    let repo_root = repository_root();
+    let app_root = repo_root.join("apps/fullstack");
+    let entry = app_root.join("src/routes/todos.tsx");
+    let source_graph = read_source_graph(&entry, &app_root, &repo_root).unwrap();
+    let semantic_graph =
+        build_semantic_graph(&source_graph.modules, &source_graph.resolved_imports).unwrap();
+    let root = discover_root_component(
+        &source_graph.modules,
+        &semantic_graph,
+        "src/routes/todos.tsx",
+        Some("TodosPage"),
+    )
+    .unwrap();
+    let hir = lower_root_component(&root, &semantic_graph)
+        .expect("TodosPage should lower without a JavaScript fallback");
+    assert!(hir.inputs.iter().any(|input| input.kind == "loaderData"));
+    assert!(hir
+        .expressions
+        .iter()
+        .any(|expression| matches!(expression.expression, plec_hir::HirExpr::Filter { .. })));
 }
 
 #[test]
@@ -78,7 +102,11 @@ fn lowers_fullstack_route_tree_to_a_rust_manifest() {
             .expect("static fullstack route declarations should lower"),
     );
     assert_eq!(manifest.version, 3);
-    assert_eq!(manifest.routes.len(), 5);
+    assert_eq!(manifest.routes.len(), 4);
+    assert!(manifest
+        .routes
+        .iter()
+        .all(|route| route.graph_id != manifest.root_graph_id));
     let todos = manifest
         .routes
         .iter()

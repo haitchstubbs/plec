@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 
 use plec_hir::{ComponentId, HirApplication, HirRoute, HirRouteApplication};
-use plec_ir::{ComponentApplication, RouteManifest, RouteManifestEntry, RouteOutlet};
+use plec_ir::{
+    ActionInstruction, ActionProgram, CapabilityRequest, ComponentApplication, ExpressionInstruction,
+    ExpressionProgram, ReturnOutcome, RouteManifest, RouteManifestEntry, RouteOutlet, StateSlot,
+    Value,
+};
 use plec_parser::ParsedModule;
 use plec_sema::{resolve_local_symbol, SemanticGraph};
 use serde::Serialize;
@@ -146,6 +150,11 @@ pub fn lower_routes(
 }
 
 pub fn lower_route_manifest(routes: &HirRouteApplication) -> RouteManifest {
+    let root_route = routes
+        .routes
+        .iter()
+        .find(|route| route.parent.is_none())
+        .expect("route application has one root route");
     RouteManifest {
         version: 3,
         revision: "rust-route-v1".into(),
@@ -153,9 +162,15 @@ pub fn lower_route_manifest(routes: &HirRouteApplication) -> RouteManifest {
         routes: routes
             .routes
             .iter()
+            // The root graph is mounted independently and persistently by the
+            // runtime. Emitting its route would mount the same layout again in
+            // its own outlet.
+            .filter(|route| route.id != root_route.id)
             .map(|route| RouteManifestEntry {
                 id: route.id.clone(),
-                parent_id: route.parent.clone(),
+                parent_id: (route.parent.as_deref() != Some(root_route.id.as_str()))
+                    .then(|| route.parent.clone())
+                    .flatten(),
                 path: route.path.clone(),
                 graph_id: graph_id(&route.component),
                 pending_graph_id: route.pending_component.as_ref().map(graph_id),
@@ -228,10 +243,173 @@ pub fn lower_route_artifacts(
     }
 
     let mut manifest = lower_route_manifest(routes);
+    for route in routes.routes.iter().filter(|route| route.loader.is_some()) {
+        let url = static_route_loader_url(modules, route)?;
+        let artifact = artifacts
+            .iter_mut()
+            .find(|artifact| artifact.graph_id == graph_id(&route.component))
+            .ok_or_else(|| RouteError("route loader graph is missing".into()))?;
+        let action = attach_route_loader(&mut artifact.graph, url)?;
+        manifest
+            .routes
+            .iter_mut()
+            .find(|entry| entry.id == route.id)
+            .ok_or_else(|| RouteError("route loader manifest entry is missing".into()))?
+            .loader_action = Some(action);
+    }
     // A revision must be stable across processes and derived from the Rust
     // compiler's canonical route/graph content rather than a JS build step.
     manifest.revision = stable_revision(&artifacts);
     Ok(RouteArtifactBundle { manifest, graphs: artifacts })
+}
+
+/// Compile the deliberately narrow loader subset needed for the experiment:
+/// an inline or named route loader whose body contains a static `fetch(url)`.
+/// The runtime owns cancellation, status handling, JSON decoding, and route
+/// phase transitions, so author-provided `signal` plumbing is unnecessary in
+/// the action graph.
+fn static_route_loader_url(modules: &[ParsedModule], route: &HirRoute) -> Result<String, RouteError> {
+    let (module_id, local) = route
+        .id
+        .rsplit_once('#')
+        .ok_or_else(|| RouteError("route loader id is invalid".into()))?;
+    let module = modules
+        .iter()
+        .find(|module| module.id == module_id)
+        .ok_or_else(|| RouteError("route loader module is missing".into()))?;
+    let loader = module
+        .ast
+        .body
+        .iter()
+        .filter_map(exported_var)
+        .flat_map(|declaration| declaration.decls.iter())
+        .find(|declaration| matches!(&declaration.name, Pat::Ident(name) if name.id.sym == *local))
+        .and_then(|declaration| declaration.init.as_deref())
+        .and_then(|expression| match expression {
+            Expr::Call(call) if callee_name(&call.callee) == Some("createRoute") => call.args.first(),
+            _ => None,
+        })
+        .and_then(|argument| match argument.expr.as_ref() {
+            Expr::Object(options) => prop(&options.props, "loader"),
+            _ => None,
+        })
+        .ok_or_else(|| RouteError("route loader declaration is missing".into()))?;
+    fetch_url_from_loader(loader).ok_or_else(|| {
+        RouteError("route loader must contain a fetch() with a static URL".into())
+    })
+}
+
+fn fetch_url_from_loader(loader: &Expr) -> Option<String> {
+    match loader {
+        Expr::Arrow(arrow) => match arrow.body.as_ref() {
+            ArrowFunctionBody::Expr(expression) => fetch_url_from_expression(expression),
+            ArrowFunctionBody::FunctionBody(body) => fetch_url_from_statements(&body.stmts),
+        },
+        Expr::Fn(function) => function
+            .function
+            .body
+            .as_ref()
+            .and_then(|body| fetch_url_from_statements(&body.stmts)),
+        Expr::Ident(_) => None,
+        _ => fetch_url_from_expression(loader),
+    }
+}
+
+fn fetch_url_from_statements(statements: &[Stmt]) -> Option<String> {
+    statements.iter().find_map(|statement| match statement {
+        Stmt::Decl(Decl::Var(declaration)) => declaration
+            .decls
+            .iter()
+            .find_map(|declaration| declaration.init.as_deref().and_then(fetch_url_from_expression)),
+        Stmt::Expr(expression) => fetch_url_from_expression(&expression.expr),
+        Stmt::Return(returned) => returned.arg.as_deref().and_then(fetch_url_from_expression),
+        Stmt::Block(block) => fetch_url_from_statements(&block.stmts),
+        _ => None,
+    })
+}
+
+fn fetch_url_from_expression(expression: &Expr) -> Option<String> {
+    match expression {
+        Expr::Await(awaited) => fetch_url_from_expression(&awaited.arg),
+        Expr::Call(call) if callee_name(&call.callee) == Some("fetch") => call
+            .args
+            .first()
+            .and_then(|argument| match argument.expr.as_ref() {
+                Expr::Lit(swc_ecma_ast::Lit::Str(url)) => Some(url.value.to_string_lossy().into_owned()),
+                _ => None,
+            }),
+        Expr::Paren(parenthesized) => fetch_url_from_expression(&parenthesized.expr),
+        Expr::TsAs(assertion) => fetch_url_from_expression(&assertion.expr),
+        Expr::TsTypeAssertion(assertion) => fetch_url_from_expression(&assertion.expr),
+        _ => None,
+    }
+}
+
+fn attach_route_loader(application: &mut ComponentApplication, url: String) -> Result<usize, RouteError> {
+    let component = application
+        .components
+        .get_mut(application.root_component)
+        .ok_or_else(|| RouteError("route loader root component is missing".into()))?;
+    let url_constant = component.constants.len();
+    component.constants.push(Value::String(url));
+    let url_expression = component.expressions.len();
+    component.expressions.push(ExpressionProgram {
+        instructions: vec![
+            ExpressionInstruction::Constant {
+                constant: url_constant,
+            },
+            ExpressionInstruction::Return,
+        ],
+    });
+    let null_constant = component.constants.len();
+    component.constants.push(Value::Null);
+    let null_expression = component.expressions.len();
+    component.expressions.push(ExpressionProgram {
+        instructions: vec![
+            ExpressionInstruction::Constant {
+                constant: null_constant,
+            },
+            ExpressionInstruction::Return,
+        ],
+    });
+    let loader_state = component.state_slots.len();
+    component.state_slots.push(StateSlot {
+        initial_expression: null_expression,
+        frame_slot: loader_state,
+    });
+    let loader_action = component.actions.len();
+    component.actions.push(ActionProgram {
+        frame_slots: 2,
+        parameter_slots: vec![],
+        loader_result_state: Some(loader_state),
+        route_loader: true,
+        instructions: vec![
+            ActionInstruction::CapabilityRequest {
+                request: CapabilityRequest::Fetch {
+                    url: url_expression,
+                    method: "GET",
+                    headers: vec![],
+                    body: None,
+                    decode: "responseJson",
+                    require_ok: true,
+                },
+                success_pc: 1,
+                failure_pc: 2,
+                finally_pc: None,
+                result_slot: 0,
+                error_slot: 1,
+            },
+            ActionInstruction::Return {
+                outcome: ReturnOutcome::Success,
+                value: None,
+            },
+            ActionInstruction::Return {
+                outcome: ReturnOutcome::Failure,
+                value: None,
+            },
+        ],
+    });
+    Ok(loader_action)
 }
 
 fn stable_revision(artifacts: &[RouteArtifact]) -> String {
@@ -477,17 +655,17 @@ mod tests {
         let manifest = lower_route_manifest(&routes);
         assert_eq!(manifest.version, 3);
         assert_eq!(manifest.root_graph_id, "routes.tsx#Layout");
-        assert_eq!(manifest.routes.len(), 2);
+        assert_eq!(manifest.routes.len(), 1);
         assert_eq!(
-            manifest.routes[1].parent_id.as_deref(),
-            Some("routes.tsx#Root")
+            manifest.routes[0].parent_id.as_deref(),
+            None
         );
-        assert_eq!(manifest.routes[1].loader_action, Some(0));
+        assert_eq!(manifest.routes[0].loader_action, Some(0));
         assert_eq!(
-            manifest.routes[1].pending_graph_id.as_deref(),
+            manifest.routes[0].pending_graph_id.as_deref(),
             Some("routes.tsx#Pending")
         );
-        assert_eq!(manifest.routes[1].pending_mode, "retain");
+        assert_eq!(manifest.routes[0].pending_mode, "retain");
     }
 
     #[test]
@@ -574,4 +752,5 @@ mod tests {
         assert_eq!(layout.graph.components[layout.graph.root_component].route_outlets[0].id, "main");
         assert!(artifacts.manifest.revision.starts_with("rust-route-"));
     }
+
 }
