@@ -12,7 +12,7 @@ describe('readSourceGraph', () => {
     );
     const entry = path.join(
       repoRoot,
-      'packages/lucide-plec/src/icons/workflow.ts',
+      'packages/lucide-plec/src/index.ts',
     );
     const modules = await readSourceGraph(entry, repoRoot, repoRoot);
 

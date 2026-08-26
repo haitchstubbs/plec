@@ -470,7 +470,7 @@ export const ComponentMetadataSchema = z.object({
   bindingIds: z.array(z.string()).default([]),
   eventIds: z.array(z.string()).default([]),
 });
-export const ApplicationSchema = z.object({
+export const LegacyApplicationSchema = z.object({
   version: z.literal('0.8'),
   revision: z.string().optional(),
   rootElementId: z.string(),
@@ -499,10 +499,41 @@ export const ApplicationSchema = z.object({
   components: z.array(ComponentMetadataSchema).default([]),
   layout: LayoutMetadataSchema.optional(),
 });
+
+const ComponentApplicationSchema = z
+  .object({
+    version: z.literal('0.10'),
+    rootComponent: z.number().int().nonnegative(),
+    revision: z.string().optional(),
+    components: z
+      .array(
+        z.object({
+          id: z.string(),
+          rootNode: z.number().int().nonnegative(),
+          strings: z.array(z.string()).default([]),
+          constants: z.array(z.unknown()).default([]),
+          nodes: z.array(z.unknown()).default([]),
+        }),
+      )
+      .default([]),
+  })
+  .passthrough();
+
+export const ApplicationSchema = z.union([
+  LegacyApplicationSchema,
+  ComponentApplicationSchema,
+]);
 export type Expression = z.infer<typeof ExpressionSchema>;
 export type Binding = z.infer<typeof BindingSchema>;
 export type EventNode = z.infer<typeof EventSchema>;
-export type ApplicationIr = z.infer<typeof ApplicationSchema>;
+export type LegacyApplicationIr = z.infer<
+  typeof LegacyApplicationSchema
+>;
+export type ComponentApplicationIr = z.infer<
+  typeof ComponentApplicationSchema
+>;
+export type ApplicationIr =
+  LegacyApplicationIr | ComponentApplicationIr;
 export type RuntimeDelta = z.infer<typeof RuntimeDeltaSchema>;
 export function validateApplicationIr(ir: unknown): ApplicationIr {
   return ApplicationSchema.parse(ir);
@@ -510,7 +541,7 @@ export function validateApplicationIr(ir: unknown): ApplicationIr {
 
 /** A compiled, immutable component definition. It carries no mount identity;
  * GraphInstance identity is assigned by PlecRuntime from topology at mount. */
-export const ComponentGraphSchema = ApplicationSchema.extend({
+export const ComponentGraphSchema = ComponentApplicationSchema.extend({
   graphId: z.string(),
   componentId: z.string(),
   componentName: z.string(),
@@ -965,6 +996,8 @@ export function renderStaticApplication(
   ir: ApplicationIr,
   host: StaticRenderHostValues = {},
 ): string {
+  if (ir.version !== '0.8') return '';
+
   const elements = new Map(ir.elements.map((node) => [node.id, node]));
   const texts = new Map(ir.texts.map((node) => [node.id, node]));
   const expressions = new Map(
