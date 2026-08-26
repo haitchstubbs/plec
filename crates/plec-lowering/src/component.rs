@@ -1,7 +1,7 @@
 use plec_hir::{HirBindingKind, HirComponent, HirNode};
 use plec_ir::{
     ActionInstruction, ActionProgram, ComponentParameter, ExecutableApplication, Input,
-    RouteOutlet, StateSlot, RefSlot, HostRef,
+    RouteOutlet, StateSlot, RefSlot, HostRef, Reaction, Listener,
 };
 
 use crate::{ComponentTargets, Ctx, LoweringError};
@@ -33,15 +33,18 @@ pub fn lower_route_loader_to_executable(
         .actions
         .get_mut(loader)
         .ok_or_else(|| LoweringError("route loader action missing".into()))?;
-    if !action.instructions.iter().any(|instruction| {
-        matches!(
-            instruction,
-            ActionInstruction::CapabilityRequest {
-                request: plec_ir::CapabilityRequest::Fetch { .. },
-                ..
-            }
-        )
-    }) {
+    let mut fetches = 0;
+    for instruction in &mut action.instructions {
+        if let ActionInstruction::CapabilityRequest {
+            request: plec_ir::CapabilityRequest::Fetch { require_ok, .. },
+            ..
+        } = instruction
+        {
+            *require_ok = true;
+            fetches += 1;
+        }
+    }
+    if fetches == 0 {
         return Err(LoweringError(
             "route loader requires return await fetch(url)".into(),
         ));
@@ -70,9 +73,34 @@ pub(crate) fn lower_component(
             }
         }
     }
+    // Process inputs BEFORE states/ref slots so that host bindings are available
+    // for state/ref initializers that reference them (e.g., useState(Route.useLoaderData())).
+    for input in &component.inputs {
+        match input.kind.as_str() {
+            "collection" => {
+                let name = ctx.string(&input.name);
+                let slot = ctx.app.inputs.len();
+                ctx.inputs.insert(input.binding, slot);
+                ctx.app.inputs.push(Input {
+                    name,
+                    kind: "collection",
+                });
+            }
+            "location" => {
+                let host = ctx.host("location", None)?;
+                ctx.hosts.insert(input.binding, host);
+            }
+            "loaderData" => {
+                let host = ctx.host("loaderData", None)?;
+                ctx.hosts.insert(input.binding, host);
+            }
+            _ => return Err(Ctx::new(component, targets).err("input kind is not executable")),
+        }
+    }
     for parameter in &component.parameters {
-        let plec_hir::HirParameterSource::Prop { name } = &parameter.source else {
-            return Err(ctx.err("direct component parameters are not executable"));
+        let name = match &parameter.source {
+            plec_hir::HirParameterSource::Prop { name } => name.as_str(),
+            plec_hir::HirParameterSource::Direct => "__plec_props",
         };
         let callable = matches!(
             component.bindings[parameter.binding.0 as usize].kind,
@@ -84,9 +112,12 @@ pub(crate) fn lower_component(
             ctx.callback_props.insert(parameter.binding, slot);
         }
         let name = ctx.string(name);
+        let component_prop = component.nodes.iter().any(|node| matches!(node,
+            HirNode::Component(call) if matches!(call.target, plec_hir::HirComponentTarget::Prop(binding) if binding == parameter.binding)
+        ));
         ctx.app
             .parameters
-            .push(ComponentParameter { name, callable });
+            .push(ComponentParameter { name, callable, component: component_prop });
     }
     for state in &component.states {
         let initial_expression = ctx.expression(state.initializer, false)?.0;
@@ -110,24 +141,6 @@ pub(crate) fn lower_component(
             ctx.app.host_refs.push(HostRef {});
         }
     }
-    for input in &component.inputs {
-        match input.kind.as_str() {
-            "collection" => {
-                let name = ctx.string(&input.name);
-                let slot = ctx.app.inputs.len();
-                ctx.inputs.insert(input.binding, slot);
-                ctx.app.inputs.push(Input {
-                    name,
-                    kind: "collection",
-                });
-            }
-            "location" => {
-                let host = ctx.host("location", None)?;
-                ctx.hosts.insert(input.binding, host);
-            }
-            _ => return Err(Ctx::new(component, targets).err("input kind is not executable")),
-        }
-    }
     for callable in &component.callables {
         let action = ctx.app.actions.len();
         ctx.app.actions.push(ActionProgram {
@@ -147,6 +160,37 @@ pub(crate) fn lower_component(
         ctx.action(&callable.body, &callable.parameters, false)?;
         let lowered = ctx.app.actions.pop().expect("action lowered");
         ctx.app.actions[action] = lowered;
+    }
+    for reaction in &component.reactions {
+        let mut dependencies = Vec::new();
+        let mut sources = std::collections::BTreeSet::new();
+        let mut has_prop_dependency = false;
+        for dependency in &reaction.dependencies {
+            let (expression, deps) = ctx.expression(*dependency, false)?;
+            has_prop_dependency |= ctx.app.expressions[expression]
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, plec_ir::ExpressionInstruction::LoadProp { .. }));
+            dependencies.push(expression);
+            sources.extend(deps);
+        }
+        if sources.is_empty() && !has_prop_dependency {
+            return Err(ctx.err(&format!("useReaction dependencies must reference reactive state or props in {}", component.id.local_name)));
+        }
+        let action = ctx.action(&reaction.body, &[], false)?;
+        let cleanup_action = reaction.cleanup.as_ref().map(|cleanup| ctx.action(cleanup, &[], false)).transpose()?;
+        let handle = ctx.app.reactions.len();
+        ctx.edges(sources, "reaction", handle);
+        for expression in &dependencies {
+            ctx.prop_edges(*expression, "reaction", handle);
+        }
+        ctx.app.reactions.push(Reaction { dependencies, action, cleanup_action });
+    }
+    for listener in &component.listeners {
+        let action = ctx.callable(&listener.callable)?;
+        let source = match listener.source.as_str() { "window" => "window", "document" => "document", _ => return Err(ctx.err("unsupported listener source")) };
+        let event = ctx.string(&listener.event);
+        ctx.app.listeners.push(Listener { source, event, action });
     }
     if component.root_nodes.len() != 1 {
         return Err(ctx.err("executable roots require exactly one node"));
