@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { compileSourceEntry } from 'plec-compiler/node-entry';
-import { validateApplicationIr } from 'plec-ir';
+import { validateExecutableApplication } from 'plec-ir/executable';
 
 const pages = [
   ['home', 'HomePage'],
@@ -27,9 +27,7 @@ describe('Plec page compilation', () => {
         options,
       );
       expect(first.result.diagnostics).toEqual([]);
-      expect(validateApplicationIr(first.result.ir).rootElementId).toBe(
-        'e1',
-      );
+      expect(validateExecutableApplication(first.result.ir).rootNode).toBe(0);
       expect(first.result.ir).toEqual(second.result.ir);
     });
   }

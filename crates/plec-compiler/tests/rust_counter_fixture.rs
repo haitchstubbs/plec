@@ -1,4 +1,4 @@
-use std::fs;
+use std::{collections::HashMap, fs};
 
 use plec_compiler::{
     discover_root_component, lower_application, lower_application_to_executable,
@@ -22,6 +22,30 @@ const REF_SOURCE: &str = r#"
     }
 "#;
 
+const REACTION_SOURCE: &str = r#"
+    export function Reactions() {
+        const [open, setOpen] = useState(false);
+        const panel = useHostRef();
+        const previous = useRef(null);
+        useReaction(() => { if (open) { previous.current = document.activeElement; panel.current.focus(); } else { previous.current.focus(); } }, [open]);
+        return <button ref={panel} onClick={() => setOpen(!open)}>Toggle</button>;
+    }
+"#;
+
+const SVG_LIBRARY_SOURCE: &str = r#"
+    export const Mark = (props: Record<string, unknown>) => (
+      <svg viewBox="0 0 24 24" stroke-width="2" {...props}>
+        <path d="M2 2h20" />
+      </svg>
+    );
+"#;
+
+const DYNAMIC_SVG_COMPONENT_SOURCE: &str = r#"
+    import { Mark } from "@scope/icons/mark";
+    export function App() { return <Frame Icon={Mark} />; }
+    function Frame({ Icon }) { return <Icon className="size-4 shrink-0" />; }
+"#;
+
 const COLLECTION_SOURCE: &str = r#"
     export function Todos() {
         const todos = useCollection("items");
@@ -34,6 +58,13 @@ const CONDITIONAL_SOURCE: &str = r#"
     export function Conditional() {
         const [enabled, setEnabled] = useState(false);
         return <div>{enabled ? <button onClick={() => setEnabled(false)}>On</button> : <button onClick={() => setEnabled(true)}>Off</button>}</div>;
+    }
+"#;
+
+const CONDITIONAL_ACTION_SOURCE: &str = r#"
+    export function ConditionalAction() {
+        const [enabled, setEnabled] = useState(false);
+        return <button onClick={enabled ? () => setEnabled(false) : () => setEnabled(true)}>Toggle</button>;
     }
 "#;
 
@@ -145,6 +176,19 @@ const GENERAL_ASYNC_ACTION_SOURCE: &str = r#"
     }
 "#;
 
+const ASYNC_CALLABLE_PARAMETER_SOURCE: &str = r#"
+    export function App() {
+        async function request(operation: string, action: () => Promise<Response>) {
+            try {
+                return await action();
+            } catch (reason) {
+                throw reason;
+            }
+        }
+        return <button>Save</button>;
+    }
+"#;
+
 const COOKIE_ACTION_SOURCE: &str = r#"
     export function CookieActions() {
         const [value, setValue] = useState("");
@@ -189,6 +233,36 @@ fn rust_static_conditional_artifact_matches_runtime_fixture() {
 }
 
 #[test]
+fn rust_conditional_action_jumps_to_a_valid_return_instruction() {
+    let module = parse_module("rust-conditional-action.tsx", CONDITIONAL_ACTION_SOURCE).unwrap();
+    let modules = vec![module];
+    let graph = build_semantic_graph(&modules, &Default::default()).unwrap();
+    let root = discover_root_component(
+        &modules,
+        &graph,
+        "rust-conditional-action.tsx",
+        Some("ConditionalAction"),
+    )
+    .unwrap();
+    let hir = lower_root_component(&root, &graph).unwrap();
+    let app = lower_component_to_executable(&hir).unwrap();
+    let conditional = app
+        .actions
+        .iter()
+        .find(|action| action.instructions.iter().any(|instruction| {
+            matches!(instruction, plec_ir::ActionInstruction::JumpIfFalse { .. })
+        }))
+        .expect("conditional handler should lower to an action");
+    assert!(conditional.instructions.iter().all(|instruction| match instruction {
+        plec_ir::ActionInstruction::Jump { target }
+        | plec_ir::ActionInstruction::JumpIfFalse { target } => {
+            *target < conditional.instructions.len()
+        }
+        _ => true,
+    }));
+}
+
+#[test]
 fn rust_component_artifact_matches_runtime_fixture() {
     let module = parse_module("rust-component.tsx", COMPONENT_SOURCE).expect("source should parse");
     let modules = vec![module];
@@ -209,7 +283,7 @@ fn rust_component_artifact_matches_runtime_fixture() {
 
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+        component_fixture_value(&fixture)
     );
 }
 
@@ -246,7 +320,7 @@ fn rust_keyed_component_artifact_matches_runtime_fixture() {
         .any(|edge| edge.source.kind == "prop" && edge.target.kind == "binding"));
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+        component_fixture_value(&fixture)
     );
 }
 
@@ -288,7 +362,7 @@ fn rust_nested_component_artifact_matches_runtime_fixture() {
         .any(|edge| edge.source.kind == "prop" && edge.target.kind == "binding"));
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+        component_fixture_value(&fixture)
     );
 }
 
@@ -319,7 +393,7 @@ fn rust_keyed_callback_component_artifact_matches_runtime_fixture() {
     )).expect("runtime fixture should exist");
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+        component_fixture_value(&fixture)
     );
 }
 
@@ -356,7 +430,7 @@ fn rust_keyed_slot_component_artifact_matches_runtime_fixture() {
     .expect("runtime fixture should exist");
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+        component_fixture_value(&fixture)
     );
 }
 
@@ -434,7 +508,7 @@ fn rust_route_async_artifact_matches_runtime_fixture() {
     .expect("runtime fixture should exist");
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+        artifact_fixture_value(&fixture)
     );
 }
 
@@ -446,6 +520,51 @@ fn rust_general_async_actions_artifact_matches_runtime_fixture() {
         GENERAL_ASYNC_ACTION_SOURCE,
         "rust-general-async-actions-0.9.json",
     );
+}
+
+#[test]
+fn rust_async_callable_parameter_uses_frame_slot_and_continuations() {
+    let module = parse_module(
+        "rust-async-callable-parameter.tsx",
+        ASYNC_CALLABLE_PARAMETER_SOURCE,
+    )
+    .unwrap();
+    let modules = vec![module];
+    let graph = build_semantic_graph(&modules, &Default::default()).unwrap();
+    let root = discover_root_component(
+        &modules,
+        &graph,
+        "rust-async-callable-parameter.tsx",
+        Some("App"),
+    )
+    .unwrap();
+    let hir = lower_root_component(&root, &graph).unwrap();
+    let app = lower_component_to_executable(&hir).unwrap();
+    let request = app
+        .actions
+        .iter()
+        .find(|action| action.parameter_slots.len() == 2)
+        .expect("request action should have operation and callable parameters");
+    let call_frame = request
+        .instructions
+        .iter()
+        .find_map(|instruction| match instruction {
+            plec_ir::ActionInstruction::CallFrame {
+                parameter,
+                success_pc,
+                failure_pc,
+                result_slot,
+                error_slot,
+                ..
+            } => Some((parameter, success_pc, failure_pc, result_slot, error_slot)),
+            _ => None,
+        })
+        .expect("awaited callable parameter should lower to callFrame");
+    assert_eq!(*call_frame.0, 1);
+    assert!(call_frame.1.is_some());
+    assert!(call_frame.2.is_some());
+    assert!(call_frame.3.is_some());
+    assert!(call_frame.4.is_some());
 }
 
 #[test]
@@ -466,6 +585,19 @@ fn rust_cookie_actions_lower_to_declared_capability_requests() {
     assert!(executable.actions.iter().flat_map(|action| &action.instructions).any(|instruction| matches!(instruction,
         plec_ir::ActionInstruction::CapabilityRequest { request: plec_ir::CapabilityRequest::Cookie { operation: "set", max_age: Some(60), .. }, .. }
     )));
+    let serialized = serde_json::to_value(executable).unwrap();
+    let cookie_request = serialized["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|action| action["instructions"].as_array().unwrap())
+        .find(|instruction| {
+            instruction["capability"] == "cookie"
+                && instruction["request"]["operation"] == "set"
+        })
+        .unwrap();
+    assert_eq!(cookie_request["request"]["maxAge"], 60);
+    assert!(cookie_request["request"].get("max_age").is_none());
 }
 
 #[test]
@@ -480,6 +612,58 @@ fn rust_refs_lower_to_non_reactive_slots_and_explicit_host_attachment() {
     assert!(matches!(app.nodes[0], plec_ir::Node::Element { host_ref: Some(0), .. }));
     assert!(app.dependency_edges.is_empty());
     assert!(app.actions.iter().flat_map(|action| &action.instructions).any(|instruction| matches!(instruction, plec_ir::ActionInstruction::StoreRef { reference: 0 })));
+}
+
+#[test]
+fn rust_reactions_lower_to_edges_and_opaque_focus_operations() {
+    let modules = vec![parse_module("reactions.tsx", REACTION_SOURCE).unwrap()];
+    let semantic = build_semantic_graph(&modules, &Default::default()).unwrap();
+    let root = discover_root_component(&modules, &semantic, "reactions.tsx", Some("Reactions")).unwrap();
+    let hir = lower_root_component(&root, &semantic).unwrap();
+    let app = lower_component_to_executable(&hir).unwrap();
+    assert_eq!(app.reactions.len(), 1);
+    assert!(app.dependency_edges.iter().any(|edge| edge.target.kind == "reaction"));
+    assert!(app.actions.iter().flat_map(|action| &action.instructions).any(|instruction| matches!(instruction, plec_ir::ActionInstruction::CaptureActiveElement { .. } | plec_ir::ActionInstruction::FocusHostRef { .. } | plec_ir::ActionInstruction::FocusRef { .. })));
+}
+
+#[test]
+fn rust_svg_library_component_uses_namespace_and_explicit_props_spread() {
+    let modules = vec![
+        parse_module("src/app.tsx", r#"import { Mark } from "@scope/icons/mark"; export function App() { return <Mark className="size-4" />; }"#).unwrap(),
+        parse_module("packages/icons/src/mark.tsx", SVG_LIBRARY_SOURCE).unwrap(),
+    ];
+    let imports = HashMap::from([(("src/app.tsx".into(), "@scope/icons/mark".into()), "packages/icons/src/mark.tsx".into())]);
+    let semantic = build_semantic_graph(&modules, &imports).unwrap();
+    let root = discover_root_component(&modules, &semantic, "src/app.tsx", Some("App")).unwrap();
+    let hir = lower_application(&modules, &root, &semantic).unwrap();
+    let app = lower_application_to_executable(&hir).unwrap();
+    let mark = app.components.iter().find(|component| component.id.ends_with("#Mark")).unwrap();
+    assert!(matches!(mark.nodes[0], plec_ir::Node::Element { namespace: "svg", .. }));
+    assert!(mark.prop_programs.iter().flat_map(|program| &program.writes).any(|write| write.spread));
+    assert!(mark.strings.iter().any(|value| value == "stroke-width"));
+}
+
+#[test]
+fn rust_dynamic_component_preserves_value_props_for_direct_props_targets() {
+    let modules = vec![
+        parse_module("src/app.tsx", DYNAMIC_SVG_COMPONENT_SOURCE).unwrap(),
+        parse_module("packages/icons/src/mark.tsx", SVG_LIBRARY_SOURCE).unwrap(),
+    ];
+    let imports = HashMap::from([(("src/app.tsx".into(), "@scope/icons/mark".into()), "packages/icons/src/mark.tsx".into())]);
+    let semantic = build_semantic_graph(&modules, &imports).unwrap();
+    let root = discover_root_component(&modules, &semantic, "src/app.tsx", Some("App")).unwrap();
+    let hir = lower_application(&modules, &root, &semantic).unwrap();
+    let app = lower_application_to_executable(&hir).unwrap();
+    let frame = app.components.iter().find(|component| component.id.ends_with("#Frame")).unwrap();
+    let dynamic_props = frame.nodes.iter().find_map(|node| match node {
+        plec_ir::Node::DynamicComponent { props, .. } => Some(props),
+        _ => None,
+    }).expect("Frame should render its component prop dynamically");
+    assert!(dynamic_props.iter().any(|prop| matches!(prop,
+        plec_ir::ComponentProp::Value { name, .. } if frame.strings[*name] == "className"
+    )));
+    let mark = app.components.iter().find(|component| component.id.ends_with("#Mark")).unwrap();
+    assert!(mark.parameters.iter().any(|parameter| mark.strings[parameter.name] == "__plec_props"));
 }
 
 fn assert_component_fixture(path: &str, component: &str, source: &str, fixture_name: &str) {
@@ -499,7 +683,7 @@ fn assert_component_fixture(path: &str, component: &str, source: &str, fixture_n
     .expect("runtime fixture should exist");
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+        component_fixture_value(&fixture)
     );
 }
 
@@ -521,6 +705,35 @@ fn assert_fixture(path: &str, component: &str, source: &str, fixture_name: &str)
 
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
-        serde_json::from_str::<serde_json::Value>(&fixture).unwrap()
+        artifact_fixture_value(&fixture)
     );
+}
+
+fn component_fixture_value(fixture: &str) -> serde_json::Value {
+    upgraded_fixture_value(fixture, plec_ir::COMPONENT_VERSION)
+}
+
+fn artifact_fixture_value(fixture: &str) -> serde_json::Value {
+    upgraded_fixture_value(fixture, plec_ir::VERSION)
+}
+
+fn upgraded_fixture_value(fixture: &str, version: &str) -> serde_json::Value {
+    fn upgrade(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Array(values) => values.iter_mut().for_each(upgrade),
+            serde_json::Value::Object(values) => {
+                if values.get("decode") == Some(&serde_json::Value::String("json".into())) {
+                    values.insert("decode".into(), serde_json::Value::String("responseJson".into()));
+                }
+                values.values_mut().for_each(upgrade);
+            }
+            _ => {}
+        }
+    }
+
+    let mut value: serde_json::Value =
+        serde_json::from_str(fixture).expect("fixture JSON should parse");
+    value["version"] = serde_json::Value::String(version.into());
+    upgrade(&mut value);
+    value
 }

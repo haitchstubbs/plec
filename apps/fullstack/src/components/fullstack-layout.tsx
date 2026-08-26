@@ -3,8 +3,7 @@ import { ChevronRight } from '@wasm-runtime/lucide-plec/icons/chevron-right';
 import { PanelLeft } from '@wasm-runtime/lucide-plec/icons/panel-left';
 import {
   useState,
-  useEffect,
-  useRef,
+  useListener,
   useLocation,
   Outlet,
   Link,
@@ -16,8 +15,6 @@ export function FullstackLayout() {
     cookie.getSync('sidebar_state') === 'false',
   );
   const [mobileOpen, setMobileOpen] = useState(false);
-  const panelRef = useRef<HTMLElement | null>(null);
-  const previousFocus = useRef<Element | null>(null);
   const location = useLocation();
   const setSidebarCollapsed = (next: boolean) => {
     void cookie.set('sidebar_state', next ? 'false' : 'true', { path: '/', maxAge: 604800 });
@@ -25,31 +22,16 @@ export function FullstackLayout() {
   };
   const closeMobile = () => setMobileOpen(false);
 
-  useEffect(() => {
-    const onKeydown = (event: KeyboardEvent) => {
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        event.key.toLowerCase() === 'b'
-      ) {
-        event.preventDefault();
-        setSidebarCollapsed(!collapsed);
-      }
-      if (event.key === 'Escape' && mobileOpen) {
-        event.preventDefault();
-        closeMobile();
-      }
-    };
-    window.addEventListener('keydown', onKeydown);
-    return () => window.removeEventListener('keydown', onKeydown);
-  }, [collapsed, mobileOpen]);
-
-  useEffect(() => {
-    if (mobileOpen) {
-      previousFocus.current = document.activeElement;
-      panelRef.current?.focus();
-    } else if (previousFocus.current instanceof HTMLElement)
-      previousFocus.current.focus();
-  }, [mobileOpen]);
+  useListener(window, 'keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'b') {
+      event.preventDefault();
+      setSidebarCollapsed(!collapsed);
+    }
+    if (event.key === 'Escape' && mobileOpen) {
+      event.preventDefault();
+      closeMobile();
+    }
+  });
 
   const page =
     location.pathname === '/'
@@ -66,10 +48,7 @@ export function FullstackLayout() {
         collapsed={collapsed}
         mobileOpen={mobileOpen}
         pathname={location.pathname}
-        onDesktopToggle={() => setSidebarCollapsed(!collapsed)}
         onMobileToggle={() => {
-          if (!mobileOpen)
-            previousFocus.current = document.activeElement;
           setMobileOpen(!mobileOpen);
         }}
         onCloseMobile={closeMobile}
@@ -78,16 +57,23 @@ export function FullstackLayout() {
         <header className="flex h-16 items-center gap-2 border-b bg-background/80 px-4">
           <button
             type="button"
-            onClick={() =>
-              window.matchMedia('(max-width: 767px)').matches
-                ? setMobileOpen(!mobileOpen)
-                : setSidebarCollapsed(!collapsed)
-            }
-            className="inline-grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={() => setSidebarCollapsed(!collapsed)}
+            className="hidden size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground md:inline-grid"
             aria-label="Toggle sidebar"
+            aria-expanded={!collapsed}
           >
             <PanelLeft className="size-4" />
             <span className="sr-only">Toggle sidebar</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileOpen(!mobileOpen)}
+            className="inline-grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground md:hidden"
+            aria-label="Toggle navigation"
+            aria-expanded={mobileOpen}
+          >
+            <PanelLeft className="size-4" />
+            <span className="sr-only">Toggle navigation</span>
           </button>
           <div className="mr-2 h-4 w-px bg-border" aria-hidden="true" />
           <nav aria-label="Breadcrumb">

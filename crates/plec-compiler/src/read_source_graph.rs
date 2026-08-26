@@ -4,6 +4,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use serde_json::Value;
+
+#[derive(Debug)]
+struct WorkspaceIndex { packages: HashMap<String, PathBuf> }
 
 #[derive(Debug)]
 pub struct SourceGraph {
@@ -49,11 +53,13 @@ pub fn read_source_graph(
     let mut seen = HashSet::new();
     let mut modules = Vec::new();
     let mut resolved_imports = HashMap::new();
+    let workspace = WorkspaceIndex::load(&repo_root_dir)?;
 
     visit_module(
         entry,
         &root_dir,
         &repo_root_dir,
+        &workspace,
         None,
         &mut seen,
         &mut modules,
@@ -70,6 +76,7 @@ fn visit_module(
     file_path: &Path,
     root_dir: &Path,
     repo_root_dir: &Path,
+    workspace: &WorkspaceIndex,
     canonical_id: Option<String>,
     seen: &mut HashSet<PathBuf>,
     modules: &mut Vec<ParsedModule>,
@@ -85,7 +92,7 @@ fn visit_module(
     let source = fs::read_to_string(&absolute)
         .map_err(|error| format!("Failed to read {}: {error}", absolute.display()))?;
 
-    let module_id = canonical_id.unwrap_or_else(|| module_id_from_path(&absolute, root_dir));
+    let module_id = canonical_id.unwrap_or_else(|| module_id_from_path(&absolute, root_dir, repo_root_dir));
 
     let parsed = parse_module(module_id.clone(), source)
         .map_err(|error| format!("Failed to parse {module_id}: {error}"))?;
@@ -102,19 +109,20 @@ fn visit_module(
     modules.push(parsed);
 
     for specifier in dependencies {
-        let Some(resolved) = resolve_module(&specifier, &absolute, repo_root_dir)? else {
+        let Some(resolved) = resolve_module(&specifier, &absolute, workspace)? else {
             continue;
         };
 
         let target_absolute = fs::canonicalize(&resolved)
             .map_err(|error| format!("Failed to resolve {}: {error}", resolved.display()))?;
-        let target_id = module_id_from_path(&target_absolute, root_dir);
+        let target_id = module_id_from_path(&target_absolute, root_dir, repo_root_dir);
         resolved_imports.insert((module_id.clone(), specifier.clone()), target_id);
 
         visit_module(
             &resolved,
             root_dir,
             repo_root_dir,
+            workspace,
             None,
             seen,
             modules,
@@ -128,7 +136,7 @@ fn visit_module(
 fn resolve_module(
     specifier: &str,
     from_file: &Path,
-    repo_root_dir: &Path,
+    workspace: &WorkspaceIndex,
 ) -> Result<Option<PathBuf>, String> {
     if specifier.starts_with("node:") {
         return Ok(None);
@@ -147,7 +155,7 @@ fn resolve_module(
         return Ok(resolve_source_candidate(&base));
     }
 
-    if let Some(workspace_module) = resolve_workspace_module(specifier, repo_root_dir)? {
+    if let Some(workspace_module) = resolve_workspace_module(specifier, workspace)? {
         return Ok(Some(workspace_module));
     }
 
@@ -201,8 +209,9 @@ fn add_source_candidates(candidates: &mut Vec<PathBuf>, base: &Path) {
     }
 }
 
-fn module_id_from_path(path: &Path, root_dir: &Path) -> String {
+fn module_id_from_path(path: &Path, root_dir: &Path, repo_root_dir: &Path) -> String {
     path.strip_prefix(root_dir)
+        .or_else(|_| path.strip_prefix(repo_root_dir))
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
@@ -215,19 +224,71 @@ fn module_id_from_path(path: &Path, root_dir: &Path) -> String {
 ///
 /// This is intentionally isolated so that package-layout policy does not leak
 /// into source graph traversal.
+impl WorkspaceIndex {
+    fn load(repo_root_dir: &Path) -> Result<Self, String> {
+        let mut packages = HashMap::new();
+        let root = repo_root_dir.join("packages");
+        let Ok(entries) = fs::read_dir(&root) else { return Ok(Self { packages }) };
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("Failed to read workspace package: {error}"))?;
+            let manifest = entry.path().join("package.json");
+            let Ok(source) = fs::read_to_string(&manifest) else { continue };
+            let value: Value = serde_json::from_str(&source).map_err(|error| format!("Invalid {}: {error}", manifest.display()))?;
+            if let Some(name) = value.get("name").and_then(Value::as_str) { packages.insert(name.into(), entry.path()); }
+        }
+        Ok(Self { packages })
+    }
+}
+
 fn resolve_workspace_module(
-    _specifier: &str,
-    _repo_root_dir: &Path,
+    specifier: &str,
+    workspace: &WorkspaceIndex,
 ) -> Result<Option<PathBuf>, String> {
-    // TODO:
-    //
-    // Port:
-    // - resolveWorkspaceModule
-    // - resolveWorkspaceSource
-    // - resolveExportTarget
-    //
-    // from the TypeScript node-entry compiler.
+    let (name, subpath) = split_package_specifier(specifier);
+    let Some(package_dir) = workspace.packages.get(name) else { return Ok(None) };
+    let manifest_path = package_dir.join("package.json");
+    let manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path).map_err(|error| format!("Failed to read {}: {error}", manifest_path.display()))?).map_err(|error| format!("Invalid {}: {error}", manifest_path.display()))?;
+    let requested = if subpath.is_empty() { ".".to_string() } else { format!("./{subpath}") };
+    let target = manifest.get("exports").and_then(|exports| resolve_export(exports, &requested));
+        
+    if let Some(target) = target { return Ok(resolve_workspace_source(package_dir, &target)); }
+    if subpath.is_empty() { return Ok(resolve_source_candidate(&package_dir.join("src/index"))); }
     Ok(None)
+}
+
+fn split_package_specifier(specifier: &str) -> (&str, &str) {
+    if specifier.starts_with('@') {
+        let mut parts = specifier.splitn(3, '/'); let scope = parts.next().unwrap(); let package = parts.next().unwrap_or(""); let rest = parts.next().unwrap_or("");
+        let length = scope.len() + package.len() + 1;
+        (&specifier[..length], rest)
+    } else { let mut parts = specifier.splitn(2, '/'); let name = parts.next().unwrap(); (name, parts.next().unwrap_or("")) }
+}
+
+fn resolve_export(exports: &Value, requested: &str) -> Option<String> {
+    if let Some(value) = exports.get(requested) { return resolve_export_target(value); }
+    let object = exports.as_object()?;
+    for (pattern, value) in object {
+        let Some(star) = pattern.find('*') else { continue };
+        let (prefix, suffix) = (&pattern[..star], &pattern[star + 1..]);
+        if requested.starts_with(prefix) && requested.ends_with(suffix) {
+            let capture = &requested[prefix.len()..requested.len() - suffix.len()];
+            return resolve_export_target(value).map(|target| target.replace('*', capture));
+        }
+    }
+    None
+}
+
+fn resolve_export_target(value: &Value) -> Option<String> {
+    if let Some(value) = value.as_str() { return Some(value.into()); }
+    let object = value.as_object()?;
+    for condition in ["source", "import", "default", "types"] { if let Some(value) = object.get(condition) { if let Some(target) = resolve_export_target(value) { return Some(target) } } }
+    None
+}
+
+fn resolve_workspace_source(package_dir: &Path, target: &str) -> Option<PathBuf> {
+    let published = package_dir.join(target);
+    let source = target.replace("./dist/", "./src/").replace(".d.ts", "").replace(".js", "");
+    resolve_source_candidate(&package_dir.join(source)).or_else(|| published.is_file().then_some(published))
 }
 
 /// Resolve a normal external package import.
@@ -261,6 +322,20 @@ mod tests {
         }
 
         fs::write(path, source).expect("fixture source should be written");
+    }
+
+    #[test]
+    fn resolves_workspace_wildcard_export_to_authored_svg_source() {
+        let repo = tempdir().expect("repo");
+        let app = repo.path().join("apps/demo");
+        write_file(&app.join("src/App.tsx"), "import { Mark } from '@scope/icons/icons/mark'; export function App(){ return <Mark />; }");
+        write_file(&repo.path().join("packages/icons/package.json"), r#"{"name":"@scope/icons","exports":{"./icons/*":{"default":"./dist/icons/*.js"}}}"#);
+        write_file(&repo.path().join("packages/icons/src/icons/mark.tsx"), "export const Mark = () => <svg><path d=\"M0 0\" /></svg>;");
+        let index = WorkspaceIndex::load(repo.path()).unwrap();
+        assert_eq!(resolve_workspace_module("@scope/icons/icons/mark", &index).unwrap(), Some(repo.path().join("packages/icons/src/icons/mark.tsx")));
+        let graph = read_source_graph(app.join("src/App.tsx"), &app, repo.path()).expect("workspace source graph");
+        assert!(graph.modules.iter().any(|module| module.id == "packages/icons/src/icons/mark.tsx"), "{:?}", graph.modules.iter().map(|module| &module.id).collect::<Vec<_>>());
+        assert_eq!(graph.resolved_imports.get(&(String::from("src/App.tsx"), String::from("@scope/icons/icons/mark"))), Some(&String::from("packages/icons/src/icons/mark.tsx")));
     }
 
     #[test]

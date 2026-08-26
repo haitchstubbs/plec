@@ -14,7 +14,7 @@ const disposeMemoryHud = installDevelopmentMemoryHud(assetUrl);
 const app = await startPlecRouter({
   root,
   manifestUrl: assetUrl('/route-manifest.json'),
-  graphUrl: (graphId) => assetUrl(`/graphs/${graphId}.json`),
+  graphUrl: (graphId) => assetUrl(`/graphs/${graphId.replace(/[\/\\]/g, '--').replace('#', '--')}.json`),
 });
 window.addEventListener('pagehide', () => app.dispose(), { once: true });
 void disposeMemoryHud;
