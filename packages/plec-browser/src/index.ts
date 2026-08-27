@@ -156,6 +156,10 @@ export interface CompiledUpdateMetrics {
   domOperations: number;
   nodesTouched: number;
   bindingsTouched: number;
+  propWrites: number;
+  rowInserts: number;
+  rowRemoves: number;
+  rowMoves: number;
   wasmDomUs: number;
 }
 export interface RuntimeMountMetrics {
@@ -259,9 +263,50 @@ export interface PlecRouterMountOptions {
       props: Record<string, unknown>,
     ) => void | (() => void)
   >;
+  /** Optional host-owned reactive inputs for routed compiled graphs. This is
+   * the same producer boundary accepted by `mountPlecApplication`. */
+  inputs?: Record<string, CompiledInputProducer<any>>;
+  onQueryUpdate?: (update: CompiledQueryUpdate) => void;
 }
 export interface PlecRouterController {
   dispose(): void;
+}
+
+/** The narrow runtime surface used to attach host-owned keyed collections to
+ * routed graphs. Exported for adapter tests; it is not a new WASM API. */
+export interface RoutedInputRuntime {
+  initialize_input(inputId: string, rows: unknown): RuntimeMountMetrics;
+  apply_deltas(deltas: unknown): CompiledUpdateMetrics;
+}
+
+export function wireRoutedInputs(
+  runtime: RoutedInputRuntime,
+  inputs: Record<string, CompiledInputProducer<any>>,
+  onQueryUpdate?: (update: CompiledQueryUpdate) => void,
+): { hydrate(): void; dispose(): void } {
+  const hydrate = () => {
+    for (const [inputId, producer] of Object.entries(inputs)) {
+      const snapshot = producer.getSnapshot();
+      // Routed graphs currently accept the same keyed collection inputs as
+      // standalone mounts. The typed runtime safely ignores inputs that are
+      // not declared by the active route instance.
+      if (Array.isArray(snapshot)) runtime.initialize_input(inputId, snapshot);
+    }
+  };
+  const subscriptions = Object.entries(inputs).flatMap(
+    ([inputId, producer]) =>
+      isDeltaInput(producer)
+        ? [
+            producer.subscribeDeltas((deltas) =>
+              publishDeltas(runtime, deltas, onQueryUpdate),
+            ),
+          ]
+        : [],
+  );
+  return {
+    hydrate,
+    dispose: () => subscriptions.forEach((unsubscribe) => unsubscribe()),
+  };
 }
 
 export const PLEC_TIMING_MARKS = [
@@ -452,6 +497,12 @@ export async function startPlecRouter(
     module_or_path: options.runtimeWasmUrl ?? DEFAULT_RUNTIME_WASM_URL,
   });
   const runtime = new runtimeModule.PlecRuntime();
+  const routedInputs = options.inputs ?? {};
+  const routedInputBridge = wireRoutedInputs(
+    runtime,
+    routedInputs,
+    options.onQueryUpdate,
+  );
   const hostInputs: Record<string, unknown> = {
     'location.pathname': window.location.pathname,
     'location.search': window.location.search,
@@ -529,11 +580,35 @@ export async function startPlecRouter(
     const graphId = (event as CustomEvent<{ graphId?: string }>).detail?.graphId;
     if (!graphId || compiled) return;
     void loadGraph(graphId, true)
-      .then(() => runtime.navigate(`${window.location.pathname}${window.location.search}${window.location.hash}`, true))
+      .then(() => {
+        runtime.navigate(
+          `${window.location.pathname}${window.location.search}${window.location.hash}`,
+          true,
+        );
+        routedInputBridge.hydrate();
+      })
       .catch((error) => console.error(`Failed to load Plec graph ${graphId}`, error));
   };
   window.addEventListener('plec:graph-needed', onGraphNeeded);
   runtime.start(options.root, manifest);
+  routedInputBridge.hydrate();
+  let hydrationQueued = false;
+  const scheduleRoutedInputHydration = () => {
+    if (hydrationQueued) return;
+    hydrationQueued = true;
+    queueMicrotask(() => {
+      hydrationQueued = false;
+      routedInputBridge.hydrate();
+    });
+  };
+  const onRouteClick = (event: Event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const link = target.closest('a[href]');
+    if (link && options.root.contains(link)) scheduleRoutedInputHydration();
+  };
+  options.root.addEventListener('click', onRouteClick, true);
+  window.addEventListener('popstate', scheduleRoutedInputHydration);
   markPlecTiming('plec:mount-end');
 
   // Mount islands for the initial root graph
@@ -551,6 +626,9 @@ export async function startPlecRouter(
         onCookieRequest,
       );
       window.removeEventListener('plec:graph-needed', onGraphNeeded);
+      options.root.removeEventListener('click', onRouteClick, true);
+      window.removeEventListener('popstate', scheduleRoutedInputHydration);
+      routedInputBridge.dispose();
       disposeIslands.forEach((dispose) => dispose());
       runtime.dispose();
     },
@@ -859,7 +937,7 @@ function isDeltaInput(
 }
 
 function publishDeltas(
-  runtime: WasmRuntimeInstance,
+  runtime: Pick<WasmRuntimeInstance, 'apply_deltas'>,
   deltas: RuntimeDelta[],
   onQueryUpdate?: (update: CompiledQueryUpdate) => void,
   reconciliationMs = 0,
@@ -872,6 +950,10 @@ function publishDeltas(
     domOperations: 0,
     nodesTouched: 0,
     bindingsTouched: 0,
+    propWrites: 0,
+    rowInserts: 0,
+    rowRemoves: 0,
+    rowMoves: 0,
     wasmDomUs: 0,
   };
   if (deltas.length > 0) addMetrics(total, applyBatch(runtime, deltas));
@@ -1065,6 +1147,10 @@ function addMetrics(
   total.domOperations += next.domOperations;
   total.nodesTouched += next.nodesTouched;
   total.bindingsTouched += next.bindingsTouched;
+  total.propWrites += next.propWrites;
+  total.rowInserts += next.rowInserts;
+  total.rowRemoves += next.rowRemoves;
+  total.rowMoves += next.rowMoves;
   total.wasmDomUs += next.wasmDomUs;
 }
 
@@ -1072,13 +1158,48 @@ function apply(
   runtime: WasmRuntimeInstance,
   delta: RuntimeDelta,
 ): CompiledUpdateMetrics {
-  return runtime.apply_delta(delta);
+  return runtime.apply_delta(toWasmDelta(delta));
 }
 function applyBatch(
-  runtime: WasmRuntimeInstance,
+  runtime: Pick<WasmRuntimeInstance, 'apply_deltas'>,
   deltas: RuntimeDelta[],
 ): CompiledUpdateMetrics {
-  return runtime.apply_deltas(deltas);
+  return runtime.apply_deltas(deltas.map(toWasmDelta));
+}
+
+/** `serde_wasm_bindgen` preserves object keys. Keep the browser-facing
+ * contract camelCase while matching the runtime's existing Rust field names. */
+function toWasmDelta(delta: RuntimeDelta): Record<string, unknown> {
+  switch (delta.type) {
+    case 'update':
+      return {
+        type: delta.type,
+        input_id: delta.inputId,
+        row_key: delta.rowKey,
+        changes: delta.changes,
+      };
+    case 'insert':
+      return {
+        type: delta.type,
+        input_id: delta.inputId,
+        row_key: delta.rowKey,
+        row: delta.row,
+        before_row_key: delta.beforeRowKey ?? null,
+      };
+    case 'remove':
+      return {
+        type: delta.type,
+        input_id: delta.inputId,
+        row_key: delta.rowKey,
+      };
+    case 'move':
+      return {
+        type: delta.type,
+        input_id: delta.inputId,
+        row_key: delta.rowKey,
+        before_row_key: delta.beforeRowKey ?? null,
+      };
+  }
 }
 async function loadRuntimeModule(
   url: string,

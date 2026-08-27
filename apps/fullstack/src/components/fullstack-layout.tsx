@@ -40,6 +40,8 @@ export function FullstackLayout() {
         ? 'About'
         : location.pathname === '/todos'
           ? 'Todos'
+          : location.pathname === '/stress'
+            ? 'Runtime stress'
           : 'Not found';
 
   return (

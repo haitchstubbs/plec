@@ -68,17 +68,30 @@ impl PlecRuntime {
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn apply_deltas(&self, deltas: JsValue) -> Result<JsValue, JsValue> {
-        let values: Vec<Value> = serde_wasm_bindgen::from_value(deltas).map_err(error)?;
+        let deltas: Vec<Delta> = serde_wasm_bindgen::from_value(deltas).map_err(error)?;
+        if !self.typed.borrow().is_empty() {
+            return self.apply_typed_deltas(deltas);
+        }
         let mut total = UpdateMetrics::default();
-        for value in values {
-            let result: UpdateMetrics = serde_wasm_bindgen::from_value(
-                self.apply_delta(serde_wasm_bindgen::to_value(&value).map_err(error)?)?,
-            )
-            .map_err(error)?;
-            total.dom_operations += result.dom_operations;
-            total.nodes_touched += result.nodes_touched;
-            total.bindings_touched += result.bindings_touched;
-            total.wasm_dom_us += result.wasm_dom_us;
+        for delta in deltas {
+            let start = now();
+            let mut metrics = UpdateMetrics::default();
+            let instance_id = self.legacy_instance_id()?;
+            match delta {
+                Delta::Update { input_id, row_key, changes, .. } => self.update(&instance_id, &input_id, &row_key, changes, &mut metrics)?,
+                Delta::Insert { input_id, row_key, row, before_row_key, .. } => self.insert(&instance_id, &input_id, row_key, row, before_row_key, &mut metrics)?,
+                Delta::Remove { input_id, row_key, .. } => self.remove(&instance_id, &input_id, &row_key, &mut metrics)?,
+                Delta::Move { input_id, row_key, before_row_key, .. } => self.move_row(&instance_id, &input_id, &row_key, before_row_key, &mut metrics)?,
+            }
+            metrics.wasm_dom_us = (now() - start) * 1000.0;
+            total.dom_operations += metrics.dom_operations;
+            total.nodes_touched += metrics.nodes_touched;
+            total.bindings_touched += metrics.bindings_touched;
+            total.prop_writes += metrics.prop_writes;
+            total.row_inserts += metrics.row_inserts;
+            total.row_removes += metrics.row_removes;
+            total.row_moves += metrics.row_moves;
+            total.wasm_dom_us += metrics.wasm_dom_us;
         }
         serde_wasm_bindgen::to_value(&total).map_err(error)
     }

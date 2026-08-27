@@ -4,6 +4,7 @@ use crate::runtime::lifecycle::*;
 use crate::schema::typed::TypedComponentProp;
 use crate::typed::cookie::*;
 use crate::typed::events::*;
+use std::collections::{HashMap, HashSet};
 #[cfg(feature = "fetch")]
 use crate::typed::fetch::*;
 
@@ -51,7 +52,6 @@ pub(crate) struct TypedComponentRequest {
     pub(crate) component_props: HashMap<String, usize>,
     pub(crate) children: Vec<usize>,
     pub(crate) row_context: Option<TypedRowContext>,
-    pub(crate) parent: Node,
     pub(crate) start: Node,
     pub(crate) end: Node,
     pub(crate) key: String,
@@ -440,7 +440,7 @@ impl PlecRuntime {
                     .collect::<Result<Vec<_>, JsValue>>()?;
                 runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
                 runtime.graph_generation = self.next_typed_generation();
-                runtime.mount_before(&request.parent, &request.end)?;
+                runtime.mount_before(&request.end)?;
                 if let Some(row) = request.row_context.as_ref() {
                     if let Some(element) = runtime
                         .nodes
@@ -566,46 +566,33 @@ impl PlecRuntime {
 impl PlecRuntime {
     pub(crate) fn apply_typed_delta(&self, delta: JsValue) -> Result<JsValue, JsValue> {
         let delta: Delta = serde_wasm_bindgen::from_value(delta).map_err(error)?;
-        let ids = match (
-            self.typed_components.borrow().is_some(),
-            delta.instance_id(),
-        ) {
-            (true, Some(id)) => vec![id.to_owned()],
-            (true, None) => self
-                .typed
-                .borrow()
-                .iter()
-                .filter_map(|(id, instance)| {
-                    instance
-                        .runtime
-                        .app
-                        .inputs
-                        .iter()
-                        .any(|input| {
-                            instance
-                                .runtime
-                                .app
-                                .strings
-                                .get(input.name)
-                                .map(String::as_str)
-                                == Some(delta.input_id())
-                        })
-                        .then(|| id.clone())
-                })
-                .collect(),
-            (false, _) => vec![graph_instance_id(None, "main", None)],
-        };
+        self.apply_typed_deltas(vec![delta])
+    }
+
+    /// Preserve batch order while avoiding one JS/WASM round trip per delta.
+    pub(crate) fn apply_typed_deltas(&self, deltas: Vec<Delta>) -> Result<JsValue, JsValue> {
+        let started = now();
         let mut metrics = UpdateMetrics::default();
-        for id in ids {
-            self.typed
-                .borrow_mut()
-                .get_mut(&id)
-                .ok_or_else(|| JsValue::from_str("typed application missing"))?
-                .runtime
-                .apply_delta(delta.clone(), &mut metrics)?;
+        for delta in deltas {
+            let ids = match (self.typed_components.borrow().is_some(), delta.instance_id()) {
+                (true, Some(id)) => vec![id.to_owned()],
+                (true, None) => self.typed.borrow().iter().filter_map(|(id, instance)| {
+                    instance.runtime.app.inputs.iter().any(|input| {
+                        instance.runtime.app.strings.get(input.name).map(String::as_str)
+                            == Some(delta.input_id())
+                    }).then(|| id.clone())
+                }).collect(),
+                (false, _) => vec![graph_instance_id(None, "main", None)],
+            };
+            for id in ids {
+                self.typed.borrow_mut().get_mut(&id)
+                    .ok_or_else(|| JsValue::from_str("typed application missing"))?
+                    .runtime.apply_delta(delta.clone(), &mut metrics)?;
+            }
         }
         self.flush_component_work()?;
         self.install_typed_event_listeners()?;
+        metrics.wasm_dom_us = (now() - started) * 1000.0;
         serde_wasm_bindgen::to_value(&metrics).map_err(error)
     }
 }
@@ -783,12 +770,20 @@ impl TypedRuntime {
 }
 
 impl TypedRuntime {
-    pub(crate) fn mount_before(&mut self, parent: &Node, end: &Node) -> Result<(), JsValue> {
+    pub(crate) fn mount_before(&mut self, end: &Node) -> Result<(), JsValue> {
+        // A component request can be produced while caller-owned slot content
+        // is being assembled in a DocumentFragment. Inserting that fragment
+        // empties it, so its original parent is no longer the parent of the
+        // component end marker by the time this request is mounted. The marker
+        // is the durable insertion contract: resolve its current parent here.
+        let parent = end
+            .parent_node()
+            .ok_or_else(|| JsValue::from_str("component end marker is detached"))?;
         let doc = document()?;
         let node = self.instantiate_node(
             &doc,
             self.app.root_node,
-            Some(parent),
+            Some(&parent),
             None,
             0,
             None,
@@ -1134,7 +1129,7 @@ impl TypedRuntime {
                 }
                 let key = format!("{index}:{}", self.next_component_instance);
                 self.next_component_instance += 1;
-                self.component_requests.push(TypedComponentRequest { call: index, component, props: values, callbacks, component_props, children, row_context: row_context.cloned(), parent: parent.clone(), start: start.clone(), end, key });
+                self.component_requests.push(TypedComponentRequest { call: index, component, props: values, callbacks, component_props, children, row_context: row_context.cloned(), start: start.clone(), end, key });
                 if row.is_some() { local.insert(index, start.clone()); } else { self.nodes.insert(index, start.clone()); }
                 Ok(start)
             }
@@ -1194,7 +1189,6 @@ impl TypedRuntime {
                     component_props,
                     children,
                     row_context: row_context.cloned(),
-                    parent: parent.clone(),
                     start: start.clone(),
                     end,
                     key,
@@ -1694,7 +1688,7 @@ impl TypedRuntime {
                     self.update_typed_row(loop_index, &key, values, None, metrics)?;
                 }
             } else {
-                self.insert_typed_row(loop_index, parent, key.clone(), values, position, metrics)?;
+                self.insert_typed_row(loop_index, parent, key.clone(), values, position, None, metrics)?;
             }
         }
         let roots = self
@@ -1714,6 +1708,7 @@ impl TypedRuntime {
             .unwrap_or_default();
         for root in roots {
             parent.append_child(&root)?;
+            metrics.dom_operations += 1;
         }
         self.loops.entry(loop_index).or_default().order = desired;
         Ok(())
@@ -1733,6 +1728,7 @@ impl TypedRuntime {
         key: String,
         values: HashMap<String, RuntimeValue>,
         index: usize,
+        before: Option<Node>,
         metrics: &mut UpdateMetrics,
     ) -> Result<(), JsValue> {
         let template = self.app.loops[loop_index].row_template;
@@ -1743,10 +1739,11 @@ impl TypedRuntime {
             loop_index,
             row_key: key.clone(),
         };
+        let fragment: Node = doc.create_document_fragment().into();
         let root = self.instantiate_node(
             &doc,
             template,
-            Some(parent),
+            Some(&fragment),
             Some(&values),
             index,
             Some(&row_context),
@@ -1754,7 +1751,7 @@ impl TypedRuntime {
             &mut conditionals,
         )?;
         let end = matches!(self.app.nodes[template], TypedNode::Component { .. })
-            .then(|| root.next_sibling())
+            .then(|| fragment.last_child())
             .flatten();
         if let Ok(element) = root.clone().dyn_into::<Element>() {
             element.set_attribute("data-runtime-row-key", &key)?;
@@ -1773,6 +1770,7 @@ impl TypedRuntime {
                 generation,
             },
         );
+        parent.insert_before(&fragment, before.as_ref())?;
         self.update_typed_row(loop_index, &key, values, None, metrics)?;
         self.queue_row_listeners(loop_index, &key);
         let row = self.loops.get(&loop_index).unwrap().rows.get(&key).unwrap();
@@ -1801,6 +1799,7 @@ impl TypedRuntime {
             self.queue_listener(target, node, owner);
         }
         metrics.dom_operations += 1;
+        metrics.row_inserts += 1;
         Ok(())
     }
 }
@@ -2090,6 +2089,241 @@ impl TypedRuntime {
 }
 
 impl TypedRuntime {
+    fn expression_uses_changed_field(
+        &self,
+        expression: usize,
+        changed: &HashSet<String>,
+    ) -> bool {
+        self.app.expressions.get(expression).is_some_and(|program| {
+            program.instructions.iter().any(|instruction| match instruction {
+                TypedExpressionInstruction::LoadRowField { field } => self
+                    .app
+                    .strings
+                    .get(*field)
+                    .is_some_and(|name| changed.contains(name)),
+                _ => false,
+            })
+        })
+    }
+
+    fn expression_uses_index(&self, expression: usize) -> bool {
+        self.app.expressions.get(expression).is_some_and(|program| {
+            program.instructions.iter().any(|instruction| matches!(instruction, TypedExpressionInstruction::Index))
+        })
+    }
+
+    fn component_uses_changed_field(&self, node: usize, changed: &HashSet<String>) -> bool {
+        matches!(self.app.nodes.get(node),
+            Some(TypedNode::Component { props, .. } | TypedNode::DynamicComponent { props, .. })
+            if props.iter().any(|prop| matches!(prop, TypedComponentProp::Value { expression, .. }
+                if self.expression_uses_changed_field(*expression, changed)))
+        )
+    }
+
+    fn component_uses_index(&self, node: usize) -> bool {
+        matches!(self.app.nodes.get(node),
+            Some(TypedNode::Component { props, .. } | TypedNode::DynamicComponent { props, .. })
+            if props.iter().any(|prop| matches!(prop, TypedComponentProp::Value { expression, .. }
+                if self.expression_uses_index(*expression)))
+        )
+    }
+
+    fn row_field_targets(
+        &self,
+        loop_index: usize,
+        changed: &HashSet<String>,
+    ) -> HashSet<(String, usize)> {
+        self.app.dependency_edges.iter().filter_map(|edge| {
+            (edge.source.kind == "rowField" && edge.source.r#loop == Some(loop_index))
+                .then(|| self.app.strings.get(edge.source.handle))
+                .flatten()
+                .filter(|field| changed.contains(*field))
+                .map(|_| (edge.target.kind.clone(), edge.target.handle))
+        }).collect()
+    }
+
+    fn has_row_field_dependency(&self, loop_index: usize, kind: &str, handle: usize) -> bool {
+        self.app.dependency_edges.iter().any(|edge| {
+            edge.source.kind == "rowField" && edge.source.r#loop == Some(loop_index)
+                && edge.target.kind == kind && edge.target.handle == handle
+        })
+    }
+
+    /// Re-evaluates only sinks whose programs read one of the supplied row
+    /// fields. This is the non-structural counterpart to keyed row deltas.
+    fn update_typed_row_fields(
+        &mut self,
+        loop_index: usize,
+        key: &str,
+        values: HashMap<String, RuntimeValue>,
+        changed: HashSet<String>,
+        metrics: &mut UpdateMetrics,
+    ) -> Result<(), JsValue> {
+        let row_index = self.loops.get(&loop_index)
+            .and_then(|rows| rows.order.iter().position(|entry| entry == key))
+            .ok_or_else(|| JsValue::from_str("row order missing"))?;
+        let targets = self.row_field_targets(loop_index, &changed);
+
+        let selected = self.row_conditional_selections(
+            self.app.loops[loop_index].row_template,
+            &values,
+            row_index,
+        )?.into_iter().filter(|(conditional, _)| {
+            targets.contains(&(String::from("conditional"), *conditional)) ||
+            (!self.has_row_field_dependency(loop_index, "conditional", *conditional) &&
+             matches!(self.app.nodes.get(*conditional), Some(TypedNode::Conditional { test, .. })
+                if self.expression_uses_changed_field(*test, &changed)))
+        }).collect();
+        self.reconcile_row_conditionals(loop_index, key, &values, row_index, selected, metrics)?;
+
+        let (nodes, conditionals) = {
+            let row = self.loops.get_mut(&loop_index)
+                .and_then(|rows| rows.rows.get_mut(key))
+                .ok_or_else(|| JsValue::from_str("row missing"))?;
+            row.values = values.clone();
+            (row.nodes.clone(), row.conditionals.values().map(|region| region.nodes.clone()).collect::<Vec<_>>())
+        };
+        for (binding_index, binding) in self.app.bindings.clone().into_iter().enumerate() {
+            if !targets.contains(&(String::from("binding"), binding_index)) &&
+                (self.has_row_field_dependency(loop_index, "binding", binding_index) ||
+                 !self.expression_uses_changed_field(binding.expression, &changed)) {
+                continue;
+            }
+            if let Some(node) = nodes.get(&binding.target).or_else(|| {
+                conditionals.iter().find_map(|region| region.get(&binding.target))
+            }) {
+                typed_apply_binding(&self.app, &binding, node, &self.states, Some(&values), row_index)?;
+                metrics.dom_operations += 1;
+                metrics.nodes_touched += 1;
+                metrics.bindings_touched += 1;
+            }
+        }
+        for (program_index, program) in self.app.prop_programs.clone().into_iter().enumerate() {
+            let Some(node) = nodes.get(&program.target) else { continue };
+            for write in program.writes {
+                let Some(expression) = write.expression else { continue };
+                if !targets.contains(&(String::from("propProgram"), program_index)) &&
+                    (self.has_row_field_dependency(loop_index, "propProgram", program_index) ||
+                     !self.expression_uses_changed_field(expression, &changed)) { continue; }
+                let value = typed_eval(&self.app, expression, &self.states, Some(&values), row_index)?;
+                if write.spread {
+                    typed_apply_spread(&self.app, &write.kind, node, value)?;
+                } else {
+                    typed_apply_value(&self.app, &write.kind, write.name, node, value)?;
+                }
+                metrics.dom_operations += 1;
+                metrics.nodes_touched += 1;
+                metrics.prop_writes += 1;
+            }
+        }
+        let component_nodes = nodes.into_iter().filter(|(node, _)| {
+            self.component_uses_changed_field(*node, &changed)
+        }).collect::<HashMap<_, _>>();
+        self.queue_row_component_refreshes(component_nodes, &values)?;
+        Ok(())
+    }
+
+    fn update_typed_row_index(
+        &mut self,
+        loop_index: usize,
+        key: &str,
+        metrics: &mut UpdateMetrics,
+    ) -> Result<(), JsValue> {
+        let (values, row_index, nodes) = self.loops.get(&loop_index)
+            .and_then(|rows| rows.rows.get(key).map(|row| (
+                row.values.clone(), rows.order.iter().position(|entry| entry == key), row.nodes.clone(),
+            )))
+            .ok_or_else(|| JsValue::from_str("row missing"))?;
+        let row_index = row_index.ok_or_else(|| JsValue::from_str("row order missing"))?;
+        let selected = self.row_conditional_selections(self.app.loops[loop_index].row_template, &values, row_index)?
+            .into_iter().filter(|(conditional, _)| {
+                matches!(self.app.nodes.get(*conditional), Some(TypedNode::Conditional { test, .. })
+                    if self.expression_uses_index(*test))
+            }).collect();
+        self.reconcile_row_conditionals(loop_index, key, &values, row_index, selected, metrics)?;
+        for binding in self.app.bindings.clone() {
+            if !self.expression_uses_index(binding.expression) { continue; }
+            if let Some(node) = nodes.get(&binding.target) {
+                typed_apply_binding(&self.app, &binding, node, &self.states, Some(&values), row_index)?;
+                metrics.dom_operations += 1;
+                metrics.nodes_touched += 1;
+                metrics.bindings_touched += 1;
+            }
+        }
+        for program in self.app.prop_programs.clone() {
+            let Some(node) = nodes.get(&program.target) else { continue };
+            for write in program.writes {
+                let Some(expression) = write.expression else { continue };
+                if !self.expression_uses_index(expression) { continue; }
+                let value = typed_eval(&self.app, expression, &self.states, Some(&values), row_index)?;
+                if write.spread { typed_apply_spread(&self.app, &write.kind, node, value)?; }
+                else { typed_apply_value(&self.app, &write.kind, write.name, node, value)?; }
+                metrics.dom_operations += 1;
+                metrics.nodes_touched += 1;
+                metrics.prop_writes += 1;
+            }
+        }
+        self.queue_row_component_refreshes(nodes.into_iter()
+            .filter(|(node, _)| self.component_uses_index(*node))
+            .collect(), &values)?;
+        Ok(())
+    }
+
+    fn refresh_index_rows(
+        &mut self,
+        loop_index: usize,
+        keys: Vec<String>,
+        metrics: &mut UpdateMetrics,
+    ) -> Result<(), JsValue> {
+        for key in keys { self.update_typed_row_index(loop_index, &key, metrics)?; }
+        Ok(())
+    }
+
+    fn remove_delta_row(&mut self, loop_index: usize, key: &str, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
+        let row = self.loops.get_mut(&loop_index)
+            .and_then(|rows| {
+                rows.order.retain(|entry| entry != key);
+                rows.rows.remove(key)
+            })
+            .ok_or_else(|| JsValue::from_str("row missing"))?;
+        self.dispose_region_listeners(loop_index, key, row.generation);
+        for (index, node) in &row.nodes { self.clear_host_ref_for_node(*index, node); }
+        if let Some(parent) = row.root.parent_node() {
+            for node in Self::row_dom_nodes(&row.root, row.end.as_ref()) {
+                parent.remove_child(&node)?;
+                metrics.dom_operations += 1;
+            }
+        }
+        metrics.row_removes += 1;
+        Ok(())
+    }
+
+    fn move_delta_row(&mut self, loop_index: usize, key: &str, before: Option<&str>, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
+        let (root, end, anchor) = {
+            let rows = self.loops.get(&loop_index).ok_or_else(|| JsValue::from_str("loop rows missing"))?;
+            let row = rows.rows.get(key).ok_or_else(|| JsValue::from_str("row missing"))?;
+            let anchor = before.and_then(|before| rows.rows.get(before)).map(|row| row.root.clone());
+            (row.root.clone(), row.end.clone(), anchor)
+        };
+        if before == Some(key) { return Ok(()); }
+        let last = end.as_ref().unwrap_or(&root);
+        if anchor.as_ref().is_some_and(|anchor| last.next_sibling().is_some_and(|next| next.is_same_node(Some(anchor)))) {
+            return Ok(());
+        }
+        let parent = root.parent_node().ok_or_else(|| JsValue::from_str("row parent missing"))?;
+        for node in Self::row_dom_nodes(&root, end.as_ref()) {
+            if let Some(anchor) = anchor.as_ref() { parent.insert_before(&node, Some(anchor))?; }
+            else { parent.append_child(&node)?; }
+            metrics.dom_operations += 1;
+        }
+        let rows = self.loops.get_mut(&loop_index).ok_or_else(|| JsValue::from_str("loop rows missing"))?;
+        rows.order.retain(|entry| entry != key);
+        let position = before.and_then(|before| rows.order.iter().position(|entry| entry == before)).unwrap_or(rows.order.len());
+        rows.order.insert(position, key.to_owned());
+        metrics.row_moves += 1;
+        Ok(())
+    }
+
     pub(crate) fn apply_delta(
         &mut self,
         delta: Delta,
@@ -2117,35 +2351,22 @@ impl TypedRuntime {
             .filter_map(|(index, entry)| (entry.input == Some(input_index)).then_some(index))
             .collect::<Vec<_>>();
         for loop_index in targets {
-            let mut keys = self
-                .loops
-                .get(&loop_index)
-                .map(|rows| rows.order.clone())
-                .unwrap_or_default();
-            let mut values = self
-                .loops
-                .get(&loop_index)
-                .map(|rows| {
-                    rows.rows
-                        .iter()
-                        .map(|(key, row)| (key.clone(), row.values.clone()))
-                        .collect::<HashMap<_, _>>()
-                })
-                .unwrap_or_default();
             match &delta {
                 Delta::Update {
                     row_key, changes, ..
                 } => {
-                    let row = values
-                        .get_mut(row_key)
+                    let (mut values, index) = self.loops.get(&loop_index)
+                        .and_then(|rows| rows.rows.get(row_key).map(|row| (row.values.clone(), rows.order.iter().position(|entry| entry == row_key))))
                         .ok_or_else(|| JsValue::from_str("row missing"))?;
-                    row.extend(
-                        changes
-                            .clone()
-                            .into_iter()
-                            .map(|(key, value)| Ok((key, runtime_from_json(value)?)))
-                            .collect::<Result<HashMap<_, _>, JsValue>>()?,
-                    );
+                    let index = index.ok_or_else(|| JsValue::from_str("row order missing"))?;
+                    let loop_def = self.app.loops[loop_index].clone();
+                    let previous_key = typed_value_string(&typed_eval(&self.app, loop_def.key_expression, &self.states, Some(&values), index)?);
+                    let changed = changes.iter().map(|(name, value)| Ok((name.clone(), runtime_from_json(value.clone())?)))
+                        .collect::<Result<HashMap<_, _>, JsValue>>()?;
+                    values.extend(changed.clone());
+                    let next_key = typed_value_string(&typed_eval(&self.app, loop_def.key_expression, &self.states, Some(&values), index)?);
+                    if previous_key != next_key { return Err(JsValue::from_str("STRUCTURAL_UPDATE_REQUIRES_EXPLICIT_DELTA")); }
+                    self.update_typed_row_fields(loop_index, row_key, values, changed.into_keys().collect(), metrics)?;
                 }
                 Delta::Insert {
                     row_key,
@@ -2153,43 +2374,49 @@ impl TypedRuntime {
                     before_row_key,
                     ..
                 } => {
-                    values.insert(
-                        row_key.clone(),
-                        row.clone()
-                            .into_iter()
-                            .map(|(key, value)| Ok((key, runtime_from_json(value)?)))
-                            .collect::<Result<HashMap<_, _>, JsValue>>()?,
-                    );
-                    keys.retain(|key| key != row_key);
-                    let position = before_row_key
-                        .as_ref()
-                        .and_then(|before| keys.iter().position(|key| key == before))
-                        .unwrap_or(keys.len());
-                    keys.insert(position, row_key.clone());
+                    let values = row.iter().map(|(key, value)| Ok((key.clone(), runtime_from_json(value.clone())?)))
+                        .collect::<Result<HashMap<_, _>, JsValue>>()?;
+                    let parent = self.parent_for_loop(loop_index)?;
+                    let (position, anchor) = {
+                        let rows = self.loops.entry(loop_index).or_default();
+                        if rows.rows.contains_key(row_key) { return Err(JsValue::from_str("duplicate row key")); }
+                        let position = before_row_key.as_ref().map(|before| {
+                            rows.order.iter().position(|key| key == before)
+                                .ok_or_else(|| JsValue::from_str("insert anchor missing"))
+                        }).transpose()?.unwrap_or(rows.order.len());
+                        let anchor = before_row_key.as_ref().and_then(|before| rows.rows.get(before)).map(|row| row.root.clone());
+                        rows.order.insert(position, row_key.clone());
+                        (position, anchor)
+                    };
+                    self.insert_typed_row(loop_index, &parent, row_key.clone(), values, position, anchor, metrics)?;
+                    let keys = self.loops.get(&loop_index).map(|rows| rows.order.iter()
+                        .skip(position + 1).cloned().collect()).unwrap_or_default();
+                    self.refresh_index_rows(loop_index, keys, metrics)?;
                 }
                 Delta::Remove { row_key, .. } => {
-                    values.remove(row_key);
-                    keys.retain(|key| key != row_key);
+                    let position = self.loops.get(&loop_index).and_then(|rows| rows.order.iter().position(|key| key == row_key))
+                        .ok_or_else(|| JsValue::from_str("row missing"))?;
+                    self.remove_delta_row(loop_index, row_key, metrics)?;
+                    let keys = self.loops.get(&loop_index).map(|rows| rows.order.iter()
+                        .skip(position).cloned().collect()).unwrap_or_default();
+                    self.refresh_index_rows(loop_index, keys, metrics)?;
                 }
                 Delta::Move {
                     row_key,
                     before_row_key,
                     ..
                 } => {
-                    keys.retain(|key| key != row_key);
-                    let position = before_row_key
-                        .as_ref()
-                        .and_then(|before| keys.iter().position(|key| key == before))
-                        .unwrap_or(keys.len());
-                    keys.insert(position, row_key.clone());
+                    let previous = self.loops.get(&loop_index).and_then(|rows| rows.order.iter().position(|key| key == row_key))
+                        .ok_or_else(|| JsValue::from_str("row missing"))?;
+                    self.move_delta_row(loop_index, row_key, before_row_key.as_deref(), metrics)?;
+                    let next = self.loops.get(&loop_index).and_then(|rows| rows.order.iter().position(|key| key == row_key))
+                        .ok_or_else(|| JsValue::from_str("row missing"))?;
+                    let (start, end) = if previous <= next { (previous, next) } else { (next, previous) };
+                    let keys = self.loops.get(&loop_index).map(|rows| rows.order.iter()
+                        .skip(start).take(end - start + 1).cloned().collect()).unwrap_or_default();
+                    self.refresh_index_rows(loop_index, keys, metrics)?;
                 }
             }
-            let projection = keys
-                .into_iter()
-                .filter_map(|key| values.remove(&key).map(|value| (key, value)))
-                .collect::<Vec<_>>();
-            let parent = self.parent_for_loop(loop_index)?;
-            self.reconcile_loop(loop_index, &parent, projection, metrics)?;
         }
         Ok(())
     }
