@@ -4,13 +4,13 @@ import { compileSourceEntry } from 'plec-compiler/node-entry';
 import { validateExecutableApplication } from 'plec-ir/executable';
 
 const pages = [
-  ['home', 'HomePage'],
-  ['about', 'AboutPage'],
-  ['not-found', 'NotFoundPage'],
+  ['home', '../components/home.tsx', 'HomePage'],
+  ['about', '../components/about.tsx', 'AboutPage'],
+  ['not-found', '../components/not-found.tsx', 'NotFoundPage'],
 ] as const;
 
 describe('Plec page compilation', () => {
-  for (const [name, component] of pages) {
+  for (const [name, source, component] of pages) {
     it(`compiles ${name} deterministically without diagnostics`, async () => {
       const options = {
         rootDir: path.resolve('.'),
@@ -19,11 +19,11 @@ describe('Plec page compilation', () => {
         rootComponent: component,
       };
       const first = await compileSourceEntry(
-        path.resolve('src/routes', `${name}.tsx`),
+        path.resolve('src/routes', source),
         options,
       );
       const second = await compileSourceEntry(
-        path.resolve('src/routes', `${name}.tsx`),
+        path.resolve('src/routes', source),
         options,
       );
       expect(first.result.diagnostics).toEqual([]);

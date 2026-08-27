@@ -132,12 +132,12 @@ export function AppSidebar({
             Todos
           </NavLink>
           <NavLink
-            href="#"
+            href="/stress"
             Icon={TestIcon}
             pathname={pathname}
             onCloseMobile={onCloseMobile}
           >
-            Test
+            Runtime stress
           </NavLink>
         </nav>
       </aside>

@@ -26,10 +26,12 @@ async function assertArtifacts() {
     await readFile(path.join(publicDir, 'route-manifest.json'), 'utf8'),
   );
   const todos = manifest.routes.find((route) => route.path === 'todos');
+  const stress = manifest.routes.find((route) => route.path === 'stress');
   assert.ok(
     Number.isInteger(todos?.loaderAction),
     'todos needs a typed loader action',
   );
+  assert.ok(stress?.graphId, 'stress needs a compiled route graph');
   const graphIds = new Set([
     manifest.rootGraphId,
     ...manifest.routes.flatMap((route) =>
@@ -48,6 +50,25 @@ async function assertArtifacts() {
     );
     assert.equal(graph.version, '0.10', `${id} is not a typed graph`);
   }
+  const stressGraphFile = stress.graphId
+    .replace(/[\/\\]/g, '--')
+    .replace('#', '--');
+  const stressGraph = JSON.parse(
+    await readFile(
+      path.join(publicDir, 'graphs', `${stressGraphFile}.json`),
+      'utf8',
+    ),
+  );
+  const stressComponent = stressGraph.components[stressGraph.rootComponent];
+  assert.deepEqual(
+    stressComponent.inputs.map((input) => stressComponent.strings[input.name]),
+    ['instruments', 'summary', 'events'],
+    'stress must expose its three keyed runtime inputs',
+  );
+  assert.ok(
+    stressComponent.loops.length >= 4,
+    'stress needs keyed grid, summary, telemetry, and event loops',
+  );
   return graphIds;
 }
 
@@ -121,7 +142,7 @@ async function homeLayoutAndSidebar(browser) {
     assert.equal(
       await desktopPage
         .getByRole('navigation', { name: 'Primary navigation' })
-        .getByRole('link', { name: 'Test' })
+        .getByRole('link', { name: 'Runtime stress' })
         .locator('svg')
         .getAttribute('class'),
       'size-4 shrink-0',
@@ -322,6 +343,50 @@ async function todoActions(browser) {
   }
 }
 
+async function runtimeStress(browser) {
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+  });
+  const page = await context.newPage();
+  const done = watch(page);
+  try {
+    await page.goto(`${origin}/stress`, { waitUntil: 'domcontentloaded' });
+    await page
+      .getByRole('heading', { name: 'Realtime market terminal' })
+      .waitFor();
+    await page.waitForFunction(
+      () => document.querySelectorAll('button[data-runtime-row-key]').length === 1_000,
+    );
+    const stableRow = page.locator('button[data-runtime-row-key="PX0001"]');
+    await stableRow.evaluate((node) => {
+      (window).__plecStressStableRow = node;
+    });
+    await page.waitForTimeout(350);
+    assert.equal(
+      await stableRow.evaluate(
+        (node) => (window).__plecStressStableRow === node,
+      ),
+      true,
+      'an untouched keyed row should retain its DOM node',
+    );
+    await stableRow.click();
+    await page.getByText('Selected instrument', { exact: true }).waitFor();
+    await page.getByText('PX0001', { exact: true }).last().waitFor();
+    const telemetry = await page
+      .locator('aside')
+      .filter({ hasText: 'Runtime telemetry' })
+      .innerText();
+    assert.match(
+      telemetry,
+      /DOM operations\s+[1-9]/,
+      'the developer panel should report targeted runtime work',
+    );
+    done();
+  } finally {
+    await context.close();
+  }
+}
+
 async function main() {
   const graphIds = await assertArtifacts();
   server = spawn(process.execPath, ['dist/server.mjs'], {
@@ -341,6 +406,7 @@ async function main() {
     await loaderPendingThenSuccess(browser);
     await loaderErrorThenRetry(browser);
     await todoActions(browser);
+    await runtimeStress(browser);
     console.log(
       `[plec-acceptance] passed with ${graphIds.size} typed graphs`,
     );

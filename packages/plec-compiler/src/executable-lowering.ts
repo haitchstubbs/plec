@@ -715,8 +715,18 @@ export function lowerCompilerFacts(
       )
         dependencyEdges.push({
           source: { kind: 'state', handle: slot },
-          target: { kind: 'propProgram', handle: index },
-        });
+        target: { kind: 'propProgram', handle: index },
+      });
+  for (const conditional of ir.conditionals ?? [])
+    for (const field of rowFields(conditional.expressionId, conditional.loopId))
+      dependencyEdges.push({
+        source: {
+          kind: 'rowField',
+          handle: string(field),
+          loop: loopIndexById.get(conditional.loopId),
+        },
+        target: { kind: 'conditional', handle: nodeIndex.get(conditional.id)! },
+      });
   for (const conditional of ir.conditionals ?? [])
     for (const [state, slot] of (ir.localStates ?? []).map(
       (state: any, slot: number) => [state, slot] as const,

@@ -87,11 +87,14 @@ export function TodosPage() {
     setPending(`update:${todo.id}`);
     setError(undefined);
     try {
-      const response = await fetch(`/api/todos/${encodeURIComponent(todo.id)}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(patch),
-      });
+      const response = await fetch(
+        `/api/todos/${encodeURIComponent(todo.id)}`,
+        {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(patch),
+        },
+      );
       if (!response.ok)
         throw new Error('The Todo API rejected this change.');
       const updated = (await response.json()) as Todo;
@@ -113,9 +116,12 @@ export function TodosPage() {
     setPending(`remove:${todo.id}`);
     setError(undefined);
     try {
-      const response = await fetch(`/api/todos/${encodeURIComponent(todo.id)}`, {
-        method: 'DELETE',
-      });
+      const response = await fetch(
+        `/api/todos/${encodeURIComponent(todo.id)}`,
+        {
+          method: 'DELETE',
+        },
+      );
       if (!response.ok)
         throw new Error('The Todo API rejected this change.');
       setTodos((items) => items.filter((item) => item.id !== todo.id));
@@ -263,7 +269,9 @@ function TodoRow({
             className="min-w-0 flex-1 rounded border bg-background px-2 py-1"
             value={editingTitle}
             onInput={(event: Event) =>
-              onEditTitle((event.currentTarget as HTMLInputElement).value)
+              onEditTitle(
+                (event.currentTarget as HTMLInputElement).value,
+              )
             }
             onKeyDown={(event: KeyboardEvent) => {
               if (event.key === 'Enter') onSave();

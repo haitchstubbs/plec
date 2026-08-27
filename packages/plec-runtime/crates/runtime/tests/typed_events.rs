@@ -12,6 +12,15 @@ wasm_bindgen_test_configure!(run_in_browser);
 let originalFetch;
 let fetchQueue = [];
 let aborts = 0;
+let domMutationCounts = { append: 0, insertBefore: 0, remove: 0 };
+const originalAppendChild = Node.prototype.appendChild;
+const originalInsertBefore = Node.prototype.insertBefore;
+const originalRemoveChild = Node.prototype.removeChild;
+Node.prototype.appendChild = function (...args) { domMutationCounts.append++; return originalAppendChild.apply(this, args); };
+Node.prototype.insertBefore = function (...args) { domMutationCounts.insertBefore++; return originalInsertBefore.apply(this, args); };
+Node.prototype.removeChild = function (...args) { domMutationCounts.remove++; return originalRemoveChild.apply(this, args); };
+export function resetPlecDomMutations() { domMutationCounts = { append: 0, insertBefore: 0, remove: 0 }; }
+export function plecDomMutations() { return JSON.stringify(domMutationCounts); }
 export function setPlecFetchQueue(specs) {
   originalFetch ??= window.fetch;
   fetchQueue = JSON.parse(specs);
@@ -33,6 +42,10 @@ extern "C" {
     fn restore_plec_fetch();
     #[wasm_bindgen::prelude::wasm_bindgen(js_name = plecFetchAborts)]
     fn plec_fetch_aborts() -> u32;
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = resetPlecDomMutations)]
+    fn reset_plec_dom_mutations();
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = plecDomMutations)]
+    fn plec_dom_mutations() -> String;
 }
 
 fn mount_root() -> Element {
@@ -122,16 +135,18 @@ fn component_slot_artifact() -> serde_json::Value {
     serde_json::json!({
         "version":"0.10", "rootComponent":0,
         "components":[
-            {"id":"App","rootNode":0,"strings":["main","p"],"constants":[],
+            {"id":"App","rootNode":0,"strings":["main"],"constants":[],
              "nodes":[
-                {"op":"element","tag":0,"parent":null,"children":[3]},
-                {"op":"element","tag":1,"parent":null,"children":[2]},
-                {"op":"text","text":0,"parent":1},
+                {"op":"element","tag":0,"parent":null,"children":[2]},
+                {"op":"component","component":2,"parent":null,"props":[],"children":[]},
                 {"op":"component","component":1,"parent":0,"props":[],"children":[1]}
-             ],"texts":[{"value":"Inside"}],"bindings":[],"propPrograms":[],"events":[],"inputs":[],"stateSlots":[],"parameters":[],"expressions":[],"actions":[],"loops":[],"dependencyEdges":[]},
+             ],"texts":[],"bindings":[],"propPrograms":[],"events":[],"inputs":[],"stateSlots":[],"parameters":[],"expressions":[],"actions":[],"loops":[],"dependencyEdges":[]},
             {"id":"Frame","rootNode":0,"strings":["section"],"constants":[],
              "nodes":[{"op":"element","tag":0,"parent":null,"children":[1]},{"op":"slot","parent":0}],
-             "texts":[],"bindings":[],"propPrograms":[],"events":[],"inputs":[],"stateSlots":[],"parameters":[],"expressions":[],"actions":[],"loops":[],"dependencyEdges":[]}
+             "texts":[],"bindings":[],"propPrograms":[],"events":[],"inputs":[],"stateSlots":[],"parameters":[],"expressions":[],"actions":[],"loops":[],"dependencyEdges":[]},
+            {"id":"Child","rootNode":0,"strings":["p"],"constants":[],
+             "nodes":[{"op":"element","tag":0,"parent":null,"children":[1]},{"op":"text","text":0,"parent":0}],
+             "texts":[{"value":"Inside"}],"bindings":[],"propPrograms":[],"events":[],"inputs":[],"stateSlots":[],"parameters":[],"expressions":[],"actions":[],"loops":[],"dependencyEdges":[]}
         ]
     })
 }
@@ -501,6 +516,12 @@ fn apply_delta(runtime: &PlecRuntime, delta: serde_json::Value) {
         .unwrap();
 }
 
+fn apply_deltas(runtime: &PlecRuntime, deltas: serde_json::Value) -> serde_json::Value {
+    serde_wasm_bindgen::from_value(
+        runtime.apply_deltas(serde_wasm_bindgen::to_value(&deltas).unwrap()).unwrap(),
+    ).unwrap()
+}
+
 fn static_output(root: &Element) -> String {
     root.first_element_child()
         .unwrap()
@@ -678,6 +699,36 @@ fn rust_keyed_slot_fixture_retains_caller_row_identity_and_disposes_slots() {
             .unwrap(),
         "Updated"
     );
+}
+
+#[wasm_bindgen_test]
+fn keyed_value_batch_updates_only_its_field_bindings_without_row_mutation() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, keyed_row_artifact(), &root);
+    apply_delta(&runtime, serde_json::json!({"type":"insert","input_id":"items","row_key":"one","row":{"id":"one","title":"One"},"before_row_key":null}));
+    apply_delta(&runtime, serde_json::json!({"type":"insert","input_id":"items","row_key":"two","row":{"id":"two","title":"Two"},"before_row_key":null}));
+    let first = root.query_selector("li").unwrap().unwrap();
+    reset_plec_dom_mutations();
+
+    let metrics = apply_deltas(&runtime, serde_json::json!([
+        {"type":"update","input_id":"items","row_key":"one","changes":{"title":"One+"}},
+        {"type":"update","input_id":"items","row_key":"two","changes":{"title":"Two+"}}
+    ]));
+    let mutations: serde_json::Value = serde_json::from_str(&plec_dom_mutations()).unwrap();
+
+    assert_eq!(mutations["append"], 0);
+    assert_eq!(mutations["insertBefore"], 0);
+    assert_eq!(mutations["remove"], 0);
+    assert_eq!(metrics["rowInserts"], 0);
+    assert_eq!(metrics["rowRemoves"], 0);
+    assert_eq!(metrics["rowMoves"], 0);
+    assert_eq!(metrics["bindingsTouched"], 2);
+    assert_eq!(root.query_selector_all("li").unwrap().length(), 2);
+    assert!(first.is_same_node(
+        root.query_selector("li").unwrap().as_ref().map(|node| node.unchecked_ref())
+    ));
+    assert_eq!(root.query_selector("li").unwrap().unwrap().text_content().as_deref(), Some("One+"));
 }
 
 #[wasm_bindgen_test]

@@ -1,9 +1,9 @@
 import { createRoute } from 'plec';
-import { NotFoundPage } from '../components/not-found';
+import { RuntimeStressPage } from '../components/runtime-stress';
 import { Route as rootRoute } from './index';
 
 export const Route = createRoute({
   getParentRoute: () => rootRoute,
-  path: '*',
-  component: NotFoundPage,
+  path: 'stress',
+  component: RuntimeStressPage,
 });

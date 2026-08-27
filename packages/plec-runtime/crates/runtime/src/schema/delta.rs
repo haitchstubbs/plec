@@ -61,6 +61,10 @@ pub struct UpdateMetrics {
     pub dom_operations: u32,
     pub nodes_touched: u32,
     pub bindings_touched: u32,
+    pub prop_writes: u32,
+    pub row_inserts: u32,
+    pub row_removes: u32,
+    pub row_moves: u32,
     pub wasm_dom_us: f64,
 }
 
