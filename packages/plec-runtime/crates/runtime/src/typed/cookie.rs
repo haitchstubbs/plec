@@ -1,9 +1,23 @@
-use crate::dom::platform::window;
+use crate::dom::platform::document;
 use crate::runtime::lifecycle::*;
 use crate::schema::typed::TypedCookieRequest;
 use crate::typed::runtime::*;
 use crate::typed::vm::*;
-use serde::Serialize;
+use serde::Deserialize;
+use std::cell::RefCell;
+use wasm_bindgen::JsCast;
+
+thread_local! {
+    static ACTIVE_COOKIE_POLICY: RefCell<Option<HashMap<String, CookiePolicy>>> = RefCell::new(None);
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CookiePolicy {
+    pub(crate) operations: Vec<String>,
+    #[serde(default)]
+    pub(crate) path: Option<String>,
+}
 
 #[derive(Clone)]
 pub(crate) struct TypedPendingCookie {
@@ -50,9 +64,9 @@ impl PlecRuntime {
             .and_then(|typed| typed.runtime.app.strings.get(pending.request.name))
             .cloned()
             .ok_or_else(|| JsValue::from_str("cookie name handle out of range"))?;
-        let detail = serde_json::json!({ "instanceId": pending.instance_id, "requestId": pending.request_id, "operation": pending.request.operation, "name": name, "value": pending.value, "path": pending.request.path, "sameSite": pending.request.same_site, "secure": pending.request.secure, "expiry": pending.request.expiry, "maxAge": pending.request.max_age }).serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true)).map_err(error)?;
-        let init = web_sys::CustomEventInit::new();
-        init.set_detail(&detail);
+        let instance_id = pending.instance_id.clone();
+        let request_id = pending.request_id;
+        let result = self.execute_cookie(&name, &pending.request, pending.value.as_deref());
         self.typed
             .borrow_mut()
             .get_mut(&pending.instance_id)
@@ -60,10 +74,103 @@ impl PlecRuntime {
             .runtime
             .pending_cookies
             .push(pending);
-        window()?.dispatch_event(
-            &web_sys::CustomEvent::new_with_event_init_dict("plec:cookie-request", &init)?.into(),
-        )?;
-        Ok(())
+        self.complete_typed_cookie(instance_id, request_id, result)
+    }
+
+    fn execute_cookie(
+        &self,
+        name: &str,
+        request: &TypedCookieRequest,
+        value: Option<&str>,
+    ) -> Result<RuntimeValue, RuntimeValue> {
+        if let Some(policy) = self
+            .cookie_policy
+            .borrow()
+            .as_ref()
+            .and_then(|entries| entries.get(name))
+        {
+            if !policy
+                .operations
+                .iter()
+                .any(|operation| operation == &request.operation)
+            {
+                return Err(cookie_error("cookie operation denied by runtime policy"));
+            }
+            if policy
+                .path
+                .as_deref()
+                .is_some_and(|path| path != request.path)
+            {
+                return Err(cookie_error("cookie path denied by runtime policy"));
+            }
+        }
+        let document: web_sys::HtmlDocument = document()
+            .map_err(|error| {
+                cookie_error(
+                    &error
+                        .as_string()
+                        .unwrap_or_else(|| "cookie document unavailable".into()),
+                )
+            })?
+            .dyn_into()
+            .map_err(|_| cookie_error("HTML document unavailable"))?;
+        let encoded_name = js_sys::encode_uri_component(name)
+            .as_string()
+            .ok_or_else(|| cookie_error("cookie name encoding failed"))?;
+        if request.operation == "get" {
+            let prefix = format!("{encoded_name}=");
+            let value = document
+                .cookie()
+                .map_err(|error| {
+                    cookie_error(
+                        &error
+                            .as_string()
+                            .unwrap_or_else(|| "cookie read failed".into()),
+                    )
+                })?
+                .split(';')
+                .map(str::trim)
+                .find_map(|entry| entry.strip_prefix(&prefix))
+                .map(|encoded| {
+                    js_sys::decode_uri_component(encoded)
+                        .unwrap_or_else(|_| encoded.into())
+                        .as_string()
+                        .unwrap_or_default()
+                });
+            return Ok(value
+                .map(RuntimeValue::String)
+                .unwrap_or(RuntimeValue::Null));
+        }
+        let encoded_value = js_sys::encode_uri_component(if request.operation == "delete" {
+            ""
+        } else {
+            value.unwrap_or("")
+        })
+        .as_string()
+        .ok_or_else(|| cookie_error("cookie value encoding failed"))?;
+        let mut attributes = vec![format!("path={}", request.path)];
+        if request.expiry == "maxAge" {
+            attributes.push(format!("max-age={}", request.max_age.unwrap_or(0)));
+        }
+        if let Some(same_site) = &request.same_site {
+            attributes.push(format!("samesite={same_site}"));
+        }
+        if request.secure == Some(true) {
+            attributes.push("secure".into());
+        }
+        document
+            .set_cookie(&format!(
+                "{encoded_name}={encoded_value}; {}",
+                attributes.join("; ")
+            ))
+            .map_err(|error| {
+                cookie_error(
+                    &error
+                        .as_string()
+                        .unwrap_or_else(|| "cookie write failed".into()),
+                )
+            })?;
+        Ok(RuntimeValue::Null)
     }
 
     pub(crate) fn complete_typed_cookie(
@@ -136,22 +243,61 @@ impl PlecRuntime {
     }
 }
 
+fn cookie_error(message: &str) -> RuntimeValue {
+    RuntimeValue::Record(HashMap::from([
+        ("kind".into(), RuntimeValue::String("cookie".into())),
+        ("message".into(), RuntimeValue::String(message.into())),
+    ]))
+}
+
+pub(crate) fn read_sync_cookie(name: &str) -> Result<RuntimeValue, JsValue> {
+    let allowed = ACTIVE_COOKIE_POLICY.with(|policy| {
+        policy
+            .borrow()
+            .as_ref()
+            .and_then(|entries| entries.get(name))
+            .map(|entry| {
+                entry
+                    .operations
+                    .iter()
+                    .any(|operation| operation == "getSync")
+            })
+            .unwrap_or(true)
+    });
+    if !allowed {
+        return Err(JsValue::from_str(
+            "cookie operation denied by runtime policy",
+        ));
+    }
+    let document: web_sys::HtmlDocument = document()?
+        .dyn_into()
+        .map_err(|_| JsValue::from_str("HTML document unavailable"))?;
+    let encoded_name = js_sys::encode_uri_component(name)
+        .as_string()
+        .ok_or_else(|| JsValue::from_str("cookie name encoding failed"))?;
+    let prefix = format!("{encoded_name}=");
+    Ok(document
+        .cookie()?
+        .split(';')
+        .map(str::trim)
+        .find_map(|entry| entry.strip_prefix(&prefix))
+        .map(|encoded| {
+            js_sys::decode_uri_component(encoded)
+                .unwrap_or_else(|_| encoded.into())
+                .as_string()
+                .unwrap_or_default()
+        })
+        .map(RuntimeValue::String)
+        .unwrap_or(RuntimeValue::Null))
+}
+
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
-    pub fn complete_cookie_request(
-        &self,
-        instance_id: String,
-        request_id: u64,
-        value: JsValue,
-        failure: Option<String>,
-    ) -> Result<(), JsValue> {
-        let result = match failure {
-            Some(message) => Err(RuntimeValue::Record(HashMap::from([
-                ("kind".into(), RuntimeValue::String("cookie".into())),
-                ("message".into(), RuntimeValue::String(message)),
-            ]))),
-            None => Ok(serde_wasm_bindgen::from_value(value).map_err(error)?),
-        };
-        self.complete_typed_cookie(instance_id, request_id, result)
+    pub fn set_cookie_policy(&self, policy: JsValue) -> Result<(), JsValue> {
+        let policy: Option<HashMap<String, CookiePolicy>> =
+            serde_wasm_bindgen::from_value(policy).map_err(error)?;
+        *self.cookie_policy.borrow_mut() = policy.clone();
+        ACTIVE_COOKIE_POLICY.with(|active| *active.borrow_mut() = policy);
+        Ok(())
     }
 }

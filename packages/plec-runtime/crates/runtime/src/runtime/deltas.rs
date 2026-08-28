@@ -69,6 +69,7 @@ impl PlecRuntime {
 impl PlecRuntime {
     pub fn apply_deltas(&self, deltas: JsValue) -> Result<JsValue, JsValue> {
         let deltas: Vec<Delta> = serde_wasm_bindgen::from_value(deltas).map_err(error)?;
+        let deltas = coalesce_deltas(deltas);
         if !self.typed.borrow().is_empty() {
             return self.apply_typed_deltas(deltas);
         }
@@ -78,10 +79,41 @@ impl PlecRuntime {
             let mut metrics = UpdateMetrics::default();
             let instance_id = self.legacy_instance_id()?;
             match delta {
-                Delta::Update { input_id, row_key, changes, .. } => self.update(&instance_id, &input_id, &row_key, changes, &mut metrics)?,
-                Delta::Insert { input_id, row_key, row, before_row_key, .. } => self.insert(&instance_id, &input_id, row_key, row, before_row_key, &mut metrics)?,
-                Delta::Remove { input_id, row_key, .. } => self.remove(&instance_id, &input_id, &row_key, &mut metrics)?,
-                Delta::Move { input_id, row_key, before_row_key, .. } => self.move_row(&instance_id, &input_id, &row_key, before_row_key, &mut metrics)?,
+                Delta::Update {
+                    input_id,
+                    row_key,
+                    changes,
+                    ..
+                } => self.update(&instance_id, &input_id, &row_key, changes, &mut metrics)?,
+                Delta::Insert {
+                    input_id,
+                    row_key,
+                    row,
+                    before_row_key,
+                    ..
+                } => self.insert(
+                    &instance_id,
+                    &input_id,
+                    row_key,
+                    row,
+                    before_row_key,
+                    &mut metrics,
+                )?,
+                Delta::Remove {
+                    input_id, row_key, ..
+                } => self.remove(&instance_id, &input_id, &row_key, &mut metrics)?,
+                Delta::Move {
+                    input_id,
+                    row_key,
+                    before_row_key,
+                    ..
+                } => self.move_row(
+                    &instance_id,
+                    &input_id,
+                    &row_key,
+                    before_row_key,
+                    &mut metrics,
+                )?,
             }
             metrics.wasm_dom_us = (now() - start) * 1000.0;
             total.dom_operations += metrics.dom_operations;

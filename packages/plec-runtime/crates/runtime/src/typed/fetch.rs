@@ -206,17 +206,32 @@ impl PlecRuntime {
                                             )
                                         })
                                         .and_then(|value| {
-                                            serde_wasm_bindgen::from_value(value).map(|body| {
-                                                RuntimeValue::Record(std::collections::HashMap::from([
-                                                    ("ok".into(), RuntimeValue::Bool(ok)),
-                                                    ("status".into(), RuntimeValue::Number(status as f64)),
-                                                    ("body".into(), body),
-                                                ]))
-                                            }).map_err(|error| failure("decode", error.to_string(), &pending.url))
+                                            serde_wasm_bindgen::from_value(value)
+                                                .map(|body| {
+                                                    RuntimeValue::Record(
+                                                        std::collections::HashMap::from([
+                                                            ("ok".into(), RuntimeValue::Bool(ok)),
+                                                            (
+                                                                "status".into(),
+                                                                RuntimeValue::Number(status as f64),
+                                                            ),
+                                                            ("body".into(), body),
+                                                        ]),
+                                                    )
+                                                })
+                                                .map_err(|error| {
+                                                    failure(
+                                                        "decode",
+                                                        error.to_string(),
+                                                        &pending.url,
+                                                    )
+                                                })
                                         }),
                                     Err(error) => Err(failure(
                                         "decode",
-                                        error.as_string().unwrap_or_else(|| "response JSON unavailable".into()),
+                                        error
+                                            .as_string()
+                                            .unwrap_or_else(|| "response JSON unavailable".into()),
                                         &pending.url,
                                     )),
                                 }

@@ -1,15 +1,6 @@
-export {
-  GraphContractError,
-  PlecGraphCoordinator,
-  type GraphArtifactLoader,
-  type GraphInstanceId,
-  type GraphRuntimeAdapter,
-  type MountGraphRequest,
-  type OutputWiring,
-  type ReplaceGraphRequest,
-} from './graph-coordinator.js';
-import { PlecRouteManifest } from 'plec-ir/validate-route-manifest';
-//import { validateExecutableApplication } from 'plec-ir/executable';
+// The Rust runtime validates the complete manifest. Browser glue only needs
+// this field to decide which independently-produced graph to fetch.
+type PlecRouteManifest = { rootGraphId: string };
 
 // SVG icon function marker and type
 export interface SvgIconFunction {
@@ -153,6 +144,7 @@ export interface CompiledEventContext {
 }
 
 export interface CompiledUpdateMetrics {
+  reconciliationUs?: number;
   domOperations: number;
   nodesTouched: number;
   bindingsTouched: number;
@@ -215,16 +207,22 @@ export interface CompiledRuntimeController {
 
 interface WasmRuntimeInstance {
   set_host_inputs(values: Record<string, unknown>): void;
-  complete_cookie_request(
-    instanceId: string,
-    requestId: bigint,
-    value: unknown,
-    failure?: string,
+  set_cookie_policy(
+    policy: PlecRouterMountOptions['cookiePolicy'] | null,
   ): void;
   load_application(ir: unknown): void;
   adopt(root: Element): RuntimeMountMetrics | null;
   mount(root: Element): RuntimeMountMetrics;
   initialize_input(inputId: string, rows: unknown): RuntimeMountMetrics;
+  initialize_snapshot_input(
+    inputId: string,
+    snapshot: unknown,
+    shape: unknown,
+  ): RuntimeMountMetrics;
+  apply_input_snapshot(
+    inputId: string,
+    snapshot: unknown,
+  ): CompiledUpdateMetrics;
   apply_delta(delta: unknown): CompiledUpdateMetrics;
   apply_deltas(deltas: unknown): CompiledUpdateMetrics;
   dispose(): void;
@@ -413,9 +411,16 @@ export async function mountPlecApplication(
     const initialMetrics = Object.entries(inputs).flatMap(
       ([inputId, producer]) => {
         const shape = inputSchemas.get(inputId);
-        return shape?.kind === 'collection'
-          ? [runtime.initialize_input(inputId, producer.getSnapshot())]
-          : [];
+        if (shape?.kind !== 'collection') return [];
+        return [
+          isDeltaInput(producer)
+            ? runtime.initialize_input(inputId, producer.getSnapshot())
+            : runtime.initialize_snapshot_input(
+                inputId,
+                producer.getSnapshot(),
+                shape,
+              ),
+        ];
       },
     );
     const mountMetrics = mergeMountMetrics(
@@ -506,6 +511,7 @@ export async function startPlecRouter(
     module_or_path: options.runtimeWasmUrl ?? DEFAULT_RUNTIME_WASM_URL,
   });
   const runtime = new runtimeModule.PlecRuntime();
+  runtime.set_cookie_policy(options.cookiePolicy ?? null);
   const routedInputs = options.inputs ?? {};
   const routedInputBridge = wireRoutedInputs(
     runtime,
@@ -517,18 +523,7 @@ export async function startPlecRouter(
     'location.search': window.location.search,
     'location.hash': window.location.hash,
   };
-  const hydrateSyncCookies = (graph: any) => {
-    for (const component of graph.components ?? [graph]) {
-      for (const capability of component.capabilities ?? []) {
-        if (
-          capability.kind === 'cookie' &&
-          capability.operations.includes('getSync')
-        )
-          hostInputs[capability.name] = readCookie(capability.name);
-      }
-    }
-    runtime.set_host_inputs(hostInputs);
-  };
+  runtime.set_host_inputs(hostInputs);
   const loadedGraphs = new Map<string, any>();
   const loadGraph = async (graphId: string, fresh = false) => {
     if (!fresh && loadedGraphs.has(graphId))
@@ -540,7 +535,6 @@ export async function startPlecRouter(
       );
     const graph = await response.json();
     loadedGraphs.set(graphId, graph);
-    hydrateSyncCookies(graph);
     runtime.register_graph(graphId, graph);
     return graph;
   };
@@ -548,52 +542,11 @@ export async function startPlecRouter(
     ? [compiled.application]
     : [await loadGraph(manifest.rootGraphId)];
   if (compiled) {
-    hydrateSyncCookies(compiled.application);
     runtime.register_graph(
       '__rust_application__',
       compiled.application,
     );
   }
-  const onCookieRequest = (event: Event) => {
-    const request = (event as CustomEvent<any>).detail;
-    try {
-      const allowed = options.cookiePolicy?.[request.name];
-      const operation =
-        request.operation === 'get' ? 'get' : request.operation;
-      if (allowed && !allowed.operations.includes(operation))
-        throw new Error('cookie operation denied by host policy');
-      if (allowed?.path && allowed.path !== request.path)
-        throw new Error('cookie path denied by host policy');
-      if (request.operation === 'get')
-        runtime.complete_cookie_request(
-          request.instanceId,
-          BigInt(request.requestId),
-          readCookie(request.name),
-        );
-      else {
-        const attributes = [`path=${request.path}`];
-        if (request.expiry === 'maxAge')
-          attributes.push(`max-age=${request.maxAge ?? 0}`);
-        if (request.sameSite)
-          attributes.push(`samesite=${request.sameSite}`);
-        if (request.secure) attributes.push('secure');
-        document.cookie = `${encodeURIComponent(request.name)}=${encodeURIComponent(request.operation === 'delete' ? '' : (request.value ?? ''))}; ${attributes.join('; ')}`;
-        runtime.complete_cookie_request(
-          request.instanceId,
-          BigInt(request.requestId),
-          null,
-        );
-      }
-    } catch (error) {
-      runtime.complete_cookie_request(
-        request.instanceId,
-        BigInt(request.requestId),
-        null,
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  };
-  window.addEventListener('plec:cookie-request', onCookieRequest);
   const onGraphNeeded = (event: Event) => {
     const graphId = (event as CustomEvent<{ graphId?: string }>).detail
       ?.graphId;
@@ -643,10 +596,6 @@ export async function startPlecRouter(
 
   return {
     dispose: () => {
-      window.removeEventListener(
-        'plec:cookie-request',
-        onCookieRequest,
-      );
       window.removeEventListener('plec:graph-needed', onGraphNeeded);
       options.root.removeEventListener('click', onRouteClick, true);
       window.removeEventListener(
@@ -658,14 +607,6 @@ export async function startPlecRouter(
       runtime.dispose();
     },
   };
-}
-
-function readCookie(name: string): string | null {
-  const prefix = `${encodeURIComponent(name)}=`;
-  const part = document.cookie
-    .split(/;\s*/)
-    .find((entry) => entry.startsWith(prefix));
-  return part ? decodeURIComponent(part.slice(prefix.length)) : null;
 }
 
 // SVG instance cache for static icons
@@ -776,9 +717,7 @@ export function adaptLiveCollection<Row extends object>(
     subscribeDeltas: (notify) => {
       const subscription = collection.subscribeChanges((changes) =>
         notify(
-          coalesceDeltas(
-            changes.map((change) => toRuntimeDelta(inputId, change)),
-          ),
+          changes.map((change) => toRuntimeDelta(inputId, change)),
         ),
       );
       return () => subscription.unsubscribe();
@@ -801,28 +740,20 @@ function subscribeInput(
     ];
   }
   if (!producer.subscribe) return [];
-  let previous = snapshotProjection(
-    producer.getSnapshot(),
-    input?.shape,
-  );
+  if (!input?.shape) return [];
   return [
     producer.subscribe(() => {
       const start = performance.now();
-      const nextValue = producer.getSnapshot();
-      const next = snapshotProjection(nextValue, input?.shape);
-      const deltas = reconcileInputSnapshot(
+      const metrics = runtime.apply_input_snapshot(
         inputId,
-        previous,
-        next,
-        input?.shape,
+        producer.getSnapshot(),
       );
-      previous = next;
-      const update = publishDeltas(
-        runtime,
-        deltas,
-        onQueryUpdate,
-        performance.now() - start,
-      );
+      const update: CompiledQueryUpdate = {
+        ...metrics,
+        adapterMs: performance.now() - start,
+        reconciliationMs: (metrics.reconciliationUs ?? 0) / 1000,
+      };
+      onQueryUpdate?.(update);
       return update;
     }),
   ];
@@ -884,7 +815,7 @@ function toRuntimeDelta<Row extends object>(
         rowKey,
         changes: change.changes
           ? { ...change.changes }
-          : diff(
+          : liveChangeFields(
               change.previousValue as Record<string, unknown>,
               change.value as Record<string, unknown>,
             ),
@@ -901,105 +832,9 @@ function toRuntimeDelta<Row extends object>(
   }
 }
 
-export type CollectionProjection = {
-  kind: 'collection';
-  keys: string[];
-  rows: Map<string, Record<string, unknown>>;
-};
-export type ValueProjection = { kind: 'value'; values: unknown[] };
-
-/** Store the observed values, not source object references: mutable stores are
- * allowed to publish the same object identity after changing a field. */
-function snapshotProjection(
-  value: unknown,
-  shape: any,
-): CollectionProjection | ValueProjection {
-  if (shape?.kind !== 'collection' || !Array.isArray(value)) {
-    const paths: string[][] = shape?.observedPaths ?? [];
-    return {
-      kind: 'value',
-      values: paths.length
-        ? paths.map((path) => readPath(value, path))
-        : [value],
-    };
-  }
-  const keyPath = String(shape.keyExpression ?? 'id')
-    .split('.')
-    .slice(1);
-  const paths: string[][] = shape.observedRowPaths ?? [];
-  const rows = new Map<string, Record<string, unknown>>();
-  const keys: string[] = [];
-  for (const row of value) {
-    const key = String(readPath(row, keyPath));
-    keys.push(key);
-    rows.set(
-      key,
-      paths.length
-        ? Object.fromEntries(
-            paths.map((path) => [path[0]!, readPath(row, path)]),
-          )
-        : { ...(row as Record<string, unknown>) },
-    );
-  }
-  return { kind: 'collection', keys, rows };
-}
-
-/** Reconcile already-projected snapshots. Exposed for producer adapters and
- * deterministic tests; normal callers should pass a CompiledInputProducer. */
-export function reconcileInputSnapshot(
-  inputId: string,
-  previous: CollectionProjection | ValueProjection,
-  next: CollectionProjection | ValueProjection,
-  shape: any,
-): RuntimeDelta[] {
-  if (
-    previous.kind !== 'collection' ||
-    next.kind !== 'collection' ||
-    shape?.kind !== 'collection'
-  )
-    return [];
-  const result: RuntimeDelta[] = [];
-  const previousKeys = new Set(previous.keys);
-  const nextKeys = new Set(next.keys);
-  for (const key of previous.keys)
-    if (!nextKeys.has(key))
-      result.push({ type: 'remove', inputId, rowKey: key });
-  for (let index = 0; index < next.keys.length; index += 1) {
-    const key = next.keys[index]!;
-    const beforeRowKey = next.keys[index + 1] ?? null;
-    const row = next.rows.get(key)!;
-    if (!previousKeys.has(key))
-      result.push({
-        type: 'insert',
-        inputId,
-        rowKey: key,
-        row,
-        beforeRowKey,
-      });
-    else {
-      const changes = diff(previous.rows.get(key)!, row);
-      if (Object.keys(changes).length)
-        result.push({ type: 'update', inputId, rowKey: key, changes });
-      if (shape.orderSensitive && previous.keys[index] !== key)
-        result.push({
-          type: 'move',
-          inputId,
-          rowKey: key,
-          beforeRowKey,
-        });
-    }
-  }
-  return coalesceDeltas(result);
-}
-
-function readPath(value: unknown, path: string[]): unknown {
-  let current: any = value;
-  for (const segment of path)
-    current = current == null ? undefined : current[segment];
-  return current;
-}
-
-function diff(
+/** Rich collection sources may omit a changed-field set. This is source
+ * adaptation, not snapshot reconciliation; the latter lives in WASM. */
+function liveChangeFields(
   previousValue: Record<string, unknown>,
   value: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -1017,22 +852,6 @@ function diff(
       changes[key] = undefined;
   }
   return changes;
-}
-
-function coalesceDeltas(deltas: RuntimeDelta[]): RuntimeDelta[] {
-  const result: RuntimeDelta[] = [];
-  for (const delta of deltas) {
-    const previous = result[result.length - 1];
-    if (
-      delta.type === 'update' &&
-      previous?.type === 'update' &&
-      previous.inputId === delta.inputId &&
-      previous.rowKey === delta.rowKey
-    ) {
-      previous.changes = { ...previous.changes, ...delta.changes };
-    } else result.push(delta);
-  }
-  return result;
 }
 
 function normalizeRowKey(
@@ -1059,49 +878,15 @@ function apply(
   runtime: WasmRuntimeInstance,
   delta: RuntimeDelta,
 ): CompiledUpdateMetrics {
-  return runtime.apply_delta(toWasmDelta(delta));
+  return runtime.apply_delta(delta);
 }
 function applyBatch(
   runtime: Pick<WasmRuntimeInstance, 'apply_deltas'>,
   deltas: RuntimeDelta[],
 ): CompiledUpdateMetrics {
-  return runtime.apply_deltas(deltas.map(toWasmDelta));
+  return runtime.apply_deltas(deltas);
 }
 
-/** `serde_wasm_bindgen` preserves object keys. Keep the browser-facing
- * contract camelCase while matching the runtime's existing Rust field names. */
-function toWasmDelta(delta: RuntimeDelta): Record<string, unknown> {
-  switch (delta.type) {
-    case 'update':
-      return {
-        type: delta.type,
-        input_id: delta.inputId,
-        row_key: delta.rowKey,
-        changes: delta.changes,
-      };
-    case 'insert':
-      return {
-        type: delta.type,
-        input_id: delta.inputId,
-        row_key: delta.rowKey,
-        row: delta.row,
-        before_row_key: delta.beforeRowKey ?? null,
-      };
-    case 'remove':
-      return {
-        type: delta.type,
-        input_id: delta.inputId,
-        row_key: delta.rowKey,
-      };
-    case 'move':
-      return {
-        type: delta.type,
-        input_id: delta.inputId,
-        row_key: delta.rowKey,
-        before_row_key: delta.beforeRowKey ?? null,
-      };
-  }
-}
 async function loadRuntimeModule(
   url: string,
 ): Promise<WasmRuntimeModule> {

@@ -132,14 +132,16 @@ impl TypedComponentApplication {
                         if expected.is_none()
                             || expected.is_some_and(|parameter| {
                                 parameter.callable != prop.callable()
-                                    || parameter.component != matches!(prop, TypedComponentProp::Component { .. })
+                                    || parameter.component
+                                        != matches!(prop, TypedComponentProp::Component { .. })
                             })
                             || !prop.valid(component)
                             || !supplied.insert(name.clone())
                         {
                             return Err(JsValue::from_str("invalid component prop"));
                         }
-                        if matches!(prop, TypedComponentProp::Component { component: target, .. } if *target >= self.components.len()) {
+                        if matches!(prop, TypedComponentProp::Component { component: target, .. } if *target >= self.components.len())
+                        {
                             return Err(JsValue::from_str("component prop target out of range"));
                         }
                     }
@@ -161,10 +163,20 @@ impl TypedComponentApplication {
                     {
                         return Err(JsValue::from_str("missing component prop"));
                     }
-                } else if let TypedNode::DynamicComponent { prop, props, children, .. } = node {
-                    if !component.parameters.get(*prop).is_some_and(|parameter| parameter.component)
+                } else if let TypedNode::DynamicComponent {
+                    prop,
+                    props,
+                    children,
+                    ..
+                } = node
+                {
+                    if !component
+                        .parameters
+                        .get(*prop)
+                        .is_some_and(|parameter| parameter.component)
                         || children.iter().any(|child| *child >= component.nodes.len())
-                        || props.iter().any(|prop| !prop.valid(component)) {
+                        || props.iter().any(|prop| !prop.valid(component))
+                    {
                         return Err(JsValue::from_str("invalid dynamic component"));
                     }
                 }
@@ -228,7 +240,10 @@ impl<'de> Deserialize<'de> for TypedComponentProp {
                 name: raw.name,
                 action,
             }),
-            ("component", None, None, Some(component)) => Ok(Self::Component { name: raw.name, component }),
+            ("component", None, None, Some(component)) => Ok(Self::Component {
+                name: raw.name,
+                component,
+            }),
             _ => Err(serde::de::Error::custom("invalid component prop")),
         }
     }
@@ -237,7 +252,9 @@ impl<'de> Deserialize<'de> for TypedComponentProp {
 impl TypedComponentProp {
     pub fn name(&self) -> usize {
         match self {
-            Self::Value { name, .. } | Self::Callable { name, .. } | Self::Component { name, .. } => *name,
+            Self::Value { name, .. }
+            | Self::Callable { name, .. }
+            | Self::Component { name, .. } => *name,
         }
     }
     pub fn callable(&self) -> bool {
@@ -326,10 +343,18 @@ pub enum TypedActionInstruction {
     StoreFrame {
         slot: usize,
     },
-    StoreRef { reference: usize },
-    CaptureActiveElement { reference: usize },
-    FocusHostRef { reference: usize },
-    FocusRef { reference: usize },
+    StoreRef {
+        reference: usize,
+    },
+    CaptureActiveElement {
+        reference: usize,
+    },
+    FocusHostRef {
+        reference: usize,
+    },
+    FocusRef {
+        reference: usize,
+    },
     PreventDefault,
     CallProp {
         prop: usize,
@@ -510,7 +535,9 @@ pub enum TypedNode {
         parent: Option<usize>,
     },
 }
-fn html_namespace() -> String { "html".into() }
+fn html_namespace() -> String {
+    "html".into()
+}
 
 #[derive(Clone, Deserialize)]
 pub struct TypedText {
@@ -557,7 +584,9 @@ pub struct TypedStateSlot {
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TypedRefSlot { pub initial_expression: usize }
+pub struct TypedRefSlot {
+    pub initial_expression: usize,
+}
 #[derive(Clone, Deserialize)]
 pub struct TypedHostRef {}
 #[derive(Clone, Deserialize)]
@@ -568,7 +597,11 @@ pub struct TypedReaction {
     pub cleanup_action: Option<usize>,
 }
 #[derive(Clone, Deserialize)]
-pub struct TypedGlobalListener { pub source: String, pub event: usize, pub action: usize }
+pub struct TypedGlobalListener {
+    pub source: String,
+    pub event: usize,
+    pub action: usize,
+}
 
 #[derive(Clone, Deserialize)]
 pub struct TypedProgram {
@@ -584,7 +617,9 @@ pub enum TypedExpressionInstruction {
     LoadState {
         state: usize,
     },
-    LoadRef { reference: usize },
+    LoadRef {
+        reference: usize,
+    },
     LoadProp {
         prop: usize,
     },
@@ -877,17 +912,30 @@ impl TypedApplication {
             }
         }
         for reaction in &self.reactions {
-            if reaction.dependencies.is_empty() || reaction.dependencies.iter().any(|value| *value >= self.expressions.len()) || reaction.action >= self.actions.len() || reaction.cleanup_action.is_some_and(|action| action >= self.actions.len()) {
+            if reaction.dependencies.is_empty()
+                || reaction
+                    .dependencies
+                    .iter()
+                    .any(|value| *value >= self.expressions.len())
+                || reaction.action >= self.actions.len()
+                || reaction
+                    .cleanup_action
+                    .is_some_and(|action| action >= self.actions.len())
+            {
                 return Err("invalid reaction");
             }
         }
         for listener in &self.listeners {
-            if !matches!(listener.source.as_str(), "window" | "document") || listener.event >= self.strings.len() || listener.action >= self.actions.len() {
+            if !matches!(listener.source.as_str(), "window" | "document")
+                || listener.event >= self.strings.len()
+                || listener.action >= self.actions.len()
+            {
                 return Err("invalid global listener");
             }
         }
         for node in &self.nodes {
-            if matches!(node, TypedNode::Element { host_ref: Some(reference), .. } if *reference >= self.host_refs.len()) {
+            if matches!(node, TypedNode::Element { host_ref: Some(reference), .. } if *reference >= self.host_refs.len())
+            {
                 return Err("host ref handle out of range");
             }
         }
@@ -983,9 +1031,15 @@ impl TypedApplication {
                     }
                     TypedActionInstruction::CaptureActiveElement { reference }
                     | TypedActionInstruction::FocusRef { reference }
-                        if *reference >= self.ref_slots.len() => return Err("action ref handle out of range"),
+                        if *reference >= self.ref_slots.len() =>
+                    {
+                        return Err("action ref handle out of range")
+                    }
                     TypedActionInstruction::FocusHostRef { reference }
-                        if *reference >= self.host_refs.len() => return Err("action host ref handle out of range"),
+                        if *reference >= self.host_refs.len() =>
+                    {
+                        return Err("action host ref handle out of range")
+                    }
                     TypedActionInstruction::CallProp { prop, arguments }
                         if self
                             .parameters
@@ -1317,8 +1371,7 @@ mod tests {
             loader_result_state: None,
             route_loader: false,
             route_retry: false,
-            instructions: vec![serde_json::from_value(serde_json::json!({"op":"return"}))
-                .unwrap()],
+            instructions: vec![serde_json::from_value(serde_json::json!({"op":"return"})).unwrap()],
         });
 
         assert!(app.validate_contract().is_ok());

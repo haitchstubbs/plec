@@ -2,37 +2,77 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Delta {
     Update {
         #[serde(default)]
         instance_id: Option<String>,
+        #[serde(rename = "inputId", alias = "input_id")]
         input_id: String,
+        #[serde(rename = "rowKey", alias = "row_key")]
         row_key: String,
         changes: HashMap<String, Value>,
     },
     Insert {
         #[serde(default)]
         instance_id: Option<String>,
+        #[serde(rename = "inputId", alias = "input_id")]
         input_id: String,
+        #[serde(rename = "rowKey", alias = "row_key")]
         row_key: String,
         row: HashMap<String, Value>,
+        #[serde(rename = "beforeRowKey", alias = "before_row_key")]
         before_row_key: Option<String>,
     },
     Remove {
         #[serde(default)]
         instance_id: Option<String>,
+        #[serde(rename = "inputId", alias = "input_id")]
         input_id: String,
+        #[serde(rename = "rowKey", alias = "row_key")]
         row_key: String,
     },
     Move {
         #[serde(default)]
         instance_id: Option<String>,
+        #[serde(rename = "inputId", alias = "input_id")]
         input_id: String,
+        #[serde(rename = "rowKey", alias = "row_key")]
         row_key: String,
+        #[serde(rename = "beforeRowKey", alias = "before_row_key")]
         before_row_key: Option<String>,
     },
+}
+
+/// Keep the browser delta protocol compact without changing its ordering
+/// semantics: only adjacent field updates for the same row are merged.
+pub fn coalesce_deltas(deltas: Vec<Delta>) -> Vec<Delta> {
+    let mut result: Vec<Delta> = Vec::with_capacity(deltas.len());
+    for delta in deltas {
+        if let (
+            Delta::Update {
+                input_id,
+                row_key,
+                changes,
+                ..
+            },
+            Some(Delta::Update {
+                input_id: previous_input,
+                row_key: previous_key,
+                changes: previous_changes,
+                ..
+            }),
+        ) = (&delta, result.last_mut())
+        {
+            if input_id == previous_input && row_key == previous_key {
+                previous_changes.extend(changes.clone());
+                continue;
+            }
+        }
+        result.push(delta);
+    }
+    result
 }
 
 impl Delta {
@@ -58,6 +98,8 @@ impl Delta {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateMetrics {
+    #[serde(default)]
+    pub reconciliation_us: f64,
     pub dom_operations: u32,
     pub nodes_touched: u32,
     pub bindings_touched: u32,
@@ -200,4 +242,25 @@ impl RuntimeValue {
 pub fn runtime_from_json(value: Value) -> Result<RuntimeValue, wasm_bindgen::JsValue> {
     serde_json::from_value(value)
         .map_err(|error| wasm_bindgen::JsValue::from_str(&error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_browser_camel_case_deltas_and_coalesces_adjacent_updates() {
+        let deltas: Vec<Delta> = serde_json::from_value(serde_json::json!([
+            {"type":"update","inputId":"todos","rowKey":"a","changes":{"title":"A"}},
+            {"type":"update","inputId":"todos","rowKey":"a","changes":{"done":true}},
+            {"type":"remove","inputId":"todos","rowKey":"b"}
+        ]))
+        .unwrap();
+        let coalesced = coalesce_deltas(deltas);
+        assert_eq!(coalesced.len(), 2);
+        let value = serde_json::to_value(&coalesced[0]).unwrap();
+        assert_eq!(value["inputId"], "todos");
+        assert_eq!(value["rowKey"], "a");
+        assert_eq!(value["changes"]["done"], true);
+    }
 }

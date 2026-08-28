@@ -620,6 +620,7 @@ name = "plec_runtime"
 version = "0.1.0"
 dependencies = [
  "js-sys",
+ "plec-ir",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",

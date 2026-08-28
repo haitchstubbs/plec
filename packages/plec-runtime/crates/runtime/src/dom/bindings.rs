@@ -100,9 +100,15 @@ pub(crate) fn typed_apply_spread(
         // behaviour at the DOM spread boundary.
         RuntimeValue::Null => return Ok(()),
         RuntimeValue::Record(values) => values,
-        _ => return Err(JsValue::from_str("intrinsic props spread must evaluate to a record")),
+        _ => {
+            return Err(JsValue::from_str(
+                "intrinsic props spread must evaluate to a record",
+            ))
+        }
     };
-    let element: Element = node.clone().dyn_into()
+    let element: Element = node
+        .clone()
+        .dyn_into()
         .map_err(|_| JsValue::from_str("binding target is not element"))?;
     if sink != "attribute" && sink != "property" {
         return Err(JsValue::from_str("unsupported intrinsic props spread sink"));
@@ -117,7 +123,10 @@ pub(crate) fn typed_apply_spread(
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .collect::<std::collections::HashSet<_>>();
-    let current = values.keys().cloned().collect::<std::collections::HashSet<_>>();
+    let current = values
+        .keys()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
     for stale in previous.difference(&current) {
         let name = if stale == "className" { "class" } else { stale };
         element.remove_attribute(name)?;
