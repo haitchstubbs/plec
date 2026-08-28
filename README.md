@@ -75,6 +75,5 @@ The demo app serves on `http://localhost:3100` (override with `PORT`).
 - [docs/getting-started.md](docs/getting-started.md) — prerequisites, build
   order, dev loop, WASM rebuild loop, tests, benchmarks
 - [crates/README.md](crates/README.md) — the Rust compiler pipeline
-- [PLEC-README.md](PLEC-README.md) — architecture and positioning
 - [AGENTS.md](AGENTS.md) — experiment goals, constraints, and milestones
 - [docs/](docs/) — IR contracts, feature maps, and handoff notes
