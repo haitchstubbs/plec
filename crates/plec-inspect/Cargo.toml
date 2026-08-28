@@ -1,0 +1,10 @@
+[package]
+name = "plec-inspect"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+plec-ir = { path = "../plec-ir" }
+async-graphql = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
