@@ -57,20 +57,32 @@ The monorepo is organized roughly like:
 
 ```text
 apps/
-  fullstack/
-  plec/
+  fullstack/            Demo full-stack Plec application (React-free)
 
 packages/
-  compiler/
-  runtime/
-  vite-plugin/
-  ir/
-  browser/
+  plec/                 Framework runtime: jsx-runtime, state hooks, router
+  plec-compiler/        Legacy TS-side compiler utilities
+  plec-ir/              Shared IR schema (Zod)
+  plec-browser/         Browser glue: startPlecRouter, graph loading
+  plec-runtime/         Rust -> WASM runtime (crate at crates/runtime)
+  ui/                   React/shadcn UI kit
+  lucide-plec/          Generated Lucide icon components for Plec
+
+crates/                 Rust compiler workspace (the compiler authority)
+  plec-parser/ plec-sema/ plec-hir/ plec-lowering/ plec-ir/
+  plec-compiler/        Driver + plec-route-manifest binary
+  plec-diagnostics/
 ```
+
+The build integration described below for `packages/vite-plugin` is
+currently realized by `apps/fullstack/scripts/build.mjs` (esbuild + the
+`plec-route-manifest` binary); no vite plugin exists. The runtime crate is
+`packages/plec-runtime/crates/runtime`, a member of the root Cargo
+workspace alongside `crates/*`.
 
 Responsibilities:
 
-### `packages/compiler`
+### Compiler (`crates/*` — Rust)
 
 This is one of the two important experimental components.
 
@@ -107,7 +119,7 @@ Do NOT attempt general React compilation.
 
 Do NOT support arbitrary effects, refs, dynamic imports, runtime component lookup, or arbitrary imperative DOM manipulation.
 
-### `packages/runtime`
+### `packages/plec-runtime`
 
 This is the second important experimental component.
 
@@ -153,7 +165,7 @@ one/few DOM mutations
 
 can occur without re-rendering an entire component subtree.
 
-### `packages/ir`
+### `packages/plec-ir`
 
 Define the shared IR schema.
 
@@ -193,7 +205,7 @@ Do not prematurely optimize the representation.
 
 JSON is acceptable for the MVP.
 
-### `packages/vite-plugin`
+### Build integration (currently `apps/fullstack/scripts`)
 
 Provide the integration point.
 
@@ -223,7 +235,7 @@ plugins: [react(), experimentalRuntime()];
 
 Do not attempt sophisticated HMR initially unless it falls out naturally.
 
-### `packages/browser`
+### `packages/plec-browser`
 
 Keep browser-specific glue here.
 
