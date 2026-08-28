@@ -290,7 +290,8 @@ export function wireRoutedInputs(
       // Routed graphs currently accept the same keyed collection inputs as
       // standalone mounts. The typed runtime safely ignores inputs that are
       // not declared by the active route instance.
-      if (Array.isArray(snapshot)) runtime.initialize_input(inputId, snapshot);
+      if (Array.isArray(snapshot))
+        runtime.initialize_input(inputId, snapshot);
     }
   };
   const subscriptions = Object.entries(inputs).flatMap(
@@ -305,7 +306,8 @@ export function wireRoutedInputs(
   );
   return {
     hydrate,
-    dispose: () => subscriptions.forEach((unsubscribe) => unsubscribe()),
+    dispose: () =>
+      subscriptions.forEach((unsubscribe) => unsubscribe()),
   };
 }
 
@@ -481,14 +483,21 @@ export async function startPlecRouter(
   options: PlecRouterMountOptions,
 ): Promise<PlecRouterController> {
   markPlecTiming('plec:mount-start');
-  const manifestResponse = await fetch(options.applicationUrl ?? options.manifestUrl ?? '/route-manifest.json');
+  const manifestResponse = await fetch(
+    options.applicationUrl ??
+      options.manifestUrl ??
+      '/route-manifest.json',
+  );
   if (!manifestResponse.ok)
     throw new Error(
       `Failed to load route manifest: ${manifestResponse.status}`,
     );
   const artifact = await manifestResponse.json();
-  const compiled = options.applicationUrl ? artifact as { manifest: PlecRouteManifest; application: any } : undefined;
-  const manifest = (compiled?.manifest ?? artifact) as PlecRouteManifest;
+  const compiled = options.applicationUrl
+    ? (artifact as { manifest: PlecRouteManifest; application: any })
+    : undefined;
+  const manifest = (compiled?.manifest ??
+    artifact) as PlecRouteManifest;
   const graphUrl = options.graphUrl ?? ((id) => `/graphs/${id}.json`);
   const runtimeModule = await loadRuntimeModule(
     options.runtimeJsUrl ?? DEFAULT_RUNTIME_JS_URL,
@@ -511,7 +520,10 @@ export async function startPlecRouter(
   const hydrateSyncCookies = (graph: any) => {
     for (const component of graph.components ?? [graph]) {
       for (const capability of component.capabilities ?? []) {
-        if (capability.kind === 'cookie' && capability.operations.includes('getSync'))
+        if (
+          capability.kind === 'cookie' &&
+          capability.operations.includes('getSync')
+        )
           hostInputs[capability.name] = readCookie(capability.name);
       }
     }
@@ -519,10 +531,13 @@ export async function startPlecRouter(
   };
   const loadedGraphs = new Map<string, any>();
   const loadGraph = async (graphId: string, fresh = false) => {
-    if (!fresh && loadedGraphs.has(graphId)) return loadedGraphs.get(graphId);
+    if (!fresh && loadedGraphs.has(graphId))
+      return loadedGraphs.get(graphId);
     const response = await fetch(graphUrl(graphId));
     if (!response.ok)
-      throw new Error(`Failed to load graph ${graphId}: ${response.status}`);
+      throw new Error(
+        `Failed to load graph ${graphId}: ${response.status}`,
+      );
     const graph = await response.json();
     loadedGraphs.set(graphId, graph);
     hydrateSyncCookies(graph);
@@ -534,7 +549,10 @@ export async function startPlecRouter(
     : [await loadGraph(manifest.rootGraphId)];
   if (compiled) {
     hydrateSyncCookies(compiled.application);
-    runtime.register_graph('__rust_application__', compiled.application);
+    runtime.register_graph(
+      '__rust_application__',
+      compiled.application,
+    );
   }
   const onCookieRequest = (event: Event) => {
     const request = (event as CustomEvent<any>).detail;
@@ -577,7 +595,8 @@ export async function startPlecRouter(
   };
   window.addEventListener('plec:cookie-request', onCookieRequest);
   const onGraphNeeded = (event: Event) => {
-    const graphId = (event as CustomEvent<{ graphId?: string }>).detail?.graphId;
+    const graphId = (event as CustomEvent<{ graphId?: string }>).detail
+      ?.graphId;
     if (!graphId || compiled) return;
     void loadGraph(graphId, true)
       .then(() => {
@@ -587,7 +606,9 @@ export async function startPlecRouter(
         );
         routedInputBridge.hydrate();
       })
-      .catch((error) => console.error(`Failed to load Plec graph ${graphId}`, error));
+      .catch((error) =>
+        console.error(`Failed to load Plec graph ${graphId}`, error),
+      );
   };
   window.addEventListener('plec:graph-needed', onGraphNeeded);
   runtime.start(options.root, manifest);
@@ -605,16 +626,17 @@ export async function startPlecRouter(
     const target = event.target;
     if (!(target instanceof Element)) return;
     const link = target.closest('a[href]');
-    if (link && options.root.contains(link)) scheduleRoutedInputHydration();
+    if (link && options.root.contains(link))
+      scheduleRoutedInputHydration();
   };
   options.root.addEventListener('click', onRouteClick, true);
   window.addEventListener('popstate', scheduleRoutedInputHydration);
   markPlecTiming('plec:mount-end');
 
   // Mount islands for the initial root graph
-  const rootGraph = !compiled && graphs.find(
-    (g: any) => g.graphId === manifest.rootGraphId,
-  );
+  const rootGraph =
+    !compiled &&
+    graphs.find((g: any) => g.graphId === manifest.rootGraphId);
   const disposeIslands = rootGraph
     ? mountIslands(options.root, rootGraph, options.islands ?? {})
     : [];
@@ -627,7 +649,10 @@ export async function startPlecRouter(
       );
       window.removeEventListener('plec:graph-needed', onGraphNeeded);
       options.root.removeEventListener('click', onRouteClick, true);
-      window.removeEventListener('popstate', scheduleRoutedInputHydration);
+      window.removeEventListener(
+        'popstate',
+        scheduleRoutedInputHydration,
+      );
       routedInputBridge.dispose();
       disposeIslands.forEach((dispose) => dispose());
       runtime.dispose();
@@ -641,130 +666,6 @@ function readCookie(name: string): string | null {
     .split(/;\s*/)
     .find((entry) => entry.startsWith(prefix));
   return part ? decodeURIComponent(part.slice(prefix.length)) : null;
-}
-
-function applyStaticHostBindings(
-  root: Element,
-  ir: any,
-  values: NonNullable<CompiledMountOptions['hostValues']>,
-) {
-  const expressions = new Map(
-    (ir.expressions ?? []).map((entry: any) => [
-      entry.id,
-      entry.expression,
-    ]),
-  );
-  for (const binding of ir.bindings ?? []) {
-    const expression = expressions.get(binding.expressionId);
-    if (!dependsOnHost(expression)) continue;
-    const node = root.querySelector(
-      `[data-runtime-node="${binding.targetId}"]`,
-    );
-    if (!(node instanceof Element) || binding.kind !== 'attribute')
-      continue;
-    const value = evaluateHostExpression(expression, { host: values });
-    node.setAttribute(
-      binding.attributeName === 'className'
-        ? 'class'
-        : binding.attributeName,
-      String(value ?? ''),
-    );
-  }
-}
-function dependsOnHost(expression: any): boolean {
-  return expression?.kind === 'identifier'
-    ? expression.name === 'host'
-    : expression?.kind === 'member'
-      ? dependsOnHost(expression.object)
-      : expression?.kind === 'binary'
-        ? dependsOnHost(expression.left) ||
-          dependsOnHost(expression.right)
-        : expression?.kind === 'conditional'
-          ? dependsOnHost(expression.test) ||
-            dependsOnHost(expression.consequent) ||
-            dependsOnHost(expression.alternate)
-          : false;
-}
-function evaluateHostExpression(expression: any, scope: any): any {
-  if (expression?.kind === 'literal') return expression.value;
-  if (expression?.kind === 'identifier') return scope[expression.name];
-  if (expression?.kind === 'member')
-    return evaluateHostExpression(expression.object, scope)?.[
-      expression.property
-    ];
-  if (expression?.kind === 'binary')
-    return expression.op === '==='
-      ? evaluateHostExpression(expression.left, scope) ===
-          evaluateHostExpression(expression.right, scope)
-      : null;
-  if (expression?.kind === 'conditional')
-    return evaluateHostExpression(expression.test, scope)
-      ? evaluateHostExpression(expression.consequent, scope)
-      : evaluateHostExpression(expression.alternate, scope);
-  return null;
-}
-
-function resolveHostValues(
-  ir: any,
-  values: { currentYear?: number | string },
-) {
-  const expressions = new Map<string, any>(
-    (ir.expressions ?? []).map((expression: any): [string, any] => [
-      expression.id,
-      expression.expression,
-    ]),
-  );
-  const textById = new Map<string, any>(
-    (ir.texts ?? []).map((text: any): [string, any] => [text.id, text]),
-  );
-  const elementById = new Map<string, any>(
-    (ir.elements ?? []).map((element: any): [string, any] => [
-      element.id,
-      element,
-    ]),
-  );
-  ir.bindings = (ir.bindings ?? []).filter((binding: any) => {
-    const expression = expressions.get(binding.expressionId);
-    if (
-      expression?.kind !== 'host' ||
-      expression.name !== 'currentYear'
-    )
-      return true;
-    const value = String(
-      values.currentYear ?? new Date().getFullYear(),
-    );
-    if (binding.kind === 'text')
-      textById.get(binding.targetId)!.staticValue = value;
-    else {
-      const element = elementById.get(binding.targetId)!;
-      const attribute = element.attributes.find(
-        (candidate: any) => candidate.name === binding.attributeName,
-      );
-      if (attribute) {
-        attribute.staticValue = value;
-        delete attribute.bindingId;
-      } else
-        element.attributes.push({
-          name: binding.attributeName,
-          staticValue: value,
-        });
-    }
-    return false;
-  });
-  // Host values are materialized as static text/attributes before WASM sees
-  // the IR. Remove their expression records too: the row-expression runtime
-  // intentionally has no host-environment evaluator.
-  const referencedExpressionIds = new Set(
-    (ir.bindings ?? [])
-      .map((binding: any) => binding.expressionId)
-      .filter(Boolean),
-  );
-  ir.expressions = (ir.expressions ?? []).filter(
-    (expression: any) =>
-      expression.expression?.kind !== 'host' ||
-      referencedExpressionIds.has(expression.id),
-  );
-  return ir;
 }
 
 // SVG instance cache for static icons
