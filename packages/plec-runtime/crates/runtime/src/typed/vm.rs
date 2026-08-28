@@ -159,26 +159,47 @@ impl TypedRuntime {
                         frame[slot] = value;
                     }
                     TypedActionInstruction::StoreRef { reference } => {
-                        let value = stack.pop().ok_or_else(|| JsValue::from_str("action stack underflow: storeRef"))?;
-                        let slot = self.app.ref_values.get_mut(reference).ok_or_else(|| JsValue::from_str("ref handle out of range"))?;
+                        let value = stack
+                            .pop()
+                            .ok_or_else(|| JsValue::from_str("action stack underflow: storeRef"))?;
+                        let slot = self
+                            .app
+                            .ref_values
+                            .get_mut(reference)
+                            .ok_or_else(|| JsValue::from_str("ref handle out of range"))?;
                         *slot = value;
                     }
                     TypedActionInstruction::CaptureActiveElement { reference } => {
-                        let slot = self.focus_refs.get_mut(reference).ok_or_else(|| JsValue::from_str("focus ref handle out of range"))?;
+                        let slot = self
+                            .focus_refs
+                            .get_mut(reference)
+                            .ok_or_else(|| JsValue::from_str("focus ref handle out of range"))?;
                         *slot = document()?.active_element();
                     }
                     TypedActionInstruction::FocusHostRef { reference } => {
-                        if let Some(node) = self.host_ref_nodes.get(reference).and_then(Option::as_ref) {
-                            if let Some(element) = node.dyn_ref::<HtmlElement>() { let _ = element.focus(); }
+                        if let Some(node) =
+                            self.host_ref_nodes.get(reference).and_then(Option::as_ref)
+                        {
+                            if let Some(element) = node.dyn_ref::<HtmlElement>() {
+                                let _ = element.focus();
+                            }
                         }
                     }
                     TypedActionInstruction::FocusRef { reference } => {
-                        if let Some(element) = self.focus_refs.get(reference).and_then(Option::as_ref) {
-                            if element.is_connected() { if let Some(element) = element.dyn_ref::<HtmlElement>() { let _ = element.focus(); } }
+                        if let Some(element) =
+                            self.focus_refs.get(reference).and_then(Option::as_ref)
+                        {
+                            if element.is_connected() {
+                                if let Some(element) = element.dyn_ref::<HtmlElement>() {
+                                    let _ = element.focus();
+                                }
+                            }
                         }
                     }
                     TypedActionInstruction::PreventDefault => {
-                        if let Some(event) = native_event { event.prevent_default(); }
+                        if let Some(event) = native_event {
+                            event.prevent_default();
+                        }
                     }
                     TypedActionInstruction::CallProp { prop, arguments } => {
                         let mut callback = self
@@ -203,7 +224,8 @@ impl TypedRuntime {
                         self.callback_requests.push(callback);
                     }
                     TypedActionInstruction::CallPropOptional { prop, arguments } => {
-                        let Some(mut callback) = self.callbacks.get(prop).and_then(Clone::clone) else {
+                        let Some(mut callback) = self.callbacks.get(prop).and_then(Clone::clone)
+                        else {
                             pc += 1;
                             continue;
                         };
@@ -330,16 +352,18 @@ impl TypedRuntime {
                         result_slot,
                         error_slot,
                     } => {
-                        let RuntimeValue::Number(target) = frame.get(parameter).cloned().unwrap_or(RuntimeValue::Null) else {
-                            return Err(JsValue::from_str("callFrame parameter must be an action handle"));
+                        let RuntimeValue::Number(target) =
+                            frame.get(parameter).cloned().unwrap_or(RuntimeValue::Null)
+                        else {
+                            return Err(JsValue::from_str(
+                                "callFrame parameter must be an action handle",
+                            ));
                         };
                         let target = target as usize;
-                        let target_program = self
-                            .app
-                            .actions
-                            .get(target)
-                            .cloned()
-                            .ok_or_else(|| JsValue::from_str("callFrame action handle out of range"))?;
+                        let target_program =
+                            self.app.actions.get(target).cloned().ok_or_else(|| {
+                                JsValue::from_str("callFrame action handle out of range")
+                            })?;
                         if arguments.len() != target_program.parameter_slots.len() {
                             return Err(JsValue::from_str("callFrame action arity mismatch"));
                         }
@@ -397,7 +421,11 @@ impl TypedRuntime {
                                 native_event,
                                 metrics,
                             )?,
-                            _ => return Err(JsValue::from_str("partial action callFrame continuation")),
+                            _ => {
+                                return Err(JsValue::from_str(
+                                    "partial action callFrame continuation",
+                                ))
+                            }
                         }
                     }
                     TypedActionInstruction::CollectionMutation {
@@ -467,7 +495,10 @@ impl TypedRuntime {
                                     && entry.path == request.path
                                     && entry.same_site == request.same_site
                                     && entry.secure == request.secure
-                                    && entry.expiry_modes.iter().any(|mode| mode == &request.expiry)
+                                    && entry
+                                        .expiry_modes
+                                        .iter()
+                                        .any(|mode| mode == &request.expiry)
                             }) {
                                 return Err(JsValue::from_str("cookie request is not declared"));
                             }
@@ -545,12 +576,14 @@ impl TypedRuntime {
                                         &frame,
                                         &event,
                                     )
-                                    .and_then(|value| match value {
-                                        // JSON.stringify already produces a fetch-ready string.
-                                        // Encoding it again turns `{\"title\":\"Plec\"}` into a JSON
-                                        // string literal, which APIs correctly reject as a non-object body.
-                                        RuntimeValue::String(value) => Ok(value),
-                                        value => value.json_body(),
+                                    .and_then(|value| {
+                                        match value {
+                                            // JSON.stringify already produces a fetch-ready string.
+                                            // Encoding it again turns `{\"title\":\"Plec\"}` into a JSON
+                                            // string literal, which APIs correctly reject as a non-object body.
+                                            RuntimeValue::String(value) => Ok(value),
+                                            value => value.json_body(),
+                                        }
                                     })
                                 })
                                 .transpose()?;
@@ -948,7 +981,13 @@ impl TypedRuntime {
                             if write.spread {
                                 typed_apply_spread(&self.app, &write.kind, &node, value)?;
                             } else {
-                                typed_apply_value(&self.app, &write.kind, write.name, &node, value)?;
+                                typed_apply_value(
+                                    &self.app,
+                                    &write.kind,
+                                    write.name,
+                                    &node,
+                                    value,
+                                )?;
                             }
                             metrics.dom_operations += 1;
                         }
@@ -968,7 +1007,11 @@ impl TypedRuntime {
 
     fn queue_reactions_from(&mut self, kind: &str, handle: usize) {
         for edge in &self.app.dependency_edges {
-            if edge.source.kind == kind && edge.source.handle == handle && edge.target.kind == "reaction" && !self.pending_reactions.contains(&edge.target.handle) {
+            if edge.source.kind == kind
+                && edge.source.handle == handle
+                && edge.target.kind == "reaction"
+                && !self.pending_reactions.contains(&edge.target.handle)
+            {
                 self.pending_reactions.push(edge.target.handle);
             }
         }
@@ -977,13 +1020,30 @@ impl TypedRuntime {
     fn drain_reactions(&mut self, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
         while let Some(reaction) = self.pending_reactions.first().copied() {
             self.pending_reactions.remove(0);
-            let reaction_def = self.app.reactions.get(reaction).cloned().ok_or_else(|| JsValue::from_str("reaction handle out of range"))?;
-            if reaction_def.dependencies.iter().any(|dependency| *dependency >= self.app.expressions.len()) { return Err(JsValue::from_str("reaction dependency out of range")); }
-            if let Some(cleanup) = self.reaction_cleanups.get_mut(reaction).and_then(Option::take) {
+            let reaction_def = self
+                .app
+                .reactions
+                .get(reaction)
+                .cloned()
+                .ok_or_else(|| JsValue::from_str("reaction handle out of range"))?;
+            if reaction_def
+                .dependencies
+                .iter()
+                .any(|dependency| *dependency >= self.app.expressions.len())
+            {
+                return Err(JsValue::from_str("reaction dependency out of range"));
+            }
+            if let Some(cleanup) = self
+                .reaction_cleanups
+                .get_mut(reaction)
+                .and_then(Option::take)
+            {
                 self.execute_action(cleanup, &[], None, None, metrics)?;
             }
             self.execute_action(reaction_def.action, &[], None, None, metrics)?;
-            if let Some(slot) = self.reaction_cleanups.get_mut(reaction) { *slot = reaction_def.cleanup_action; }
+            if let Some(slot) = self.reaction_cleanups.get_mut(reaction) {
+                *slot = reaction_def.cleanup_action;
+            }
         }
         Ok(())
     }
@@ -1043,7 +1103,13 @@ impl TypedRuntime {
                                 if write.spread {
                                     typed_apply_spread(&self.app, &write.kind, &node, value)?;
                                 } else {
-                                    typed_apply_value(&self.app, &write.kind, write.name, &node, value)?;
+                                    typed_apply_value(
+                                        &self.app,
+                                        &write.kind,
+                                        write.name,
+                                        &node,
+                                        value,
+                                    )?;
                                 }
                                 metrics.dom_operations += 1;
                             }

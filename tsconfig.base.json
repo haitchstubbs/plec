@@ -17,7 +17,6 @@
       "plec-browser/compiled-subtree": [
         "./packages/plec-browser/src/compiled-subtree-entry.ts"
       ],
-      "plec-ir": ["./packages/plec-ir/src/index.ts"],
       "@wasm-runtime/lucide-plec": [
         "./packages/lucide-plec/src/index.ts"
       ],

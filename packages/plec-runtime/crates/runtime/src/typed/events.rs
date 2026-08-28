@@ -23,28 +23,103 @@ pub(crate) struct TypedGlobalListenerHandle {
 
 impl PlecRuntime {
     pub(crate) fn install_typed_global_listeners(&self) -> Result<(), JsValue> {
-        let candidates = self.typed.borrow().iter().map(|(id, instance)| (id.clone(), instance.runtime.app.listeners.clone())).collect::<Vec<_>>();
+        let candidates = self
+            .typed
+            .borrow()
+            .iter()
+            .map(|(id, instance)| (id.clone(), instance.runtime.app.listeners.clone()))
+            .collect::<Vec<_>>();
         for (instance_id, listeners) in candidates {
             for listener in listeners {
                 let target: EventTarget = match listener.source.as_str() {
-                    "window" => web_sys::window().ok_or_else(|| JsValue::from_str("window unavailable"))?.into(),
-                    "document" => web_sys::window().ok_or_else(|| JsValue::from_str("window unavailable"))?.document().ok_or_else(|| JsValue::from_str("document unavailable"))?.into(),
+                    "window" => web_sys::window()
+                        .ok_or_else(|| JsValue::from_str("window unavailable"))?
+                        .into(),
+                    "document" => web_sys::window()
+                        .ok_or_else(|| JsValue::from_str("window unavailable"))?
+                        .document()
+                        .ok_or_else(|| JsValue::from_str("document unavailable"))?
+                        .into(),
                     _ => continue,
                 };
-                let event_type = self.typed.borrow().get(&instance_id).and_then(|value| value.runtime.app.strings.get(listener.event)).cloned().ok_or_else(|| JsValue::from_str("listener event out of range"))?;
-                let already = self.typed.borrow().get(&instance_id).is_some_and(|value| value.runtime.global_listeners.iter().any(|entry| entry.event_type == event_type));
-                if already { continue; }
-                let runtime = self.clone(); let id = instance_id.clone(); let action = listener.action;
+                let event_type = self
+                    .typed
+                    .borrow()
+                    .get(&instance_id)
+                    .and_then(|value| value.runtime.app.strings.get(listener.event))
+                    .cloned()
+                    .ok_or_else(|| JsValue::from_str("listener event out of range"))?;
+                let already = self.typed.borrow().get(&instance_id).is_some_and(|value| {
+                    value
+                        .runtime
+                        .global_listeners
+                        .iter()
+                        .any(|entry| entry.event_type == event_type)
+                });
+                if already {
+                    continue;
+                }
+                let runtime = self.clone();
+                let id = instance_id.clone();
+                let action = listener.action;
                 let callback = Closure::wrap(Box::new(move |event: Event| {
-                    let value = RuntimeValue::Record([
-                        ("key".into(), event.dyn_ref::<KeyboardEvent>().map(|e| RuntimeValue::String(e.key())).unwrap_or(RuntimeValue::Null)),
-                        ("metaKey".into(), RuntimeValue::Bool(event.dyn_ref::<KeyboardEvent>().map(|e| e.meta_key()).unwrap_or(false))),
-                        ("ctrlKey".into(), RuntimeValue::Bool(event.dyn_ref::<KeyboardEvent>().map(|e| e.ctrl_key()).unwrap_or(false))),
-                    ].into_iter().collect());
-                    if let Ok(mut typed) = runtime.typed.try_borrow_mut() { if let Some(instance) = typed.get_mut(&id) { let _ = instance.runtime.execute_action_with_frame(action, &[(0, value)], None, Some(&event), &mut UpdateMetrics::default()); } }
+                    let value = RuntimeValue::Record(
+                        [
+                            (
+                                "key".into(),
+                                event
+                                    .dyn_ref::<KeyboardEvent>()
+                                    .map(|e| RuntimeValue::String(e.key()))
+                                    .unwrap_or(RuntimeValue::Null),
+                            ),
+                            (
+                                "metaKey".into(),
+                                RuntimeValue::Bool(
+                                    event
+                                        .dyn_ref::<KeyboardEvent>()
+                                        .map(|e| e.meta_key())
+                                        .unwrap_or(false),
+                                ),
+                            ),
+                            (
+                                "ctrlKey".into(),
+                                RuntimeValue::Bool(
+                                    event
+                                        .dyn_ref::<KeyboardEvent>()
+                                        .map(|e| e.ctrl_key())
+                                        .unwrap_or(false),
+                                ),
+                            ),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    );
+                    if let Ok(mut typed) = runtime.typed.try_borrow_mut() {
+                        if let Some(instance) = typed.get_mut(&id) {
+                            let _ = instance.runtime.execute_action_with_frame(
+                                action,
+                                &[(0, value)],
+                                None,
+                                Some(&event),
+                                &mut UpdateMetrics::default(),
+                            );
+                        }
+                    }
                 }) as Box<dyn FnMut(Event)>);
-                target.add_event_listener_with_callback(&event_type, callback.as_ref().unchecked_ref())?;
-                if let Some(instance) = self.typed.borrow_mut().get_mut(&instance_id) { instance.runtime.global_listeners.push(TypedGlobalListenerHandle { target, event_type, callback }); }
+                target.add_event_listener_with_callback(
+                    &event_type,
+                    callback.as_ref().unchecked_ref(),
+                )?;
+                if let Some(instance) = self.typed.borrow_mut().get_mut(&instance_id) {
+                    instance
+                        .runtime
+                        .global_listeners
+                        .push(TypedGlobalListenerHandle {
+                            target,
+                            event_type,
+                            callback,
+                        });
+                }
             }
         }
         Ok(())
@@ -276,7 +351,9 @@ impl PlecRuntime {
         let current_target = event
             .current_target()
             .and_then(|value| value.dyn_into::<Element>().ok());
-        let target = event.target().and_then(|value| value.dyn_into::<Element>().ok());
+        let target = event
+            .target()
+            .and_then(|value| value.dyn_into::<Element>().ok());
         let values = {
             let Ok(typed) = self.typed.try_borrow() else {
                 return Ok(());
@@ -392,7 +469,9 @@ impl PlecRuntime {
                                 && action.instructions.iter().any(|instruction| {
                                     let prop = match instruction {
                                         TypedActionInstruction::CallProp { prop, .. }
-                                        | TypedActionInstruction::CallPropOptional { prop, .. } => *prop,
+                                        | TypedActionInstruction::CallPropOptional {
+                                            prop, ..
+                                        } => *prop,
                                         _ => return false,
                                     };
                                     app.parameters.get(prop).is_some_and(|parameter| {
@@ -530,7 +609,14 @@ pub(crate) fn typed_event_field(
         "event" => Ok(RuntimeValue::Record(std::collections::HashMap::from([
             ("target".into(), typed_event_element(target)),
             ("currentTarget".into(), typed_event_element(current_target)),
-            ("key".into(), event.clone().dyn_into::<KeyboardEvent>().map(|key| RuntimeValue::String(key.key())).unwrap_or(RuntimeValue::Null)),
+            (
+                "key".into(),
+                event
+                    .clone()
+                    .dyn_into::<KeyboardEvent>()
+                    .map(|key| RuntimeValue::String(key.key()))
+                    .unwrap_or(RuntimeValue::Null),
+            ),
             ("type".into(), RuntimeValue::String(event.type_())),
         ]))),
         "type" => Ok(RuntimeValue::String(event.type_())),
@@ -598,15 +684,19 @@ pub(crate) fn typed_event_field(
 }
 
 fn typed_event_element(element: Option<&Element>) -> RuntimeValue {
-    let Some(element) = element else { return RuntimeValue::Null; };
+    let Some(element) = element else {
+        return RuntimeValue::Null;
+    };
     let value = element
         .clone()
         .dyn_into::<HtmlInputElement>()
         .ok()
-        .map(|input| RuntimeValue::Record(std::collections::HashMap::from([
-            ("value".into(), RuntimeValue::String(input.value())),
-            ("checked".into(), RuntimeValue::Bool(input.checked())),
-        ])))
+        .map(|input| {
+            RuntimeValue::Record(std::collections::HashMap::from([
+                ("value".into(), RuntimeValue::String(input.value())),
+                ("checked".into(), RuntimeValue::Bool(input.checked())),
+            ]))
+        })
         .unwrap_or(RuntimeValue::Record(std::collections::HashMap::new()));
     value
 }

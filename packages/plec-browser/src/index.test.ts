@@ -2,9 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   markPlecTiming,
   adaptLiveCollection,
-  reconcileInputSnapshot,
   wireRoutedInputs,
-  type CollectionProjection,
   type LiveCollectionChange,
 } from './index';
 
@@ -21,38 +19,6 @@ describe('compiled browser adapter', () => {
       ['plec:mount-error'],
     ]);
     vi.unstubAllGlobals();
-  });
-
-  it('reconciles only observed fields for a snapshot collection', () => {
-    const previous: CollectionProjection = {
-      kind: 'collection',
-      keys: ['a', 'b'],
-      rows: new Map([
-        ['a', { title: 'A', done: false }],
-        ['b', { title: 'B', done: false }],
-      ]),
-    };
-    const next: CollectionProjection = {
-      kind: 'collection',
-      keys: ['a', 'b'],
-      rows: new Map([
-        ['a', { title: 'A', done: true }],
-        ['b', { title: 'B', done: false }],
-      ]),
-    };
-    expect(
-      reconcileInputSnapshot('todos', previous, next, {
-        kind: 'collection',
-        orderSensitive: true,
-      }),
-    ).toEqual([
-      {
-        type: 'update',
-        inputId: 'todos',
-        rowKey: 'a',
-        changes: { done: true },
-      },
-    ]);
   });
 
   it('adapts live collection changes into runtime deltas', () => {
@@ -143,9 +109,10 @@ describe('compiled browser adapter', () => {
     );
 
     bridge.hydrate();
-    expect(runtime.initialize_input).toHaveBeenCalledWith('instruments', [
-      { id: 'PX0001', last: 101 },
-    ]);
+    expect(runtime.initialize_input).toHaveBeenCalledWith(
+      'instruments',
+      [{ id: 'PX0001', last: 101 }],
+    );
 
     notify([
       {
@@ -158,8 +125,8 @@ describe('compiled browser adapter', () => {
     expect(runtime.apply_deltas).toHaveBeenCalledWith([
       {
         type: 'update',
-        input_id: 'instruments',
-        row_key: 'PX0001',
+        inputId: 'instruments',
+        rowKey: 'PX0001',
         changes: { last: 101.2 },
       },
     ]);

@@ -40,7 +40,10 @@ pub(crate) fn typed_eval_frame(
                 stack.push(states.get(*state).cloned().unwrap_or(RuntimeValue::Null))
             }
             TypedExpressionInstruction::LoadRef { reference } => stack.push(
-                app.ref_values.get(*reference).cloned().unwrap_or(RuntimeValue::Null)
+                app.ref_values
+                    .get(*reference)
+                    .cloned()
+                    .unwrap_or(RuntimeValue::Null),
             ),
             TypedExpressionInstruction::LoadProp { prop } => stack.push(
                 app.runtime_props
@@ -75,8 +78,13 @@ pub(crate) fn typed_eval_frame(
                         "cookie" => slot
                             .name
                             .and_then(|name| app.strings.get(name))
-                            .and_then(|name| app.host_inputs.get(name))
-                            .cloned(),
+                            .and_then(|name| crate::typed::cookie::read_sync_cookie(name).ok())
+                            .or_else(|| {
+                                slot.name
+                                    .and_then(|name| app.strings.get(name))
+                                    .and_then(|name| app.host_inputs.get(name))
+                                    .cloned()
+                            }),
                         "location" => app
                             .host_inputs
                             .get("location.pathname")
@@ -166,11 +174,15 @@ pub(crate) fn typed_eval_frame(
                     .ok_or_else(|| JsValue::from_str("expression stack underflow: index object"))?;
                 let key = match key {
                     RuntimeValue::String(value) => value,
-                    RuntimeValue::Number(value) if value.is_finite() && value.fract() == 0.0 => value.to_string(),
+                    RuntimeValue::Number(value) if value.is_finite() && value.fract() == 0.0 => {
+                        value.to_string()
+                    }
                     _ => String::new(),
                 };
                 stack.push(match object {
-                    RuntimeValue::Record(value) => value.get(&key).cloned().unwrap_or(RuntimeValue::Null),
+                    RuntimeValue::Record(value) => {
+                        value.get(&key).cloned().unwrap_or(RuntimeValue::Null)
+                    }
                     RuntimeValue::Array(value) => key
                         .parse::<usize>()
                         .ok()
@@ -291,9 +303,9 @@ pub(crate) fn typed_eval_frame(
                 stack.push(RuntimeValue::Record(record));
             }
             TypedExpressionInstruction::OmitFields { fields } => {
-                let value = stack.pop().ok_or_else(|| {
-                    JsValue::from_str("expression stack underflow: omitFields")
-                })?;
+                let value = stack
+                    .pop()
+                    .ok_or_else(|| JsValue::from_str("expression stack underflow: omitFields"))?;
                 let mut record = value.record().cloned().unwrap_or_default();
                 for field in fields {
                     if let Some(name) = app.strings.get(*field) {
@@ -490,8 +502,12 @@ mod tests {
                 {"op": "index"}, {"op": "constant", "constant": 0},
                 {"op": "binary", "kind": "greaterEqual"}, {"op": "return"}
             ]}]
-        })).unwrap();
+        }))
+        .unwrap();
         let row = HashMap::from([("2".into(), RuntimeValue::Number(3.0))]);
-        assert_eq!(typed_eval(&app, 0, &[], Some(&row), 0).unwrap(), RuntimeValue::Bool(true));
+        assert_eq!(
+            typed_eval(&app, 0, &[], Some(&row), 0).unwrap(),
+            RuntimeValue::Bool(true)
+        );
     }
 }

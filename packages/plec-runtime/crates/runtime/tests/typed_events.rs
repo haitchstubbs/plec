@@ -1,7 +1,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use plec_runtime::PlecRuntime;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::*;
 use web_sys::{Element, Event};
@@ -25,10 +25,11 @@ export function setPlecFetchQueue(specs) {
   originalFetch ??= window.fetch;
   fetchQueue = JSON.parse(specs);
   aborts = 0;
-  window.fetch = (_request) => {
+  window.fetch = (input, init) => {
     const spec = fetchQueue.shift();
     if (spec.reject) return Promise.reject(Object.assign(new Error(spec.reject), { name: spec.name || 'TypeError' }));
-    if (spec.pending) return new Promise((_resolve, reject) => _request.signal.addEventListener('abort', () => { aborts++; reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }));
+    const signal = input instanceof Request ? input.signal : init?.signal;
+    if (spec.pending) return new Promise((_resolve, reject) => signal.addEventListener('abort', () => { aborts++; reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }));
     return Promise.resolve(new Response(spec.body ?? '', { status: spec.status ?? 200, statusText: spec.statusText ?? '', headers: spec.headers ?? {} }));
   };
 }
@@ -46,6 +47,51 @@ extern "C" {
     fn reset_plec_dom_mutations();
     #[wasm_bindgen::prelude::wasm_bindgen(js_name = plecDomMutations)]
     fn plec_dom_mutations() -> String;
+}
+
+struct FetchMockGuard;
+
+impl Drop for FetchMockGuard {
+    fn drop(&mut self) {
+        restore_plec_fetch();
+    }
+}
+
+fn install_plec_fetch_queue(specs: &str) -> FetchMockGuard {
+    set_plec_fetch_queue(specs);
+    FetchMockGuard
+}
+
+struct BrowserLocationGuard {
+    href: String,
+}
+
+impl Drop for BrowserLocationGuard {
+    fn drop(&mut self) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let _ = window.history().and_then(|history| {
+            history.replace_state_with_url(&JsValue::NULL, "", Some(&self.href))
+        });
+    }
+}
+
+fn reset_browser_location() -> BrowserLocationGuard {
+    let window = web_sys::window().unwrap();
+    let location = window.location();
+    let href = format!(
+        "{}{}{}",
+        location.pathname().unwrap(),
+        location.search().unwrap(),
+        location.hash().unwrap(),
+    );
+    window
+        .history()
+        .unwrap()
+        .replace_state_with_url(&JsValue::NULL, "", Some("/"))
+        .unwrap();
+    BrowserLocationGuard { href }
 }
 
 fn mount_root() -> Element {
@@ -518,8 +564,11 @@ fn apply_delta(runtime: &PlecRuntime, delta: serde_json::Value) {
 
 fn apply_deltas(runtime: &PlecRuntime, deltas: serde_json::Value) -> serde_json::Value {
     serde_wasm_bindgen::from_value(
-        runtime.apply_deltas(serde_wasm_bindgen::to_value(&deltas).unwrap()).unwrap(),
-    ).unwrap()
+        runtime
+            .apply_deltas(serde_wasm_bindgen::to_value(&deltas).unwrap())
+            .unwrap(),
+    )
+    .unwrap()
 }
 
 fn static_output(root: &Element) -> String {
@@ -706,15 +755,24 @@ fn keyed_value_batch_updates_only_its_field_bindings_without_row_mutation() {
     let runtime = PlecRuntime::new();
     let root = mount_root();
     load_and_mount(&runtime, keyed_row_artifact(), &root);
-    apply_delta(&runtime, serde_json::json!({"type":"insert","input_id":"items","row_key":"one","row":{"id":"one","title":"One"},"before_row_key":null}));
-    apply_delta(&runtime, serde_json::json!({"type":"insert","input_id":"items","row_key":"two","row":{"id":"two","title":"Two"},"before_row_key":null}));
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"insert","input_id":"items","row_key":"one","row":{"id":"one","title":"One"},"before_row_key":null}),
+    );
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"insert","input_id":"items","row_key":"two","row":{"id":"two","title":"Two"},"before_row_key":null}),
+    );
     let first = root.query_selector("li").unwrap().unwrap();
     reset_plec_dom_mutations();
 
-    let metrics = apply_deltas(&runtime, serde_json::json!([
-        {"type":"update","input_id":"items","row_key":"one","changes":{"title":"One+"}},
-        {"type":"update","input_id":"items","row_key":"two","changes":{"title":"Two+"}}
-    ]));
+    let metrics = apply_deltas(
+        &runtime,
+        serde_json::json!([
+            {"type":"update","input_id":"items","row_key":"one","changes":{"title":"One+"}},
+            {"type":"update","input_id":"items","row_key":"two","changes":{"title":"Two+"}}
+        ]),
+    );
     let mutations: serde_json::Value = serde_json::from_str(&plec_dom_mutations()).unwrap();
 
     assert_eq!(mutations["append"], 0);
@@ -726,9 +784,19 @@ fn keyed_value_batch_updates_only_its_field_bindings_without_row_mutation() {
     assert_eq!(metrics["bindingsTouched"], 2);
     assert_eq!(root.query_selector_all("li").unwrap().length(), 2);
     assert!(first.is_same_node(
-        root.query_selector("li").unwrap().as_ref().map(|node| node.unchecked_ref())
+        root.query_selector("li")
+            .unwrap()
+            .as_ref()
+            .map(|node| node.unchecked_ref())
     ));
-    assert_eq!(root.query_selector("li").unwrap().unwrap().text_content().as_deref(), Some("One+"));
+    assert_eq!(
+        root.query_selector("li")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .as_deref(),
+        Some("One+")
+    );
 }
 
 #[wasm_bindgen_test]
@@ -961,83 +1029,87 @@ fn rust_collection_mutation_fixture_updates_one_keyed_row_without_remounting() {
 
 #[wasm_bindgen_test(async)]
 async fn rust_general_async_actions_fixture_preserves_frame_and_finally_lifecycle() {
-    set_plec_fetch_queue(r#"[{"body":"{\"id\":\"one\",\"title\":\"New\"}"}]"#);
-    let runtime = PlecRuntime::new();
-    let root = mount_root();
-    load_and_mount(&runtime, rust_general_async_actions_artifact(), &root);
-    initialize_rows(&runtime, serde_json::json!([{"id":"one","title":"Old"}]));
-    let row = root.query_selector("li").unwrap().unwrap();
-    let text = row.first_child().unwrap();
-    root.query_selector("button")
-        .unwrap()
-        .unwrap()
-        .dyn_into::<web_sys::EventTarget>()
-        .unwrap()
-        .dispatch_event(&Event::new("click").unwrap())
-        .unwrap();
-    settle_fetch().await;
-    let next = root.query_selector("li").unwrap().unwrap();
-    assert!(row.is_same_node(Some(&next)));
-    assert!(text.is_same_node(next.first_child().as_ref()));
-    assert_eq!(next.text_content().unwrap(), "New");
-    assert_eq!(
-        root.query_selector_all("p")
+    {
+        let _fetch = install_plec_fetch_queue(r#"[{"body":"{\"id\":\"one\",\"title\":\"New\"}"}]"#);
+        let runtime = PlecRuntime::new();
+        let root = mount_root();
+        load_and_mount(&runtime, rust_general_async_actions_artifact(), &root);
+        initialize_rows(&runtime, serde_json::json!([{"id":"one","title":"Old"}]));
+        let row = root.query_selector("li").unwrap().unwrap();
+        let text = row.first_child().unwrap();
+        root.query_selector("button")
             .unwrap()
-            .item(1)
             .unwrap()
-            .text_content()
-            .unwrap(),
-        "true"
-    );
-    restore_plec_fetch();
+            .dyn_into::<web_sys::EventTarget>()
+            .unwrap()
+            .dispatch_event(&Event::new("click").unwrap())
+            .unwrap();
+        settle_fetch().await;
+        let next = root.query_selector("li").unwrap().unwrap();
+        assert!(row.is_same_node(Some(&next)));
+        assert!(text.is_same_node(next.first_child().as_ref()));
+        assert_eq!(next.text_content().unwrap(), "New");
+        assert_eq!(
+            root.query_selector_all("p")
+                .unwrap()
+                .item(1)
+                .unwrap()
+                .text_content()
+                .unwrap(),
+            "true"
+        );
+    }
 
-    set_plec_fetch_queue(r#"[{"status":500,"statusText":"Failed","body":"nope"}]"#);
-    let runtime = PlecRuntime::new();
-    let root = mount_root();
-    load_and_mount(&runtime, rust_general_async_actions_artifact(), &root);
-    initialize_rows(&runtime, serde_json::json!([{"id":"one","title":"Old"}]));
-    root.query_selector("button")
-        .unwrap()
-        .unwrap()
-        .dyn_into::<web_sys::EventTarget>()
-        .unwrap()
-        .dispatch_event(&Event::new("click").unwrap())
-        .unwrap();
-    settle_fetch().await;
-    assert!(root
-        .query_selector("p")
-        .unwrap()
-        .unwrap()
-        .text_content()
-        .unwrap()
-        .contains("request failed (500)"));
-    assert_eq!(
-        root.query_selector_all("p")
+    {
+        let _fetch = install_plec_fetch_queue(r#"[{"reject":"offline"}]"#);
+        let runtime = PlecRuntime::new();
+        let root = mount_root();
+        load_and_mount(&runtime, rust_general_async_actions_artifact(), &root);
+        initialize_rows(&runtime, serde_json::json!([{"id":"one","title":"Old"}]));
+        root.query_selector("button")
             .unwrap()
-            .item(1)
             .unwrap()
-            .text_content()
-            .unwrap(),
-        "true"
-    );
-    restore_plec_fetch();
+            .dyn_into::<web_sys::EventTarget>()
+            .unwrap()
+            .dispatch_event(&Event::new("click").unwrap())
+            .unwrap();
+        settle_fetch().await;
+        assert_eq!(
+            root.query_selector("p")
+                .unwrap()
+                .unwrap()
+                .text_content()
+                .unwrap(),
+            "network request failed"
+        );
+        assert_eq!(
+            root.query_selector_all("p")
+                .unwrap()
+                .item(1)
+                .unwrap()
+                .text_content()
+                .unwrap(),
+            "true"
+        );
+    }
 
-    set_plec_fetch_queue(r#"[{"pending":true}]"#);
-    let runtime = PlecRuntime::new();
-    let root = mount_root();
-    load_and_mount(&runtime, rust_general_async_actions_artifact(), &root);
-    root.query_selector("button")
-        .unwrap()
-        .unwrap()
-        .dyn_into::<web_sys::EventTarget>()
-        .unwrap()
-        .dispatch_event(&Event::new("click").unwrap())
-        .unwrap();
-    runtime.dispose().unwrap();
-    settle_fetch().await;
-    assert_eq!(plec_fetch_aborts(), 1);
-    assert_eq!(root.text_content().unwrap_or_default(), "");
-    restore_plec_fetch();
+    {
+        let _fetch = install_plec_fetch_queue(r#"[{"pending":true}]"#);
+        let runtime = PlecRuntime::new();
+        let root = mount_root();
+        load_and_mount(&runtime, rust_general_async_actions_artifact(), &root);
+        root.query_selector("button")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<web_sys::EventTarget>()
+            .unwrap()
+            .dispatch_event(&Event::new("click").unwrap())
+            .unwrap();
+        runtime.dispose().unwrap();
+        settle_fetch().await;
+        assert_eq!(plec_fetch_aborts(), 1);
+        assert_eq!(root.text_content().unwrap_or_default(), "");
+    }
 }
 
 #[wasm_bindgen_test]
@@ -1507,6 +1579,7 @@ fn event_dispatch_exposes_only_declared_slots_and_rejects_unsupported_fields() {
 
 #[wasm_bindgen_test(async)]
 async fn row_event_frame_survives_nested_call_and_fetch_continuation() {
+    let _fetch = install_plec_fetch_queue(r#"[{"body":"ok"}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     load_and_mount(&runtime, async_row_action_artifact(), &root);
@@ -1524,12 +1597,15 @@ async fn row_event_frame_survives_nested_call_and_fetch_continuation() {
     for _ in 0..5 {
         browser_tick().await;
     }
-    assert_eq!(root.text_content().unwrap(), "retained rowclick");
+    assert_eq!(
+        root.text_content().unwrap(),
+        "retained rowretained rowclick"
+    );
 }
 
 #[wasm_bindgen_test(async)]
 async fn disposing_a_typed_graph_aborts_and_discards_its_fetch() {
-    set_plec_fetch_queue(r#"[{"pending":true}]"#);
+    let _fetch = install_plec_fetch_queue(r#"[{"pending":true}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     load_and_mount(&runtime, async_row_action_artifact(), &root);
@@ -1550,7 +1626,6 @@ async fn disposing_a_typed_graph_aborts_and_discards_its_fetch() {
     }
     assert_eq!(plec_fetch_aborts(), 1);
     assert_eq!(root.text_content().unwrap_or_default(), "");
-    restore_plec_fetch();
 }
 
 #[wasm_bindgen_test(async)]
@@ -1564,14 +1639,13 @@ async fn typed_fetch_decodes_json_text_and_empty_responses() {
         ("text", r#"[{"body":"plain"}]"#, "plaininner"),
         ("empty", r#"[{"body":"ignored"}]"#, "inner"),
     ] {
-        set_plec_fetch_queue(spec);
+        let _fetch = install_plec_fetch_queue(spec);
         let runtime = PlecRuntime::new();
         let root = mount_root();
         load_and_mount(&runtime, fetch_artifact(decode, true, false), &root);
         click_fetch(&root);
         settle_fetch().await;
         assert_eq!(root.text_content().unwrap(), expected);
-        restore_plec_fetch();
     }
 }
 
@@ -1592,7 +1666,7 @@ async fn typed_fetch_routes_http_decode_network_and_abort_failures() {
             "\"kind\":\"abort\"",
         ),
     ] {
-        set_plec_fetch_queue(spec);
+        let _fetch = install_plec_fetch_queue(spec);
         let runtime = PlecRuntime::new();
         let root = mount_root();
         load_and_mount(&runtime, fetch_artifact("json", true, false), &root);
@@ -1602,46 +1676,43 @@ async fn typed_fetch_routes_http_decode_network_and_abort_failures() {
         assert!(output.contains(expected), "{output}");
         assert!(output.contains("\"url\":\"url\""), "{output}");
         assert!(output.ends_with("inner"), "{output}");
-        restore_plec_fetch();
     }
 
-    set_plec_fetch_queue(r#"[{"status":418,"body":"teapot"}]"#);
+    let _fetch = install_plec_fetch_queue(r#"[{"status":418,"body":"teapot"}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     load_and_mount(&runtime, fetch_artifact("text", false, false), &root);
     click_fetch(&root);
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap(), "teapotinner");
-    restore_plec_fetch();
 }
 
 #[wasm_bindgen_test(async)]
 async fn typed_fetch_runs_nested_finalizers_inner_to_outer() {
-    set_plec_fetch_queue(r#"[{"body":"outer"},{"body":"inner"}]"#);
+    let _fetch = install_plec_fetch_queue(r#"[{"body":"outer"},{"body":"inner"}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     load_and_mount(&runtime, fetch_artifact("text", true, true), &root);
     click_fetch(&root);
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap(), "innerinnerouter");
-    restore_plec_fetch();
 }
 
 #[wasm_bindgen_test(async)]
 async fn suspended_callee_resumes_its_caller_continuation() {
-    set_plec_fetch_queue(r#"[{"body":"resumed"}]"#);
+    let _fetch = install_plec_fetch_queue(r#"[{"body":"resumed"}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     load_and_mount(&runtime, caller_continuation_artifact(), &root);
     click_fetch(&root);
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap(), "resumed");
-    restore_plec_fetch();
 }
 
 #[wasm_bindgen_test(async)]
 async fn remount_and_typed_route_replacement_abort_stale_fetches() {
-    set_plec_fetch_queue(r#"[{"pending":true}]"#);
+    let _location = reset_browser_location();
+    let fetch = install_plec_fetch_queue(r#"[{"pending":true}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     load_and_mount(&runtime, fetch_artifact("text", true, false), &root);
@@ -1650,9 +1721,9 @@ async fn remount_and_typed_route_replacement_abort_stale_fetches() {
     settle_fetch().await;
     assert_eq!(plec_fetch_aborts(), 1);
     assert_eq!(root.text_content().unwrap_or_default(), "");
-    restore_plec_fetch();
+    drop(fetch);
 
-    set_plec_fetch_queue(r#"[{"pending":true}]"#);
+    let _fetch = install_plec_fetch_queue(r#"[{"pending":true}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     let mut route_root = fetch_artifact("text", true, false);
@@ -1690,12 +1761,12 @@ async fn remount_and_typed_route_replacement_abort_stale_fetches() {
     settle_fetch().await;
     assert_eq!(plec_fetch_aborts(), 1);
     assert_eq!(root.text_content().unwrap_or_default(), "");
-    restore_plec_fetch();
 }
 
 #[wasm_bindgen_test(async)]
 async fn typed_route_loader_writes_its_declared_result_state() {
-    set_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
+    let _location = reset_browser_location();
+    let _fetch = install_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     let mut route = fetch_artifact("text", true, false);
@@ -1728,12 +1799,12 @@ async fn typed_route_loader_writes_its_declared_result_state() {
     runtime.start(root.clone(), manifest).unwrap();
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap_or_default(), "loaded");
-    restore_plec_fetch();
 }
 
 #[wasm_bindgen_test(async)]
 async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
-    set_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
+    let _location = reset_browser_location();
+    let fetch = install_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     let route = rust_route_async_artifact();
@@ -1755,9 +1826,9 @@ async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
     runtime.start(root.clone(), manifest).unwrap();
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap_or_default(), "loaded");
-    restore_plec_fetch();
+    drop(fetch);
 
-    set_plec_fetch_queue(r#"[{"status":500,"statusText":"Failed","body":"nope"}]"#);
+    let fetch = install_plec_fetch_queue(r#"[{"status":500,"statusText":"Failed","body":"nope"}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     let route = rust_route_async_artifact();
@@ -1784,9 +1855,9 @@ async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
         .text_content()
         .unwrap_or_default()
         .contains("request failed (500)"));
-    restore_plec_fetch();
+    drop(fetch);
 
-    set_plec_fetch_queue(r#"[{"pending":true}]"#);
+    let _fetch = install_plec_fetch_queue(r#"[{"pending":true}]"#);
     let runtime = PlecRuntime::new();
     let root = mount_root();
     let route = rust_route_async_artifact();
@@ -1817,12 +1888,12 @@ async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
     settle_fetch().await;
     assert_eq!(plec_fetch_aborts(), 1);
     assert_eq!(root.text_content().unwrap_or_default(), "");
-    restore_plec_fetch();
 }
 
 #[wasm_bindgen_test(async)]
 async fn typed_route_error_receives_fetch_failure_and_retry_reloads() {
-    set_plec_fetch_queue(
+    let _location = reset_browser_location();
+    let _fetch = install_plec_fetch_queue(
         r#"[{"status":418,"statusText":"Teapot","body":"short and stout"},{"body":"loaded"}]"#,
     );
     let runtime = PlecRuntime::new();
@@ -1861,5 +1932,4 @@ async fn typed_route_error_receives_fetch_failure_and_retry_reloads() {
     click_fetch(&root);
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap_or_default(), "loaded");
-    restore_plec_fetch();
 }

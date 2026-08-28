@@ -26,8 +26,7 @@
     "clean": "powershell -NoProfile -Command \"if (Test-Path dist) { Remove-Item -Recurse -Force dist }\""
   },
   "dependencies": {
-    "comlink": "^4.4.2",
-    "plec-ir": "workspace:*"
+    "comlink": "^4.4.2"
   },
   "devDependencies": {
     "vitest": "^3.2.4"

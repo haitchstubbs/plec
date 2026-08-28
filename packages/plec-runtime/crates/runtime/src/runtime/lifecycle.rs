@@ -21,7 +21,7 @@ pub(crate) use crate::schema::{
         Application, Binding, Conditional, ContextScope, ElementNode, EventBinding, Expression,
         Loop, PropProgram, TextNode,
     },
-    delta::{runtime_from_json, Delta, MountMetrics, RuntimeValue, UpdateMetrics},
+    delta::{coalesce_deltas, runtime_from_json, Delta, MountMetrics, RuntimeValue, UpdateMetrics},
     routing::{RouteManifest, RouterState},
     typed::{
         TypedActionInstruction, TypedApplication, TypedBinding, TypedCollection,
@@ -32,7 +32,9 @@ pub(crate) use crate::schema::{
 use crate::dom::{bindings::*, instantiate::*, listeners::*, platform::*, util::*};
 use crate::eval::value::*;
 use crate::router::listeners::*;
+use crate::runtime::snapshots::SnapshotInput;
 use crate::runtime::state::*;
+use crate::typed::cookie::CookiePolicy;
 use crate::typed::runtime::*;
 
 /** Runtime-owned identity. ComponentGraph ids are compiler artifacts; an
@@ -86,6 +88,8 @@ pub struct PlecRuntime {
     pub(crate) typed_host_inputs: Rc<RefCell<HashMap<String, RuntimeValue>>>,
     /// Immutable component definitions for the currently loaded IR 0.10 application.
     pub(crate) typed_components: Rc<RefCell<Option<TypedComponentApplication>>>,
+    pub(crate) snapshot_inputs: Rc<RefCell<HashMap<String, SnapshotInput>>>,
+    pub(crate) cookie_policy: Rc<RefCell<Option<HashMap<String, CookiePolicy>>>>,
 }
 
 impl Clone for PlecRuntime {
@@ -103,6 +107,8 @@ impl Clone for PlecRuntime {
             typed_manifest: Rc::clone(&self.typed_manifest),
             typed_host_inputs: Rc::clone(&self.typed_host_inputs),
             typed_components: Rc::clone(&self.typed_components),
+            snapshot_inputs: Rc::clone(&self.snapshot_inputs),
+            cookie_policy: Rc::clone(&self.cookie_policy),
         }
     }
 }
@@ -243,7 +249,43 @@ impl PlecRuntime {
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn start(&self, root: Element, manifest: JsValue) -> Result<(), JsValue> {
-        let manifest: RouteManifest = serde_wasm_bindgen::from_value(manifest).map_err(error)?;
+        let manifest_value: Value = serde_wasm_bindgen::from_value(manifest).map_err(error)?;
+        let manifest: RouteManifest = if manifest_value.get("version").and_then(Value::as_u64)
+            == Some(3)
+            && manifest_value
+                .get("revision")
+                .and_then(Value::as_str)
+                .is_some()
+        {
+            let manifest: plec_ir::RouteManifest =
+                serde_json::from_value(manifest_value).map_err(error)?;
+            manifest
+                .validate()
+                .map_err(|message| JsValue::from_str(&message))?;
+            RouteManifest {
+                version: Some(manifest.version),
+                root_graph_id: manifest.root_graph_id,
+                routes: manifest
+                    .routes
+                    .into_iter()
+                    .map(|route| crate::schema::routing::RouteManifestEntry {
+                        id: route.id,
+                        parent_id: route.parent_id,
+                        path: route.path,
+                        graph_id: route.graph_id,
+                        pending_graph_id: route.pending_graph_id,
+                        pending_mode: route.pending_mode,
+                        error_graph_id: route.error_graph_id,
+                        outlet_id: route.outlet_id,
+                        loader: None,
+                        loader_state_slot_id: None,
+                        loader_action: route.loader_action,
+                    })
+                    .collect(),
+            }
+        } else {
+            serde_json::from_value(manifest_value).map_err(error)?
+        };
         if manifest.version == Some(3) {
             self.validate_typed_manifest(&manifest)?;
             *self.typed_manifest.borrow_mut() = Some(manifest);

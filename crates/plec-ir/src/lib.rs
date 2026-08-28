@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub const VERSION: &str = "0.10";
 // The component graph schema is still in its 0.10 development window.  Keep
@@ -17,16 +17,17 @@ pub struct ComponentApplication {
 
 /// The router is deliberately a separate artifact: graphs keep local runtime
 /// handles while this manifest owns the links between route instances.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteManifest {
     pub version: u32,
+    #[serde(default)]
     pub revision: String,
     pub root_graph_id: String,
     pub routes: Vec<RouteManifestEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteManifestEntry {
     pub id: String,
@@ -36,7 +37,10 @@ pub struct RouteManifestEntry {
     pub graph_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_graph_id: Option<String>,
-    #[serde(skip_serializing_if = "is_replace_pending_mode", default)]
+    #[serde(
+        skip_serializing_if = "is_replace_pending_mode",
+        default = "default_pending_mode"
+    )]
     pub pending_mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_graph_id: Option<String>,
@@ -45,8 +49,24 @@ pub struct RouteManifestEntry {
     pub outlet_id: String,
 }
 
+impl RouteManifest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.version != 3 {
+            return Err("unsupported route manifest version".into());
+        }
+        if self.root_graph_id.is_empty() {
+            return Err("route manifest root graph id is required".into());
+        }
+        Ok(())
+    }
+}
+
 fn is_replace_pending_mode(value: &String) -> bool {
     value == "replace"
+}
+
+fn default_pending_mode() -> String {
+    "replace".into()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -312,14 +332,25 @@ pub struct StateSlot {
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RefSlot { pub initial_expression: usize }
+pub struct RefSlot {
+    pub initial_expression: usize,
+}
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HostRef {}
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Reaction { pub dependencies: Vec<usize>, pub action: usize, #[serde(skip_serializing_if = "Option::is_none")] pub cleanup_action: Option<usize> }
+pub struct Reaction {
+    pub dependencies: Vec<usize>,
+    pub action: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup_action: Option<usize>,
+}
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Listener { pub source: &'static str, pub event: usize, pub action: usize }
+pub struct Listener {
+    pub source: &'static str,
+    pub event: usize,
+    pub action: usize,
+}
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ExpressionProgram {
     pub instructions: Vec<ExpressionInstruction>,
@@ -327,22 +358,45 @@ pub struct ExpressionProgram {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum ExpressionInstruction {
-    Constant { constant: usize },
-    LoadState { state: usize },
-    LoadRef { reference: usize },
-    LoadProp { prop: usize },
-    LoadFrame { slot: usize },
-    LoadHost { host: usize },
+    Constant {
+        constant: usize,
+    },
+    LoadState {
+        state: usize,
+    },
+    LoadRef {
+        reference: usize,
+    },
+    LoadProp {
+        prop: usize,
+    },
+    LoadFrame {
+        slot: usize,
+    },
+    LoadHost {
+        host: usize,
+    },
     /// The whole serializable loop row. This is distinct from a field read so
     /// computed row access and row spreads retain their normal value-graph
     /// semantics.
     LoadRowRecord,
-    LoadRowField { field: usize },
-    Field { field: usize },
+    LoadRowField {
+        field: usize,
+    },
+    Field {
+        field: usize,
+    },
     Index,
-    Unary { kind: &'static str },
-    Binary { kind: &'static str },
-    String { kind: &'static str, count: usize },
+    Unary {
+        kind: &'static str,
+    },
+    Binary {
+        kind: &'static str,
+    },
+    String {
+        kind: &'static str,
+        count: usize,
+    },
     MakeArray {
         count: usize,
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -353,7 +407,9 @@ pub enum ExpressionInstruction {
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
         spreads: Vec<bool>,
     },
-    OmitFields { fields: Vec<usize> },
+    OmitFields {
+        fields: Vec<usize>,
+    },
     Map {
         mapper: usize,
         item_slot: usize,
@@ -366,8 +422,12 @@ pub enum ExpressionInstruction {
         #[serde(skip_serializing_if = "Option::is_none")]
         index_slot: Option<usize>,
     },
-    Jump { target: usize },
-    JumpIfFalse { target: usize },
+    Jump {
+        target: usize,
+    },
+    JumpIfFalse {
+        target: usize,
+    },
     Return,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -403,10 +463,18 @@ pub enum ActionInstruction {
     StoreFrame {
         slot: usize,
     },
-    StoreRef { reference: usize },
-    CaptureActiveElement { reference: usize },
-    FocusHostRef { reference: usize },
-    FocusRef { reference: usize },
+    StoreRef {
+        reference: usize,
+    },
+    CaptureActiveElement {
+        reference: usize,
+    },
+    FocusHostRef {
+        reference: usize,
+    },
+    FocusRef {
+        reference: usize,
+    },
     PreventDefault,
     CallProp {
         prop: usize,
@@ -559,4 +627,44 @@ pub struct DependencyEndpoint {
 pub struct RouteOutlet {
     pub id: String,
     pub node: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_manifest_round_trips_the_active_transport_schema() {
+        let manifest = RouteManifest {
+            version: 3,
+            revision: "test".into(),
+            root_graph_id: "root".into(),
+            routes: vec![RouteManifestEntry {
+                id: "todos".into(),
+                parent_id: None,
+                path: "/todos".into(),
+                graph_id: "todos-graph".into(),
+                pending_graph_id: None,
+                pending_mode: "replace".into(),
+                error_graph_id: None,
+                loader_action: None,
+                outlet_id: "main".into(),
+            }],
+        };
+        let json = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(
+            serde_json::from_value::<RouteManifest>(json).unwrap(),
+            manifest
+        );
+    }
+
+    #[test]
+    fn route_manifest_rejects_a_non_v3_version() {
+        let value =
+            serde_json::json!({"version":2,"revision":"x","rootGraphId":"root","routes":[]});
+        assert!(serde_json::from_value::<RouteManifest>(value)
+            .unwrap()
+            .validate()
+            .is_err());
+    }
 }

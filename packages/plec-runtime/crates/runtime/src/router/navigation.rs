@@ -3,8 +3,8 @@ use crate::runtime::lifecycle::*;
 use crate::schema::delta::RuntimeValue;
 use crate::schema::routing::RouteManifestEntry;
 use crate::typed::runtime::*;
-use std::collections::HashMap;
 use js_sys::{Object, Reflect};
+use std::collections::HashMap;
 use web_sys::{CustomEvent, CustomEventInit};
 
 #[derive(Clone)]
@@ -266,12 +266,19 @@ impl PlecRuntime {
     }
 
     fn has_typed_graph(&self, graph_id: &str) -> bool {
-        self.typed_component_registry.borrow().contains_key(graph_id)
+        self.typed_component_registry
+            .borrow()
+            .contains_key(graph_id)
             || self.typed_registry.borrow().contains_key(graph_id)
     }
 
     fn typed_graph_application(&self, graph_id: &str) -> Option<TypedApplication> {
-        if let Some(graph) = self.typed_component_registry.borrow().get(graph_id).cloned() {
+        if let Some(graph) = self
+            .typed_component_registry
+            .borrow()
+            .get(graph_id)
+            .cloned()
+        {
             return graph.components.get(graph.root_component).cloned();
         }
         self.typed_registry.borrow().get(graph_id).cloned()
@@ -346,13 +353,25 @@ impl PlecRuntime {
             .get(&graph_id)
             .cloned();
         let app = match graph {
-            Some(graph) => graph.components.get(graph.root_component).cloned()
+            Some(graph) => graph
+                .components
+                .get(graph.root_component)
+                .cloned()
                 .ok_or_else(|| JsValue::from_str("typed route graph root is missing"))?,
-            None => self.typed_registry.borrow().get(&graph_id).cloned()
+            None => self
+                .typed_registry
+                .borrow()
+                .get(&graph_id)
+                .cloned()
                 .ok_or_else(|| JsValue::from_str("typed route graph is not registered"))?,
         };
         let mut runtime = TypedRuntime::new(app)?;
-        if let Some(graph) = self.typed_component_registry.borrow().get(&graph_id).cloned() {
+        if let Some(graph) = self
+            .typed_component_registry
+            .borrow()
+            .get(&graph_id)
+            .cloned()
+        {
             runtime.set_component_definitions(graph.components);
         }
         runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
@@ -561,11 +580,22 @@ impl PlecRuntime {
         preserve_loader: bool,
         error: Option<RuntimeValue>,
     ) -> Result<(), JsValue> {
-        let graph = self.typed_component_registry.borrow().get(graph_id).cloned();
+        let graph = self
+            .typed_component_registry
+            .borrow()
+            .get(graph_id)
+            .cloned();
         let app = match graph.as_ref() {
-            Some(graph) => graph.components.get(graph.root_component).cloned()
+            Some(graph) => graph
+                .components
+                .get(graph.root_component)
+                .cloned()
                 .ok_or_else(|| JsValue::from_str("typed route graph root is missing"))?,
-            None => self.typed_registry.borrow().get(graph_id).cloned()
+            None => self
+                .typed_registry
+                .borrow()
+                .get(graph_id)
+                .cloned()
                 .ok_or_else(|| JsValue::from_str("typed route graph is not registered"))?,
         };
         let mut next = TypedRuntime::new(app)?;
@@ -990,10 +1020,7 @@ mod tests {
         let manifest = RouteManifest {
             version: Some(3),
             root_graph_id: "root".into(),
-            routes: vec![
-                route("layout", None, ""),
-                route("home", Some("layout"), ""),
-            ],
+            routes: vec![route("layout", None, ""), route("home", Some("layout"), "")],
         };
         let matched = typed_route_chain(&manifest, "/");
         assert_eq!(
