@@ -38,7 +38,6 @@ const FORBIDDEN_BROWSER_DEPENDENCIES = [
   'zod',
   'typescript',
   '@swc/core',
-  'plec-compiler',
 ];
 
 const BUILD_DEFAULTS = {

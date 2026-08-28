@@ -61,7 +61,6 @@ apps/
 
 packages/
   plec/                 Framework runtime: jsx-runtime, state hooks, router
-  plec-compiler/        Legacy TS-side compiler utilities
   plec-ir/              Shared IR schema (Zod)
   plec-browser/         Browser glue: startPlecRouter, graph loading
   plec-runtime/         Rust -> WASM runtime (crate at crates/runtime)

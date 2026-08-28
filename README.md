@@ -45,7 +45,6 @@ apps/
   fullstack/          Demo full-stack Plec application (the runnable example)
 packages/
   plec/               Framework runtime: jsx-runtime, state hooks, router
-  plec-compiler/      TS-side compiler utilities (legacy; Rust is the authority)
   plec-ir/            Shared IR schema (Zod) and validation
   plec-browser/       Browser glue: startPlecRouter, graph loading
   plec-runtime/       Rust -> WASM runtime (crate under crates/runtime)

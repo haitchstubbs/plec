@@ -2,9 +2,7 @@
 
 The Rust crates compile typed TSX source into the Plec application artifact:
 a route manifest plus semantic application graphs consumed by the WASM
-runtime. Rust is the compiler authority; the TypeScript-side
-`packages/plec-compiler` is legacy and being retired (see
-[docs/rust-authority-capstone-handoff.md](../docs/rust-authority-capstone-handoff.md)).
+runtime. Rust is the compiler authority.
 
 ## Pipeline
 
