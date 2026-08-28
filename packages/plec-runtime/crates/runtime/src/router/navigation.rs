@@ -21,6 +21,70 @@ struct TypedLocation {
 }
 
 impl PlecRuntime {
+    pub(crate) fn adopt_typed_route(&self, href: &str, root: Element) -> Result<(), JsValue> {
+        let manifest = self
+            .typed_manifest
+            .borrow()
+            .clone()
+            .ok_or_else(|| JsValue::from_str("missing:ssr-manifest"))?;
+        let location = typed_location(href);
+        if !self.has_typed_graph(&manifest.root_graph_id) {
+            return Err(JsValue::from_str("missing:ssr-root-graph"));
+        }
+        let root_id = graph_instance_id(None, "main", None);
+        self.adopt_typed_graph(
+            root_id.clone(),
+            None,
+            "main".into(),
+            manifest.root_graph_id.clone(),
+            None,
+            None,
+            root,
+            "root".into(),
+        )?;
+        let mut parent_id = root_id;
+        let mut path = "root".to_owned();
+        for matched in typed_route_chain(&manifest, &location.pathname) {
+            let route = matched.route;
+            if route.loader_action.is_some() {
+                return Err(JsValue::from_str("unsupported:ssr-route-loader"));
+            }
+            if !self.has_typed_graph(&route.graph_id) {
+                return Err(JsValue::from_str("missing:ssr-route-graph"));
+            }
+            let match_key = typed_match_key(&route.id, &matched.params, &location);
+            let id = graph_instance_id(Some(&parent_id), &route.outlet_id, None);
+            let outlet = self.typed_outlet_element(&parent_id, &route.outlet_id)?;
+            let child_path = format!("{path}/outlet:{}", route.outlet_id);
+            self.adopt_typed_graph(
+                id.clone(),
+                Some(parent_id),
+                route.outlet_id.clone(),
+                route.graph_id.clone(),
+                Some(route.id),
+                Some(match_key),
+                outlet,
+                child_path.clone(),
+            )?;
+            self.typed.borrow_mut().get_mut(&id).expect("adopted route exists").route_state = Some(TypedRouteState {
+                normal_graph_id: route.graph_id,
+                pending_graph_id: route.pending_graph_id,
+                pending_mode: route.pending_mode,
+                error_graph_id: route.error_graph_id,
+                loader_action: None,
+                params: matched.params,
+                location: (location.pathname.clone(), location.search.clone(), location.hash.clone()),
+                phase: TypedRoutePhase::Normal,
+            });
+            parent_id = id;
+            path = child_path;
+        }
+        self.flush_component_work()?;
+        self.install_typed_event_listeners()?;
+        self.install_typed_global_listeners()?;
+        self.refresh_navigation_state(&location.pathname)
+    }
+
     pub(crate) fn navigate_internal(&self, href: &str, replace: bool) -> Result<(), JsValue> {
         let state = self
             .router
@@ -397,6 +461,51 @@ impl PlecRuntime {
         );
         self.mount_component_requests()?;
         self.install_typed_event_listeners()
+    }
+
+    fn adopt_typed_graph(
+        &self,
+        id: String,
+        parent_id: Option<String>,
+        outlet_id: String,
+        graph_id: String,
+        route_id: Option<String>,
+        match_key: Option<String>,
+        root: Element,
+        path: String,
+    ) -> Result<(), JsValue> {
+        let graph = self
+            .typed_component_registry
+            .borrow()
+            .get(&graph_id)
+            .cloned()
+            .ok_or_else(|| JsValue::from_str("missing:ssr-component-graph"))?;
+        let app = graph
+            .components
+            .get(graph.root_component)
+            .cloned()
+            .ok_or_else(|| JsValue::from_str("missing:ssr-root-component"))?;
+        let mut runtime = TypedRuntime::new(app)?;
+        runtime.set_component_definitions(graph.components);
+        runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+        runtime.graph_generation = self.next_typed_generation();
+        runtime.adopt(root, &path)?;
+        self.typed.borrow_mut().insert(
+            id,
+            TypedGraphInstance {
+                parent_id,
+                outlet_id,
+                graph_id,
+                route_id,
+                match_key,
+                route_state: None,
+                loader_runtime: None,
+                component_call: None,
+                component_start: None,
+                runtime,
+            },
+        );
+        Ok(())
     }
     fn typed_outlet_element(&self, parent_id: &str, outlet_id: &str) -> Result<Element, JsValue> {
         let typed = self.typed.borrow();

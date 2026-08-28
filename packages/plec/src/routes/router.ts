@@ -15,6 +15,11 @@ export type LoaderContext = {
 
 export type PendingMode = 'replace' | 'retain';
 
+export type RouteMetadata = {
+  title?: string;
+  description?: string;
+};
+
 export type RouteOptions<TData = unknown> = {
   path?: string;
   /** Child graphs mount here in the matching parent graph. */
@@ -24,6 +29,8 @@ export type RouteOptions<TData = unknown> = {
   pendingComponent?: PlecComponent;
   pendingMode?: PendingMode;
   errorComponent?: PlecComponent;
+  /** Static document metadata rendered by the Plec server. */
+  meta?: RouteMetadata;
 };
 
 export type RouteDefinition<TData = unknown> = RouteOptions<TData> & {

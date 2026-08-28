@@ -228,6 +228,8 @@ interface WasmRuntimeInstance {
   dispose(): void;
   register_graph(graphId: string, ir: unknown): void;
   start(root: Element, manifest: unknown): void;
+  start_adopt(root: Element, manifest: unknown): void;
+  abandon_adoption(): void;
   navigate(href: string, replace: boolean): void;
 }
 interface WasmRuntimeModule {
@@ -265,6 +267,16 @@ export interface PlecRouterMountOptions {
    * the same producer boundary accepted by `mountPlecApplication`. */
   inputs?: Record<string, CompiledInputProducer<any>>;
   onQueryUpdate?: (update: CompiledQueryUpdate) => void;
+  /** Development/test visibility for SSR adoption decisions. Production hosts
+   * may omit this and transparently take the normal mount path. */
+  onAdoptionDiagnostic?: (diagnostic: PlecAdoptionDiagnostic) => void;
+}
+export interface PlecAdoptionDiagnostic {
+  outcome: 'adopted' | 'fallback';
+  expectedRevision?: string;
+  observedRevision?: string;
+  routeId?: string | null;
+  mismatchCodes: string[];
 }
 export interface PlecRouterController {
   dispose(): void;
@@ -488,6 +500,7 @@ export async function startPlecRouter(
   options: PlecRouterMountOptions,
 ): Promise<PlecRouterController> {
   markPlecTiming('plec:mount-start');
+  const bootstrap = readSsrBootstrap();
   const manifestResponse = await fetch(
     options.applicationUrl ??
       options.manifestUrl ??
@@ -513,11 +526,6 @@ export async function startPlecRouter(
   const runtime = new runtimeModule.PlecRuntime();
   runtime.set_cookie_policy(options.cookiePolicy ?? null);
   const routedInputs = options.inputs ?? {};
-  const routedInputBridge = wireRoutedInputs(
-    runtime,
-    routedInputs,
-    options.onQueryUpdate,
-  );
   const hostInputs: Record<string, unknown> = {
     'location.pathname': window.location.pathname,
     'location.search': window.location.search,
@@ -547,6 +555,49 @@ export async function startPlecRouter(
       compiled.application,
     );
   }
+  let adopted = false;
+  if (bootstrap) {
+    const expectedRevision = (manifest as any).revision as string | undefined;
+    const route = (manifest as any).routes?.find(
+      (entry: any) => entry.id === bootstrap.routeId,
+    );
+    const currentPath = window.location.pathname.replace(/^\/+/, '');
+    const routeMatches = route && (route.path === currentPath || (route.path === '' && currentPath === '') || route.path === '*');
+    if (expectedRevision !== bootstrap.revision) {
+      emitAdoptionDiagnostic(options, {
+        outcome: 'fallback', expectedRevision, observedRevision: bootstrap.revision,
+        routeId: bootstrap.routeId, mismatchCodes: ['stale-revision'],
+      });
+    } else if (!routeMatches) {
+      emitAdoptionDiagnostic(options, {
+        outcome: 'fallback', expectedRevision, observedRevision: bootstrap.revision,
+        routeId: bootstrap.routeId, mismatchCodes: ['route-mismatch'],
+      });
+    } else {
+      try {
+        // The initial route graph is needed before WASM can reconstruct the
+        // existing outlet; later route graphs remain lazy.
+        if (!compiled) await loadGraph(route.graphId);
+        runtime.start_adopt(options.root, manifest);
+        adopted = true;
+        emitAdoptionDiagnostic(options, {
+          outcome: 'adopted', expectedRevision, observedRevision: bootstrap.revision,
+          routeId: bootstrap.routeId, mismatchCodes: [],
+        });
+      } catch (error) {
+        runtime.abandon_adoption();
+        emitAdoptionDiagnostic(options, {
+          outcome: 'fallback', expectedRevision, observedRevision: bootstrap.revision,
+          routeId: bootstrap.routeId, mismatchCodes: [adoptionMismatchCode(error)],
+        });
+      }
+    }
+  }
+  const routedInputBridge = wireRoutedInputs(
+    runtime,
+    routedInputs,
+    options.onQueryUpdate,
+  );
   const onGraphNeeded = (event: Event) => {
     const graphId = (event as CustomEvent<{ graphId?: string }>).detail
       ?.graphId;
@@ -564,7 +615,7 @@ export async function startPlecRouter(
       );
   };
   window.addEventListener('plec:graph-needed', onGraphNeeded);
-  runtime.start(options.root, manifest);
+  if (!adopted) runtime.start(options.root, manifest);
   routedInputBridge.hydrate();
   let hydrationQueued = false;
   const scheduleRoutedInputHydration = () => {
@@ -607,6 +658,26 @@ export async function startPlecRouter(
       runtime.dispose();
     },
   };
+}
+
+function readSsrBootstrap(): { revision?: string; routeId?: string | null } | null {
+  const element = document.querySelector('#plec-bootstrap[type="application/json"]');
+  if (!element?.textContent) return null;
+  try { return JSON.parse(element.textContent); } catch { return { }; }
+}
+
+function adoptionMismatchCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/^Error:\s*/, '') || 'adoption-error';
+}
+
+function emitAdoptionDiagnostic(
+  options: PlecRouterMountOptions,
+  diagnostic: PlecAdoptionDiagnostic,
+) {
+  options.onAdoptionDiagnostic?.(diagnostic);
+  if (typeof window !== 'undefined')
+    window.dispatchEvent(new CustomEvent('plec:adoption', { detail: diagnostic }));
 }
 
 // SVG instance cache for static icons

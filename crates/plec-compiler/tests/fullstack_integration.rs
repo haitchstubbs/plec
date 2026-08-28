@@ -102,7 +102,7 @@ fn lowers_fullstack_route_tree_to_a_rust_manifest() {
             .expect("static fullstack route declarations should lower"),
     );
     assert_eq!(manifest.version, 3);
-    assert_eq!(manifest.routes.len(), 4);
+    assert_eq!(manifest.routes.len(), 5);
     assert!(manifest
         .routes
         .iter()

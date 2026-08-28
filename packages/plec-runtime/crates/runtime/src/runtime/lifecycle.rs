@@ -325,6 +325,65 @@ impl PlecRuntime {
             .unwrap_or_else(|_| "/".into());
         self.navigate_internal(&pathname, true)
     }
+
+    /// Starts a typed route tree from server-rendered DOM.  This is separate
+    /// from `start` so normal client mounts retain their small, marker-free
+    /// output contract.
+    pub fn start_adopt(&self, root: Element, manifest: JsValue) -> Result<(), JsValue> {
+        let manifest_value: Value = serde_wasm_bindgen::from_value(manifest).map_err(error)?;
+        if manifest_value.get("version").and_then(Value::as_u64) != Some(3) {
+            return Err(JsValue::from_str("unsupported:ssr-manifest"));
+        }
+        let manifest: plec_ir::RouteManifest =
+            serde_json::from_value(manifest_value).map_err(error)?;
+        manifest
+            .validate()
+            .map_err(|message| JsValue::from_str(&format!("mismatch:ssr-manifest:{message}")))?;
+        let manifest = RouteManifest {
+            version: Some(manifest.version),
+            root_graph_id: manifest.root_graph_id,
+            routes: manifest
+                .routes
+                .into_iter()
+                .map(|route| crate::schema::routing::RouteManifestEntry {
+                    id: route.id,
+                    parent_id: route.parent_id,
+                    path: route.path,
+                    graph_id: route.graph_id,
+                    pending_graph_id: route.pending_graph_id,
+                    pending_mode: route.pending_mode,
+                    error_graph_id: route.error_graph_id,
+                    outlet_id: route.outlet_id,
+                    loader: None,
+                    loader_state_slot_id: None,
+                    loader_action: route.loader_action,
+                })
+                .collect(),
+        };
+        self.validate_typed_manifest(&manifest)?;
+        *self.typed_manifest.borrow_mut() = Some(manifest);
+        *self.typed_root.borrow_mut() = Some(root.clone());
+        self.dispose_router_listeners();
+        self.install_router_listeners()?;
+        let location = window()?.location();
+        let href = format!(
+            "{}{}{}",
+            location.pathname().unwrap_or_else(|_| "/".into()),
+            location.search().unwrap_or_default(),
+            location.hash().unwrap_or_default(),
+        );
+        self.adopt_typed_route(&href, root)
+    }
+
+    /// Discards only partially reconstructed runtime ownership after an SSR
+    /// mismatch. The server DOM is intentionally left intact so the caller
+    /// can make the normal mount path the single, observable fallback.
+    pub fn abandon_adoption(&self) {
+        self.dispose_typed_instances();
+        *self.typed_manifest.borrow_mut() = None;
+        *self.typed_root.borrow_mut() = None;
+        self.dispose_router_listeners();
+    }
 }
 
 #[wasm_bindgen::prelude::wasm_bindgen]

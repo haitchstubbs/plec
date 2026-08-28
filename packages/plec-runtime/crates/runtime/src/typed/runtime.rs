@@ -55,6 +55,14 @@ pub(crate) struct TypedComponentRequest {
     pub(crate) start: Node,
     pub(crate) end: Node,
     pub(crate) key: String,
+    /// SSR already owns this range. Component work must bind it rather than
+    /// inserting a second copy before the end marker.
+    pub(crate) adoption: Option<TypedAdoptionRequest>,
+}
+
+pub(crate) struct TypedAdoptionRequest {
+    pub(crate) root: Element,
+    pub(crate) path: String,
 }
 
 #[derive(Clone)]
@@ -455,7 +463,11 @@ impl PlecRuntime {
                     .collect::<Result<Vec<_>, JsValue>>()?;
                 runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
                 runtime.graph_generation = self.next_typed_generation();
-                runtime.mount_before(&request.end)?;
+                if let Some(adoption) = request.adoption.as_ref() {
+                    runtime.adopt(adoption.root.clone(), &adoption.path)?;
+                } else {
+                    runtime.mount_before(&request.end)?;
+                }
                 if let Some(row) = request.row_context.as_ref() {
                     if let Some(element) = runtime
                         .nodes
@@ -465,7 +477,10 @@ impl PlecRuntime {
                         element.set_attribute("data-runtime-row-key", &row.row_key)?;
                     }
                 }
-                if !request.children.is_empty() && !runtime.slot_requests.is_empty() {
+                if !request.children.is_empty()
+                    && !runtime.slot_requests.is_empty()
+                    && request.adoption.is_none()
+                {
                     let slot = runtime.slot_requests.pop().expect("slot exists");
                     if !runtime.slot_requests.is_empty() {
                         return Err(JsValue::from_str(
@@ -817,6 +832,196 @@ impl TypedRuntime {
             ..Default::default()
         })
     }
+
+    /// Rebuild the runtime-side ownership of SSR DOM without changing that
+    /// DOM.  The server emits paths from the same graph-instance/component
+    /// traversal used here, so this is deliberately a strict contract: an
+    /// absent or stale marker is an adoption failure, never an excuse to
+    /// silently attach a listener to a guessed node.
+    pub(crate) fn adopt(&mut self, root: Element, path: &str) -> Result<MountMetrics, JsValue> {
+        self.invalidate_fetches();
+        self.clear_listeners();
+        self.nodes.clear();
+        self.loops.clear();
+        self.conditionals.clear();
+        self.listener_requests.clear();
+        self.component_requests.clear();
+        self.slot_requests.clear();
+
+        let comments = typed_adoption_comments(&root);
+        for (index, node) in self.app.nodes.clone().into_iter().enumerate() {
+            match node {
+                TypedNode::Element { tag, host_ref, .. } => {
+                    let marker = format!("{path}/node:{index}");
+                    let selector = format!("[data-plec-node=\"{marker}\"]");
+                    let element = root
+                        .query_selector(&selector)?
+                        .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-node:{marker}")))?;
+                    let expected_tag = self
+                        .app
+                        .strings
+                        .get(tag)
+                        .ok_or_else(|| JsValue::from_str("adoption tag handle out of range"))?;
+                    if element.tag_name().to_ascii_lowercase() != expected_tag.to_ascii_lowercase() {
+                        return Err(JsValue::from_str(&format!("mismatch:ssr-tag:{marker}")));
+                    }
+                    let dom_node: Node = element.into();
+                    if let Some(reference) = host_ref {
+                        let slot = self
+                            .host_ref_nodes
+                            .get_mut(reference)
+                            .ok_or_else(|| JsValue::from_str("adoption host ref handle out of range"))?;
+                        *slot = Some(dom_node.clone());
+                    }
+                    self.nodes.insert(index, dom_node);
+                }
+                TypedNode::Text { .. } => {
+                    let marker = format!("plec:text:{path}:{index}");
+                    let text = comments
+                        .get(&marker)
+                        .and_then(Node::next_sibling)
+                        .filter(|candidate| candidate.node_type() == Node::TEXT_NODE)
+                        .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-text:{path}:{index}")))?;
+                    self.nodes.insert(index, text);
+                }
+                TypedNode::Component { component, props, children, .. } => {
+                    self.queue_adopted_component(
+                        index,
+                        component,
+                        props,
+                        children,
+                        &comments,
+                        &root,
+                        path,
+                    )?;
+                }
+                TypedNode::Slot { .. } => {
+                    let start = comments
+                        .get(&format!("plec:slot:{path}:{index}"))
+                        .cloned()
+                        .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-slot:{path}:{index}")))?;
+                    let end = comments
+                        .get(&format!("plec:slot-end:{path}:{index}"))
+                        .cloned()
+                        .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-slot-end:{path}:{index}")))?;
+                    self.nodes.insert(index, start.clone());
+                    self.slot_requests.push(TypedSlotRequest { start, end });
+                }
+                // These regions require an SSR row/branch ownership record,
+                // which this first adoption slice has not emitted yet.  Fail
+                // loudly so dev/test callers see a structured fallback.
+                TypedNode::Loop { .. } => return Err(JsValue::from_str("unsupported:ssr-loop")),
+                TypedNode::Conditional { .. } => {
+                    return Err(JsValue::from_str("unsupported:ssr-conditional"))
+                }
+                TypedNode::DynamicComponent { prop, props, children, .. } => {
+                    let component = self
+                        .app
+                        .runtime_component_props
+                        .get(prop)
+                        .and_then(|value| *value)
+                        .ok_or_else(|| JsValue::from_str("missing:ssr-dynamic-component"))?;
+                    self.queue_adopted_component(
+                        index,
+                        component,
+                        props,
+                        children,
+                        &comments,
+                        &root,
+                        path,
+                    )?;
+                }
+            }
+        }
+        self.root = Some(root);
+        self.apply_static_bindings()?;
+        self.queue_static_listeners();
+        Ok(MountMetrics {
+            bindings: self.app.bindings.len() as u32,
+            ..Default::default()
+        })
+    }
+
+    fn queue_adopted_component(
+        &mut self,
+        index: usize,
+        component: usize,
+        props: Vec<TypedComponentProp>,
+        children: Vec<usize>,
+        comments: &HashMap<String, Node>,
+        root: &Element,
+        path: &str,
+    ) -> Result<(), JsValue> {
+        let start = comments
+            .get(&format!("plec:component:{path}:{index}"))
+            .cloned()
+            .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-component:{path}:{index}")))?;
+        let end = comments
+            .get(&format!("plec:component-end:{path}:{index}"))
+            .cloned()
+            .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-component-end:{path}:{index}")))?;
+        let mut values = HashMap::new();
+        let mut callbacks = HashMap::new();
+        let mut component_props = HashMap::new();
+        for prop in props {
+            let name = self
+                .app
+                .strings
+                .get(prop.name())
+                .ok_or_else(|| JsValue::from_str("adoption component prop name out of range"))?
+                .clone();
+            match prop {
+                TypedComponentProp::Value { expression, .. } => {
+                    values.insert(name, typed_eval(&self.app, expression, &self.states, None, 0)?);
+                }
+                TypedComponentProp::Callable { action, .. } => {
+                    callbacks.insert(name, TypedCallbackSpec { action, row: None });
+                }
+                TypedComponentProp::Component { component, .. } => {
+                    component_props.insert(name, component);
+                }
+            }
+        }
+        let key = format!("{index}:{}", self.next_component_instance);
+        self.next_component_instance += 1;
+        self.nodes.insert(index, start.clone());
+        self.component_requests.push(TypedComponentRequest {
+            call: index,
+            component,
+            props: values,
+            callbacks,
+            component_props,
+            children,
+            row_context: None,
+            start,
+            end,
+            key,
+            adoption: Some(TypedAdoptionRequest {
+                root: root.clone(),
+                path: format!("{path}/component:{index}"),
+            }),
+        });
+        Ok(())
+    }
+}
+
+fn typed_adoption_comments(root: &Element) -> HashMap<String, Node> {
+    fn visit(node: &Node, comments: &mut HashMap<String, Node>) {
+        if node.node_type() == Node::COMMENT_NODE {
+            if let Some(value) = node.node_value() {
+                comments.insert(value, node.clone());
+            }
+        }
+        let children = node.child_nodes();
+        for index in 0..children.length() {
+            if let Some(child) = children.item(index) {
+                visit(&child, comments);
+            }
+        }
+    }
+    let mut comments = HashMap::new();
+    visit(&root.clone().into(), &mut comments);
+    comments
 }
 
 impl TypedRuntime {
@@ -1240,6 +1445,7 @@ impl TypedRuntime {
                     start: start.clone(),
                     end,
                     key,
+                    adoption: None,
                 });
                 if row.is_some() {
                     local.insert(index, start.clone());
@@ -1307,6 +1513,7 @@ impl TypedRuntime {
                     start: start.clone(),
                     end,
                     key,
+                    adoption: None,
                 });
                 if row.is_some() {
                     local.insert(index, start.clone());

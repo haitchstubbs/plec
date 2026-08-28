@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use plec_hir::{ComponentId, HirApplication, HirRoute, HirRouteApplication};
+use plec_hir::{ComponentId, HirApplication, HirRoute, HirRouteApplication, HirRouteMetadata};
 use plec_ir::{
     ActionInstruction, ActionProgram, CapabilityRequest, ComponentApplication, ExpressionInstruction,
     ExpressionProgram, ReturnOutcome, RouteManifest, RouteManifestEntry, RouteOutlet, StateSlot,
-    Value,
+    Value, RouteMetadata,
 };
 use plec_parser::ParsedModule;
 use plec_sema::{resolve_local_symbol, SemanticGraph};
@@ -106,6 +106,7 @@ pub fn lower_routes(
                 let loader = optional_ident_option(options.props.as_slice(), "loader")?;
                 let outlet_id = string_option(options.props.as_slice(), "outletId")?
                     .unwrap_or_else(|| "main".into());
+                let metadata = route_metadata_option(options.props.as_slice())?;
                 let id = format!("{}#{}", module.id, name.id.sym);
                 route_locals.insert((module.id.clone(), name.id.sym.to_string()), id.clone());
                 routes.push(HirRoute {
@@ -118,6 +119,7 @@ pub fn lower_routes(
                     error_component,
                     loader,
                     outlet_id,
+                    metadata,
                 });
             }
         }
@@ -180,6 +182,9 @@ pub fn lower_route_manifest(routes: &HirRouteApplication) -> RouteManifest {
                 // cannot supply this runtime handle.
                 loader_action: route.loader.as_ref().map(|_| 0),
                 outlet_id: route.outlet_id.clone(),
+                meta: (!route.metadata.title.is_none() || !route.metadata.description.is_none()).then(|| RouteMetadata {
+                    title: route.metadata.title.clone(), description: route.metadata.description.clone(),
+                }),
             })
             .collect(),
     }
@@ -551,6 +556,13 @@ fn string_option(props: &[PropOrSpread], name: &str) -> Result<Option<String>, R
         }
     }
     Ok(None)
+}
+fn route_metadata_option(props: &[PropOrSpread]) -> Result<HirRouteMetadata, RouteError> {
+    let Some(Expr::Object(meta)) = prop(props, "meta") else { return Ok(HirRouteMetadata::default()); };
+    Ok(HirRouteMetadata {
+        title: string_option(&meta.props, "title")?,
+        description: string_option(&meta.props, "description")?,
+    })
 }
 fn pending_mode_option(props: &[PropOrSpread]) -> Result<String, RouteError> {
     match string_option(props, "pendingMode")?.as_deref() {

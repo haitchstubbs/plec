@@ -3,8 +3,11 @@ import {
   PageFrame,
   PageKicker,
 } from '../components/page-primitives';
+import { useLocation, useState } from 'plec';
 
 export function HomePage() {
+  const location = useLocation();
+  const [count, setCount] = useState(0);
   return (
     <PageFrame>
       <PageKicker>Runtime control room</PageKicker>
@@ -15,6 +18,12 @@ export function HomePage() {
         The home view is a compact operational snapshot of the
         experimental fullstack runtime.
       </p>
+      <p id="ssr-request" className="m-0 text-sm text-muted-foreground">
+        Requested {location.pathname}{location.search}
+      </p>
+      <button id="ssr-counter" type="button" onClick={() => setCount(count + 1)}>
+        SSR counter: {count}
+      </button>
       <div className="grid gap-4 md:grid-cols-2">
         <InfoCard title="Renderer">
           <p className="font-semibold !text-emerald-700 dark:!text-emerald-400">
