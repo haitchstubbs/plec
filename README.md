@@ -13,9 +13,7 @@ updates exactly the DOM nodes that depend on it.
 
 The runtime is written in Rust and compiled to WebAssembly. WebAssembly is an
 implementation detail, not the point — the point is the boundary between
-application source and application execution. For the full architectural
-story and a comparison against React, Svelte, Solid, Blazor, Leptos, Dioxus,
-and Meta's LightSpeed, read [PLEC-README.md](PLEC-README.md).
+application source and application execution.
 
 ## How it works
 
