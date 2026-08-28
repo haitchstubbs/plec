@@ -101,6 +101,12 @@ await writeFile(
   path.join(publicDir, 'route-manifest.json'),
   `${JSON.stringify(rustArtifacts.manifest, null, 2)}\n`,
 );
+// The Plec server consumes this compiler-owned bundle for document SSR. The
+// browser continues to lazily fetch the manifest and individual graphs.
+await writeFile(
+  path.join(publicDir, 'route-artifact.json'),
+  `${JSON.stringify(rustArtifacts)}\n`,
+);
 
 //
 // Copy WASM runtime from package

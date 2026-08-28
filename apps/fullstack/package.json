@@ -18,7 +18,8 @@
     "@wasm-runtime/lucide-plec": "workspace:*",
     "@wasm-runtime/ui": "workspace:*",
     "plec": "workspace:*",
-    "plec-browser": "workspace:*"
+    "plec-browser": "workspace:*",
+    "plec-server": "workspace:*"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.3",

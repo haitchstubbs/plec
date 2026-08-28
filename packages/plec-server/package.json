@@ -1,0 +1,23 @@
+{
+  "name": "plec-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "yarn --cwd ../.. exec tsc -p packages/plec-server/tsconfig.json",
+    "test": "yarn --cwd ../.. exec vitest run packages/plec-server/src --passWithNoTests",
+    "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec-server/tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.4.0",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1851,6 +1851,7 @@ __metadata:
     playwright: "npm:^1.55.0"
     plec: "workspace:*"
     plec-browser: "workspace:*"
+    plec-server: "workspace:*"
     tailwindcss: "npm:^4.3.3"
     typescript: "npm:^7.0.2"
     vitest: "npm:^3.2.4"
@@ -4243,6 +4244,15 @@ __metadata:
 "plec-runtime@workspace:packages/plec-runtime":
   version: 0.0.0-use.local
   resolution: "plec-runtime@workspace:packages/plec-runtime"
+  languageName: unknown
+  linkType: soft
+
+"plec-server@workspace:*, plec-server@workspace:packages/plec-server":
+  version: 0.0.0-use.local
+  resolution: "plec-server@workspace:packages/plec-server"
+  dependencies:
+    "@types/node": "npm:^24.4.0"
+    vitest: "npm:^3.2.4"
   languageName: unknown
   linkType: soft
 

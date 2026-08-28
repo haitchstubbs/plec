@@ -5,6 +5,29 @@ pub const VERSION: &str = "0.10";
 // additions in this contract until it is deliberately released.
 pub const COMPONENT_VERSION: &str = "0.10";
 
+/// Execution ownership and public exposure are intentionally separate. A
+/// value may be serializable while still being server-only (for example a
+/// session identifier); only an explicit PublicExport may cross the boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecutionOwner { Shared, Server, Client }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicExport {
+    pub name: String,
+    pub source_owner: ExecutionOwner,
+    pub value_is_serializable: bool,
+    pub explicitly_public: bool,
+}
+
+pub fn validate_public_export(export: &PublicExport) -> Result<(), &'static str> {
+    if export.source_owner == ExecutionOwner::Client { return Err("client values cannot be server exports"); }
+    if !export.value_is_serializable { return Err("public export must be serializable"); }
+    if !export.explicitly_public { return Err("server value requires an explicit public export boundary"); }
+    Ok(())
+}
+
 /// A separately-versioned component application.  Component definitions keep
 /// their local node/state handles; call nodes connect those local programs.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -47,6 +70,17 @@ pub struct RouteManifestEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub loader_action: Option<usize>,
     pub outlet_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<RouteMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 impl RouteManifest {
@@ -649,6 +683,7 @@ mod tests {
                 error_graph_id: None,
                 loader_action: None,
                 outlet_id: "main".into(),
+                meta: None,
             }],
         };
         let json = serde_json::to_value(&manifest).unwrap();
@@ -656,6 +691,14 @@ mod tests {
             serde_json::from_value::<RouteManifest>(json).unwrap(),
             manifest
         );
+    }
+
+    #[test]
+    fn serializable_server_values_still_require_explicit_public_exposure() {
+        let hidden = PublicExport { name: "session".into(), source_owner: ExecutionOwner::Server, value_is_serializable: true, explicitly_public: false };
+        assert_eq!(validate_public_export(&hidden), Err("server value requires an explicit public export boundary"));
+        let public = PublicExport { explicitly_public: true, ..hidden };
+        assert!(validate_public_export(&public).is_ok());
     }
 
     #[test]

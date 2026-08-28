@@ -15,3 +15,7 @@ export const router = createRouter({
     notFoundRoute,
   ]),
 });
+
+export type Router = typeof router;
+
+export default router;

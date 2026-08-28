@@ -235,6 +235,13 @@ pub struct HirRoute {
     pub error_component: Option<ComponentId>,
     pub loader: Option<String>,
     pub outlet_id: String,
+    pub metadata: HirRouteMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct HirRouteMetadata {
+    pub title: Option<String>,
+    pub description: Option<String>,
 }
 
 impl HirComponent {
