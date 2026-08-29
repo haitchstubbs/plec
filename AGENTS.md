@@ -535,6 +535,14 @@ Comment unusual compiler/runtime decisions, not obvious code.
 
 Prefer small commits or clearly separated implementation steps if your environment supports them.
 
+## No temporary files (hard rule)
+
+Never create temporary, scratch, or intermediate files as part of agent work — no markdown drafts, notes, JSON payloads, or scripts written to the repo, `/tmp`, or elsewhere to feed into a CLI.
+
+Work directly with the primary tool's interface instead: pass arguments/flags inline, pipe stdin when a tool requires it, and use the tool's own batching features (e.g. `bd create --graph` or repeated `bd` calls — not a hand-written plan file).
+
+The only files you write are files the task itself requires in the repository (source, tests, config, docs).
+
 ## Decision rule
 
 Whenever there is a choice between:
