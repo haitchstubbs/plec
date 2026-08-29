@@ -1147,6 +1147,7 @@ dependencies = [
  "plec-parser",
  "plec-sema",
  "pollster",
+ "serde",
  "serde_json",
 ]
 

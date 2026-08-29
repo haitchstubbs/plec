@@ -877,11 +877,33 @@ impl TypedRuntime {
                 }
                 TypedNode::Text { .. } => {
                     let marker = format!("plec:text:{path}:{index}");
-                    let text = comments
+                    let marker_node = comments
                         .get(&marker)
-                        .and_then(Node::next_sibling)
-                        .filter(|candidate| candidate.node_type() == Node::TEXT_NODE)
                         .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-text:{path}:{index}")))?;
+                    let text = match marker_node
+                        .next_sibling()
+                        .filter(|candidate| candidate.node_type() == Node::TEXT_NODE)
+                    {
+                        Some(text) => text,
+                        // An empty server-rendered value parses to no text
+                        // node at all, but binding writes need one to own.
+                        // The marker still proves the exact location.
+                        None => {
+                            let parent = marker_node.parent_node().ok_or_else(|| {
+                                JsValue::from_str(&format!("detached:ssr-text:{path}:{index}"))
+                            })?;
+                            let text = document()?.create_text_node("");
+                            match marker_node.next_sibling() {
+                                Some(reference) => {
+                                    parent.insert_before(&text, Some(&reference))?;
+                                }
+                                None => {
+                                    parent.append_child(&text)?;
+                                }
+                            }
+                            text.into()
+                        }
+                    };
                     self.nodes.insert(index, text);
                 }
                 TypedNode::Component { component, props, children, .. } => {
