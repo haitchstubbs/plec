@@ -1,12 +1,19 @@
-use clap::{Parser, Subcommand};
-use plec_compiler::{
-    discover_root_component, lower_application, lower_application_to_executable, lower_route_manifest,
-    lower_routes, read_source_graph,
-};
-use plec_ir::ComponentApplication;
-use std::path::PathBuf;
+mod id;
+mod json_out;
 
+mod build;
+mod compile;
+mod load;
+mod stage;
+
+use build::build;
+use compile::compile;
+use load::load;
+
+use clap::{Parser, Subcommand};
+use plec_compiler::{lower_route_manifest, lower_routes};
 use plec_inspect::Inspector;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 struct Cli {
@@ -16,45 +23,27 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Inspect { source: String, query: String },
-    Raw { source: String },
-    Routes { source: String },
-}
+    Inspect {
+        source: PathBuf,
+        query: String,
+    },
 
-/// Parse the source graph reachable from `source` and build its semantic graph.
-fn load_semantic_graph(
-    source: &str,
-) -> Result<
-    (
-        Vec<plec_parser::ParsedModule>,
-        plec_sema::SemanticGraph,
-    ),
-    Box<dyn std::error::Error>,
-> {
-    let entry = PathBuf::from(source);
-    let root_dir = std::env::current_dir()?;
+    Raw {
+        source: PathBuf,
+    },
 
-    let source_graph = read_source_graph(&entry, &root_dir, &root_dir)?;
+    Routes {
+        source: PathBuf,
+    },
 
-    let semantic_graph =
-        plec_sema::build_semantic_graph(&source_graph.modules, &source_graph.resolved_imports)?;
+    /// Compile a routed Plec application into deployable compiler artifacts.
+    Build {
+        source: PathBuf,
 
-    Ok((source_graph.modules, semantic_graph))
-}
-
-/// Parse, type-check, discover the entry component, and lower it to the
-/// executable component graph.
-fn compile(source: &str) -> Result<ComponentApplication, Box<dyn std::error::Error>> {
-    let (modules, semantic_graph) = load_semantic_graph(source)?;
-
-    // read_source_graph guarantees modules[0] is the entry module.
-    let entry_module_id = modules[0].id.clone();
-
-    let root = discover_root_component(&modules, &semantic_graph, &entry_module_id, None)?;
-
-    let hir = lower_application(&modules, &root, &semantic_graph)?;
-
-    Ok(lower_application_to_executable(&hir)?)
+        /// Directory to emit Plec artifacts into.
+        #[arg(short, long, default_value = "dist/public")]
+        out_dir: PathBuf,
+    },
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -63,30 +52,31 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Command::Inspect { source, query } => {
             let application = compile(&source)?;
-
             let inspector = Inspector::new(&application);
-
             let result = pollster::block_on(inspector.query(&query));
-
             for error in &result.errors {
                 eprintln!("query error: {error}");
             }
-
             println!("{}", serde_json::to_string_pretty(&result.data)?);
         }
+
         Command::Raw { source } => {
             let application = compile(&source)?;
-
             println!("{}", serde_json::to_string_pretty(&application)?);
         }
+
         Command::Routes { source } => {
-            let (modules, semantic_graph) = load_semantic_graph(&source)?;
-
+            let (modules, semantic_graph) = load(&source)?;
             let routes = lower_routes(&modules, &semantic_graph)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&lower_route_manifest(&routes))?
+            );
+        }
 
-            println!("{}", serde_json::to_string_pretty(&lower_route_manifest(&routes))?);
+        Command::Build { source, out_dir } => {
+            build(&source, &out_dir)?;
         }
     }
-
     Ok(())
 }

@@ -12,6 +12,7 @@ plec-compiler = { path = "../plec-compiler" }
 clap = { workspace = true }
 pollster = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
 [[bin]]
 name = "plec"
 path = "src/main.rs"

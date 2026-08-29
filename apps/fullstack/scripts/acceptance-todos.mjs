@@ -129,6 +129,9 @@ async function homeLayoutAndSidebar(browser) {
   const desktopDone = watch(desktopPage);
   try {
     await desktopPage.goto(origin, { waitUntil: 'domcontentloaded' });
+    // SSR markup is interactive only once runtime ownership is live; the
+    // mount-end mark fires after listener installation on adopt and mount.
+    await waitForMount(desktopPage);
     await desktopPage
       .getByRole('heading', {
         name: 'TSX enters as source. Plec owns the resulting DOM.',
@@ -170,6 +173,7 @@ async function homeLayoutAndSidebar(browser) {
   const mobileDone = watch(mobilePage);
   try {
     await mobilePage.goto(origin, { waitUntil: 'domcontentloaded' });
+    await waitForMount(mobilePage);
     await mobilePage.getByRole('button', { name: 'Toggle navigation' }).click();
     assert.equal(
       await mobilePage.locator('[data-mobile-open]').first().getAttribute('data-mobile-open'),
@@ -246,6 +250,7 @@ async function todoActions(browser) {
     await page.goto(`${origin}/todos`, {
       waitUntil: 'domcontentloaded',
     });
+    await waitForMount(page);
     await page.getByRole('heading', { name: 'Todos' }).waitFor();
 
     const search = page.locator('#todo-search');
@@ -254,6 +259,7 @@ async function todoActions(browser) {
       .getByText('Try the Plec Todo API')
       .waitFor({ state: 'detached' });
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitForMount(page);
     await page.getByRole('heading', { name: 'Todos' }).waitFor();
 
     let post = 'delay';
