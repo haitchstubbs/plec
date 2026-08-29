@@ -1,0 +1,6 @@
+{
+  "build-tools": {
+    "wasm-pack": "0.13.1",
+    "wasm-tools": "1.258.0"
+  }
+}

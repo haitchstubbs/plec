@@ -3,7 +3,6 @@ import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findInPath, isWindows } from './utils.js';
-
 /**
  * Get relative path from one directory to another.
  *
@@ -79,9 +78,14 @@ export async function buildWasm({
 
     const selectedFeatures = features ?? profileFeatures;
     // wasm-pack interprets --out-dir relative to the crate directory
-    const relativeOutDir = relativePath(absoluteCratePath, absoluteOutDir);
+    const relativeOutDir = relativePath(
+      absoluteCratePath,
+      absoluteOutDir,
+    );
 
-    console.log(`Building WASM: ${absoluteCratePath} -> ${absoluteOutDir} (relative: ${relativeOutDir})`);
+    console.log(
+      `Building WASM: ${absoluteCratePath} -> ${absoluteOutDir} (relative: ${relativeOutDir})`,
+    );
 
     const args = [
       'build',
@@ -97,13 +101,17 @@ export async function buildWasm({
     // Add feature flags if specified
     if (selectedFeatures) {
       const noDefaultFlags =
-        profile === 'core' || profile === 'router' || profile === 'fetch'
+        profile === 'core' ||
+        profile === 'router' ||
+        profile === 'fetch'
           ? ['--no-default-features']
           : [];
       args.push(
         '--',
         ...noDefaultFlags,
-        ...(selectedFeatures.length ? ['--features', selectedFeatures.join(',')] : []),
+        ...(selectedFeatures.length
+          ? ['--features', selectedFeatures.join(',')]
+          : []),
       );
     }
 
@@ -140,12 +148,17 @@ async function optimizeWasm(outDir, outName) {
   const wasmTools = await findWasmTools();
 
   if (!wasmTools) {
-    console.warn('wasm-tools not found in PATH, skipping WASM optimization');
+    console.warn(
+      'wasm-tools not found in PATH, skipping WASM optimization',
+    );
     return;
   }
 
   const wasmPath = path.join(outDir, `${outName}_bg.wasm`);
-  const strippedWasmPath = path.join(outDir, `${outName}_bg.stripped.wasm`);
+  const strippedWasmPath = path.join(
+    outDir,
+    `${outName}_bg.stripped.wasm`,
+  );
 
   console.log(`Optimizing WASM with wasm-tools...`);
 
@@ -163,7 +176,9 @@ async function optimizeWasm(outDir, outName) {
   // Rename stripped version back to original name
   await renameFile(strippedWasmPath, wasmPath);
 
-  const stats = await import('node:fs/promises').then(fs => fs.stat(wasmPath));
+  const stats = await import('node:fs/promises').then((fs) =>
+    fs.stat(wasmPath),
+  );
   console.log(`Optimized WASM size: ${stats.size} bytes`);
 }
 
@@ -206,12 +221,15 @@ if (
   const args = process.argv.slice(2);
 
   if (args.length === 0) {
-    console.error('Usage: build-wasm.mjs <crate-path> [out-dir] [options]');
+    console.error(
+      'Usage: build-wasm.mjs <crate-path> [out-dir] [options]',
+    );
     process.exit(1);
   }
 
   const cratePath = args[0];
-  const outDir = args[1] || path.join(path.dirname(cratePath), 'dist', 'runtime');
+  const outDir =
+    args[1] || path.join(path.dirname(cratePath), 'dist', 'runtime');
 
   // Parse options
   const options = { cratePath, outDir, optimize: true };
