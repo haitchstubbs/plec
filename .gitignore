@@ -45,3 +45,9 @@ packages/lucide-plec/src/icons/
 
 # Chrome Drivers
 .tools/chromedriver-151
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
