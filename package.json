@@ -7,7 +7,8 @@
     "packages/*"
   ],
   "scripts": {
-    "setup": "yarn turbo prune && yarn install && yarn build --force",
+    "install:build-tools": "node scripts/setup.mjs",
+    "setup": "yarn install:build-tools && yarn install && yarn build --force",
     "dev": "turbo run dev --parallel",
     "dev:wasm": "yarn workspace plec-runtime dev:wasm",
     "build": "turbo run build",
