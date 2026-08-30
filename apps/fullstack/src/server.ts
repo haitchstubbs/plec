@@ -21,5 +21,5 @@ export function createAppServer(publicDir: string, api = createTodoApi()) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const server = createAppServer(path.resolve('dist/public'));
   serve(server);
-  server.on('listening', () => console.log(`Plec fullstack playground on http://localhost:${process.env.PORT ?? 3100}`));
+  server.on('listening', () => console.log(`Plec fullstack playground on http://localhost:${process.env.PORT ?? 3000}`));
 }

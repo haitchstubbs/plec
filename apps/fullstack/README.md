@@ -17,7 +17,7 @@ yarn workspace plec-runtime build             # once: build the WASM runtime
 yarn workspace @wasm-runtime/fullstack dev    # build + node --watch dist/server.mjs
 ```
 
-Serves on `PORT` (default `3100`). TSX edits require a rebuild — the Rust
+Serves on `PORT` (default `3000`). TSX edits require a rebuild — the Rust
 compiler emits graphs at build time; there is no HMR.
 
 ## Test

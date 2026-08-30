@@ -86,7 +86,7 @@ export function createPlecServer(options: PlecServerOptions): Server {
   });
 }
 
-export function serve(server: Server, port = Number(process.env.PORT ?? 3100)): Server {
+export function serve(server: Server, port = Number(process.env.PORT ?? 3000)): Server {
   server.listen(port);
   return server;
 }

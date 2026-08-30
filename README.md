@@ -67,7 +67,7 @@ yarn build                          # turbo: compile routes, bundle, brotli
 yarn workspace @wasm-runtime/fullstack dev
 ```
 
-The demo app serves on `http://localhost:3100` (override with `PORT`).
+The demo app serves on `http://localhost:3000` (override with `PORT`).
 
 ## Documentation
 

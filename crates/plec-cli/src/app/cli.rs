@@ -26,13 +26,30 @@ enum Command {
         source: PathBuf,
     },
 
-    /// Compile a routed Plec application into deployable compiler artifacts.
+    /// Compile a routed Plec application into deployable artifacts.
     Build {
+        /// Route source entry (e.g. src/router.tsx).
         source: PathBuf,
 
-        /// Directory to emit Plec artifacts into.
-        #[arg(short, long, default_value = "dist/public")]
+        /// Build output root; Plec artifacts are emitted under `public/`.
+        #[arg(short, long, default_value = "dist")]
         out_dir: PathBuf,
+
+        /// Browser client entry, relative to the app directory.
+        #[arg(long, default_value = "src/client.tsx")]
+        client_entry: PathBuf,
+
+        /// Server entry, relative to the app directory.
+        #[arg(long, default_value = "src/server.ts")]
+        server_entry: PathBuf,
+
+        /// Document title for the generated HTML shell.
+        #[arg(long, default_value = "Plec app")]
+        title: String,
+
+        /// Skip minification of browser/server bundles.
+        #[arg(long)]
+        no_optimize: bool,
     },
 }
 
@@ -64,8 +81,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
-        Command::Build { source, out_dir } => {
-            com::build::build(&source, &out_dir)?;
+        Command::Build {
+            source,
+            out_dir,
+            client_entry,
+            server_entry,
+            title,
+            no_optimize,
+        } => {
+            let result = com::build::build(com::build::BuildOptions {
+                source,
+                client_entry,
+                server_entry,
+                out_dir,
+                optimize: !no_optimize,
+                title,
+            })?;
+            println!(
+                "Plec build complete (revision {}) in {}",
+                result.revision,
+                result.out_dir.display()
+            );
         }
     }
     Ok(())

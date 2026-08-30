@@ -1,0 +1,3 @@
+# Inert workspace marker: repo-root detection looks for a Cargo.toml next to
+# a packages/ directory. Cargo never builds this file.
+[workspace]
