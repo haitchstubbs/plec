@@ -16,3 +16,6 @@ serde = { workspace = true }
 [[bin]]
 name = "plec"
 path = "src/main.rs"
+
+[build-dependencies]
+dotenvy = "0.15.7"

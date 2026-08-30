@@ -69,10 +69,7 @@ export function createPlecServer(options: PlecServerOptions): Server {
         const match = matchRoute(artifact.manifest, context.pathname);
         const document = match?.route.meta ?? options.document ?? {};
         const body = renderApplication(artifact, match?.route, context);
-        const bootstrap = JSON.stringify({
-          version: 1, revision: artifact.manifest.revision, routeId: match?.route.id ?? null,
-          public: { location: { pathname: context.pathname, search: new URL(context.url).search } },
-        }).replace(/</g, '\\u003c');
+        const bootstrap = JSON.stringify(bootstrapPayload(artifact, match, context)).replace(/</g, '\\u003c');
         return sendHtml(outgoing, document, body, bootstrap, options);
       } catch (error) {
         // A fixture without compiler artifacts remains useful for HTTP-host
@@ -160,6 +157,34 @@ function sendHtml(response: ServerResponse, metadata: DocumentMetadata, body: st
   const script = options.clientScript ? `<script type="module" src="${escapeAttribute(options.clientScript)}"></script>` : '';
   response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
   response.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>${description ? `<meta name="description" content="${escapeAttribute(description)}">` : ''}${styles}</head><body><div id="app">${body}</div><script id="plec-bootstrap" type="application/json">${bootstrap}</script>${script}</body></html>`);
+}
+
+/** The v2 bootstrap carries the typed SSR execution snapshot (see the
+ * `PlecSsrSnapshot` contract in crates/plec-ir). Without a matched route there
+ * is nothing to resume, so the legacy v1 shape is emitted and the browser
+ * treats the page as non-snapshot SSR. */
+function bootstrapPayload(bundle: ArtifactBundle, match: ReturnType<typeof matchRoute> | undefined, context: RequestContext) {
+  if (!match?.route) {
+    return {
+      version: 1, revision: bundle.manifest.revision, routeId: null,
+      public: { location: { pathname: context.pathname, search: new URL(context.url).search } },
+    };
+  }
+  return {
+    version: 2,
+    snapshot: {
+      version: 1,
+      revision: bundle.manifest.revision,
+      routes: [{ routeId: match.route.id, params: match.params, phase: 'active' }],
+      public: { location: `${context.pathname}${new URL(context.url).search}` },
+      loaders: [],
+      structure: {
+        graphs: {
+          'root/outlet:main': { graphId: bundle.manifest.rootGraphId },
+        },
+      },
+    },
+  };
 }
 
 function matchRoute(manifest: Manifest, pathname: string): { route: Route; params: Record<string, string> } | undefined {

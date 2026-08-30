@@ -4,6 +4,23 @@ Command-line tooling for compiling and inspecting Plec applications.
 
 The CLI exposes the Plec compiler pipeline directly, making it possible to inspect executable IR, route manifests, and compiler state without starting a browser runtime or development server.
 
+## Dev CLI vs app CLI
+
+The `plec` binary contains two frontends: the **dev CLI** (compiler inspection: `inspect`, `raw`, `routes`, `build`) and the **app CLI**. Which frontend handles a command is selected at **compile time**, not process startup:
+
+- `crates/plec-cli/build.rs` lifts `PLEC_CLI_VERSION` from `.env.plec` at the workspace root (parsed with `dotenvy`) and bakes it into the crate with `cargo:rustc-env`.
+- `lib.rs` selects the frontend with `option_env!("PLEC_CLI_VERSION")`: `release` selects the app CLI, any other value (or an absent variable) keeps the dev CLI.
+
+Because the selection is baked in, changing `.env.plec` triggers a rebuild of the CLI through the build script's `rerun-if-changed` directive, and an explicitly exported `PLEC_CLI_VERSION` in the build environment wins over the file:
+
+```bash
+# .env.plec
+PLEC_CLI_VERSION='release'
+
+# pick up the change in the binary
+cargo build -p plec-cli
+```
+
 ## Usage
 
 ```bash
