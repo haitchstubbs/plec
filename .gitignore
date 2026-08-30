@@ -24,6 +24,7 @@ coverage/
 .env
 .env.*
 !.env.benchmark
+!.env.example
 *.log
 
 # IDE and OS

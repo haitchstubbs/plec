@@ -1,4 +1,4 @@
-use crate::load::load;
+use super::load::load;
 use plec_compiler::{discover_root_component, lower_application, lower_application_to_executable};
 use plec_ir::ComponentApplication;
 use std::path::Path;
