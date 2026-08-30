@@ -229,8 +229,10 @@ interface WasmRuntimeInstance {
   register_graph(graphId: string, ir: unknown): void;
   start(root: Element, manifest: unknown): void;
   start_adopt(root: Element, manifest: unknown): void;
+  start_adopt_snapshot(root: Element, manifest: unknown, snapshot: unknown): void;
   abandon_adoption(): void;
   navigate(href: string, replace: boolean): void;
+  ssr_text_divergences(): number;
 }
 interface WasmRuntimeModule {
   default(input?: unknown): Promise<unknown>;
@@ -277,6 +279,12 @@ export interface PlecAdoptionDiagnostic {
   observedRevision?: string;
   routeId?: string | null;
   mismatchCodes: string[];
+  /** True when the adoption consumed a validated SSR execution snapshot. */
+  snapshotImported?: boolean;
+  /** Server-rendered text values the deterministic recompute replaced.
+   * Divergence is allowed and reported only; present for snapshot
+   * adoptions. */
+  textDivergences?: number;
 }
 export interface PlecRouterController {
   dispose(): void;
@@ -556,7 +564,15 @@ export async function startPlecRouter(
     );
   }
   let adopted = false;
-  if (bootstrap) {
+  if (bootstrap?.kind === 'invalid') {
+    // A present-but-unparseable bootstrap is an SSR contract failure, never a
+    // silent normal mount.
+    emitAdoptionDiagnostic(options, {
+      outcome: 'fallback',
+      routeId: null,
+      mismatchCodes: ['invalid:ssr-bootstrap'],
+    });
+  } else if (bootstrap) {
     const expectedRevision = (manifest as any).revision as string | undefined;
     const route = (manifest as any).routes?.find(
       (entry: any) => entry.id === bootstrap.routeId,
@@ -578,11 +594,24 @@ export async function startPlecRouter(
         // The initial route graph is needed before WASM can reconstruct the
         // existing outlet; later route graphs remain lazy.
         if (!compiled) await loadGraph(route.graphId);
-        runtime.start_adopt(options.root, manifest);
+        const snapshotImported = bootstrap.kind === 'snapshot';
+        if (snapshotImported) {
+          runtime.start_adopt_snapshot(
+            options.root,
+            manifest,
+            bootstrap.snapshot,
+          );
+        } else {
+          runtime.start_adopt(options.root, manifest);
+        }
         adopted = true;
         emitAdoptionDiagnostic(options, {
           outcome: 'adopted', expectedRevision, observedRevision: bootstrap.revision,
           routeId: bootstrap.routeId, mismatchCodes: [],
+          snapshotImported,
+          ...(snapshotImported
+            ? { textDivergences: runtime.ssr_text_divergences() }
+            : {}),
         });
       } catch (error) {
         runtime.abandon_adoption();
@@ -660,10 +689,61 @@ export async function startPlecRouter(
   };
 }
 
-function readSsrBootstrap(): { revision?: string; routeId?: string | null } | null {
-  const element = document.querySelector('#plec-bootstrap[type="application/json"]');
+/** The `#plec-bootstrap` payload shapes the adoption gate understands. */
+type SsrBootstrap =
+  | null
+  | { kind: 'invalid' }
+  /** v2: the bootstrap carries the typed SSR execution snapshot. */
+  | {
+      kind: 'snapshot';
+      revision?: string;
+      routeId?: string | null;
+      snapshot: unknown;
+    }
+  /** Legacy v1: adoption may proceed without imported execution state. */
+  | { kind: 'legacy'; revision?: string; routeId?: string | null };
+
+/** Exported for adapter tests. */
+export type { SsrBootstrap };
+
+export function readSsrBootstrap(): SsrBootstrap {
+  const element = document.querySelector(
+    '#plec-bootstrap[type="application/json"]',
+  );
   if (!element?.textContent) return null;
-  try { return JSON.parse(element.textContent); } catch { return { }; }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(element.textContent);
+  } catch {
+    return { kind: 'invalid' };
+  }
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    parsed.version === 2 &&
+    parsed.snapshot &&
+    typeof parsed.snapshot === 'object'
+  ) {
+    const snapshot = parsed.snapshot;
+    const firstRoute = Array.isArray(snapshot.routes)
+      ? snapshot.routes[0]
+      : undefined;
+    return {
+      kind: 'snapshot',
+      revision:
+        typeof snapshot.revision === 'string' ? snapshot.revision : undefined,
+      routeId:
+        firstRoute && typeof firstRoute.routeId === 'string'
+          ? firstRoute.routeId
+          : null,
+      snapshot,
+    };
+  }
+  return {
+    kind: 'legacy',
+    revision: typeof parsed?.revision === 'string' ? parsed.revision : undefined,
+    routeId: parsed?.routeId ?? null,
+  };
 }
 
 function adoptionMismatchCode(error: unknown): string {

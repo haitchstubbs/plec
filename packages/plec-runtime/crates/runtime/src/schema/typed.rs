@@ -75,6 +75,28 @@ pub struct TypedComponentApplication {
     pub components: Vec<TypedApplication>,
 }
 
+impl plec_ir::SsrStructureApplication for TypedComponentApplication {
+    fn structure_graph(&self, graph_id: &str) -> Option<&dyn plec_ir::SsrStructureGraph> {
+        let component = self
+            .components
+            .iter()
+            .find(|component| component.id == graph_id)?;
+        Some(component)
+    }
+}
+
+impl plec_ir::SsrStructureGraph for TypedApplication {
+    fn structure_node(&self, handle: usize) -> Option<plec_ir::SsrStructureNode> {
+        Some(match self.nodes.get(handle)? {
+            TypedNode::Conditional { alternate, .. } => plec_ir::SsrStructureNode::Conditional {
+                has_alternate: alternate.is_some(),
+            },
+            TypedNode::Loop { .. } => plec_ir::SsrStructureNode::Loop,
+            _ => plec_ir::SsrStructureNode::Other,
+        })
+    }
+}
+
 impl TypedComponentApplication {
     pub(crate) fn validate(&self) -> Result<(), JsValue> {
         if self.version != "0.10" || self.root_component >= self.components.len() {

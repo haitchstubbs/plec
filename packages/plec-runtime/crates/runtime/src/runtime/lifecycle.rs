@@ -86,6 +86,13 @@ pub struct PlecRuntime {
     pub(crate) typed_component_registry: Rc<RefCell<HashMap<String, TypedComponentApplication>>>,
     pub(crate) typed_manifest: Rc<RefCell<Option<RouteManifest>>>,
     pub(crate) typed_host_inputs: Rc<RefCell<HashMap<String, RuntimeValue>>>,
+    /// Host-input keys seeded from an imported SSR snapshot. `abandon_adoption`
+    /// purges exactly these so a fallback remount starts from window-derived
+    /// state instead of leaked request state.
+    pub(crate) typed_ssr_host_inputs: Rc<RefCell<HashSet<String>>>,
+    /// Whether the in-flight adoption is backed by an imported snapshot.
+    /// Adopted graph instances read this to enable the divergence observation.
+    pub(crate) typed_ssr_imported: Rc<RefCell<bool>>,
     /// Immutable component definitions for the currently loaded IR 0.10 application.
     pub(crate) typed_components: Rc<RefCell<Option<TypedComponentApplication>>>,
     pub(crate) snapshot_inputs: Rc<RefCell<HashMap<String, SnapshotInput>>>,
@@ -106,6 +113,8 @@ impl Clone for PlecRuntime {
             typed_component_registry: Rc::clone(&self.typed_component_registry),
             typed_manifest: Rc::clone(&self.typed_manifest),
             typed_host_inputs: Rc::clone(&self.typed_host_inputs),
+            typed_ssr_host_inputs: Rc::clone(&self.typed_ssr_host_inputs),
+            typed_ssr_imported: Rc::clone(&self.typed_ssr_imported),
             typed_components: Rc::clone(&self.typed_components),
             snapshot_inputs: Rc::clone(&self.snapshot_inputs),
             cookie_policy: Rc::clone(&self.cookie_policy),
@@ -330,6 +339,22 @@ impl PlecRuntime {
     /// from `start` so normal client mounts retain their small, marker-free
     /// output contract.
     pub fn start_adopt(&self, root: Element, manifest: JsValue) -> Result<(), JsValue> {
+        self.start_adopt_snapshot(root, manifest, JsValue::UNDEFINED)
+    }
+
+    /// `start_adopt` with an SSR execution snapshot (the v2 bootstrap
+    /// payload). The snapshot is parsed, version/revision gated, and fully
+    /// validated against the manifest plus the registered component
+    /// application **before** adoption claims DOM; its public state is seeded
+    /// into the host inputs so adopted instances evaluate from imported
+    /// causes instead of blank initializers. Any snapshot failure is a
+    /// fail-closed code; the caller falls back to a normal mount.
+    pub fn start_adopt_snapshot(
+        &self,
+        root: Element,
+        manifest: JsValue,
+        snapshot: JsValue,
+    ) -> Result<(), JsValue> {
         let manifest_value: Value = serde_wasm_bindgen::from_value(manifest).map_err(error)?;
         if manifest_value.get("version").and_then(Value::as_u64) != Some(3) {
             return Err(JsValue::from_str("unsupported:ssr-manifest"));
@@ -339,6 +364,7 @@ impl PlecRuntime {
         manifest
             .validate()
             .map_err(|message| JsValue::from_str(&format!("mismatch:ssr-manifest:{message}")))?;
+        self.import_ssr_snapshot(&snapshot, &manifest)?;
         let manifest = RouteManifest {
             version: Some(manifest.version),
             root_graph_id: manifest.root_graph_id,
@@ -375,6 +401,69 @@ impl PlecRuntime {
         self.adopt_typed_route(&href, root)
     }
 
+    /// Validates an optional SSR snapshot and seeds its public state. Kept
+    /// separate from `start_adopt_snapshot` so the manifest remains the only
+    /// required input; seeding happens before `adopt_typed_route` creates
+    /// instances, which is what makes imported state visible to state
+    /// initializers and claimed DOM.
+    fn import_ssr_snapshot(
+        &self,
+        snapshot: &JsValue,
+        manifest: &plec_ir::RouteManifest,
+    ) -> Result<(), JsValue> {
+        if snapshot.is_undefined() || snapshot.is_null() {
+            *self.typed_ssr_imported.borrow_mut() = false;
+            return Ok(());
+        }
+        self.reset_ssr_text_divergences();
+        let value: Value = serde_wasm_bindgen::from_value(snapshot.clone())
+            .map_err(|_| JsValue::from_str("mismatch:ssr-snapshot-payload"))?;
+        let parsed: plec_ir::PlecSsrSnapshot = serde_json::from_value(value)
+            .map_err(|_| JsValue::from_str("mismatch:ssr-snapshot-payload"))?;
+        if parsed.version != plec_ir::SSR_SNAPSHOT_VERSION {
+            return Err(JsValue::from_str("unsupported:ssr-snapshot-version"));
+        }
+        if parsed.revision != manifest.revision {
+            return Err(JsValue::from_str("stale-revision"));
+        }
+        let application = self
+            .typed_components
+            .borrow()
+            .clone()
+            .ok_or_else(|| JsValue::from_str("mismatch:ssr-snapshot-graphs"))?;
+        parsed
+            .validate(&plec_ir::SsrSnapshotReferences {
+                manifest,
+                application: &application,
+            })
+            .map_err(|message| JsValue::from_str(&format!("mismatch:ssr-snapshot:{message}")))?;
+        self.seed_ssr_host_inputs(&parsed)?;
+        *self.typed_ssr_imported.borrow_mut() = true;
+        Ok(())
+    }
+
+    /// Applies the snapshot's public state to the shared host inputs. State
+    /// initializers run per instance from these inputs, so seeding here is
+    /// what makes imported state observable before adoption claims DOM.
+    fn seed_ssr_host_inputs(&self, snapshot: &plec_ir::PlecSsrSnapshot) -> Result<(), JsValue> {
+        let (pathname, search, hash) = split_ssr_location(&snapshot.public.location);
+        let current = window()?.location().pathname().unwrap_or_else(|_| "/".into());
+        if pathname != current {
+            return Err(JsValue::from_str("mismatch:ssr-location"));
+        }
+        let mut seeded: HashMap<String, RuntimeValue> = HashMap::from([
+            ("location.pathname".into(), RuntimeValue::String(pathname)),
+            ("location.search".into(), RuntimeValue::String(search)),
+            ("location.hash".into(), RuntimeValue::String(hash)),
+        ]);
+        for (name, export) in &snapshot.public.exports {
+            seeded.insert(name.clone(), ssr_snapshot_value(&export.value));
+        }
+        *self.typed_ssr_host_inputs.borrow_mut() = seeded.keys().cloned().collect();
+        self.typed_host_inputs.borrow_mut().extend(seeded);
+        Ok(())
+    }
+
     /// Discards only partially reconstructed runtime ownership after an SSR
     /// mismatch. The server DOM is intentionally left intact so the caller
     /// can make the normal mount path the single, observable fallback.
@@ -382,7 +471,49 @@ impl PlecRuntime {
         self.dispose_typed_instances();
         *self.typed_manifest.borrow_mut() = None;
         *self.typed_root.borrow_mut() = None;
+        {
+            let seeded = self.typed_ssr_host_inputs.borrow().clone();
+            let mut host_inputs = self.typed_host_inputs.borrow_mut();
+            for key in &seeded {
+                host_inputs.remove(key);
+            }
+        }
+        self.typed_ssr_host_inputs.borrow_mut().clear();
+        *self.typed_ssr_imported.borrow_mut() = false;
         self.dispose_router_listeners();
+    }
+}
+
+fn split_ssr_location(location: &str) -> (String, String, String) {
+    let (path_part, hash) = match location.split_once('#') {
+        Some((before, hash)) => (before, format!("#{hash}")),
+        None => (location, String::new()),
+    };
+    match path_part.split_once('?') {
+        Some((pathname, search)) => (
+            pathname.into(),
+            format!("?{search}"),
+            hash,
+        ),
+        None => (path_part.into(), String::new(), hash),
+    }
+}
+
+fn ssr_snapshot_value(value: &plec_ir::SsrSnapshotValue) -> RuntimeValue {
+    match value {
+        plec_ir::SsrSnapshotValue::Null => RuntimeValue::Null,
+        plec_ir::SsrSnapshotValue::Bool(value) => RuntimeValue::Bool(*value),
+        plec_ir::SsrSnapshotValue::Number(value) => RuntimeValue::Number(*value),
+        plec_ir::SsrSnapshotValue::String(value) => RuntimeValue::String(value.clone()),
+        plec_ir::SsrSnapshotValue::Array(values) => {
+            RuntimeValue::Array(values.iter().map(ssr_snapshot_value).collect())
+        }
+        plec_ir::SsrSnapshotValue::Record(values) => RuntimeValue::Record(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), ssr_snapshot_value(value)))
+                .collect(),
+        ),
     }
 }
 

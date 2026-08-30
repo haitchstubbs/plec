@@ -760,6 +760,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "fetch")]
     fn fetch_uses_json_stringify_results_as_raw_request_bodies() {
         let app: TypedApplication = serde_json::from_value(json!({
             "rootNode": 0,
