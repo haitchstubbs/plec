@@ -487,9 +487,10 @@ impl PlecRuntime {
             .ok_or_else(|| JsValue::from_str("missing:ssr-root-component"))?;
         let mut runtime = TypedRuntime::new(app)?;
         runtime.set_component_definitions(graph.components);
+        runtime.ssr_imported = *self.typed_ssr_imported.borrow();
         runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
         runtime.graph_generation = self.next_typed_generation();
-        runtime.adopt(root, &path)?;
+        runtime.adopt(root.clone(), TypedAdoptionScope::Element(root), &path)?;
         self.typed.borrow_mut().insert(
             id,
             TypedGraphInstance {

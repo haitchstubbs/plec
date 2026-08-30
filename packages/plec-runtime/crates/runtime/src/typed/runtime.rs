@@ -6,7 +6,23 @@ use crate::typed::cookie::*;
 use crate::typed::events::*;
 #[cfg(feature = "fetch")]
 use crate::typed::fetch::*;
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+
+thread_local! {
+    /// Test instrumentation for the adoption index: DOM nodes visited while
+    /// building ownership indexes. Exposed through `PlecRuntime` counters so
+    /// wasm integration tests can prove nested adoptions walk only their own
+    /// scope instead of re-walking the whole adoption root per component
+    /// level.
+    static ADOPTION_INDEX_WALKS: Cell<u32> = const { Cell::new(0) };
+    /// Divergence policy observation: server-rendered text nodes whose
+    /// recomputed static binding differs after a snapshot-backed adoption.
+    /// Divergence is allowed (recompute-consequences semantics) and only ever
+    /// reported, never treated as an adoption failure. Exposed through
+    /// `PlecRuntime::ssr_text_divergences` for the dev diagnostic channel.
+    static SSR_TEXT_DIVERGENCES: Cell<u32> = const { Cell::new(0) };
+}
 
 #[derive(Default)]
 pub(crate) struct TypedLoopRows {
@@ -159,6 +175,12 @@ pub(crate) struct TypedRuntime {
     pub(crate) next_fetch_id: u64,
     #[cfg(feature = "fetch")]
     pub(crate) abort_controllers: HashMap<u64, AbortController>,
+    /// True when this instance adopted server DOM on behalf of an imported
+    /// SSR snapshot. Gates the binding-divergence observation in
+    /// `apply_static_bindings`: recomputed static values may legally differ
+    /// from the server-rendered text, and that divergence is counted instead
+    /// of being treated as an adoption failure.
+    pub(crate) ssr_imported: bool,
 }
 
 /** Mutable typed graph ownership. Definitions live in `typed_registry`; this
@@ -236,6 +258,8 @@ impl PlecRuntime {
             typed_component_registry: Rc::new(RefCell::new(HashMap::new())),
             typed_manifest: Rc::new(RefCell::new(None)),
             typed_host_inputs: Rc::new(RefCell::new(HashMap::new())),
+            typed_ssr_host_inputs: Rc::new(RefCell::new(HashSet::new())),
+            typed_ssr_imported: Rc::new(RefCell::new(false)),
             typed_components: Rc::new(RefCell::new(None)),
             snapshot_inputs: Rc::new(RefCell::new(HashMap::new())),
             cookie_policy: Rc::new(RefCell::new(None)),
@@ -464,7 +488,14 @@ impl PlecRuntime {
                 runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
                 runtime.graph_generation = self.next_typed_generation();
                 if let Some(adoption) = request.adoption.as_ref() {
-                    runtime.adopt(adoption.root.clone(), &adoption.path)?;
+                    runtime.adopt(
+                        adoption.root.clone(),
+                        TypedAdoptionScope::Range {
+                            start: request.start.clone(),
+                            end: request.end.clone(),
+                        },
+                        &adoption.path,
+                    )?;
                 } else {
                     runtime.mount_before(&request.end)?;
                 }
@@ -722,6 +753,7 @@ impl TypedRuntime {
             next_fetch_id: 0,
             #[cfg(feature = "fetch")]
             abort_controllers: HashMap::new(),
+            ssr_imported: false,
         })
     }
 }
@@ -838,7 +870,15 @@ impl TypedRuntime {
     /// traversal used here, so this is deliberately a strict contract: an
     /// absent or stale marker is an adoption failure, never an excuse to
     /// silently attach a listener to a guessed node.
-    pub(crate) fn adopt(&mut self, root: Element, path: &str) -> Result<MountMetrics, JsValue> {
+    ///
+    /// Every claim resolves through one `TypedAdoptionIndex` built for the
+    /// adoption scope; no claim re-scans the DOM.
+    pub(crate) fn adopt(
+        &mut self,
+        root: Element,
+        scope: TypedAdoptionScope,
+        path: &str,
+    ) -> Result<MountMetrics, JsValue> {
         self.invalidate_fetches();
         self.clear_listeners();
         self.nodes.clear();
@@ -848,38 +888,35 @@ impl TypedRuntime {
         self.component_requests.clear();
         self.slot_requests.clear();
 
-        let comments = typed_adoption_comments(&root);
+        let markers = TypedAdoptionIndex::build(scope)?;
         for (index, node) in self.app.nodes.clone().into_iter().enumerate() {
             match node {
                 TypedNode::Element { tag, host_ref, .. } => {
                     let marker = format!("{path}/node:{index}");
-                    let selector = format!("[data-plec-node=\"{marker}\"]");
-                    let element = root
-                        .query_selector(&selector)?
-                        .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-node:{marker}")))?;
+                    let element = markers.element(&marker)?;
                     let expected_tag = self
                         .app
                         .strings
                         .get(tag)
                         .ok_or_else(|| JsValue::from_str("adoption tag handle out of range"))?;
-                    if element.tag_name().to_ascii_lowercase() != expected_tag.to_ascii_lowercase() {
+                    if element.tag_name().to_ascii_lowercase() != expected_tag.to_ascii_lowercase()
+                    {
                         return Err(JsValue::from_str(&format!("mismatch:ssr-tag:{marker}")));
                     }
                     let dom_node: Node = element.into();
                     if let Some(reference) = host_ref {
-                        let slot = self
-                            .host_ref_nodes
-                            .get_mut(reference)
-                            .ok_or_else(|| JsValue::from_str("adoption host ref handle out of range"))?;
+                        let slot = self.host_ref_nodes.get_mut(reference).ok_or_else(|| {
+                            JsValue::from_str("adoption host ref handle out of range")
+                        })?;
                         *slot = Some(dom_node.clone());
                     }
                     self.nodes.insert(index, dom_node);
                 }
                 TypedNode::Text { .. } => {
                     let marker = format!("plec:text:{path}:{index}");
-                    let marker_node = comments
-                        .get(&marker)
-                        .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-text:{path}:{index}")))?;
+                    let marker_node = markers.get(&marker).ok_or_else(|| {
+                        JsValue::from_str(&format!("missing:ssr-text:{path}:{index}"))
+                    })?;
                     let text = match marker_node
                         .next_sibling()
                         .filter(|candidate| candidate.node_type() == Node::TEXT_NODE)
@@ -912,20 +949,22 @@ impl TypedRuntime {
                         component,
                         props,
                         children,
-                        &comments,
                         &root,
+                        &markers,
                         path,
                     )?;
                 }
                 TypedNode::Slot { .. } => {
-                    let start = comments
+                    let start = markers
                         .get(&format!("plec:slot:{path}:{index}"))
                         .cloned()
                         .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-slot:{path}:{index}")))?;
-                    let end = comments
+                    let end = markers
                         .get(&format!("plec:slot-end:{path}:{index}"))
                         .cloned()
-                        .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-slot-end:{path}:{index}")))?;
+                        .ok_or_else(|| {
+                            JsValue::from_str(&format!("missing:ssr-slot-end:{path}:{index}"))
+                        })?;
                     self.nodes.insert(index, start.clone());
                     self.slot_requests.push(TypedSlotRequest { start, end });
                 }
@@ -948,8 +987,8 @@ impl TypedRuntime {
                         component,
                         props,
                         children,
-                        &comments,
                         &root,
+                        &markers,
                         path,
                     )?;
                 }
@@ -970,18 +1009,22 @@ impl TypedRuntime {
         component: usize,
         props: Vec<TypedComponentProp>,
         children: Vec<usize>,
-        comments: &HashMap<String, Node>,
         root: &Element,
+        markers: &TypedAdoptionIndex,
         path: &str,
     ) -> Result<(), JsValue> {
-        let start = comments
+        let start = markers
             .get(&format!("plec:component:{path}:{index}"))
             .cloned()
-            .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-component:{path}:{index}")))?;
-        let end = comments
+            .ok_or_else(|| {
+                JsValue::from_str(&format!("missing:ssr-component:{path}:{index}"))
+            })?;
+        let end = markers
             .get(&format!("plec:component-end:{path}:{index}"))
             .cloned()
-            .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-component-end:{path}:{index}")))?;
+            .ok_or_else(|| {
+                JsValue::from_str(&format!("missing:ssr-component-end:{path}:{index}"))
+            })?;
         let mut values = HashMap::new();
         let mut callbacks = HashMap::new();
         let mut component_props = HashMap::new();
@@ -1027,23 +1070,123 @@ impl TypedRuntime {
     }
 }
 
-fn typed_adoption_comments(root: &Element) -> HashMap<String, Node> {
-    fn visit(node: &Node, comments: &mut HashMap<String, Node>) {
-        if node.node_type() == Node::COMMENT_NODE {
-            if let Some(value) = node.node_value() {
-                comments.insert(value, node.clone());
+/// The DOM scope one adoption owns: a whole element subtree, or the sibling
+/// range between two boundary markers. Route and root adoptions use the
+/// element scope; adopted component calls use the range between their
+/// `plec:component`/`plec:component-end` markers, so nested adoptions never
+/// re-walk the adoption root. Row and branch claims reuse the same shape.
+pub(crate) enum TypedAdoptionScope {
+    Element(Element),
+    Range { start: Node, end: Node },
+}
+
+/// Marker string -> DOM node for one adoption scope, built in a single tree
+/// walk. Element markers are `data-plec-node` attribute values; every other
+/// marker is an ownership comment. A repeated marker fails the build: a
+/// last-wins map would silently bind a duplicated stale marker and corrupt
+/// claims invisibly.
+pub(crate) struct TypedAdoptionIndex {
+    markers: HashMap<String, Node>,
+}
+
+impl TypedAdoptionIndex {
+    fn build(scope: TypedAdoptionScope) -> Result<Self, JsValue> {
+        let mut markers = HashMap::new();
+        match scope {
+            TypedAdoptionScope::Element(root) => Self::visit(&root.into(), &mut markers)?,
+            TypedAdoptionScope::Range { start, end } => {
+                let mut cursor = start.next_sibling();
+                while let Some(node) = cursor {
+                    if node.is_same_node(Some(&end)) {
+                        break;
+                    }
+                    Self::visit(&node, &mut markers)?;
+                    cursor = node.next_sibling();
+                }
             }
+        }
+        Ok(Self { markers })
+    }
+
+    fn visit(node: &Node, markers: &mut HashMap<String, Node>) -> Result<(), JsValue> {
+        ADOPTION_INDEX_WALKS.with(|walks| walks.set(walks.get().saturating_add(1)));
+        match node.node_type() {
+            Node::COMMENT_NODE => {
+                if let Some(marker) = node.node_value() {
+                    Self::register(markers, marker, node)?;
+                }
+            }
+            Node::ELEMENT_NODE => {
+                if let Some(marker) = node
+                    .dyn_ref::<Element>()
+                    .and_then(|element| element.get_attribute("data-plec-node"))
+                {
+                    Self::register(markers, marker, node)?;
+                }
+            }
+            _ => {}
         }
         let children = node.child_nodes();
-        for index in 0..children.length() {
-            if let Some(child) = children.item(index) {
-                visit(&child, comments);
+        for position in 0..children.length() {
+            if let Some(child) = children.item(position) {
+                Self::visit(&child, markers)?;
             }
         }
+        Ok(())
     }
-    let mut comments = HashMap::new();
-    visit(&root.clone().into(), &mut comments);
-    comments
+
+    fn register(
+        markers: &mut HashMap<String, Node>,
+        marker: String,
+        node: &Node,
+    ) -> Result<(), JsValue> {
+        if markers.insert(marker.clone(), node.clone()).is_some() {
+            return Err(JsValue::from_str(&format!("duplicate:ssr-marker:{marker}")));
+        }
+        Ok(())
+    }
+
+    fn get(&self, marker: &str) -> Option<&Node> {
+        self.markers.get(marker)
+    }
+
+    /// Element claims only ever resolve markers this index registered from
+    /// `data-plec-node` attributes, so the cast failure below is
+    /// unreachable; it maps to the nearest existing diagnostic.
+    fn element(&self, marker: &str) -> Result<Element, JsValue> {
+        match self.markers.get(marker) {
+            None => Err(JsValue::from_str(&format!("missing:ssr-node:{marker}"))),
+            Some(node) => node
+                .clone()
+                .dyn_into::<Element>()
+                .map_err(|_| JsValue::from_str(&format!("mismatch:ssr-tag:{marker}"))),
+        }
+    }
+}
+
+impl PlecRuntime {
+    /// Test instrumentation for the adoption index: DOM nodes visited by
+    /// index builds since the last reset. Scoped adoptions visit each owned
+    /// node once per owning scope; a regression to full-root walks per
+    /// component level would multiply this by the nesting depth.
+    pub fn adoption_index_walks(&self) -> u32 {
+        ADOPTION_INDEX_WALKS.with(Cell::get)
+    }
+
+    pub fn reset_adoption_index_walks(&self) {
+        ADOPTION_INDEX_WALKS.with(|walks| walks.set(0));
+    }
+
+    /// Server-rendered text values replaced by the deterministic recompute
+    /// during the most recent snapshot-backed adoption. Divergence is allowed
+    /// and reported only; see `SSR_TEXT_DIVERGENCES`.
+    pub fn ssr_text_divergences(&self) -> u32 {
+        SSR_TEXT_DIVERGENCES.with(Cell::get)
+    }
+
+    pub fn reset_ssr_text_divergences(&self) {
+        SSR_TEXT_DIVERGENCES.with(|count| count.set(0));
+    }
 }
 
 impl TypedRuntime {
@@ -2411,9 +2554,40 @@ impl TypedRuntime {
 
 impl TypedRuntime {
     pub(crate) fn apply_static_bindings(&mut self) -> Result<(), JsValue> {
+        // One before/after observation at the single re-evaluation point: when
+        // this instance adopted server DOM for an imported snapshot, record
+        // which server-rendered text values the deterministic recompute
+        // replaces. This is outcome-level reporting, not per-binding diffing
+        // or reconciliation.
+        let observed = if self.ssr_imported {
+            self.app
+                .bindings
+                .iter()
+                .filter(|binding| binding.sink == "text")
+                .filter_map(|binding| {
+                    let node = self.nodes.get(&binding.target)?;
+                    Some((
+                        binding.target,
+                        node.text_content().unwrap_or_default(),
+                    ))
+                })
+                .collect::<HashMap<usize, String>>()
+        } else {
+            HashMap::new()
+        };
         for binding in self.app.bindings.clone() {
             if let Some(node) = self.nodes.get(&binding.target) {
                 typed_apply_binding(&self.app, &binding, node, &self.states, None, 0)?;
+            }
+        }
+        for (target, before) in observed {
+            if let Some(node) = self.nodes.get(&target) {
+                let after = node.text_content().unwrap_or_default();
+                if after != before {
+                    SSR_TEXT_DIVERGENCES.with(|count| {
+                        count.set(count.get().saturating_add(1))
+                    });
+                }
             }
         }
         for program in self.app.prop_programs.clone() {

@@ -1933,3 +1933,406 @@ async fn typed_route_error_receives_fetch_failure_and_retry_reloads() {
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap_or_default(), "loaded");
 }
+
+// --- SSR adoption ownership index -------------------------------------------
+
+/// Server-rendered shape for `rust-nested-component-0.10.json`: the root
+/// "main" graph calls Section -> Grandchild, so adoption must claim the root
+/// scope plus one nested sibling range per component call. Marker paths
+/// mirror the server's `renderNode` emission exactly.
+fn nested_adoption_html(duplicate_text_marker: bool) -> String {
+    let text_marker = "<!--plec:text:root/component:1/component:1:2-->";
+    let span_marker = if duplicate_text_marker {
+        format!("{text_marker}{text_marker}")
+    } else {
+        text_marker.to_owned()
+    };
+    let mut html = String::new();
+    html.push_str("<main data-plec-node=\"root/node:0\">");
+    html.push_str("<!--plec:component:root:1-->");
+    html.push_str("<section data-plec-node=\"root/component:1/node:0\">");
+    html.push_str("<!--plec:component:root/component:1:1-->");
+    html.push_str("<div data-plec-node=\"root/component:1/component:1/node:0\">");
+    html.push_str("<span data-plec-node=\"root/component:1/component:1/node:1\">");
+    html.push_str(&span_marker);
+    html.push_str("one</span>");
+    html.push_str("<button data-plec-node=\"root/component:1/component:1/node:3\">");
+    html.push_str("<!--plec:text:root/component:1/component:1:4-->0</button>");
+    html.push_str("</div>");
+    html.push_str("<!--plec:component-end:root/component:1:1-->");
+    html.push_str("</section>");
+    html.push_str("<!--plec:component-end:root:1-->");
+    html.push_str("<button data-plec-node=\"root/node:2\"></button>");
+    html.push_str("</main>");
+    html
+}
+
+fn start_adopt_fixture(runtime: &PlecRuntime, root: &Element, html: &str) -> Result<(), JsValue> {
+    root.set_inner_html(html);
+    runtime
+        .register_graph(
+            "rust-nested-component.tsx#App".into(),
+            serde_wasm_bindgen::to_value(&rust_nested_component_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        r#"{"version":3,"rootGraphId":"rust-nested-component.tsx#App","routes":[]}"#,
+    )
+    .unwrap();
+    runtime.start_adopt(root.clone(), manifest)
+}
+
+#[wasm_bindgen_test]
+fn adopted_nested_components_claim_scoped_indexes_and_stay_live() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_adopt_fixture(&runtime, &root, &nested_adoption_html(false)).unwrap();
+
+    // Claims bound the intended nodes: the grandchild span carries the
+    // propagated prop and its button owns the click action plus the state
+    // text binding, all updated in place on the server DOM.
+    let span = root.query_selector("span").unwrap().unwrap();
+    let button = root.query_selector("div button").unwrap().unwrap();
+    assert_eq!(span.text_content().unwrap(), "one");
+    let button_text = button.text_content().unwrap();
+    assert_eq!(button_text, "0", "button text before click: {button_text}");
+    button
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(
+        root.query_selector("span")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "one"
+    );
+    assert_eq!(
+        root.query_selector("div button")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "1"
+    );
+
+    // Scoped index construction: this fixture performs three adoptions over
+    // ~31 owned nodes (root scope 15, section range 9, grandchild range 7).
+    // Rebuilding a full-root comment map per component level would walk at
+    // least 45 nodes.
+    let walks = runtime.adoption_index_walks();
+    assert!(
+        walks < 45,
+        "nested adoption must not re-walk the adoption root (walked {walks})"
+    );
+}
+
+#[wasm_bindgen_test]
+fn adopted_duplicate_marker_fails_instead_of_silently_claiming() {
+    let runtime = PlecRuntime::new();
+    let error = start_adopt_fixture(&runtime, &mount_root(), &nested_adoption_html(true))
+        .unwrap_err();
+    let message = error.as_string().unwrap_or_default();
+    assert!(
+        message.contains("duplicate:ssr-marker:plec:text:root/component:1/component:1:2"),
+        "unexpected adoption error: {message}"
+    );
+}
+
+#[wasm_bindgen_test]
+fn adopted_missing_and_mismatched_markers_fail_closed_with_unchanged_codes() {
+    // Absent element marker.
+    let html = nested_adoption_html(false)
+        .replace("<button data-plec-node=\"root/node:2\"></button>", "");
+    let error = start_adopt_fixture(&PlecRuntime::new(), &mount_root(), &html).unwrap_err();
+    assert!(error
+        .as_string()
+        .unwrap_or_default()
+        .contains("missing:ssr-node:root/node:2"));
+
+    // Absent text marker, surfaced from a nested scoped index.
+    let html = nested_adoption_html(false)
+        .replace("<!--plec:text:root/component:1/component:1:2-->", "");
+    let error = start_adopt_fixture(&PlecRuntime::new(), &mount_root(), &html).unwrap_err();
+    assert!(
+        error
+            .as_string()
+            .unwrap_or_default()
+            .contains("missing:ssr-text:root/component:1/component:1:2"),
+        "unexpected adoption error: {}",
+        error.as_string().unwrap_or_default()
+    );
+
+    // Absent component boundary.
+    let html = nested_adoption_html(false).replace("<!--plec:component:root:1-->", "");
+    let error = start_adopt_fixture(&PlecRuntime::new(), &mount_root(), &html).unwrap_err();
+    assert!(error
+        .as_string()
+        .unwrap_or_default()
+        .contains("missing:ssr-component:root:1"));
+
+    // Wrong element tag.
+    let html = nested_adoption_html(false)
+        .replace(
+            "<main data-plec-node=\"root/node:0\">",
+            "<section data-plec-node=\"root/node:0\">",
+        )
+        .replace("</main>", "</section>");
+    let error = start_adopt_fixture(&PlecRuntime::new(), &mount_root(), &html).unwrap_err();
+    assert!(error
+        .as_string()
+        .unwrap_or_default()
+        .contains("mismatch:ssr-tag:root/node:0"));
+}
+
+// ---------------------------------------------------------------------------
+// SSR snapshot import pipeline
+//
+// One text node whose static binding reads the `loaderData` host slot (a
+// direct host-input read). The snapshot seeds a public export named
+// `loaderData`, so adoption must recompute the binding from the imported
+// value instead of a blank initialiser.
+// ---------------------------------------------------------------------------
+
+fn snapshot_fixture_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "ssr-snapshot.tsx#App",
+            "rootNode": 0,
+            "strings": ["main", "p"],
+            "constants": [],
+            "nodes": [
+                {"op": "element", "tag": 0, "parent": null, "children": [1]},
+                {"op": "element", "tag": 1, "parent": 0, "children": [2]},
+                {"op": "text", "text": 0, "parent": 1}
+            ],
+            "texts": [{"binding": 0}],
+            "bindings": [{"target": 2, "sink": "text", "expression": 0}],
+            "propPrograms": [],
+            "events": [],
+            "inputs": [],
+            "hostSlots": [{"kind": "loaderData"}],
+            "stateSlots": [],
+            "parameters": [],
+            "expressions": [
+                {"instructions": [{"op": "loadHost", "host": 0}, {"op": "return"}]}
+            ],
+            "actions": [],
+            "loops": [],
+            "dependencyEdges": [],
+            "routeOutlets": [{"id": "main", "node": 0}]
+        }]
+    })
+}
+
+fn snapshot_fixture(
+    revision: &str,
+    export_value: &str,
+    location: &str,
+    structure_graph: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "version": 1,
+        "revision": revision,
+        "routes": [{"routeId": "ssr-snapshot.tsx#Home", "params": {}, "phase": "active"}],
+        "public": {"location": location, "exports": {
+            "loaderData": {
+                "value": export_value,
+                "declaration": {
+                    "name": "loaderData",
+                    "sourceOwner": "server",
+                    "valueIsSerializable": true,
+                    "explicitlyPublic": true
+                }
+            }
+        }},
+        "loaders": [],
+        "structure": {"graphs": {"root/outlet:main": {"graphId": structure_graph}}}
+    })
+}
+
+fn start_snapshot_fixture(
+    runtime: &PlecRuntime,
+    root: &Element,
+    server_text: &str,
+    snapshot: serde_json::Value,
+) -> Result<(), JsValue> {
+    root.set_inner_html(&format!(
+        "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
+         <!--plec:text:root:2-->{server_text}</p></main>"
+    ));
+    runtime
+        .register_graph(
+            "ssr-snapshot.tsx#App".into(),
+            serde_wasm_bindgen::to_value(&snapshot_fixture_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        r#"{"version":3,"revision":"rev-1","rootGraphId":"ssr-snapshot.tsx#App",
+            "routes":[{"id":"ssr-snapshot.tsx#Home","path":"__never__",
+            "graphId":"ssr-snapshot.tsx#App","outletId":"main"}]}"#,
+    )
+    .unwrap();
+    let snapshot = serde_wasm_bindgen::to_value(&snapshot).unwrap();
+    runtime.start_adopt_snapshot(root.clone(), manifest, snapshot)
+}
+
+fn snapshot_root_text(root: &Element) -> String {
+    root.query_selector("p")
+        .unwrap()
+        .unwrap()
+        .text_content()
+        .unwrap_or_default()
+}
+
+#[wasm_bindgen_test]
+fn snapshot_import_seeds_public_exports_before_adoption() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_snapshot_fixture(
+        &runtime,
+        &root,
+        "seeded-value",
+        snapshot_fixture("rev-1", "seeded-value", "/", "ssr-snapshot.tsx#App"),
+    )
+    .unwrap();
+    // The recomputed binding evaluates from the imported export, matching the
+    // server DOM exactly: seeded state, no divergence.
+    assert_eq!(snapshot_root_text(&root), "seeded-value");
+    assert_eq!(runtime.ssr_text_divergences(), 0);
+}
+
+#[wasm_bindgen_test]
+fn snapshot_binding_divergence_is_allowed_and_reported() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_snapshot_fixture(
+        &runtime,
+        &root,
+        "server-value",
+        snapshot_fixture("rev-1", "seeded-value", "/", "ssr-snapshot.tsx#App"),
+    )
+    .unwrap();
+    // Ordinary binding-value divergence never fails adoption: recompute
+    // consequences win, and the divergence is observable for dev reporting.
+    assert_eq!(snapshot_root_text(&root), "seeded-value");
+    assert_eq!(runtime.ssr_text_divergences(), 1);
+}
+
+#[wasm_bindgen_test]
+fn snapshot_version_and_revision_gates_have_dedicated_codes() {
+    let _location = reset_browser_location();
+    let mut snapshot = snapshot_fixture("rev-1", "x", "/", "ssr-snapshot.tsx#App");
+    snapshot["version"] = serde_json::json!(999);
+    let error = start_snapshot_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        "x",
+        snapshot,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "unsupported:ssr-snapshot-version"
+    );
+
+    let snapshot = snapshot_fixture("other-revision", "x", "/", "ssr-snapshot.tsx#App");
+    let error = start_snapshot_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        "x",
+        snapshot,
+    )
+    .unwrap_err();
+    assert_eq!(error.as_string().unwrap_or_default(), "stale-revision");
+}
+
+#[wasm_bindgen_test]
+fn snapshot_payload_and_structure_failures_fail_closed() {
+    let _location = reset_browser_location();
+    // Unparseable payload: a bare string cannot decode as a snapshot.
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    root.set_inner_html("<main data-plec-node=\"root/node:0\"></main>");
+    runtime
+        .register_graph(
+            "ssr-snapshot.tsx#App".into(),
+            serde_wasm_bindgen::to_value(&snapshot_fixture_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        r#"{"version":3,"revision":"rev-1","rootGraphId":"ssr-snapshot.tsx#App","routes":[]}"#,
+    )
+    .unwrap();
+    let error = runtime
+        .start_adopt_snapshot(root.clone(), manifest, JsValue::from_str("not-a-snapshot"))
+        .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "mismatch:ssr-snapshot-payload"
+    );
+
+    // Structure referencing an unknown component graph.
+    let snapshot = snapshot_fixture("rev-1", "x", "/", "missing.tsx#Nope");
+    let error = start_snapshot_fixture(&PlecRuntime::new(), &mount_root(), "x", snapshot)
+        .unwrap_err();
+    assert!(error
+        .as_string()
+        .unwrap_or_default()
+        .starts_with("mismatch:ssr-snapshot:unknown ssr snapshot graph"));
+}
+
+#[wasm_bindgen_test]
+fn snapshot_location_mismatch_fails_closed() {
+    let _location = reset_browser_location();
+    let snapshot = snapshot_fixture("rev-1", "x", "/other-page", "ssr-snapshot.tsx#App");
+    let error = start_snapshot_fixture(&PlecRuntime::new(), &mount_root(), "x", snapshot)
+        .unwrap_err();
+    assert_eq!(error.as_string().unwrap_or_default(), "mismatch:ssr-location");
+}
+
+#[wasm_bindgen_test]
+fn abandon_adoption_purges_seeded_host_inputs() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_snapshot_fixture(
+        &runtime,
+        &root,
+        "seeded-value",
+        snapshot_fixture("rev-1", "seeded-value", "/", "ssr-snapshot.tsx#App"),
+    )
+    .unwrap();
+    runtime.abandon_adoption();
+    // A subsequent adoption without a snapshot recomputes from blank host
+    // inputs: the seeded export must not leak into the fallback remount.
+    start_adopt_snapshot_fixture_without_snapshot(&runtime, &root).unwrap();
+    assert_eq!(snapshot_root_text(&root), "");
+    assert_eq!(runtime.ssr_text_divergences(), 0);
+}
+
+fn start_adopt_snapshot_fixture_without_snapshot(
+    runtime: &PlecRuntime,
+    root: &Element,
+) -> Result<(), JsValue> {
+    root.set_inner_html(
+        "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
+         <!--plec:text:root:2-->ignored</p></main>",
+    );
+    let manifest = js_sys::JSON::parse(
+        r#"{"version":3,"revision":"rev-1","rootGraphId":"ssr-snapshot.tsx#App","routes":[]}"#,
+    )
+    .unwrap();
+    runtime.start_adopt_snapshot(
+        root.clone(),
+        manifest,
+        wasm_bindgen::JsValue::UNDEFINED,
+    )
+}
+

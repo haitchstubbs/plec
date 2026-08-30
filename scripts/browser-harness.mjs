@@ -1,7 +1,9 @@
 // scripts/browser-harness.mjs
 
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, readdirSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 
 const repoRoot = path.resolve(
@@ -74,27 +76,96 @@ function resolveChromeDriver() {
   );
 }
 
+function resolveBrowserExecutable() {
+  if (process.env.PLEC_CHROME_EXECUTABLE) {
+    return process.env.PLEC_CHROME_EXECUTABLE;
+  }
+  // The setup script provisions ChromeDriver without a browser; the only
+  // Chrome on this machine comes from the Playwright cache. Pick the newest
+  // installed Chromium so the driver can be matched to its major version.
+  const cache = path.join(
+    os.homedir(),
+    '.cache',
+    'ms-playwright',
+  );
+  try {
+    const newest = readdirSync(cache)
+      .filter((entry) => /^chromium-\d+$/.test(entry))
+      .sort()
+      .pop();
+    const binary = path.join(cache, newest, 'chrome-linux64', 'chrome');
+    accessSync(binary, constants.X_OK);
+    return binary;
+  } catch {
+    return undefined;
+  }
+}
+
+function majorVersion(binary, versionFlag) {
+  const result = spawnSync(binary, [versionFlag], { encoding: 'utf8' });
+  return /(\d+)\./.exec(result.stdout ?? '')?.[1];
+}
+
 const chromeDriver = resolveChromeDriver();
+const browserExecutable = resolveBrowserExecutable();
+const driverExecutable = (() => {
+  const browserMajor = browserExecutable
+    ? majorVersion(browserExecutable, '--version')
+    : undefined;
+  const driverMajor = majorVersion(chromeDriver, '--version');
+  if (!browserMajor || browserMajor === driverMajor) return chromeDriver;
+  // setup.mjs installs the stable driver; a browser from a different release
+  // channel needs its matching major from the same tooling directory.
+  const matched = path.join(
+    path.dirname(chromeDriver),
+    `chromedriver-${browserMajor}`,
+  );
+  try {
+    accessSync(matched, constants.X_OK);
+    return matched;
+  } catch {
+    return chromeDriver;
+  }
+})();
 
 try {
-  accessSync(chromeDriver, constants.X_OK);
+  accessSync(driverExecutable, constants.X_OK);
 } catch {
   console.error(
-    `ChromeDriver is not installed or executable:\n  ${chromeDriver}`,
+    `ChromeDriver is not installed or executable:\n  ${driverExecutable}`,
   );
   console.error(
     '\nRun `yarn setup` to install the required browser tooling.',
   );
 
   process.exitCode = 1;
-} 
+}
 
 if (!process.exitCode) {
-  const driverDir = path.dirname(chromeDriver);
+  const driverDir = path.dirname(driverExecutable);
 
   console.log(
-    `Using ChromeDriver: ${chromeDriver}`,
+    `Using ChromeDriver: ${driverExecutable}`,
   );
+  if (browserExecutable) {
+    console.log(`Using Chrome browser: ${browserExecutable}`);
+  }
+
+  // Chromedriver only auto-discovers its matching browser from PATH. When the
+  // browser comes from the Playwright cache, point the session at it through
+  // the runner's webdriver capability config (kept in the git-ignored target
+  // directory).
+  let webdriverJson;
+  if (browserExecutable) {
+    webdriverJson = path.join(repoRoot, 'target', 'webdriver.json');
+    await mkdir(path.dirname(webdriverJson), { recursive: true });
+    await writeFile(
+      webdriverJson,
+      JSON.stringify({
+        'goog:chromeOptions': { binary: browserExecutable },
+      }),
+    );
+  }
 
   const result = spawnSync(
     'wasm-pack',
@@ -115,7 +186,10 @@ if (!process.exitCode) {
 
         // wasm-bindgen/wasm-pack can locate the driver
         // either through CHROMEDRIVER or PATH.
-        CHROMEDRIVER: chromeDriver,
+        CHROMEDRIVER: driverExecutable,
+        ...(webdriverJson
+          ? { WASM_BINDGEN_TEST_WEBDRIVER_JSON: webdriverJson }
+          : {}),
         PATH: [
           driverDir,
           process.env.PATH,

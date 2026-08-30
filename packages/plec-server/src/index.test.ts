@@ -23,5 +23,10 @@ it('renders a route artifact with document metadata and public request location'
   expect(html).toContain('name="description" content="Home description"');
   expect(html).toContain('Server rendered');
   expect(html).toContain('data-plec-node="root/node:0"');
-  expect(html).toContain('"search":"?source=test"');
+  // The v2 bootstrap carries the typed SSR execution snapshot: route chain
+  // identity plus the public request location (path + search).
+  expect(html).toContain('"version":2');
+  expect(html).toContain('"revision":"test-revision"');
+  expect(html).toContain('"routeId":"home"');
+  expect(html).toContain('"location":"/?source=test"');
 });

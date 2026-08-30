@@ -103,6 +103,555 @@ fn default_pending_mode() -> String {
     "replace".into()
 }
 
+// ---------------------------------------------------------------------------
+// SSR execution snapshot (v1)
+//
+// The snapshot is the typed transfer half of the SSR contract: the server
+// emits HTML plus one `PlecSsrSnapshot`, and the browser/WASM runtime imports
+// that snapshot as its initial execution state before adopting the
+// server-rendered DOM.
+//
+// Design decisions frozen here:
+//
+// 1. **Schema home and format.** These types live in `plec-ir` (Rust-owned);
+//    serde is camelCase to match `RouteManifest`. The TypeScript server
+//    produces JSON conforming to this schema and the WASM runtime is the
+//    strict consumer. There is deliberately no Zod or TypeScript schema for
+//    the snapshot — a second schema would drift exactly like the
+//    hand-mirrored types in `packages/plec-server` already have.
+// 2. **Canonical encodings.** No new id spaces are introduced. Route chain
+//    entries reference manifest route ids (`"{module}#{local}"`). Loader
+//    outcomes are derived from `RouteManifestEntry { graph_id, loader_action }`
+//    (see `loader_ref`). Conditional branch ownership is encoded against the
+//    node handle with `consequent | alternate | none`; selecting `alternate`
+//    is only valid when that conditional defines one. Loop keys are the
+//    strings produced by the runtime's `typed_value_string` canonicalization
+//    (string as-is, null → `""`, bool → `"true"`/`"false"`, number → its
+//    Rust `Display` form, array/record → compact JSON); non-string keys are
+//    unrepresentable in this schema, so producers must canonicalize first.
+//    Graph instance keys use the runtime `graph_instance_id` grammar
+//    (`root/outlet:main`, `{parent}/outlet:{outlet}[/key:{key}]` with `%2F`
+//    and `%25` escaping) so snapshot keys and runtime instance ids coincide.
+// 3. **Version + validation policy.** The snapshot has its own version
+//    constant, independent of the route manifest and artifact versions.
+//    `validate` fails closed on: unknown versions, revision mismatch with the
+//    manifest, malformed graph-instance paths, unknown route/graph/node
+//    references, broken route chains, undeclared route params, duplicate or
+//    unordered structural entries, duplicate loop keys, non-finite numbers,
+//    and any export failing `validate_public_export`.
+// 4. **Public vs server-only taxonomy.** The snapshot may carry only
+//    explicitly public exports (`validate_public_export` enforces
+//    `explicitly_public` + `source_owner != Client` + `value_is_serializable`).
+//    Raw headers, cookies, sessions, DB handles, closures, and continuations
+//    are server-only and can never be represented as exports.
+// 5. **Transfer-vs-recompute scope.** The snapshot transfers identity and
+//    causes that cannot safely be reconstructed: route chain identity, public
+//    execution exports, loader outcomes, and structural ownership (selected
+//    branches, keyed loop rows). Everything deterministic is recomputed
+//    client-side: pure expressions, derived bindings, dependency edges, and
+//    static deterministic state. The snapshot never carries component-local
+//    VM state.
+// ---------------------------------------------------------------------------
+
+/// Snapshot schema version, independent of `RouteManifest.version` and the
+/// artifact version.
+pub const SSR_SNAPSHOT_VERSION: u32 = 1;
+
+/// The graph instance the route chain renders into. Mirrors the runtime's
+/// `graph_instance_id(None, "main", None)` convention.
+pub const ROOT_GRAPH_INSTANCE_ID: &str = "root/outlet:main";
+
+/// The server-rendered execution state for one request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlecSsrSnapshot {
+    #[serde(default)]
+    pub version: u32,
+    /// Must equal the `RouteManifest` revision (the freshness handshake).
+    #[serde(default)]
+    pub revision: String,
+    /// The matched route chain, outermost first.
+    pub routes: Vec<SsrRouteInstance>,
+    /// Request-scoped public state.
+    pub public: SsrPublicState,
+    /// Outcomes of route loaders executed server-side, keyed by manifest
+    /// entry (`graph_id` + `loader_action`).
+    #[serde(default)]
+    pub loaders: Vec<SsrLoaderOutcome>,
+    /// Structural ownership per mounted graph instance.
+    pub structure: SsrStructure,
+}
+
+/// The compiled-graph facts snapshot structure validation needs.  A trait so
+/// the compile-time `ComponentApplication` and the WASM runtime's
+/// deserialization mirror can both act as the validation reference without
+/// plec-ir owning the runtime's schema.
+pub trait SsrStructureApplication {
+    /// The component graph with this id, if the application defines it.
+    fn structure_graph(&self, graph_id: &str) -> Option<&dyn SsrStructureGraph>;
+}
+
+/// One component graph as seen by snapshot structure validation.
+pub trait SsrStructureGraph {
+    /// The structure-relevant kind of one node handle, `None` when the handle
+    /// is out of range.
+    fn structure_node(&self, handle: usize) -> Option<SsrStructureNode>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SsrStructureNode {
+    /// A conditional node; `has_alternate` gates `SsrSelectedBranch::Alternate`.
+    Conditional { has_alternate: bool },
+    Loop,
+    Other,
+}
+
+/// The compile-time artifacts a snapshot must be validated against.
+#[derive(Clone, Copy)]
+pub struct SsrSnapshotReferences<'a> {
+    pub manifest: &'a RouteManifest,
+    pub application: &'a dyn SsrStructureApplication,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SsrRouteInstance {
+    /// A `RouteManifestEntry.id`.
+    pub route_id: String,
+    /// Matched `$param` values for this entry's path segment.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub params: std::collections::BTreeMap<String, String>,
+    /// Which phase graph the instance rendered.
+    #[serde(default)]
+    pub phase: SsrRoutePhase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SsrRoutePhase {
+    #[default]
+    Active,
+    Pending,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SsrPublicState {
+    /// Absolute request path the snapshot was produced for.
+    pub location: String,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub exports: std::collections::BTreeMap<String, SsrPublicExport>,
+}
+
+/// One value that crossed the server boundary through an explicit public
+/// export. The declaration is carried alongside the value so consumers (and
+/// `validate`) can re-check the boundary at import time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SsrPublicExport {
+    pub value: SsrSnapshotValue,
+    pub declaration: PublicExport,
+}
+
+/// A JSON-transportable value. Deliberately separate from the graph `Value`
+/// enum, which is serialize-only; the snapshot needs strict round-tripping.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SsrSnapshotValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<SsrSnapshotValue>),
+    Record(std::collections::BTreeMap<String, SsrSnapshotValue>),
+}
+
+/// Canonical loader reference derived from a `RouteManifestEntry`:
+/// `"{graph_id}#action:{n}"`. Graph ids may contain `#`, so parse refs from
+/// the right.
+pub fn loader_ref(graph_id: &str, action: usize) -> String {
+    format!("{graph_id}#action:{action}")
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SsrLoaderOutcome {
+    /// The `RouteManifestEntry.graph_id` that owns the loader.
+    pub graph_id: String,
+    /// The entry's `loader_action` index.
+    pub action: usize,
+    pub state: SsrLoaderState,
+}
+
+/// Loader outcomes are total: a loader either resolved a value or was
+/// rejected with a message. There is no "unresolved" state to represent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SsrLoaderState {
+    Resolved { value: SsrSnapshotValue },
+    Rejected { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SsrStructure {
+    /// Structural ownership per graph instance, keyed by instance id. The
+    /// map key grammar keeps snapshot keys identical to runtime instance ids.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub graphs: std::collections::BTreeMap<String, SsrGraphStructure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SsrGraphStructure {
+    /// The compiled component graph mounted at this instance.
+    pub graph_id: String,
+    /// Selected conditional branches, ordered by node handle.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub branches: Vec<SsrBranchSelection>,
+    /// Claimed loop rows, ordered by node handle.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loops: Vec<SsrLoopRows>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SsrBranchSelection {
+    /// Handle of the `Node::Conditional` within `graph_id`'s component.
+    pub node: usize,
+    pub selected: SsrSelectedBranch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SsrSelectedBranch {
+    Consequent,
+    Alternate,
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SsrLoopRows {
+    /// Handle of the `Node::Loop` within `graph_id`'s component.
+    pub node: usize,
+    /// Row keys in render order, canonicalized with `typed_value_string`.
+    pub keys: Vec<String>,
+}
+
+impl SsrStructureApplication for ComponentApplication {
+    fn structure_graph(&self, graph_id: &str) -> Option<&dyn SsrStructureGraph> {
+        let component = self
+            .components
+            .iter()
+            .find(|component| component.id == graph_id)?;
+        Some(component)
+    }
+}
+
+impl SsrStructureGraph for ExecutableComponent {
+    fn structure_node(&self, handle: usize) -> Option<SsrStructureNode> {
+        Some(match self.nodes.get(handle)? {
+            Node::Conditional { alternate, .. } => SsrStructureNode::Conditional {
+                has_alternate: alternate.is_some(),
+            },
+            Node::Loop { .. } => SsrStructureNode::Loop,
+            _ => SsrStructureNode::Other,
+        })
+    }
+}
+
+impl PlecSsrSnapshot {
+    /// Validates the snapshot against the artifacts it claims to describe.
+    /// Every check fails closed; a snapshot that cannot be fully validated
+    /// must send the browser to a client remount, never to a guess.
+    pub fn validate(&self, references: &SsrSnapshotReferences<'_>) -> Result<(), String> {
+        if self.version != SSR_SNAPSHOT_VERSION {
+            return Err("unsupported ssr snapshot version".into());
+        }
+        if self.revision.is_empty() {
+            return Err("ssr snapshot revision is required".into());
+        }
+        if self.revision != references.manifest.revision {
+            return Err("ssr snapshot revision does not match the route manifest".into());
+        }
+        self.validate_route_chain(references.manifest)?;
+        self.validate_public_state()?;
+        self.validate_loaders(references.manifest)?;
+        self.validate_structure(references.application)
+    }
+
+    fn validate_route_chain(&self, manifest: &RouteManifest) -> Result<(), String> {
+        if self.routes.is_empty() {
+            return Err("ssr snapshot route chain is required".into());
+        }
+        for (index, instance) in self.routes.iter().enumerate() {
+            if instance.route_id.is_empty() {
+                return Err("ssr snapshot route instance id is required".into());
+            }
+            let entry = manifest
+                .routes
+                .iter()
+                .find(|route| route.id == instance.route_id)
+                .ok_or_else(|| format!("unknown ssr snapshot route {}", instance.route_id))?;
+            if index > 0 {
+                let parent_id = self.routes[index - 1].route_id.as_str();
+                if entry.parent_id.as_deref() != Some(parent_id) {
+                    return Err(format!(
+                        "ssr snapshot route chain breaks at {}",
+                        instance.route_id
+                    ));
+                }
+            }
+            let declared = route_path_param_names(&entry.path);
+            for (name, value) in &instance.params {
+                if name.is_empty() {
+                    return Err("ssr snapshot route param name is required".into());
+                }
+                if !declared.contains(&name.as_str()) {
+                    return Err(format!(
+                        "route param {name} is not declared by {}",
+                        instance.route_id
+                    ));
+                }
+                if value.is_empty() {
+                    return Err(format!("route param {name} value is required"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_public_state(&self) -> Result<(), String> {
+        if !self.public.location.starts_with('/') {
+            return Err("ssr snapshot location must be an absolute path".into());
+        }
+        for (name, export) in &self.public.exports {
+            if name.is_empty() {
+                return Err("ssr snapshot export name is required".into());
+            }
+            if export.declaration.name != *name {
+                return Err(format!(
+                    "public export declaration name does not match {name}"
+                ));
+            }
+            validate_public_export(&export.declaration)
+                .map_err(|error| format!("public export {name} rejected: {error}"))?;
+            if ensure_value_is_finite(&export.value).is_err() {
+                return Err(format!(
+                    "public export {name} contains a non-finite number"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_loaders(&self, manifest: &RouteManifest) -> Result<(), String> {
+        let mut seen = std::collections::BTreeSet::new();
+        for outcome in &self.loaders {
+            let reference = loader_ref(&outcome.graph_id, outcome.action);
+            if outcome.graph_id.is_empty() {
+                return Err("ssr snapshot loader graph id is required".into());
+            }
+            let known = manifest.routes.iter().any(|route| {
+                route.graph_id == outcome.graph_id
+                    && route.loader_action == Some(outcome.action)
+            });
+            if !known {
+                return Err(format!("unknown ssr snapshot loader {reference}"));
+            }
+            if !seen.insert((outcome.graph_id.as_str(), outcome.action)) {
+                return Err(format!("duplicate ssr snapshot loader {reference}"));
+            }
+            match &outcome.state {
+                SsrLoaderState::Resolved { value } => {
+                    if ensure_value_is_finite(value).is_err() {
+                        return Err(format!("loader {reference} resolved a non-finite number"));
+                    }
+                }
+                SsrLoaderState::Rejected { message } => {
+                    if message.is_empty() {
+                        return Err(format!("loader {reference} rejection requires a message"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_structure(&self, application: &dyn SsrStructureApplication) -> Result<(), String> {
+        if !self.structure.graphs.contains_key(ROOT_GRAPH_INSTANCE_ID) {
+            return Err("ssr snapshot structure requires the root graph instance".into());
+        }
+        for (instance_id, structure) in &self.structure.graphs {
+            validate_graph_instance_path(instance_id)
+                .map_err(|error| format!("malformed graph instance path {instance_id}: {error}"))?;
+            let (parent, _, _) = split_graph_instance_path(instance_id)
+                .map_err(|error| format!("malformed graph instance path {instance_id}: {error}"))?;
+            if let Some(parent) = parent {
+                if !self.structure.graphs.contains_key(parent) {
+                    return Err(format!(
+                        "graph instance {instance_id} references unclaimed parent {parent}"
+                    ));
+                }
+            }
+            let component = application
+                .structure_graph(&structure.graph_id)
+                .ok_or_else(|| format!("unknown ssr snapshot graph {}", structure.graph_id))?;
+            validate_branch_selections(component, instance_id, &structure.branches)?;
+            validate_loop_rows(component, instance_id, &structure.loops)?;
+        }
+        Ok(())
+    }
+}
+
+fn route_path_param_names(path: &str) -> Vec<&str> {
+    path.split('/')
+        .filter_map(|segment| segment.strip_prefix('$'))
+        .collect()
+}
+
+fn ensure_value_is_finite(value: &SsrSnapshotValue) -> Result<(), &'static str> {
+    match value {
+        SsrSnapshotValue::Number(number) if !number.is_finite() => {
+            Err("snapshot numbers must be finite to survive the JSON transport")
+        }
+        SsrSnapshotValue::Array(values) => {
+            values.iter().try_for_each(ensure_value_is_finite)
+        }
+        SsrSnapshotValue::Record(fields) => {
+            fields.values().try_for_each(ensure_value_is_finite)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_branch_selections(
+    graph: &dyn SsrStructureGraph,
+    instance_id: &str,
+    branches: &[SsrBranchSelection],
+) -> Result<(), String> {
+    let mut previous: Option<usize> = None;
+    for branch in branches {
+        if previous.is_some_and(|previous| branch.node <= previous) {
+            return Err(format!(
+                "branch selections for {instance_id} must be ordered by node handle without duplicates"
+            ));
+        }
+        previous = Some(branch.node);
+        let has_alternate = match graph.structure_node(branch.node) {
+            Some(SsrStructureNode::Conditional { has_alternate }) => has_alternate,
+            Some(_) => {
+                return Err(format!(
+                    "branch selection for {instance_id} names node {} which is not a conditional",
+                    branch.node
+                ))
+            }
+            None => {
+                return Err(format!(
+                    "branch selection for {instance_id} references unknown node handle {}",
+                    branch.node
+                ))
+            }
+        };
+        if branch.selected == SsrSelectedBranch::Alternate && !has_alternate {
+            return Err(format!(
+                "branch selection for {instance_id} names an alternate that node {} does not define",
+                branch.node
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_loop_rows(
+    graph: &dyn SsrStructureGraph,
+    instance_id: &str,
+    loops: &[SsrLoopRows],
+) -> Result<(), String> {
+    let mut previous: Option<usize> = None;
+    for loop_rows in loops {
+        if previous.is_some_and(|previous| loop_rows.node <= previous) {
+            return Err(format!(
+                "loop records for {instance_id} must be ordered by node handle without duplicates"
+            ));
+        }
+        previous = Some(loop_rows.node);
+        match graph.structure_node(loop_rows.node) {
+            Some(SsrStructureNode::Loop) => {}
+            Some(_) => {
+                return Err(format!(
+                    "loop record for {instance_id} names node {} which is not a loop",
+                    loop_rows.node
+                ))
+            }
+            None => {
+                return Err(format!(
+                    "loop record for {instance_id} references unknown node handle {}",
+                    loop_rows.node
+                ))
+            }
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for key in &loop_rows.keys {
+            if !seen.insert(key.as_str()) {
+                return Err(format!(
+                    "loop at {instance_id} node {} has duplicate key {key}",
+                    loop_rows.node
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates one graph instance path against the runtime's ownership grammar:
+/// `root`, `root/outlet:main`, or `{parent}/outlet:{outlet}[/key:{key}]`
+/// where `outlet` and `key` escape `/` as `%2F` and `%` as `%25`. Marker
+/// paths (`{instance}/component:{i}/node:{j}`) compose from a valid instance
+/// prefix.
+pub fn validate_graph_instance_path(path: &str) -> Result<(), String> {
+    split_graph_instance_path(path).map(|_| ())
+}
+
+fn split_graph_instance_path(
+    path: &str,
+) -> Result<(Option<&str>, &str, Option<&str>), String> {
+    if path.is_empty() {
+        return Err("graph instance path is empty".into());
+    }
+    let (base, key) = match path.rfind("/key:") {
+        Some(index) => {
+            let key = &path[index + "/key:".len()..];
+            if key.is_empty() {
+                return Err("graph instance key segment is empty".into());
+            }
+            if key.contains('/') {
+                return Err("graph instance key segment must escape '/'".into());
+            }
+            (&path[..index], Some(key))
+        }
+        None => (path, None),
+    };
+    let outlet_at = base
+        .rfind("/outlet:")
+        .ok_or_else(|| "graph instance path requires an /outlet: segment".to_string())?;
+    let outlet = &base[outlet_at + "/outlet:".len()..];
+    if outlet.is_empty() {
+        return Err("graph instance outlet segment is empty".into());
+    }
+    if outlet.contains('/') {
+        return Err("graph instance outlet segment must escape '/'".into());
+    }
+    let parent = &base[..outlet_at];
+    if parent.is_empty() {
+        return Err("graph instance path requires a parent".into());
+    }
+    let parent = if parent == "root" { None } else { Some(parent) };
+    Ok((parent, outlet, key))
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecutableComponent {
@@ -709,5 +1258,560 @@ mod tests {
             .unwrap()
             .validate()
             .is_err());
+    }
+
+    fn test_manifest() -> RouteManifest {
+        RouteManifest {
+            version: 3,
+            revision: "rev-1".into(),
+            root_graph_id: "app#Index".into(),
+            routes: vec![
+                RouteManifestEntry {
+                    id: "app#Index".into(),
+                    parent_id: None,
+                    path: "".into(),
+                    graph_id: "app#Index".into(),
+                    pending_graph_id: None,
+                    pending_mode: "replace".into(),
+                    error_graph_id: None,
+                    loader_action: None,
+                    outlet_id: "main".into(),
+                    meta: None,
+                },
+                RouteManifestEntry {
+                    id: "app#Todo".into(),
+                    parent_id: Some("app#Index".into()),
+                    path: "todos/$todoId".into(),
+                    graph_id: "app#Todo".into(),
+                    pending_graph_id: None,
+                    pending_mode: "replace".into(),
+                    error_graph_id: None,
+                    loader_action: Some(0),
+                    outlet_id: "main".into(),
+                    meta: None,
+                },
+            ],
+        }
+    }
+
+    fn executable_component(id: &str, nodes: Vec<Node>) -> ExecutableComponent {
+        ExecutableComponent {
+            id: id.into(),
+            root_node: 0,
+            strings: vec![],
+            constants: vec![],
+            nodes,
+            texts: vec![],
+            bindings: vec![],
+            prop_programs: vec![],
+            events: vec![],
+            inputs: vec![],
+            host_slots: vec![],
+            capabilities: vec![],
+            state_slots: vec![],
+            ref_slots: vec![],
+            host_refs: vec![],
+            reactions: vec![],
+            listeners: vec![],
+            parameters: vec![],
+            expressions: vec![],
+            actions: vec![],
+            loops: vec![],
+            dependency_edges: vec![],
+            route_outlets: vec![],
+        }
+    }
+
+    fn test_application(with_alternate: bool) -> ComponentApplication {
+        ComponentApplication {
+            version: COMPONENT_VERSION,
+            root_component: 0,
+            components: vec![
+                executable_component("app#Index", vec![]),
+                executable_component(
+                    "app#Todo",
+                    vec![
+                        Node::Conditional {
+                            test: 0,
+                            parent: None,
+                            consequent: 1,
+                            alternate: with_alternate.then_some(2),
+                        },
+                        Node::Element {
+                            tag: 0,
+                            namespace: "html",
+                            parent: None,
+                            children: vec![],
+                            host_ref: None,
+                        },
+                        Node::Loop {
+                            r#loop: 0,
+                            parent: None,
+                        },
+                    ],
+                ),
+            ],
+        }
+    }
+
+    fn valid_snapshot() -> PlecSsrSnapshot {
+        PlecSsrSnapshot {
+            version: SSR_SNAPSHOT_VERSION,
+            revision: "rev-1".into(),
+            routes: vec![
+                SsrRouteInstance {
+                    route_id: "app#Index".into(),
+                    params: Default::default(),
+                    phase: SsrRoutePhase::Active,
+                },
+                SsrRouteInstance {
+                    route_id: "app#Todo".into(),
+                    params: [("todoId".into(), "42".into())].into_iter().collect(),
+                    phase: SsrRoutePhase::Active,
+                },
+            ],
+            public: SsrPublicState {
+                location: "/todos/42".into(),
+                exports: [(
+                    "todoCount".to_string(),
+                    SsrPublicExport {
+                        value: SsrSnapshotValue::Number(2.0),
+                        declaration: PublicExport {
+                            name: "todoCount".into(),
+                            source_owner: ExecutionOwner::Server,
+                            value_is_serializable: true,
+                            explicitly_public: true,
+                        },
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+            loaders: vec![SsrLoaderOutcome {
+                graph_id: "app#Todo".into(),
+                action: 0,
+                state: SsrLoaderState::Resolved {
+                    value: SsrSnapshotValue::String("todo".into()),
+                },
+            }],
+            structure: SsrStructure {
+                graphs: [
+                    (
+                        ROOT_GRAPH_INSTANCE_ID.to_string(),
+                        SsrGraphStructure {
+                            graph_id: "app#Index".into(),
+                            branches: vec![],
+                            loops: vec![],
+                        },
+                    ),
+                    (
+                        "root/outlet:main/outlet:main/key:todos".to_string(),
+                        SsrGraphStructure {
+                            graph_id: "app#Todo".into(),
+                            branches: vec![SsrBranchSelection {
+                                node: 0,
+                                selected: SsrSelectedBranch::Consequent,
+                            }],
+                            loops: vec![SsrLoopRows {
+                                node: 2,
+                                keys: vec!["t1".into(), "t2".into()],
+                            }],
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        }
+    }
+
+    fn snapshot_error(mutate: impl FnOnce(&mut PlecSsrSnapshot)) -> String {
+        let mut snapshot = valid_snapshot();
+        mutate(&mut snapshot);
+        let manifest = test_manifest();
+        let application = test_application(true);
+        snapshot
+            .validate(&SsrSnapshotReferences {
+                manifest: &manifest,
+                application: &application,
+            })
+            .expect_err("snapshot should fail validation")
+    }
+
+    #[test]
+    fn ssr_snapshot_round_trips_with_camel_case_fields() {
+        let snapshot = valid_snapshot();
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(json["version"], SSR_SNAPSHOT_VERSION);
+        assert_eq!(json["routes"][1]["routeId"], "app#Todo");
+        assert_eq!(json["routes"][1]["params"]["todoId"], "42");
+        assert_eq!(json["public"]["location"], "/todos/42");
+        assert_eq!(json["public"]["exports"]["todoCount"]["declaration"]["explicitlyPublic"], true);
+        assert_eq!(json["loaders"][0]["state"]["kind"], "resolved");
+        assert_eq!(json["structure"]["graphs"]["root/outlet:main"]["graphId"], "app#Index");
+        assert_eq!(
+            serde_json::from_value::<PlecSsrSnapshot>(json).unwrap(),
+            snapshot
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_a_wrong_version() {
+        assert_eq!(
+            snapshot_error(|snapshot| snapshot.version = 2),
+            "unsupported ssr snapshot version"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_a_missing_version() {
+        let mut json = serde_json::to_value(valid_snapshot()).unwrap();
+        json.as_object_mut().unwrap().remove("version");
+        let snapshot = serde_json::from_value::<PlecSsrSnapshot>(json).unwrap();
+        assert_eq!(
+            snapshot
+                .validate(&SsrSnapshotReferences {
+                    manifest: &test_manifest(),
+                    application: &test_application(true),
+                })
+                .unwrap_err(),
+            "unsupported ssr snapshot version"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_a_revision_mismatch() {
+        assert_eq!(
+            snapshot_error(|snapshot| snapshot.revision = "rev-2".into()),
+            "ssr snapshot revision does not match the route manifest"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_an_empty_route_chain() {
+        assert_eq!(
+            snapshot_error(|snapshot| snapshot.routes = vec![]),
+            "ssr snapshot route chain is required"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_an_unknown_route_id() {
+        assert_eq!(
+            snapshot_error(|snapshot| snapshot.routes[1].route_id = "app#Ghost".into()),
+            "unknown ssr snapshot route app#Ghost"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_a_broken_route_chain() {
+        let error = snapshot_error(|snapshot| snapshot.routes.swap(0, 1));
+        assert_eq!(error, "ssr snapshot route chain breaks at app#Index");
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_undeclared_route_params() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot.routes[1]
+                    .params
+                    .insert("userId".into(), "7".into());
+            }),
+            "route param userId is not declared by app#Todo"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_malformed_graph_instance_paths() {
+        for path in [
+            "root",
+            "root/outlet:",
+            "root/outlet:main/outlet:a/b",
+            "root/outlet:main/key:",
+            "outlet:main",
+        ] {
+            assert!(
+                validate_graph_instance_path(path).is_err(),
+                "expected {path} to be malformed"
+            );
+        }
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot.structure.graphs.insert(
+                    "root".into(),
+                    SsrGraphStructure {
+                        graph_id: "app#Index".into(),
+                        branches: vec![],
+                        loops: vec![],
+                    },
+                );
+            }),
+            "malformed graph instance path root: graph instance path requires an /outlet: segment"
+        );
+    }
+
+    #[test]
+    fn graph_instance_paths_follow_the_runtime_grammar() {
+        assert!(validate_graph_instance_path(ROOT_GRAPH_INSTANCE_ID).is_ok());
+        assert!(validate_graph_instance_path("root/outlet:main/outlet:main/key:todos").is_ok());
+        assert!(validate_graph_instance_path("root%2Foutlet:main/outlet:rows/key:todo%2F1").is_ok());
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_a_missing_root_graph_instance() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot.structure.graphs.remove(ROOT_GRAPH_INSTANCE_ID);
+            }),
+            "ssr snapshot structure requires the root graph instance"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_an_unclaimed_parent_instance() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot.structure.graphs.insert(
+                    "root/outlet:side/outlet:rows".into(),
+                    SsrGraphStructure {
+                        graph_id: "app#Index".into(),
+                        branches: vec![],
+                        loops: vec![],
+                    },
+                );
+            }),
+            "graph instance root/outlet:side/outlet:rows references unclaimed parent root/outlet:side"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_unknown_graph_ids() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot
+                    .structure
+                    .graphs
+                    .get_mut("root/outlet:main/outlet:main/key:todos")
+                    .unwrap()
+                    .graph_id = "app#Ghost".into();
+            }),
+            "unknown ssr snapshot graph app#Ghost"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_branch_selections_that_are_not_conditionals() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot
+                    .structure
+                    .graphs
+                    .get_mut("root/outlet:main/outlet:main/key:todos")
+                    .unwrap()
+                    .branches = vec![SsrBranchSelection {
+                    node: 1,
+                    selected: SsrSelectedBranch::Consequent,
+                }];
+            }),
+            "branch selection for root/outlet:main/outlet:main/key:todos names node 1 which is not a conditional"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_unknown_branch_node_handles() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot
+                    .structure
+                    .graphs
+                    .get_mut("root/outlet:main/outlet:main/key:todos")
+                    .unwrap()
+                    .branches = vec![SsrBranchSelection {
+                    node: 9,
+                    selected: SsrSelectedBranch::Consequent,
+                }];
+            }),
+            "branch selection for root/outlet:main/outlet:main/key:todos references unknown node handle 9"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_alternate_selection_without_an_alternate() {
+        let mut snapshot = valid_snapshot();
+        snapshot
+            .structure
+            .graphs
+            .get_mut("root/outlet:main/outlet:main/key:todos")
+            .unwrap()
+            .branches[0]
+            .selected = SsrSelectedBranch::Alternate;
+        let manifest = test_manifest();
+        let application = test_application(false);
+        assert_eq!(
+            snapshot
+                .validate(&SsrSnapshotReferences {
+                    manifest: &manifest,
+                    application: &application,
+                })
+                .unwrap_err(),
+            "branch selection for root/outlet:main/outlet:main/key:todos names an alternate that node 0 does not define"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_duplicate_and_unordered_branch_selections() {
+        assert!(snapshot_error(|snapshot| {
+            snapshot
+                .structure
+                .graphs
+                .get_mut("root/outlet:main/outlet:main/key:todos")
+                .unwrap()
+                .branches = vec![
+                SsrBranchSelection {
+                    node: 0,
+                    selected: SsrSelectedBranch::Consequent,
+                },
+                SsrBranchSelection {
+                    node: 0,
+                    selected: SsrSelectedBranch::None,
+                },
+            ];
+        })
+        .contains("must be ordered by node handle without duplicates"));
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_loop_records_that_are_not_loops() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot
+                    .structure
+                    .graphs
+                    .get_mut("root/outlet:main/outlet:main/key:todos")
+                    .unwrap()
+                    .loops = vec![SsrLoopRows {
+                    node: 0,
+                    keys: vec![],
+                }];
+            }),
+            "loop record for root/outlet:main/outlet:main/key:todos names node 0 which is not a loop"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_duplicate_loop_keys() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot
+                    .structure
+                    .graphs
+                    .get_mut("root/outlet:main/outlet:main/key:todos")
+                    .unwrap()
+                    .loops = vec![SsrLoopRows {
+                    node: 2,
+                    keys: vec!["t1".into(), "t1".into()],
+                }];
+            }),
+            "loop at root/outlet:main/outlet:main/key:todos node 2 has duplicate key t1"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_unknown_loader_references() {
+        assert_eq!(
+            snapshot_error(|snapshot| snapshot.loaders[0].graph_id = "app#Ghost".into()),
+            "unknown ssr snapshot loader app#Ghost#action:0"
+        );
+        assert_eq!(
+            snapshot_error(|snapshot| snapshot.loaders[0].action = 5),
+            "unknown ssr snapshot loader app#Todo#action:5"
+        );
+        assert_eq!(
+            snapshot_error(|snapshot| snapshot.loaders[0].graph_id = "app#Index".into()),
+            "unknown ssr snapshot loader app#Index#action:0"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_duplicate_loader_outcomes() {
+        assert_eq!(
+            snapshot_error(|snapshot| snapshot.loaders.push(snapshot.loaders[0].clone())),
+            "duplicate ssr snapshot loader app#Todo#action:0"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_loader_rejections_without_messages() {
+        assert_eq!(
+            snapshot_error(|snapshot| snapshot.loaders[0].state =
+                SsrLoaderState::Rejected { message: "".into() }),
+            "loader app#Todo#action:0 rejection requires a message"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_exports_that_fail_the_public_boundary() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot.public.exports.get_mut("todoCount").unwrap().declaration.source_owner =
+                    ExecutionOwner::Client;
+            }),
+            "public export todoCount rejected: client values cannot be server exports"
+        );
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot.public.exports.get_mut("todoCount").unwrap().declaration.value_is_serializable = false;
+            }),
+            "public export todoCount rejected: public export must be serializable"
+        );
+        // A cookie- or header-derived value (serializable, server-owned) still
+        // requires the explicit boundary.
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot.public.exports.get_mut("todoCount").unwrap().declaration.explicitly_public = false;
+            }),
+            "public export todoCount rejected: server value requires an explicit public export boundary"
+        );
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot.public.exports.get_mut("todoCount").unwrap().declaration.name = "other".into();
+            }),
+            "public export declaration name does not match todoCount"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_non_finite_numbers() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot.public.exports.get_mut("todoCount").unwrap().value =
+                    SsrSnapshotValue::Number(f64::NAN);
+            }),
+            "public export todoCount contains a non-finite number"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_relative_locations() {
+        assert_eq!(
+            snapshot_error(|snapshot| snapshot.public.location = "todos/42".into()),
+            "ssr snapshot location must be an absolute path"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_unknown_fields() {
+        let mut json = serde_json::to_value(valid_snapshot()).unwrap();
+        json.as_object_mut().unwrap().insert("extra".into(), 1.into());
+        assert!(serde_json::from_value::<PlecSsrSnapshot>(json).is_err());
+    }
+
+    #[test]
+    fn loader_refs_derive_from_the_manifest_entry() {
+        assert_eq!(loader_ref("app#Todo", 0), "app#Todo#action:0");
+        assert_eq!(
+            loader_ref("app#Layout#Home", 12),
+            "app#Layout#Home#action:12"
+        );
     }
 }
