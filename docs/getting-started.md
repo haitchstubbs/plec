@@ -45,7 +45,7 @@ yarn workspace @wasm-runtime/fullstack dev
 ```
 
 This rebuilds and then runs `node --watch dist/server.mjs`. The server listens
-on `PORT` (default `3100`).
+on `PORT` (default `3000`).
 
 There is no vite/HMR: the Rust compiler emits the route manifest and graphs
 at build time. TSX edits require re-running the fullstack build — the `dev`

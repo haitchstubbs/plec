@@ -76,9 +76,13 @@ Key property: **server renderer, browser glue, and WASM runtime all walk the exa
 
 ## The handshake contract
 
-Two things ship in the HTML. Nothing else is serialized — **no component state, no query data, no cookies**. The client re-evaluates everything and self-heals the DOM via `apply_static_bindings` (`typed/runtime.rs:2413`).
+Two things ship in the HTML. Nothing else is serialized — **no component state, no query data, no cookies**. The client re-evaluates deterministic consequences via `apply_static_bindings` (the single re-evaluation point).
 
-**1. The bootstrap script** — `<script id="plec-bootstrap" type="application/json">` containing only `{ version, revision, routeId, public.location }` (`plec-server/src/index.ts:72`).
+> **Contract evolution:** the browser now consumes the typed execution snapshot (`PlecSsrSnapshot`, `SSR_SNAPSHOT_VERSION = 1`, frozen in `crates/plec-ir/src/lib.rs`) through the v2 bootstrap: `{ version: 2, snapshot }`. The snapshot is parsed and validated **in WASM before adoption** (`PlecRuntime::start_adopt_snapshot`) — version gate (`unsupported:ssr-snapshot-version`), revision gate (`stale-revision`), full fail-closed validation (`mismatch:ssr-snapshot:*`), and request-location identity (`mismatch:ssr-location`). Its public state (location components and explicit public exports) is seeded into the shared host inputs before adoption claims DOM, so state initializers and re-evaluated bindings evaluate from imported causes. `abandon_adoption` purges exactly the seeded keys so the fallback remount starts clean. A legacy v1 bootstrap still adopts without imported state; an unparseable bootstrap fails closed with `invalid:ssr-bootstrap`.
+
+**Divergence policy.** Two failure classes have distinct outcomes. *Structural mismatch* — invalid snapshots, unknown markers, unreferenced structures — fails adoption closed with a specific code on `plec:adoption`. *Binding-value divergence* — a recomputed static value differing from the server-rendered text — is allowed: recompute-consequences semantics win, and the divergence is counted (`PlecRuntime::ssr_text_divergences`) and surfaced on the adopted diagnostic (`snapshotImported`, `textDivergences`) for development reporting. No per-binding diffing or reconciliation exists.
+
+**1. The bootstrap script** — `<script id="plec-bootstrap" type="application/json">` containing the v2 snapshot payload (`plec-server/src/index.ts`, `bootstrapPayload`): route chain identity, public request location, explicit public exports, and structural ownership per graph instance.
 
 **2. Ownership markers** — the path grammar is the contract; paths compose as `root → /outlet:{id} → /component:{i} → /node:{i}`:
 

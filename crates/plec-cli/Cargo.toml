@@ -13,6 +13,8 @@ clap = { workspace = true }
 pollster = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
+brotli = "8"
+sha2 = "0.10"
 [[bin]]
 name = "plec"
 path = "src/main.rs"
