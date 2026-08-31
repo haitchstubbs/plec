@@ -136,7 +136,13 @@ Avoid re-deriving facts or re-evaluating decisions that are already captured in 
 **fixture-summary.sh**
 ```bash
 .agents/skills/beads-next/scripts/fixture-summary.sh \
-  packages/plec-runtime/crates/runtime/tests/fixtures/rust-nested-component-0.10.json
+  crates/plec-runtime/tests/fixtures/rust-nested-component-0.10.json
+```
+
+### Plec CLI
+```bash
+# Usage
+plec --help
 ```
 
 No need to invent cd, filtering, tail, etc.

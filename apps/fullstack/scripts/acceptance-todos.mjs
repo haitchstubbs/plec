@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { chromium } from 'playwright';
+import { launchBrowser } from './browser.mjs';
 
 const appDir = path.resolve(import.meta.dirname, '..');
 const port = Number(process.env.PLEC_ACCEPTANCE_PORT ?? 3201);
@@ -26,7 +26,9 @@ async function assertArtifacts() {
     await readFile(path.join(publicDir, 'route-manifest.json'), 'utf8'),
   );
   const todos = manifest.routes.find((route) => route.path === 'todos');
-  const stress = manifest.routes.find((route) => route.path === 'stress');
+  const stress = manifest.routes.find(
+    (route) => route.path === 'stress',
+  );
   assert.ok(
     Number.isInteger(todos?.loaderAction),
     'todos needs a typed loader action',
@@ -59,9 +61,12 @@ async function assertArtifacts() {
       'utf8',
     ),
   );
-  const stressComponent = stressGraph.components[stressGraph.rootComponent];
+  const stressComponent =
+    stressGraph.components[stressGraph.rootComponent];
   assert.deepEqual(
-    stressComponent.inputs.map((input) => stressComponent.strings[input.name]),
+    stressComponent.inputs.map(
+      (input) => stressComponent.strings[input.name],
+    ),
     ['instruments', 'summary', 'events'],
     'stress must expose its three keyed runtime inputs',
   );
@@ -138,7 +143,9 @@ async function homeLayoutAndSidebar(browser) {
       })
       .waitFor();
     assert.equal(
-      await desktopPage.getByRole('navigation', { name: 'Breadcrumb' }).count(),
+      await desktopPage
+        .getByRole('navigation', { name: 'Breadcrumb' })
+        .count(),
       1,
       'the persistent layout should render one breadcrumb',
     );
@@ -151,13 +158,18 @@ async function homeLayoutAndSidebar(browser) {
       'size-4 shrink-0',
       'a dynamic icon must receive its className props',
     );
-    await desktopPage.getByRole('button', { name: 'Toggle sidebar' }).click();
+    await desktopPage
+      .getByRole('button', { name: 'Toggle sidebar' })
+      .click();
     await desktopPage
       .locator('[data-collapsed]')
       .first()
       .waitFor({ state: 'attached' });
     assert.equal(
-      await desktopPage.locator('[data-collapsed]').first().getAttribute('data-collapsed'),
+      await desktopPage
+        .locator('[data-collapsed]')
+        .first()
+        .getAttribute('data-collapsed'),
       'true',
       'the desktop control should collapse the desktop sidebar',
     );
@@ -174,9 +186,14 @@ async function homeLayoutAndSidebar(browser) {
   try {
     await mobilePage.goto(origin, { waitUntil: 'domcontentloaded' });
     await waitForMount(mobilePage);
-    await mobilePage.getByRole('button', { name: 'Toggle navigation' }).click();
+    await mobilePage
+      .getByRole('button', { name: 'Toggle navigation' })
+      .click();
     assert.equal(
-      await mobilePage.locator('[data-mobile-open]').first().getAttribute('data-mobile-open'),
+      await mobilePage
+        .locator('[data-mobile-open]')
+        .first()
+        .getAttribute('data-mobile-open'),
       'true',
       'the mobile control should open the navigation drawer',
     );
@@ -356,27 +373,35 @@ async function runtimeStress(browser) {
   const page = await context.newPage();
   const done = watch(page);
   try {
-    await page.goto(`${origin}/stress`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${origin}/stress`, {
+      waitUntil: 'domcontentloaded',
+    });
     await page
       .getByRole('heading', { name: 'Realtime market terminal' })
       .waitFor();
     await page.waitForFunction(
-      () => document.querySelectorAll('button[data-runtime-row-key]').length === 1_000,
+      () =>
+        document.querySelectorAll('button[data-runtime-row-key]')
+          .length === 1_000,
     );
-    const stableRow = page.locator('button[data-runtime-row-key="PX0001"]');
+    const stableRow = page.locator(
+      'button[data-runtime-row-key="PX0001"]',
+    );
     await stableRow.evaluate((node) => {
-      (window).__plecStressStableRow = node;
+      window.__plecStressStableRow = node;
     });
     await page.waitForTimeout(350);
     assert.equal(
       await stableRow.evaluate(
-        (node) => (window).__plecStressStableRow === node,
+        (node) => window.__plecStressStableRow === node,
       ),
       true,
       'an untouched keyed row should retain its DOM node',
     );
     await stableRow.click();
-    await page.getByText('Selected instrument', { exact: true }).waitFor();
+    await page
+      .getByText('Selected instrument', { exact: true })
+      .waitFor();
     await page.getByText('PX0001', { exact: true }).last().waitFor();
     const telemetry = await page
       .locator('aside')
@@ -402,11 +427,7 @@ async function main() {
     windowsHide: true,
   });
   await waitForServer();
-  const browser = await chromium.launch({
-    headless: true,
-    channel: process.env.PLEC_CHROME_EXECUTABLE ? undefined : 'chrome',
-    executablePath: process.env.PLEC_CHROME_EXECUTABLE,
-  });
+  const browser = await launchBrowser({ headless: true });
   try {
     await homeLayoutAndSidebar(browser);
     await loaderPendingThenSuccess(browser);

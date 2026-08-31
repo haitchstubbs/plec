@@ -8,22 +8,25 @@ const packageRoot = path.resolve(
   '..',
 );
 
-const cratePath = path.join(packageRoot, 'crates', 'runtime');
+const cratePath = path.join(packageRoot, 'crates', 'plec-runtime');
 const outDir = path.join(packageRoot, 'dist', 'runtime');
 
 // Feature/profile from environment
 const profile = process.env.PLEC_RUNTIME_PROFILE ?? 'full';
-const features = process.env.PLEC_RUNTIME_FEATURES
-  ?.split(',')
+const features = process.env.PLEC_RUNTIME_FEATURES?.split(',')
   .map((f) => f.trim())
   .filter(Boolean);
 
-console.log(`WASM Watch Mode: Building WASM for profile "${profile}"...`);
+console.log(
+  `WASM Watch Mode: Building WASM for profile "${profile}"...`,
+);
 
 // Initial build
 await buildWasm();
 
-console.log(`WASM Watch Mode: Watching ${cratePath}/src for changes...`);
+console.log(
+  `WASM Watch Mode: Watching ${cratePath}/src for changes...`,
+);
 
 // Watch for changes
 const watcher = watch(path.join(cratePath, 'src'), { recursive: true });
@@ -31,7 +34,9 @@ let rebuildTimeout = null;
 
 for await (const event of watcher) {
   if (event.filename && event.filename.endsWith('.rs')) {
-    console.log(`\nWASM Watch Mode: ${event.filename} changed, rebuilding...`);
+    console.log(
+      `\nWASM Watch Mode: ${event.filename} changed, rebuilding...`,
+    );
 
     // Debounce rebuilds
     if (rebuildTimeout) {

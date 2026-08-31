@@ -24,9 +24,9 @@ manifest and per-route graphs.
 
 ## The runtime crate is a workspace member too
 
-The WASM runtime lives at `packages/plec-runtime/crates/runtime` and is a
+The WASM runtime lives at `crates/plec-runtime` and is a
 member of this same Cargo workspace (root `Cargo.toml`), under the crate
-name `plec_runtime`. It decodes and validates the IR these crates emit, with
+name `plec-runtime`. It decodes and validates the IR these crates emit, with
 feature profiles `full` (default; router + fetch), `core`, `router`, and
 `fetch`.
 

@@ -93,6 +93,23 @@ pub struct PlecRuntime {
     /// Whether the in-flight adoption is backed by an imported snapshot.
     /// Adopted graph instances read this to enable the divergence observation.
     pub(crate) typed_ssr_imported: Rc<RefCell<bool>>,
+    /// The route chain the server published in the imported snapshot. The
+    /// adoption path cross-validates it against its own URL-derived chain so
+    /// the transferred cause, not a browser re-match, defines execution
+    /// identity.
+    pub(crate) typed_ssr_route_chain: Rc<RefCell<Option<Vec<plec_ir::SsrRouteInstance>>>>,
+    /// Loader outcomes the server already executed, keyed by
+    /// `loader_ref(graph_id, action)`. Adopted loader routes resume from
+    /// these instead of re-running their loaders on first paint.
+    pub(crate) typed_ssr_loaders: Rc<RefCell<HashMap<String, plec_ir::SsrLoaderState>>>,
+    /// Selected conditional branches per graph instance from the imported
+    /// snapshot. The record is the ownership cause: adoption claims the
+    /// marked region and registers it with this exact branch selection.
+    pub(crate) typed_ssr_branches:
+        Rc<RefCell<HashMap<String, HashMap<usize, plec_ir::SsrSelectedBranch>>>>,
+    /// Keyed SSR loop rows per graph instance. Values are identity/order only;
+    /// row values are recomputed from imported runtime state during claim.
+    pub(crate) typed_ssr_loops: Rc<RefCell<HashMap<String, HashMap<usize, Vec<String>>>>>,
     /// Immutable component definitions for the currently loaded IR 0.10 application.
     pub(crate) typed_components: Rc<RefCell<Option<TypedComponentApplication>>>,
     pub(crate) snapshot_inputs: Rc<RefCell<HashMap<String, SnapshotInput>>>,
@@ -115,6 +132,10 @@ impl Clone for PlecRuntime {
             typed_host_inputs: Rc::clone(&self.typed_host_inputs),
             typed_ssr_host_inputs: Rc::clone(&self.typed_ssr_host_inputs),
             typed_ssr_imported: Rc::clone(&self.typed_ssr_imported),
+            typed_ssr_route_chain: Rc::clone(&self.typed_ssr_route_chain),
+            typed_ssr_loaders: Rc::clone(&self.typed_ssr_loaders),
+            typed_ssr_branches: Rc::clone(&self.typed_ssr_branches),
+            typed_ssr_loops: Rc::clone(&self.typed_ssr_loops),
             typed_components: Rc::clone(&self.typed_components),
             snapshot_inputs: Rc::clone(&self.snapshot_inputs),
             cookie_policy: Rc::clone(&self.cookie_policy),
@@ -413,6 +434,10 @@ impl PlecRuntime {
     ) -> Result<(), JsValue> {
         if snapshot.is_undefined() || snapshot.is_null() {
             *self.typed_ssr_imported.borrow_mut() = false;
+            *self.typed_ssr_route_chain.borrow_mut() = None;
+            self.typed_ssr_loaders.borrow_mut().clear();
+            self.typed_ssr_branches.borrow_mut().clear();
+            self.typed_ssr_loops.borrow_mut().clear();
             return Ok(());
         }
         self.reset_ssr_text_divergences();
@@ -431,13 +456,62 @@ impl PlecRuntime {
             .borrow()
             .clone()
             .ok_or_else(|| JsValue::from_str("mismatch:ssr-snapshot-graphs"))?;
+        let structure = RegisteredStructureApplication {
+            primary: application,
+            registry: self.typed_component_registry.borrow().clone(),
+        };
         parsed
             .validate(&plec_ir::SsrSnapshotReferences {
                 manifest,
-                application: &application,
+                application: &structure,
             })
             .map_err(|message| JsValue::from_str(&format!("mismatch:ssr-snapshot:{message}")))?;
         self.seed_ssr_host_inputs(&parsed)?;
+        *self.typed_ssr_loaders.borrow_mut() = parsed
+            .loaders
+            .iter()
+            .map(|outcome| {
+                (
+                    plec_ir::loader_ref(&outcome.graph_id, outcome.action),
+                    outcome.state.clone(),
+                )
+            })
+            .collect();
+        *self.typed_ssr_route_chain.borrow_mut() = Some(parsed.routes);
+        // Branch selections become the adoption ownership map for conditional
+        // regions, keyed by the same graph instance ids the adopter uses.
+        *self.typed_ssr_branches.borrow_mut() = parsed
+            .structure
+            .graphs
+            .iter()
+            .filter(|(_, structure)| !structure.branches.is_empty())
+            .map(|(instance, structure)| {
+                (
+                    instance.clone(),
+                    structure
+                        .branches
+                        .iter()
+                        .map(|branch| (branch.node, branch.selected))
+                        .collect::<HashMap<_, _>>(),
+                )
+            })
+            .collect();
+        *self.typed_ssr_loops.borrow_mut() = parsed
+            .structure
+            .graphs
+            .iter()
+            .filter(|(_, structure)| !structure.loops.is_empty())
+            .map(|(instance, structure)| {
+                (
+                    instance.clone(),
+                    structure
+                        .loops
+                        .iter()
+                        .map(|loop_rows| (loop_rows.node, loop_rows.keys.clone()))
+                        .collect::<HashMap<_, _>>(),
+                )
+            })
+            .collect();
         *self.typed_ssr_imported.borrow_mut() = true;
         Ok(())
     }
@@ -447,7 +521,10 @@ impl PlecRuntime {
     /// what makes imported state observable before adoption claims DOM.
     fn seed_ssr_host_inputs(&self, snapshot: &plec_ir::PlecSsrSnapshot) -> Result<(), JsValue> {
         let (pathname, search, hash) = split_ssr_location(&snapshot.public.location);
-        let current = window()?.location().pathname().unwrap_or_else(|_| "/".into());
+        let current = window()?
+            .location()
+            .pathname()
+            .unwrap_or_else(|_| "/".into());
         if pathname != current {
             return Err(JsValue::from_str("mismatch:ssr-location"));
         }
@@ -480,7 +557,31 @@ impl PlecRuntime {
         }
         self.typed_ssr_host_inputs.borrow_mut().clear();
         *self.typed_ssr_imported.borrow_mut() = false;
+        *self.typed_ssr_route_chain.borrow_mut() = None;
+        self.typed_ssr_loaders.borrow_mut().clear();
+        self.typed_ssr_branches.borrow_mut().clear();
+        self.typed_ssr_loops.borrow_mut().clear();
         self.dispose_router_listeners();
+    }
+}
+
+/// Snapshot structure validation resolves graph ids against every registered
+/// 0.10 application. Lazy route graphs are registered as independent
+/// applications, and the snapshot's structure legitimately references graphs
+/// (the root layout) from applications other than the most recent one.
+struct RegisteredStructureApplication {
+    primary: TypedComponentApplication,
+    registry: HashMap<String, TypedComponentApplication>,
+}
+
+impl plec_ir::SsrStructureApplication for RegisteredStructureApplication {
+    fn structure_graph(&self, graph_id: &str) -> Option<&dyn plec_ir::SsrStructureGraph> {
+        if let Some(found) = self.primary.structure_graph(graph_id) {
+            return Some(found);
+        }
+        self.registry
+            .get(graph_id)
+            .and_then(|application| application.structure_graph(graph_id))
     }
 }
 
@@ -490,16 +591,12 @@ fn split_ssr_location(location: &str) -> (String, String, String) {
         None => (location, String::new()),
     };
     match path_part.split_once('?') {
-        Some((pathname, search)) => (
-            pathname.into(),
-            format!("?{search}"),
-            hash,
-        ),
+        Some((pathname, search)) => (pathname.into(), format!("?{search}"), hash),
         None => (path_part.into(), String::new(), hash),
     }
 }
 
-fn ssr_snapshot_value(value: &plec_ir::SsrSnapshotValue) -> RuntimeValue {
+pub(crate) fn ssr_snapshot_value(value: &plec_ir::SsrSnapshotValue) -> RuntimeValue {
     match value {
         plec_ir::SsrSnapshotValue::Null => RuntimeValue::Null,
         plec_ir::SsrSnapshotValue::Bool(value) => RuntimeValue::Bool(*value),

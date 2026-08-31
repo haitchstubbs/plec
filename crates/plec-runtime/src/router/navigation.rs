@@ -44,11 +44,21 @@ impl PlecRuntime {
         )?;
         let mut parent_id = root_id;
         let mut path = "root".to_owned();
-        for matched in typed_route_chain(&manifest, &location.pathname) {
-            let route = matched.route;
-            if route.loader_action.is_some() {
-                return Err(JsValue::from_str("unsupported:ssr-route-loader"));
+        let derived_chain = typed_route_chain(&manifest, &location.pathname);
+        // The transferred snapshot chain is the route execution cause. The
+        // runtime re-derives the chain from the URL with the same matcher used
+        // for fresh navigation; agreement lets the imported identity proceed,
+        // disagreement is a contract failure, never a silent remount.
+        if let Some(imported) = self.typed_ssr_route_chain.borrow().as_ref() {
+            let loaders = self.typed_ssr_loaders.borrow();
+            if let Some(detail) = ssr_route_chain_mismatch(imported, &derived_chain, &loaders) {
+                return Err(JsValue::from_str(&format!(
+                    "mismatch:ssr-route-chain:{detail}"
+                )));
             }
+        }
+        for matched in derived_chain.into_iter() {
+            let route = matched.route;
             if !self.has_typed_graph(&route.graph_id) {
                 return Err(JsValue::from_str("missing:ssr-route-graph"));
             }
@@ -56,26 +66,113 @@ impl PlecRuntime {
             let id = graph_instance_id(Some(&parent_id), &route.outlet_id, None);
             let outlet = self.typed_outlet_element(&parent_id, &route.outlet_id)?;
             let child_path = format!("{path}/outlet:{}", route.outlet_id);
-            self.adopt_typed_graph(
-                id.clone(),
-                Some(parent_id),
-                route.outlet_id.clone(),
-                route.graph_id.clone(),
-                Some(route.id),
-                Some(match_key),
-                outlet,
-                child_path.clone(),
-            )?;
-            self.typed.borrow_mut().get_mut(&id).expect("adopted route exists").route_state = Some(TypedRouteState {
-                normal_graph_id: route.graph_id,
-                pending_graph_id: route.pending_graph_id,
-                pending_mode: route.pending_mode,
-                error_graph_id: route.error_graph_id,
-                loader_action: None,
-                params: matched.params,
-                location: (location.pathname.clone(), location.search.clone(), location.hash.clone()),
-                phase: TypedRoutePhase::Normal,
-            });
+            // Loader routes resume from the transferred outcome instead of
+            // re-running on first paint. The chain check above guarantees the
+            // snapshot phase pairs with the outcome (`active` + resolved,
+            // `error` + rejected) and that a loader route imports an outcome.
+            let loader = route
+                .loader_action
+                .map(|action| {
+                    let reference = plec_ir::loader_ref(&route.graph_id, action);
+                    let outcome = self
+                        .typed_ssr_loaders
+                        .borrow()
+                        .get(&reference)
+                        .cloned()
+                        .ok_or_else(|| {
+                            JsValue::from_str(&format!("mismatch:ssr-loader:{reference}"))
+                        })?;
+                    Ok::<_, JsValue>((action, outcome))
+                })
+                .transpose()?;
+            if let Some((action, plec_ir::SsrLoaderState::Rejected { message })) = loader {
+                let reference = plec_ir::loader_ref(&route.graph_id, action);
+                let error_graph_id = route.error_graph_id.clone().ok_or_else(|| {
+                    JsValue::from_str(&format!("mismatch:ssr-loader-error-graph:{reference}"))
+                })?;
+                if !self.has_typed_graph(&error_graph_id) {
+                    return Err(JsValue::from_str("missing:ssr-route-error-graph"));
+                }
+                // The server rendered the error phase, so the SSR DOM belongs
+                // to the error graph: claim it there, then restore the
+                // recorded error so the phase matches a client-side failure
+                // and `retry_typed_route` re-enters the loader.
+                self.adopt_typed_graph(
+                    id.clone(),
+                    Some(parent_id.clone()),
+                    route.outlet_id.clone(),
+                    error_graph_id,
+                    Some(route.id.clone()),
+                    Some(match_key),
+                    outlet,
+                    child_path.clone(),
+                )?;
+                let mut typed = self.typed.borrow_mut();
+                let instance = typed.get_mut(&id).expect("adopted route exists");
+                instance.route_state = Some(TypedRouteState {
+                    normal_graph_id: route.graph_id,
+                    pending_graph_id: route.pending_graph_id,
+                    pending_mode: route.pending_mode,
+                    error_graph_id: route.error_graph_id,
+                    loader_action: Some(action),
+                    params: matched.params,
+                    location: (
+                        location.pathname.clone(),
+                        location.search.clone(),
+                        location.hash.clone(),
+                    ),
+                    phase: TypedRoutePhase::Error,
+                });
+                instance
+                    .runtime
+                    .set_route_error(ssr_loader_error(&message))?;
+                instance.runtime.apply_static_bindings()?;
+                drop(typed);
+            } else {
+                if let Some((_, plec_ir::SsrLoaderState::Resolved { value })) = &loader {
+                    // Loader data is a host input: seed it before adoption so
+                    // `loadHost("loaderData")` state initializers evaluate
+                    // from the imported outcome instead of blank state.
+                    self.typed_host_inputs
+                        .borrow_mut()
+                        .insert("loaderData".into(), ssr_snapshot_value(value));
+                    self.typed_ssr_host_inputs
+                        .borrow_mut()
+                        .insert("loaderData".into());
+                }
+                self.adopt_typed_graph(
+                    id.clone(),
+                    Some(parent_id.clone()),
+                    route.outlet_id.clone(),
+                    route.graph_id.clone(),
+                    Some(route.id),
+                    Some(match_key),
+                    outlet,
+                    child_path.clone(),
+                )?;
+                // Chain agreement above proves these params equal the
+                // snapshot's imported values, so this stamps the transferred
+                // identity. A resolved outcome replaces the initial loader
+                // run; a later fresh navigation still executes the loader.
+                self.typed
+                    .borrow_mut()
+                    .get_mut(&id)
+                    .expect("adopted route exists")
+                    .route_state = Some(TypedRouteState {
+                    normal_graph_id: route.graph_id,
+                    pending_graph_id: route.pending_graph_id,
+                    pending_mode: route.pending_mode,
+                    error_graph_id: route.error_graph_id,
+                    loader_action: loader.map(|(action, _)| action),
+                    params: matched.params,
+                    location: (
+                        location.pathname.clone(),
+                        location.search.clone(),
+                        location.hash.clone(),
+                    ),
+                    phase: TypedRoutePhase::Normal,
+                });
+            }
             parent_id = id;
             path = child_path;
         }
@@ -128,6 +225,35 @@ impl PlecRuntime {
     }
 
     pub(crate) fn refresh_navigation_state(&self, pathname: &str) -> Result<(), JsValue> {
+        let location = window()?.location();
+        let location = [
+            (
+                "location.pathname",
+                RuntimeValue::String(location.pathname()?),
+            ),
+            ("location.search", RuntimeValue::String(location.search()?)),
+            ("location.hash", RuntimeValue::String(location.hash()?)),
+        ];
+        // Location is a host input, so it must reach the graph the same way
+        // state changes do: re-apply this instance's bindings, then re-evaluate
+        // component call props so children see the new location instead of the
+        // value snapshotted at instantiation. Without the refresh cascade a
+        // prop-drilled pathname stays frozen at its mount-time value.
+        for instance in self.typed.borrow_mut().values_mut() {
+            for (name, value) in &location {
+                instance
+                    .runtime
+                    .app
+                    .host_inputs
+                    .insert((*name).into(), value.clone());
+            }
+            instance.runtime.apply_static_bindings()?;
+            instance.runtime.queue_static_component_refreshes()?;
+        }
+        self.flush_component_work()?;
+        // Graph bindings now reflect the new location; this sweep only
+        // normalizes links that live outside the application graph, and runs
+        // last so stale bindings can no longer overwrite it.
         let links = document()?.query_selector_all("a[href]")?;
         for index in 0..links.length() {
             let Some(node) = links.item(index) else {
@@ -146,25 +272,6 @@ impl PlecRuntime {
             } else {
                 link.remove_attribute("aria-current")?;
             }
-        }
-        let location = window()?.location();
-        let location = [
-            (
-                "location.pathname",
-                RuntimeValue::String(location.pathname()?),
-            ),
-            ("location.search", RuntimeValue::String(location.search()?)),
-            ("location.hash", RuntimeValue::String(location.hash()?)),
-        ];
-        for instance in self.typed.borrow_mut().values_mut() {
-            for (name, value) in &location {
-                instance
-                    .runtime
-                    .app
-                    .host_inputs
-                    .insert((*name).into(), value.clone());
-            }
-            instance.runtime.apply_static_bindings()?;
         }
         Ok(())
     }
@@ -490,7 +597,25 @@ impl PlecRuntime {
         runtime.ssr_imported = *self.typed_ssr_imported.borrow();
         runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
         runtime.graph_generation = self.next_typed_generation();
-        runtime.adopt(root.clone(), TypedAdoptionScope::Element(root), &path)?;
+        let branches = self
+            .typed_ssr_branches
+            .borrow()
+            .get(&id)
+            .cloned()
+            .unwrap_or_default();
+        let loops = self
+            .typed_ssr_loops
+            .borrow()
+            .get(&id)
+            .cloned()
+            .unwrap_or_default();
+        runtime.adopt(
+            root.clone(),
+            TypedAdoptionScope::Element(root),
+            &path,
+            &branches,
+            &loops,
+        )?;
         self.typed.borrow_mut().insert(
             id,
             TypedGraphInstance {
@@ -938,6 +1063,70 @@ fn typed_match_key(
     )
 }
 
+/// Compares the server-published snapshot chain with the chain re-derived
+/// from the current URL. Returns the detail for a
+/// `mismatch:ssr-route-chain:{detail}` failure code, or `None` on agreement.
+/// The chain comparison reuses `typed_route_chain` output; it never invents a
+/// third matcher. Loader outcomes must pair with the phase that rendered
+/// them: `active` requires a resolved outcome, `error` a rejected one.
+fn ssr_route_chain_mismatch(
+    imported: &[plec_ir::SsrRouteInstance],
+    derived: &[TypedRouteMatch],
+    loaders: &HashMap<String, plec_ir::SsrLoaderState>,
+) -> Option<String> {
+    if imported.len() != derived.len() {
+        return Some(format!("length:{}:{}", imported.len(), derived.len()));
+    }
+    for (index, (instance, matched)) in imported.iter().zip(derived).enumerate() {
+        let outcome = matched
+            .route
+            .loader_action
+            .map(|action| loaders.get(&plec_ir::loader_ref(&matched.route.graph_id, action)));
+        let phase = match (&instance.phase, outcome) {
+            (
+                plec_ir::SsrRoutePhase::Active,
+                Some(Some(plec_ir::SsrLoaderState::Resolved { .. })),
+            )
+            | (plec_ir::SsrRoutePhase::Active, None) => None,
+            // A loader route may only resume as active from its resolved
+            // outcome; anything else cannot claim the normal-phase DOM.
+            (plec_ir::SsrRoutePhase::Active, Some(_)) => Some("loader"),
+            (plec_ir::SsrRoutePhase::Pending, _) => Some("pending"),
+            (
+                plec_ir::SsrRoutePhase::Error,
+                Some(Some(plec_ir::SsrLoaderState::Rejected { .. })),
+            ) => None,
+            // Error phases resume only from a matching rejected outcome.
+            (plec_ir::SsrRoutePhase::Error, _) => Some("error"),
+        };
+        if let Some(phase) = phase {
+            return Some(format!("phase:{index}:{phase}"));
+        }
+        if instance.route_id != matched.route.id {
+            return Some(format!("route:{index}:{}", instance.route_id));
+        }
+        for (key, value) in &instance.params {
+            if matched.params.get(key).map(String::as_str) != Some(value.as_str()) {
+                return Some(format!("params:{index}:{key}"));
+            }
+        }
+        if matched.params.len() != instance.params.len() {
+            return Some(format!("params:{index}:count"));
+        }
+    }
+    None
+}
+
+/// The error record a rejected imported outcome restores. The snapshot
+/// carries only the message, so the record uses the transport `http` kind
+/// `normalize_route_error` passes through unchanged.
+fn ssr_loader_error(message: &str) -> RuntimeValue {
+    RuntimeValue::Record(HashMap::from([
+        ("kind".into(), RuntimeValue::String("http".into())),
+        ("message".into(), RuntimeValue::String(message.into())),
+    ]))
+}
+
 fn typed_route_chain(manifest: &RouteManifest, pathname: &str) -> Vec<TypedRouteMatch> {
     let parts = pathname
         .trim_matches('/')
@@ -1169,5 +1358,121 @@ mod tests {
         );
         assert_ne!(first, second);
         assert_ne!(first, search);
+    }
+
+    fn instance(route_id: &str, params: &[(&str, &str)]) -> plec_ir::SsrRouteInstance {
+        plec_ir::SsrRouteInstance {
+            route_id: route_id.into(),
+            params: params
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+            phase: plec_ir::SsrRoutePhase::Active,
+        }
+    }
+
+    #[test]
+    fn snapshot_chain_agrees_for_flat_param_catch_all_and_nested_chains() {
+        // Flat multi-segment $param route: the server matcher and
+        // typed_route_chain agree on the route and decoded params.
+        let manifest = RouteManifest {
+            version: Some(3),
+            root_graph_id: "root".into(),
+            routes: vec![
+                route("home", None, ""),
+                route("project", None, "projects/$projectId"),
+                route("missing", None, "*"),
+            ],
+        };
+        let derived = typed_route_chain(&manifest, "/projects/a%20b");
+        assert_eq!(
+            ssr_route_chain_mismatch(
+                &[instance("project", &[("projectId", "a b")])],
+                &derived,
+                &HashMap::new()
+            ),
+            None
+        );
+
+        // Catch-all agreement: an unmatched path resolves to the same
+        // fallback route on both sides.
+        let derived = typed_route_chain(&manifest, "/nowhere");
+        assert_eq!(
+            ssr_route_chain_mismatch(&[instance("missing", &[])], &derived, &HashMap::new()),
+            None
+        );
+
+        // Nested pathless-index chain agreement when the snapshot carries the
+        // full descent.
+        let nested = RouteManifest {
+            version: Some(3),
+            root_graph_id: "root".into(),
+            routes: vec![route("layout", None, ""), route("home", Some("layout"), "")],
+        };
+        let derived = typed_route_chain(&nested, "/");
+        assert_eq!(
+            derived
+                .iter()
+                .map(|m| m.route.id.as_str())
+                .collect::<Vec<_>>(),
+            ["layout", "home"]
+        );
+        assert_eq!(
+            ssr_route_chain_mismatch(
+                &[instance("layout", &[]), instance("home", &[])],
+                &derived,
+                &HashMap::new()
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn snapshot_chain_mismatches_pin_server_and_typed_matcher_gaps() {
+        let nested = RouteManifest {
+            version: Some(3),
+            root_graph_id: "root".into(),
+            routes: vec![route("layout", None, ""), route("home", Some("layout"), "")],
+        };
+        // Known semantic gap: the flat server matcher publishes only the first
+        // pathless route (the layout) while the typed chain descends into the
+        // index child. This disagreement must be detectable, never silent.
+        let derived = typed_route_chain(&nested, "/");
+        assert_eq!(
+            ssr_route_chain_mismatch(&[instance("layout", &[])], &derived, &HashMap::new()),
+            Some("length:1:2".into())
+        );
+        // Param value disagreement (server rendered one id, URL holds another).
+        let manifest = RouteManifest {
+            version: Some(3),
+            root_graph_id: "root".into(),
+            routes: vec![route("project", None, "projects/$projectId")],
+        };
+        let derived = typed_route_chain(&manifest, "/projects/a");
+        assert_eq!(
+            ssr_route_chain_mismatch(
+                &[instance("project", &[("projectId", "b")])],
+                &derived,
+                &HashMap::new()
+            ),
+            Some("params:0:projectId".into())
+        );
+        // Extra derived params (snapshot claims none for a $param route).
+        assert_eq!(
+            ssr_route_chain_mismatch(&[instance("project", &[])], &derived, &HashMap::new()),
+            Some("params:0:count".into())
+        );
+        // Route id disagreement at the same position.
+        assert_eq!(
+            ssr_route_chain_mismatch(&[instance("home", &[])], &derived, &HashMap::new()),
+            Some("route:0:home".into())
+        );
+        // Reserved phases cannot adopt as active.
+        let mut reserved = instance("project", &[("projectId", "a")]);
+        reserved.phase = plec_ir::SsrRoutePhase::Error;
+        assert_eq!(
+            ssr_route_chain_mismatch(&[reserved], &derived, &HashMap::new()),
+            Some("phase:0:error".into())
+        );
     }
 }

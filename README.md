@@ -47,7 +47,7 @@ packages/
   plec/               Framework runtime: jsx-runtime, state hooks, router
   plec-ir/            Shared IR schema (Zod) and validation
   plec-browser/       Browser glue: startPlecRouter, graph loading
-  plec-runtime/       Rust -> WASM runtime (crate under crates/runtime)
+  plec-runtime/       Rust -> WASM runtime (crate under crates/plec-runtime)
   ui/                 React/shadcn UI kit used by tooling pages
   lucide-plec/        Generated Lucide icon components for Plec
 crates/               Rust compiler workspace (parser -> sema -> HIR -> IR)

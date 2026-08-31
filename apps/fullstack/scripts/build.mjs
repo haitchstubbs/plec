@@ -1,5 +1,4 @@
 import { copyFile, mkdir, readdir } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -12,51 +11,6 @@ const appDir = path.resolve(
 const require = createRequire(import.meta.url);
 
 const assetsDir = path.join(appDir, 'dist', 'public', 'assets');
-
-//
-// Plec build (framework-owned pipeline)
-//
-
-execFileSync(
-  'plec',
-  [
-    'build',
-    'src/router.tsx',
-    '--out-dir',
-    'dist',
-    '--title',
-    'Plec fullstack playground',
-  ],
-  {
-    cwd: appDir,
-    stdio: 'inherit',
-  },
-);
-
-//
-// Tailwind (application-owned)
-//
-
-const tailwindCli = path.join(
-  path.dirname(require.resolve('@tailwindcss/cli/package.json')),
-  'dist',
-  'index.mjs',
-);
-
-execFileSync(
-  process.execPath,
-  [
-    tailwindCli,
-    '-i',
-    'src/styles.css',
-    '-o',
-    'dist/public/assets/styles.css',
-  ],
-  {
-    cwd: appDir,
-    stdio: 'inherit',
-  },
-);
 
 //
 // Fonts (application-owned)

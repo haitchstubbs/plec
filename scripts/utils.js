@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { access } from 'node:fs/promises';
+import { existsSync, readdirSync } from 'node:fs';
 
 /**
  * Convert a Unix-style path to Windows path if needed.
@@ -50,7 +51,8 @@ export function getHomeDir() {
  * @returns {Promise<string|null>} Full path to the executable or null if not found
  */
 export async function findInPath(name) {
-  const pathEnv = process.env.PATH || process.env.Path || process.env.path;
+  const pathEnv =
+    process.env.PATH || process.env.Path || process.env.path;
   if (!pathEnv) {
     return null;
   }
@@ -71,4 +73,65 @@ export async function findInPath(name) {
   }
 
   return null;
+}
+
+/**
+ * Locate the Chrome/Chromium binary the browser tooling should drive:
+ * PLEC_CHROME_EXECUTABLE if set, otherwise the newest Chromium in the
+ * Playwright browser cache. Used to derive the matching ChromeDriver
+ * version instead of installing whatever the stable channel ships.
+ *
+ * @returns {string|undefined} Absolute path to a Chrome/Chromium binary
+ */
+export function findPlaywrightChromium() {
+  if (process.env.PLEC_CHROME_EXECUTABLE) {
+    return process.env.PLEC_CHROME_EXECUTABLE;
+  }
+
+  const cacheDir =
+    process.platform === 'win32'
+      ? path.join(process.env.LOCALAPPDATA ?? '', 'ms-playwright')
+      : process.platform === 'darwin'
+        ? path.join(getHomeDir(), 'Library', 'Caches', 'ms-playwright')
+        : path.join(getHomeDir(), '.cache', 'ms-playwright');
+
+  const binaryLayouts = {
+    win32: [
+      ['chrome-win64', 'chrome.exe'],
+      ['chrome-win', 'chrome.exe'],
+    ],
+    darwin: [
+      ['chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'],
+    ],
+  }[process.platform] ?? [
+    ['chrome-linux64', 'chrome'],
+    ['chrome-linux', 'chrome'],
+  ];
+
+  let revisions;
+  try {
+    revisions = readdirSync(cacheDir)
+      .filter((entry) => /^chromium-\d+$/.test(entry))
+      .sort(
+        (a, b) =>
+          Number(a.slice('chromium-'.length)) -
+          Number(b.slice('chromium-'.length)),
+      );
+  } catch {
+    return undefined;
+  }
+
+  const newest = revisions.at(-1);
+  if (!newest) {
+    return undefined;
+  }
+
+  for (const segments of binaryLayouts) {
+    const binary = path.join(cacheDir, newest, ...segments);
+    if (existsSync(binary)) {
+      return binary;
+    }
+  }
+
+  return undefined;
 }

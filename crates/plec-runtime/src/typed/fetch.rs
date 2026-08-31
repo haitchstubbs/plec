@@ -428,6 +428,7 @@ impl PlecRuntime {
                         Some(instance) => instance,
                         None => return Ok(()),
                     };
+                    let restore = instance.loader_runtime.is_some();
                     let Some(runtime) =
                         instance.runtime_for_generation_mut(pending.graph_generation)
                     else {
@@ -445,9 +446,17 @@ impl PlecRuntime {
                     if state >= runtime.states.len() {
                         return Err(JsValue::from_str("loader state handle out of range"));
                     }
+                    if !restore {
+                        // Without a preserved loader runtime there is no
+                        // restore path: the fetch completed against the live
+                        // normal graph, so its host inputs must be re-applied
+                        // before the dependency refresh for loader-data
+                        // initialisers to observe the outcome.
+                        runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+                    }
                     runtime.states[state] = value;
                     runtime.refresh_state(state, &mut UpdateMetrics::default())?;
-                    instance.loader_runtime.is_some()
+                    restore
                 };
                 if restore {
                     self.restore_typed_route_normal(&instance_id)?;

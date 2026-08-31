@@ -5,7 +5,7 @@ instantiates the view graph, and applies targeted DOM mutations from
 reactive deltas — one changed tuple reaches the few DOM nodes that depend on
 it instead of rerendering a subtree.
 
-The crate lives at `crates/runtime` (crate name `plec_runtime`) and is a
+The crate lives at `crates/plec-runtime` (crate name `plec-runtime`) and is a
 member of the root Cargo workspace. Docs for the compiler crates:
 [`crates/README.md`](../../crates/README.md).
 

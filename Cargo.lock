@@ -1301,16 +1301,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "plec-sema"
-version = "0.1.0"
-dependencies = [
- "plec-parser",
- "swc_common",
- "swc_ecma_ast",
-]
-
-[[package]]
-name = "plec_runtime"
+name = "plec-runtime"
 version = "0.1.0"
 dependencies = [
  "js-sys",
@@ -1322,6 +1313,15 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+]
+
+[[package]]
+name = "plec-sema"
+version = "0.1.0"
+dependencies = [
+ "plec-parser",
+ "swc_common",
+ "swc_ecma_ast",
 ]
 
 [[package]]

@@ -14,11 +14,13 @@ version lives in the root [README](../README.md).
 - **wasm-tools** (optional): the WASM build strips debug info with it when it
   is on `PATH`, and prints a warning and skips optimization when it is not
   (`scripts/build-wasm.mjs`).
-- **Chrome + a matching ChromeDriver** for the WASM browser tests. The
-  installed Chrome and a compatible driver must match; a driver for Chrome
-  151 lives at `.tools/chromedriver-151/chromedriver-win64/`. See
-  [slice-4.4-handoff.md](slice-4.4-handoff.md) for how the browser harness
-  wires the driver onto `PATH`.
+- **Chrome + a matching ChromeDriver** for the WASM browser tests. Run
+  `yarn install:build-tools`: it reads the Chromium version Playwright
+  manages and provisions an exactly matching ChromeDriver into
+  `.tools/chromedriver-<platform>/` (git-ignored), so the driver
+  can never drift from the browser. The browser harness resolves the driver
+  automatically; override with `CHROMEDRIVER` and `PLEC_CHROME_EXECUTABLE`
+  if needed.
 
 ## First build
 
@@ -53,8 +55,7 @@ script does that before restarting the server.
 
 ## Rebuilding the WASM runtime
 
-After changing the runtime crate
-(`packages/plec-runtime/crates/runtime`):
+After changing the runtime crate (`crates/plec-runtime`):
 
 ```sh
 yarn workspace plec-runtime build:wasm   # wasm-pack -> packages/plec-runtime/dist/runtime

@@ -490,7 +490,15 @@ impl PlecSsrSnapshot {
             let (parent, _, _) = split_graph_instance_path(instance_id)
                 .map_err(|error| format!("malformed graph instance path {instance_id}: {error}"))?;
             if let Some(parent) = parent {
-                if !self.structure.graphs.contains_key(parent) {
+                // Nested instance ids embed their parent segment escaped
+                // (`graph_instance_id` escapes `/` as `%2F` and `%` as
+                // `%25`), so the claimed parent may be stored under its
+                // decoded form: `root%2Foutlet:main/outlet:main` chains to
+                // the root instance keyed `root/outlet:main`.
+                let decoded = parent.replace("%2F", "/").replace("%25", "%");
+                if !self.structure.graphs.contains_key(parent)
+                    && !self.structure.graphs.contains_key(&decoded)
+                {
                     return Err(format!(
                         "graph instance {instance_id} references unclaimed parent {parent}"
                     ));
@@ -1581,6 +1589,34 @@ mod tests {
                 );
             }),
             "graph instance root/outlet:side/outlet:rows references unclaimed parent root/outlet:side"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_accepts_an_escaped_parent_instance_segment() {
+        // Runtime instance ids embed their parent segment escaped
+        // (`root%2Foutlet:main/outlet:main`); the claimed parent is the
+        // same instance stored under its decoded key.
+        let mut snapshot = valid_snapshot();
+        let child = snapshot
+            .structure
+            .graphs
+            .remove("root/outlet:main/outlet:main/key:todos")
+            .unwrap();
+        snapshot
+            .structure
+            .graphs
+            .insert("root%2Foutlet:main/outlet:main/key:todos".into(), child);
+        let manifest = test_manifest();
+        let application = test_application(true);
+        assert!(
+            snapshot
+                .validate(&SsrSnapshotReferences {
+                    manifest: &manifest,
+                    application: &application,
+                })
+                .is_ok(),
+            "escaped parent segments must chain to their decoded instance key"
         );
     }
 

@@ -102,11 +102,18 @@ fn lowers_fullstack_route_tree_to_a_rust_manifest() {
             .expect("static fullstack route declarations should lower"),
     );
     assert_eq!(manifest.version, 3);
-    assert_eq!(manifest.routes.len(), 5);
+    assert_eq!(manifest.routes.len(), 7);
     assert!(manifest
         .routes
         .iter()
         .all(|route| route.graph_id != manifest.root_graph_id));
+    // The parameterized fixture route keeps its `$param` path segment.
+    let project = manifest
+        .routes
+        .iter()
+        .find(|route| route.path == "projects/$id")
+        .unwrap();
+    assert_eq!(project.outlet_id, "main");
     let todos = manifest
         .routes
         .iter()

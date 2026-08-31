@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { chromium } from 'playwright';
+import { launchBrowser } from './browser.mjs';
 
 const appDir = path.resolve(import.meta.dirname, '..');
 const port = Number(process.env.PLEC_ACCEPTANCE_PORT ?? 3201);
@@ -194,11 +194,7 @@ async function main() {
 
   await waitForServer();
 
-  const browser = await chromium.launch({
-    headless: true,
-    channel: process.env.PLEC_CHROME_EXECUTABLE ? undefined : 'chrome',
-    executablePath: process.env.PLEC_CHROME_EXECUTABLE,
-  });
+  const browser = await launchBrowser({ headless: true });
 
   try {
     await renameTest(browser);
