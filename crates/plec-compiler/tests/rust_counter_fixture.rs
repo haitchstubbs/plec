@@ -276,7 +276,7 @@ fn rust_component_artifact_matches_runtime_fixture() {
     let executable =
         lower_application_to_executable(&application).expect("App should lower to component IR");
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-component-0.10.json",
+        "{}/../plec-runtime/tests/fixtures/rust-component-0.10.json",
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("runtime fixture should exist");
@@ -306,7 +306,7 @@ fn rust_keyed_component_artifact_matches_runtime_fixture() {
     let executable =
         lower_application_to_executable(&application).expect("Todos should lower to component IR");
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-keyed-component-0.10.json",
+        "{}/../plec-runtime/tests/fixtures/rust-keyed-component-0.10.json",
         env!("CARGO_MANIFEST_DIR")
     )).expect("runtime fixture should exist");
 
@@ -343,7 +343,7 @@ fn rust_nested_component_artifact_matches_runtime_fixture() {
     let executable =
         lower_application_to_executable(&application).expect("App should lower to component IR");
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-nested-component-0.10.json",
+        "{}/../plec-runtime/tests/fixtures/rust-nested-component-0.10.json",
         env!("CARGO_MANIFEST_DIR")
     )).expect("runtime fixture should exist");
 
@@ -388,7 +388,7 @@ fn rust_keyed_callback_component_artifact_matches_runtime_fixture() {
     let executable =
         lower_application_to_executable(&application).expect("Todos should lower to component IR");
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-keyed-callback-component-0.10.json",
+        "{}/../plec-runtime/tests/fixtures/rust-keyed-callback-component-0.10.json",
         env!("CARGO_MANIFEST_DIR")
     )).expect("runtime fixture should exist");
     assert_eq!(
@@ -424,7 +424,7 @@ fn rust_keyed_slot_component_artifact_matches_runtime_fixture() {
         .iter()
         .any(|node| matches!(node, plec_ir::Node::Slot { .. })));
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-keyed-slot-component-0.10.json",
+        "{}/../plec-runtime/tests/fixtures/rust-keyed-slot-component-0.10.json",
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("runtime fixture should exist");
@@ -502,7 +502,7 @@ fn rust_route_async_artifact_matches_runtime_fixture() {
     assert_eq!(executable.route_outlets[0].id, "main");
     assert_eq!(executable.route_outlets[0].node, executable.root_node);
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-route-async-0.9.json",
+        "{}/../plec-runtime/tests/fixtures/rust-route-async-0.9.json",
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("runtime fixture should exist");
@@ -677,7 +677,7 @@ fn assert_component_fixture(path: &str, component: &str, source: &str, fixture_n
     let executable =
         lower_application_to_executable(&application).expect("HIR should lower to component IR");
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/{fixture_name}",
+        "{}/../plec-runtime/tests/fixtures/{fixture_name}",
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("runtime fixture should exist");
@@ -698,7 +698,7 @@ fn assert_fixture(path: &str, component: &str, source: &str, fixture_name: &str)
     let application = lower_component_to_executable(&hir).expect("Counter should lower to IR");
     let actual = serde_json::to_string_pretty(&application).expect("IR should serialize");
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/{fixture_name}",
+        "{}/../plec-runtime/tests/fixtures/{fixture_name}",
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("runtime fixture should exist");

@@ -42,9 +42,8 @@ find_driver() {
     candidates+=("$CHROMEDRIVER")
 
   candidates+=(
-    "$ROOT/chromedriver-linux64/chromedriver"
-    "$ROOT/chromedriver-win64/chromedriver.exe"
-    "$HOME/.cache/plec-tools/chromedriver-linux64/chromedriver"
+    "$ROOT/.tools/chromedriver-linux64/chromedriver"
+    "$ROOT/.tools/chromedriver-win64/chromedriver.exe"
   )
 
   if command -v chromedriver >/dev/null 2>&1; then

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import cliToolsConfig from '../cli-tools.json' with { type: 'json' };
+import { findPlaywrightChromium } from './utils.js';
 
 const { 'build-tools': buildTools } = cliToolsConfig;
 
@@ -67,15 +68,11 @@ function chromeDriverPlatform() {
   }
 
   if (process.platform === 'linux') {
-    return process.arch === 'arm64'
-      ? 'linux-arm64'
-      : 'linux64';
+    return process.arch === 'arm64' ? 'linux-arm64' : 'linux64';
   }
 
   if (process.platform === 'darwin') {
-    return process.arch === 'arm64'
-      ? 'mac-arm64'
-      : 'mac-x64';
+    return process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64';
   }
 
   throw new Error(
@@ -113,10 +110,7 @@ function findFile(root, filename) {
 
 function ensureExecutable(
   command,
-  {
-    args = ['--version'],
-    installHint,
-  } = {},
+  { args = ['--version'], installHint } = {},
 ) {
   const check = spawnSync(command, args, {
     encoding: 'utf8',
@@ -129,9 +123,7 @@ function ensureExecutable(
   }
 
   if (check.error) {
-    console.error(
-      `${command} check failed: ${check.error.message}`,
-    );
+    console.error(`${command} check failed: ${check.error.message}`);
   } else {
     console.error(
       `${command} check exited with status ${check.status}`,
@@ -143,6 +135,45 @@ function ensureExecutable(
   }
 
   return false;
+}
+
+function versionOf(binary) {
+  const result = spawnSync(binary, ['--version'], {
+    encoding: 'utf8',
+    shell: false,
+  });
+  return /(\d+\.\d+\.\d+\.\d+)/.exec(result.stdout ?? '')?.[1];
+}
+
+function ensureChromiumInstalled() {
+  if (findPlaywrightChromium()) {
+    return;
+  }
+
+  if (
+    !existsSync(path.join(repoRoot, 'node_modules', 'playwright-core'))
+  ) {
+    console.log(
+      'playwright is not installed yet; skipping Chromium check.',
+    );
+    return;
+  }
+
+  const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  console.log('Installing Playwright Chromium...');
+  const install = run(command, [
+    '--yes',
+    'playwright',
+    'install',
+    'chromium',
+  ]);
+
+  if (install.error || install.status !== 0) {
+    // Not fatal: ChromeDriver provisioning falls back to the stable channel.
+    console.error(
+      'Failed to install Playwright Chromium; ChromeDriver will fall back to the stable channel.',
+    );
+  }
 }
 
 function ensureChromeDriver() {
@@ -159,53 +190,50 @@ function ensureChromeDriver() {
   }
   const platform = chromeDriverPlatform();
   const executable =
-    process.platform === 'win32'
-      ? 'chromedriver.exe'
-      : 'chromedriver';
+    process.platform === 'win32' ? 'chromedriver.exe' : 'chromedriver';
 
-  const installDir = path.join(
-    repoRoot,
-    `chromedriver-${platform}`,
-  );
+  const installDir = path.join(repoRoot, '.tools', `chromedriver-${platform}`);
 
   const target = path.join(installDir, executable);
 
-  if (existsSync(target)) {
-    const check = spawnSync(target, ['--version'], {
-      encoding: 'utf8',
-      shell: false,
-    });
+  ensureChromiumInstalled();
 
-    if (check.error?.code === 'EACCES') {
-      console.error(
-        `Cannot execute ${target}: ${check.error.message}`,
-      );
-    } else if (check.error?.code === 'ENOENT') {
-      console.error(`${target} was not found.`);
-    } else if (check.error) {
-      console.error(
-        `Failed to check ${target}: ${check.error.message}`,
-      );
-    }
-  
-    if (!check.error && check.status === 0) {
-      console.log(
-        `chromedriver found: ${check.stdout.trim()}`,
-      );
+  // The driver must match the browser it drives. Derive the version from
+  // the Playwright-managed Chromium so the two can never drift apart.
+  const chromium = findPlaywrightChromium();
+  const chromiumVersion = chromium ? versionOf(chromium) : undefined;
+  const driverVersion = existsSync(target)
+    ? versionOf(target)
+    : undefined;
 
-      return;
-    }
+  if (
+    driverVersion &&
+    (!chromiumVersion || driverVersion === chromiumVersion)
+  ) {
+    console.log(
+      `chromedriver found: ChromeDriver ${driverVersion}` +
+        (chromiumVersion
+          ? ` (matches Chromium ${chromiumVersion})`
+          : ''),
+    );
+    return;
   }
 
-  console.log(
-    `chromedriver-${platform} not found; installing stable ChromeDriver...`,
-  );
+  if (driverVersion && chromiumVersion) {
+    console.log(
+      `ChromeDriver ${driverVersion} does not match Chromium ${chromiumVersion}; reinstalling...`,
+    );
+  } else {
+    console.log(
+      `chromedriver-${platform} not found; installing ChromeDriver...`,
+    );
+  }
 
-  const cacheDir = path.join(
-    repoRoot,
-    '.cache',
-    'chromedriver',
-  );
+  const requested = chromiumVersion
+    ? `chromedriver@${chromiumVersion}`
+    : 'chromedriver@stable';
+
+  const cacheDir = path.join(repoRoot, '.cache', 'chromedriver');
 
   rmSync(cacheDir, {
     recursive: true,
@@ -216,33 +244,39 @@ function ensureChromeDriver() {
     recursive: true,
   });
 
-  const command =
-    process.platform === 'win32'
-      ? 'npx.cmd'
-      : 'npx';
+  const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
-  const install = run(command, [
+  let install = run(command, [
     '--yes',
     '@puppeteer/browsers',
     'install',
-    'chromedriver@stable',
+    requested,
     '--path',
     cacheDir,
   ]);
 
-  if (install.error || install.status !== 0) {
+  if (chromiumVersion && (install.error || install.status !== 0)) {
     console.error(
-      `Failed to install ChromeDriver for ${platform}.`,
+      `ChromeDriver ${chromiumVersion} is not available; falling back to the stable channel.`,
     );
+    install = run(command, [
+      '--yes',
+      '@puppeteer/browsers',
+      'install',
+      'chromedriver@stable',
+      '--path',
+      cacheDir,
+    ]);
+  }
+
+  if (install.error || install.status !== 0) {
+    console.error(`Failed to install ChromeDriver for ${platform}.`);
 
     process.exitCode = install.status ?? 1;
     return;
   }
 
-  const downloaded = findFile(
-    cacheDir,
-    executable,
-  );
+  const downloaded = findFile(cacheDir, executable);
 
   if (!downloaded) {
     console.error(
@@ -282,9 +316,7 @@ function ensureChromeDriver() {
     return;
   }
 
-  console.log(
-    `chromedriver installed: ${check.stdout.trim()}`,
-  );
+  console.log(`chromedriver installed: ${check.stdout.trim()}`);
 }
 
 // Ensure required Rust build tools are installed
@@ -298,9 +330,7 @@ for (const [name, version] of Object.entries(buildTools)) {
 }
 
 if (!process.exitCode) {
-  console.log(
-    'Ensuring wasm32-unknown-unknown target is installed...',
-  );
+  console.log('Ensuring wasm32-unknown-unknown target is installed...');
 
   const target = run('rustup', [
     'target',
@@ -309,9 +339,7 @@ if (!process.exitCode) {
   ]);
 
   if (target.error || target.status !== 0) {
-    console.error(
-      'Failed to ensure wasm32-unknown-unknown target.',
-    );
+    console.error('Failed to ensure wasm32-unknown-unknown target.');
 
     process.exitCode = target.status ?? 1;
   }

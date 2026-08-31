@@ -78,6 +78,10 @@ impl Drop for BrowserLocationGuard {
 }
 
 fn reset_browser_location() -> BrowserLocationGuard {
+    reset_browser_location_to("/")
+}
+
+fn reset_browser_location_to(path: &str) -> BrowserLocationGuard {
     let window = web_sys::window().unwrap();
     let location = window.location();
     let href = format!(
@@ -89,7 +93,7 @@ fn reset_browser_location() -> BrowserLocationGuard {
     window
         .history()
         .unwrap()
-        .replace_state_with_url(&JsValue::NULL, "", Some("/"))
+        .replace_state_with_url(&JsValue::NULL, "", Some(path))
         .unwrap();
     BrowserLocationGuard { href }
 }
@@ -252,11 +256,12 @@ fn static_conditional_artifact(alternate: bool) -> serde_json::Value {
         "expressions":[
             {"instructions":[{"op":"constant","constant":0},{"op":"return"}]},
             {"instructions":[{"op":"constant","constant":1},{"op":"return"}]},
-            {"instructions":[{"op":"loadState","state":0},{"op":"return"}]}
+            {"instructions":[{"op":"loadState","state":0},{"op":"return"}]},
+            {"instructions":[{"op":"loadState","state":0},{"op":"unary","kind":"not"},{"op":"return"}]}
         ],
         "actions":[
-            {"frameSlots":0,"instructions":[{"op":"evaluate","expression":1},{"op":"storeState","state":0},{"op":"return"}]},
-            {"frameSlots":0,"instructions":[{"op":"evaluate","expression":0},{"op":"storeState","state":0},{"op":"return"}]}
+            {"frameSlots":0,"instructions":[{"op":"evaluate","expression":3},{"op":"storeState","state":0},{"op":"return"}]},
+            {"frameSlots":0,"instructions":[{"op":"evaluate","expression":3},{"op":"storeState","state":0},{"op":"return"}]}
         ],
         "events":[
             {"target":2,"type":2,"action":1,"fields":[]},
@@ -521,6 +526,76 @@ fn route_error_artifact() -> serde_json::Value {
             {"instructions":[{"op":"constant","constant":0},{"op":"return"}]}
         ],
         "actions":[{"routeRetry":true,"instructions":[{"op":"return"}]}]
+    })
+}
+
+/// A layout that passes a location-derived prop into a child component whose
+/// bindings read that prop. The `<a>` has no href on purpose: the raw
+/// `a[href]` navigation sweep must not be able to produce any of the expected
+/// DOM state, so only graph propagation can satisfy the assertions.
+fn navigation_prop_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version":"0.10", "rootComponent":0,
+        "components":[
+            {"id":"App","rootNode":0,
+             "strings":["main","pathname","div","nav"],
+             "constants":[],
+             "hostSlots":[{"kind":"location","query":null,"name":null}],
+             "nodes":[
+                {"op":"element","tag":2,"parent":null,"children":[1,2]},
+                {"op":"component","component":1,"parent":0,"props":[{"kind":"value","name":1,"expression":0}],"children":[]},
+                {"op":"element","tag":3,"parent":0,"children":[]}
+             ],
+             "texts":[],"bindings":[],"propPrograms":[],"events":[],"inputs":[],"stateSlots":[],"parameters":[],
+             "expressions":[{"instructions":[{"op":"loadHost","host":0},{"op":"field","field":1},{"op":"return"}]}],
+             "actions":[],"loops":[],
+             "routeOutlets":[{"id":"main","node":2}],
+             "dependencyEdges":[]},
+            {"id":"Nav","rootNode":0,
+             "strings":["pathname","a","aria-current","span"],
+             "constants":["/next","page",null],
+             "nodes":[
+                {"op":"element","tag":1,"parent":null,"children":[1,2]},
+                {"op":"text","text":0,"parent":0},
+                {"op":"element","tag":3,"parent":0,"children":[]}
+             ],
+             "texts":[{"binding":0}],
+             "bindings":[
+                {"target":1,"sink":"text","expression":0},
+                {"target":0,"sink":"attribute","name":2,"expression":1}
+             ],
+             "propPrograms":[],"events":[],"inputs":[],"stateSlots":[],
+             "parameters":[{"name":0,"callable":false,"component":false}],
+             "expressions":[
+                {"instructions":[{"op":"loadProp","prop":0},{"op":"return"}]},
+                {"instructions":[
+                    {"op":"loadProp","prop":0},
+                    {"op":"constant","constant":0},
+                    {"op":"binary","kind":"equal"},
+                    {"op":"jumpIfFalse","target":6},
+                    {"op":"constant","constant":1},
+                    {"op":"jump","target":7},
+                    {"op":"constant","constant":2},
+                    {"op":"return"}
+                ]}
+             ],
+             "actions":[],"loops":[],
+             "dependencyEdges":[
+                {"source":{"kind":"prop","handle":0},"target":{"kind":"binding","handle":0},"loop":null},
+                {"source":{"kind":"prop","handle":0},"target":{"kind":"binding","handle":1},"loop":null}
+             ]}
+        ]
+    })
+}
+
+fn navigation_route_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version":"0.10", "rootComponent":0,
+        "components":[
+            {"id":"Page","rootNode":0,"strings":["p"],"constants":[],
+             "nodes":[{"op":"element","tag":0,"parent":null,"children":[1]},{"op":"text","text":0,"parent":0}],
+             "texts":[{"value":"Route body"}],"bindings":[],"propPrograms":[],"events":[],"inputs":[],"stateSlots":[],"parameters":[],"expressions":[],"actions":[],"loops":[],"dependencyEdges":[]}
+        ]
     })
 }
 
@@ -1763,6 +1838,42 @@ async fn remount_and_typed_route_replacement_abort_stale_fetches() {
     assert_eq!(root.text_content().unwrap_or_default(), "");
 }
 
+#[wasm_bindgen_test]
+fn navigation_refreshes_location_props_in_child_components() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    runtime
+        .register_graph(
+            "root".into(),
+            serde_wasm_bindgen::to_value(&navigation_prop_artifact()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "page".into(),
+            serde_wasm_bindgen::to_value(&navigation_route_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        &serde_json::json!({
+            "version":3,"rootGraphId":"root","routes":[
+                {"id":"index","path":"*","graphId":"page","outletId":"main"}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    runtime.start(root.clone(), manifest).unwrap();
+    let link = root.query_selector("a").unwrap().unwrap();
+    assert_eq!(link.text_content().as_deref(), Some("/"));
+    assert_eq!(link.get_attribute("aria-current").as_deref(), Some(""));
+    runtime.navigate("/next".into(), false).unwrap();
+    let link = root.query_selector("a").unwrap().unwrap();
+    assert_eq!(link.text_content().as_deref(), Some("/next"));
+    assert_eq!(link.get_attribute("aria-current").as_deref(), Some("page"));
+}
+
 #[wasm_bindgen_test(async)]
 async fn typed_route_loader_writes_its_declared_result_state() {
     let _location = reset_browser_location();
@@ -2022,6 +2133,10 @@ fn adopted_nested_components_claim_scoped_indexes_and_stay_live() {
     // ~31 owned nodes (root scope 15, section range 9, grandchild range 7).
     // Rebuilding a full-root comment map per component level would walk at
     // least 45 nodes.
+    // The visit counter is process-global, so reset it to measure only this
+    // fixture's walks instead of inheriting earlier tests' adoptions.
+    runtime.reset_adoption_index_walks();
+    start_adopt_fixture(&runtime, &mount_root(), &nested_adoption_html(false)).unwrap();
     let walks = runtime.adoption_index_walks();
     assert!(
         walks < 45,
@@ -2032,8 +2147,8 @@ fn adopted_nested_components_claim_scoped_indexes_and_stay_live() {
 #[wasm_bindgen_test]
 fn adopted_duplicate_marker_fails_instead_of_silently_claiming() {
     let runtime = PlecRuntime::new();
-    let error = start_adopt_fixture(&runtime, &mount_root(), &nested_adoption_html(true))
-        .unwrap_err();
+    let error =
+        start_adopt_fixture(&runtime, &mount_root(), &nested_adoption_html(true)).unwrap_err();
     let message = error.as_string().unwrap_or_default();
     assert!(
         message.contains("duplicate:ssr-marker:plec:text:root/component:1/component:1:2"),
@@ -2044,8 +2159,8 @@ fn adopted_duplicate_marker_fails_instead_of_silently_claiming() {
 #[wasm_bindgen_test]
 fn adopted_missing_and_mismatched_markers_fail_closed_with_unchanged_codes() {
     // Absent element marker.
-    let html = nested_adoption_html(false)
-        .replace("<button data-plec-node=\"root/node:2\"></button>", "");
+    let html =
+        nested_adoption_html(false).replace("<button data-plec-node=\"root/node:2\"></button>", "");
     let error = start_adopt_fixture(&PlecRuntime::new(), &mount_root(), &html).unwrap_err();
     assert!(error
         .as_string()
@@ -2053,8 +2168,8 @@ fn adopted_missing_and_mismatched_markers_fail_closed_with_unchanged_codes() {
         .contains("missing:ssr-node:root/node:2"));
 
     // Absent text marker, surfaced from a nested scoped index.
-    let html = nested_adoption_html(false)
-        .replace("<!--plec:text:root/component:1/component:1:2-->", "");
+    let html =
+        nested_adoption_html(false).replace("<!--plec:text:root/component:1/component:1:2-->", "");
     let error = start_adopt_fixture(&PlecRuntime::new(), &mount_root(), &html).unwrap_err();
     assert!(
         error
@@ -2129,16 +2244,61 @@ fn snapshot_fixture_artifact() -> serde_json::Value {
     })
 }
 
+/// The route page graph mounted into the root layout's outlet: an empty span
+/// with no bindings, claimed at the `root/outlet:main` instance path.
+fn snapshot_route_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "ssr-snapshot.tsx#Home",
+            "rootNode": 0,
+            "strings": ["span"],
+            "constants": [],
+            "nodes": [{"op": "element", "tag": 0, "parent": null, "children": []}],
+            "texts": [],
+            "bindings": [],
+            "propPrograms": [],
+            "events": [],
+            "inputs": [],
+            "hostSlots": [],
+            "stateSlots": [],
+            "parameters": [],
+            "expressions": [],
+            "actions": [],
+            "loops": [],
+            "dependencyEdges": [],
+            "routeOutlets": []
+        }]
+    })
+}
+
 fn snapshot_fixture(
     revision: &str,
     export_value: &str,
     location: &str,
     structure_graph: &str,
 ) -> serde_json::Value {
+    snapshot_chain_fixture(
+        revision,
+        export_value,
+        location,
+        structure_graph,
+        serde_json::json!({}),
+    )
+}
+
+fn snapshot_chain_fixture(
+    revision: &str,
+    export_value: &str,
+    location: &str,
+    structure_graph: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
     serde_json::json!({
         "version": 1,
         "revision": revision,
-        "routes": [{"routeId": "ssr-snapshot.tsx#Home", "params": {}, "phase": "active"}],
+        "routes": [{"routeId": "ssr-snapshot.tsx#Home", "params": params, "phase": "active"}],
         "public": {"location": location, "exports": {
             "loaderData": {
                 "value": export_value,
@@ -2161,21 +2321,40 @@ fn start_snapshot_fixture(
     server_text: &str,
     snapshot: serde_json::Value,
 ) -> Result<(), JsValue> {
+    start_snapshot_route_fixture(runtime, root, server_text, snapshot, "")
+}
+
+fn start_snapshot_route_fixture(
+    runtime: &PlecRuntime,
+    root: &Element,
+    server_text: &str,
+    snapshot: serde_json::Value,
+    route_path: &str,
+) -> Result<(), JsValue> {
     root.set_inner_html(&format!(
         "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
-         <!--plec:text:root:2-->{server_text}</p></main>"
+         <!--plec:text:root:2-->{server_text}</p>\
+         <span data-plec-node=\"root/outlet:main/node:0\"></span></main>"
     ));
+    runtime
+        .register_graph(
+            "ssr-snapshot.tsx#Home".into(),
+            serde_wasm_bindgen::to_value(&snapshot_route_artifact()).unwrap(),
+        )
+        .unwrap();
+    // Register the root application last: snapshot structure validation reads
+    // the most recently registered 0.10 application.
     runtime
         .register_graph(
             "ssr-snapshot.tsx#App".into(),
             serde_wasm_bindgen::to_value(&snapshot_fixture_artifact()).unwrap(),
         )
         .unwrap();
-    let manifest = js_sys::JSON::parse(
-        r#"{"version":3,"revision":"rev-1","rootGraphId":"ssr-snapshot.tsx#App",
-            "routes":[{"id":"ssr-snapshot.tsx#Home","path":"__never__",
-            "graphId":"ssr-snapshot.tsx#App","outletId":"main"}]}"#,
-    )
+    let manifest = js_sys::JSON::parse(&format!(
+        r#"{{"version":3,"revision":"rev-1","rootGraphId":"ssr-snapshot.tsx#App",
+            "routes":[{{"id":"ssr-snapshot.tsx#Home","path":"{route_path}",
+            "graphId":"ssr-snapshot.tsx#Home","outletId":"main"}}]}}"#,
+    ))
     .unwrap();
     let snapshot = serde_wasm_bindgen::to_value(&snapshot).unwrap();
     runtime.start_adopt_snapshot(root.clone(), manifest, snapshot)
@@ -2230,26 +2409,16 @@ fn snapshot_version_and_revision_gates_have_dedicated_codes() {
     let _location = reset_browser_location();
     let mut snapshot = snapshot_fixture("rev-1", "x", "/", "ssr-snapshot.tsx#App");
     snapshot["version"] = serde_json::json!(999);
-    let error = start_snapshot_fixture(
-        &PlecRuntime::new(),
-        &mount_root(),
-        "x",
-        snapshot,
-    )
-    .unwrap_err();
+    let error =
+        start_snapshot_fixture(&PlecRuntime::new(), &mount_root(), "x", snapshot).unwrap_err();
     assert_eq!(
         error.as_string().unwrap_or_default(),
         "unsupported:ssr-snapshot-version"
     );
 
     let snapshot = snapshot_fixture("other-revision", "x", "/", "ssr-snapshot.tsx#App");
-    let error = start_snapshot_fixture(
-        &PlecRuntime::new(),
-        &mount_root(),
-        "x",
-        snapshot,
-    )
-    .unwrap_err();
+    let error =
+        start_snapshot_fixture(&PlecRuntime::new(), &mount_root(), "x", snapshot).unwrap_err();
     assert_eq!(error.as_string().unwrap_or_default(), "stale-revision");
 }
 
@@ -2280,8 +2449,8 @@ fn snapshot_payload_and_structure_failures_fail_closed() {
 
     // Structure referencing an unknown component graph.
     let snapshot = snapshot_fixture("rev-1", "x", "/", "missing.tsx#Nope");
-    let error = start_snapshot_fixture(&PlecRuntime::new(), &mount_root(), "x", snapshot)
-        .unwrap_err();
+    let error =
+        start_snapshot_fixture(&PlecRuntime::new(), &mount_root(), "x", snapshot).unwrap_err();
     assert!(error
         .as_string()
         .unwrap_or_default()
@@ -2292,9 +2461,89 @@ fn snapshot_payload_and_structure_failures_fail_closed() {
 fn snapshot_location_mismatch_fails_closed() {
     let _location = reset_browser_location();
     let snapshot = snapshot_fixture("rev-1", "x", "/other-page", "ssr-snapshot.tsx#App");
-    let error = start_snapshot_fixture(&PlecRuntime::new(), &mount_root(), "x", snapshot)
-        .unwrap_err();
-    assert_eq!(error.as_string().unwrap_or_default(), "mismatch:ssr-location");
+    let error =
+        start_snapshot_fixture(&PlecRuntime::new(), &mount_root(), "x", snapshot).unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "mismatch:ssr-location"
+    );
+}
+
+#[wasm_bindgen_test]
+fn snapshot_param_route_chain_adopts_with_imported_params() {
+    let _location = reset_browser_location_to("/projects/p1");
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    let snapshot = snapshot_chain_fixture(
+        "rev-1",
+        "seeded-value",
+        "/projects/p1",
+        "ssr-snapshot.tsx#App",
+        serde_json::json!({"projectId": "p1"}),
+    );
+    // The URL-derived chain agrees with the imported chain, including the
+    // decoded $param value, so adoption proceeds instead of falling back.
+    start_snapshot_route_fixture(
+        &runtime,
+        &root,
+        "seeded-value",
+        snapshot,
+        "projects/$projectId",
+    )
+    .unwrap();
+    assert_eq!(snapshot_root_text(&root), "seeded-value");
+    assert_eq!(runtime.ssr_text_divergences(), 0);
+}
+
+#[wasm_bindgen_test]
+fn snapshot_param_value_mismatch_fails_closed() {
+    let _location = reset_browser_location_to("/projects/p1");
+    let snapshot = snapshot_chain_fixture(
+        "rev-1",
+        "x",
+        "/projects/p1",
+        "ssr-snapshot.tsx#App",
+        serde_json::json!({"projectId": "other"}),
+    );
+    let error = start_snapshot_route_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        "x",
+        snapshot,
+        "projects/$projectId",
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "mismatch:ssr-route-chain:params:0:projectId"
+    );
+}
+
+#[wasm_bindgen_test]
+fn snapshot_chain_route_disagreement_fails_closed() {
+    let _location = reset_browser_location_to("/about");
+    // The URL resolves to no manifest route while the snapshot claims the
+    // home page: the transferred cause contradicts the browser URL.
+    let snapshot = snapshot_fixture("rev-1", "x", "/about", "ssr-snapshot.tsx#App");
+    let error =
+        start_snapshot_fixture(&PlecRuntime::new(), &mount_root(), "x", snapshot).unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "mismatch:ssr-route-chain:length:1:0"
+    );
+}
+
+#[wasm_bindgen_test]
+fn snapshot_non_active_phase_fails_closed() {
+    let _location = reset_browser_location();
+    let mut snapshot = snapshot_fixture("rev-1", "x", "/", "ssr-snapshot.tsx#App");
+    snapshot["routes"][0]["phase"] = serde_json::json!("pending");
+    let error =
+        start_snapshot_fixture(&PlecRuntime::new(), &mount_root(), "x", snapshot).unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "mismatch:ssr-route-chain:phase:0:pending"
+    );
 }
 
 #[wasm_bindgen_test]
@@ -2329,10 +2578,690 @@ fn start_adopt_snapshot_fixture_without_snapshot(
         r#"{"version":3,"revision":"rev-1","rootGraphId":"ssr-snapshot.tsx#App","routes":[]}"#,
     )
     .unwrap();
-    runtime.start_adopt_snapshot(
-        root.clone(),
-        manifest,
-        wasm_bindgen::JsValue::UNDEFINED,
+    runtime.start_adopt_snapshot(root.clone(), manifest, wasm_bindgen::JsValue::UNDEFINED)
+}
+
+// ---------------------------------------------------------------------------
+// SSR conditional adoption
+//
+// One static conditional in the route page graph (p vs span branch) plus a
+// toggle button outside the region. The snapshot's branch record is the
+// ownership cause: adoption claims the marked region with the recorded side,
+// and branch flips run through the normal reconcile path.
+// ---------------------------------------------------------------------------
+
+/// The route page graph. The conditional's node handle is 1; its branches are
+/// the p (2, consequent) and span (3, alternate) elements. Initial state is
+/// false, so a client reconcile always starts on the alternate side.
+fn conditional_route_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "ssr-conditional.tsx#Home",
+            "rootNode": 0,
+            "strings": ["section", "p", "span", "button", "click"],
+            "constants": [false],
+            "nodes": [
+                {"op": "element", "tag": 0, "children": [1, 4]},
+                {"op": "conditional", "test": 1, "parent": 0, "consequent": 2, "alternate": 3},
+                {"op": "element", "tag": 1, "parent": 0, "children": []},
+                {"op": "element", "tag": 2, "parent": 0, "children": []},
+                {"op": "element", "tag": 3, "parent": 0, "children": []}
+            ],
+            "texts": [],
+            "bindings": [],
+            "propPrograms": [],
+            "events": [{"target": 4, "type": 4, "action": 0, "fields": []}],
+            "inputs": [],
+            "hostSlots": [],
+            "stateSlots": [{"initialExpression": 0, "frameSlot": 0}],
+            "parameters": [],
+            "expressions": [
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadState", "state": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadState", "state": 0}, {"op": "unary", "kind": "not"}, {"op": "return"}]}
+            ],
+            "actions": [{"frameSlots": 0, "instructions": [
+                {"op": "evaluate", "expression": 2},
+                {"op": "storeState", "state": 0},
+                {"op": "return"}
+            ]}],
+            "loops": [],
+            "dependencyEdges": [{"source": {"kind": "state", "handle": 0}, "target": {"kind": "conditional", "handle": 1}}],
+            "routeOutlets": []
+        }]
+    })
+}
+
+/// The server markup the route graph renders for one recorded branch side.
+fn conditional_server_dom(selected: &str) -> String {
+    let inner = match selected {
+        "consequent" => "<p data-plec-node=\"root/outlet:main/node:2\"></p>",
+        "alternate" => "<span data-plec-node=\"root/outlet:main/node:3\"></span>",
+        _ => "",
+    };
+    format!(
+        "<!--plec:conditional:root/outlet:main:1-->{inner}\
+         <!--plec:conditional-end:root/outlet:main:1-->\
+         <button data-plec-node=\"root/outlet:main/node:4\"></button>"
     )
 }
 
+/// Snapshot structure with branch records for the conditional route instance.
+fn conditional_snapshot(branches: serde_json::Value) -> serde_json::Value {
+    let mut snapshot = snapshot_chain_fixture(
+        "rev-1",
+        "x",
+        "/",
+        "ssr-snapshot.tsx#App",
+        serde_json::json!({}),
+    );
+    // Nested instance ids embed the parent segment escaped, mirroring
+    // graph_instance_id exactly.
+    snapshot["structure"]["graphs"]["root%2Foutlet:main/outlet:main"] = serde_json::json!({
+        "graphId": "ssr-conditional.tsx#Home",
+        "branches": branches,
+    });
+    snapshot
+}
+
+fn start_conditional_fixture(
+    runtime: &PlecRuntime,
+    root: &Element,
+    outlet_dom: &str,
+    branches: serde_json::Value,
+) -> Result<(), JsValue> {
+    root.set_inner_html(&format!(
+        "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
+         <!--plec:text:root:2-->ignored</p>\
+         <section data-plec-node=\"root/outlet:main/node:0\">{outlet_dom}</section></main>"
+    ));
+    runtime
+        .register_graph(
+            "ssr-conditional.tsx#Home".into(),
+            serde_wasm_bindgen::to_value(&conditional_route_artifact()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "ssr-snapshot.tsx#App".into(),
+            serde_wasm_bindgen::to_value(&snapshot_fixture_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        r#"{"version":3,"revision":"rev-1","rootGraphId":"ssr-snapshot.tsx#App",
+            "routes":[{"id":"ssr-snapshot.tsx#Home","path":"",
+            "graphId":"ssr-conditional.tsx#Home","outletId":"main"}]}"#,
+    )
+    .unwrap();
+    let snapshot = serde_wasm_bindgen::to_value(&conditional_snapshot(branches)).unwrap();
+    runtime.start_adopt_snapshot(root.clone(), manifest, snapshot)
+}
+
+fn conditional_toggle(root: &Element) -> web_sys::EventTarget {
+    root.query_selector("[data-plec-node='root/outlet:main/node:4']")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+}
+
+#[wasm_bindgen_test]
+fn ssr_conditional_adopts_recorded_branch_and_flips_through_reconcile() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_conditional_fixture(
+        &runtime,
+        &root,
+        &conditional_server_dom("alternate"),
+        serde_json::json!([{"node": 1, "selected": "alternate"}]),
+    )
+    .unwrap();
+    // The server-rendered alternate branch survived adoption untouched.
+    let adopted_span = root
+        .query_selector("[data-plec-node='root/outlet:main/node:3']")
+        .unwrap()
+        .unwrap();
+    assert!(root
+        .query_selector("[data-plec-node='root/outlet:main/node:2']")
+        .unwrap()
+        .is_none());
+    // The recomputed initial test value (false) agrees with the recorded
+    // side, so the first toggle flips the region through the normal
+    // reconcile path: the span is replaced by a freshly instantiated
+    // consequent p (client nodes carry data-runtime-node markers).
+    conditional_toggle(&root)
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    let flip_one = root
+        .query_selector("[data-runtime-node='2']")
+        .unwrap()
+        .unwrap();
+    assert!(adopted_span.parent_node().is_none());
+    assert!(root
+        .query_selector("[data-plec-node='root/outlet:main/node:3']")
+        .unwrap()
+        .is_none());
+    // And back: the region keeps flipping without remounting the graph.
+    conditional_toggle(&root)
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert!(flip_one.parent_node().is_none());
+    assert!(root
+        .query_selector("[data-runtime-node='3']")
+        .unwrap()
+        .is_some());
+}
+
+#[wasm_bindgen_test]
+fn ssr_conditional_divergence_keeps_recorded_side_until_first_reconcile() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    // The record claims the consequent while the recomputed initial test
+    // value (false) selects the alternate: adoption proceeds, the recorded
+    // side stays mounted, and the divergence resolves on the first flip.
+    start_conditional_fixture(
+        &runtime,
+        &root,
+        &conditional_server_dom("consequent"),
+        serde_json::json!([{"node": 1, "selected": "consequent"}]),
+    )
+    .unwrap();
+    let adopted_p = root
+        .query_selector("[data-plec-node='root/outlet:main/node:2']")
+        .unwrap()
+        .unwrap();
+    conditional_toggle(&root)
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    // false -> true recomputes to the recorded consequent: no flip yet.
+    assert!(adopted_p.parent_node().is_some());
+    conditional_toggle(&root)
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert!(adopted_p.parent_node().is_none());
+    assert!(root
+        .query_selector("[data-runtime-node='3']")
+        .unwrap()
+        .is_some());
+}
+
+#[wasm_bindgen_test]
+fn ssr_conditional_without_branch_record_fails_closed() {
+    let _location = reset_browser_location();
+    let error = start_conditional_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &conditional_server_dom("alternate"),
+        serde_json::json!([]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "missing:ssr-branch:root/outlet:main:1"
+    );
+}
+
+#[wasm_bindgen_test]
+fn ssr_conditional_with_missing_markers_fails_closed() {
+    let _location = reset_browser_location();
+    // No start marker: the ownership region cannot be located.
+    let error = start_conditional_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        "<span data-plec-node=\"root/outlet:main/node:3\"></span>",
+        serde_json::json!([{"node": 1, "selected": "alternate"}]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "missing:ssr-branch:root/outlet:main:1"
+    );
+
+    // Start marker present but the region is unterminated.
+    let error = start_conditional_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        "<!--plec:conditional:root/outlet:main:1-->\
+         <span data-plec-node=\"root/outlet:main/node:3\"></span>",
+        serde_json::json!([{"node": 1, "selected": "alternate"}]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "missing:ssr-branch-end:root/outlet:main:1"
+    );
+}
+
+#[wasm_bindgen_test]
+fn ssr_conditional_side_disagreement_fails_closed() {
+    let _location = reset_browser_location();
+    // The record claims the alternate while the markers enclose the
+    // consequent's p: the ownership cause contradicts the markup.
+    let error = start_conditional_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &conditional_server_dom("consequent"),
+        serde_json::json!([{"node": 1, "selected": "alternate"}]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "mismatch:ssr-branch:root/outlet:main:1"
+    );
+
+    // A none record over a non-empty region is the same structural lie.
+    let error = start_conditional_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &conditional_server_dom("alternate"),
+        serde_json::json!([{"node": 1, "selected": "none"}]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "mismatch:ssr-branch:root/outlet:main:1"
+    );
+}
+
+#[wasm_bindgen_test]
+fn ssr_conditional_none_branch_adopts_empty_region_and_flips() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_conditional_fixture(
+        &runtime,
+        &root,
+        &conditional_server_dom("none"),
+        serde_json::json!([{"node": 1, "selected": "none"}]),
+    )
+    .unwrap();
+    assert!(root
+        .query_selector("[data-plec-node='root/outlet:main/node:2']")
+        .unwrap()
+        .is_none());
+    assert!(root
+        .query_selector("[data-plec-node='root/outlet:main/node:3']")
+        .unwrap()
+        .is_none());
+    // The empty region still flips into a mounted branch afterwards.
+    conditional_toggle(&root)
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert!(root
+        .query_selector("[data-runtime-node='2']")
+        .unwrap()
+        .is_some());
+}
+
+// ---------------------------------------------------------------------------
+// Loader state transfer: SSR executes route loaders, the browser resumes.
+//
+// The route page reads the `loaderData` host slot, so a resolved imported
+// outcome must reach its initialiser without any client fetch, and a
+// rejected outcome must restore the error phase the server rendered.
+// ---------------------------------------------------------------------------
+
+fn loader_layout_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "loader-transfer.tsx#Root",
+            "rootNode": 0,
+            "strings": ["main", "p"],
+            "constants": [],
+            "nodes": [
+                {"op": "element", "tag": 0, "parent": null, "children": [1]},
+                {"op": "element", "tag": 1, "parent": 0, "children": [2]},
+                {"op": "text", "text": 0, "parent": 1}
+            ],
+            "texts": [{"value": "layout"}],
+            "bindings": [],
+            "propPrograms": [],
+            "events": [],
+            "inputs": [],
+            "hostSlots": [],
+            "stateSlots": [],
+            "parameters": [],
+            "expressions": [],
+            "actions": [],
+            "loops": [],
+            "dependencyEdges": [],
+            "routeOutlets": [{"id": "main", "node": 0}]
+        }]
+    })
+}
+
+fn loader_page_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "loader-transfer.tsx#Page",
+            "rootNode": 0,
+            "strings": ["p"],
+            "constants": [null, "/api/data"],
+            "nodes": [
+                {"op": "element", "tag": 0, "parent": null, "children": [1]},
+                {"op": "text", "text": 0, "parent": 0}
+            ],
+            "texts": [{"binding": 0}],
+            "bindings": [{"target": 1, "sink": "text", "expression": 0}],
+            "propPrograms": [],
+            "events": [],
+            "inputs": [],
+            "hostSlots": [{"kind": "loaderData"}],
+            "stateSlots": [{"initialExpression": 1, "frameSlot": 0}],
+            "parameters": [],
+            "expressions": [
+                {"instructions": [{"op": "loadHost", "host": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 1}, {"op": "return"}]}
+            ],
+            "actions": [{
+                "frameSlots": 2,
+                "loaderResultState": 0,
+                "routeLoader": true,
+                "instructions": [
+                    {"op": "capabilityRequest", "capability": "fetch", "request": {"url": 2, "method": "GET", "decode": "responseJson", "requireOk": true}, "successPc": 1, "failurePc": 2, "resultSlot": 0, "errorSlot": 1},
+                    {"op": "return"},
+                    {"op": "return", "outcome": "failure"}
+                ]
+            }],
+            "loops": [],
+            "dependencyEdges": [
+                {"source": {"kind": "state", "handle": 0}, "target": {"kind": "binding", "handle": 0}}
+            ],
+            "routeOutlets": []
+        }]
+    })
+}
+
+fn loader_error_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "loader-transfer.tsx#Error",
+            "rootNode": 0,
+            "strings": ["div", "button", "click", "Retry", "message", "kind"],
+            "constants": [null, "Retry"],
+            "nodes": [
+                {"op": "element", "tag": 0, "parent": null, "children": [1, 2]},
+                {"op": "text", "text": 0, "parent": 0},
+                {"op": "element", "tag": 1, "parent": 0, "children": [3]},
+                {"op": "text", "text": 2, "parent": 2}
+            ],
+            "texts": [{"binding": 0}, {"binding": 1}, {"value": "Retry"}],
+            "bindings": [
+                {"target": 1, "sink": "text", "expression": 1},
+                {"target": 2, "sink": "text", "expression": 2}
+            ],
+            "propPrograms": [],
+            "events": [{"target": 2, "type": 2, "action": 0}],
+            "inputs": [],
+            "hostSlots": [],
+            "stateSlots": [{"initialExpression": 0, "frameSlot": 0}],
+            "parameters": [],
+            "expressions": [
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadState", "state": 0}, {"op": "field", "field": 4}, {"op": "return"}]},
+                {"instructions": [{"op": "loadState", "state": 0}, {"op": "field", "field": 5}, {"op": "return"}]}
+            ],
+            "actions": [{"routeRetry": true, "instructions": [{"op": "return"}]}],
+            "loops": [],
+            "dependencyEdges": [],
+            "routeErrorState": 0,
+            "routeOutlets": []
+        }]
+    })
+}
+
+fn loader_plain_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "loader-transfer.tsx#Next",
+            "rootNode": 0,
+            "strings": ["p"],
+            "constants": [],
+            "nodes": [
+                {"op": "element", "tag": 0, "parent": null, "children": [1]},
+                {"op": "text", "text": 0, "parent": 0}
+            ],
+            "texts": [{"value": "next-page"}],
+            "bindings": [],
+            "propPrograms": [],
+            "events": [],
+            "inputs": [],
+            "hostSlots": [],
+            "stateSlots": [],
+            "parameters": [],
+            "expressions": [],
+            "actions": [],
+            "loops": [],
+            "dependencyEdges": [],
+            "routeOutlets": []
+        }]
+    })
+}
+
+fn loader_manifest(error_graph: bool) -> JsValue {
+    let mut page = serde_json::json!({
+        "id": "page",
+        "path": "todos",
+        "graphId": "loader-transfer.tsx#Page",
+        "outletId": "main",
+        "loaderAction": 0
+    });
+    if error_graph {
+        page["errorGraphId"] = serde_json::json!("loader-transfer.tsx#Error");
+    }
+    serde_wasm_bindgen::to_value(&serde_json::json!({
+        "version": 3,
+        "revision": "rev-1",
+        "rootGraphId": "loader-transfer.tsx#Root",
+        "routes": [
+            page,
+            {"id": "next", "path": "next", "graphId": "loader-transfer.tsx#Next", "outletId": "main"}
+        ]
+    }))
+    .unwrap()
+}
+
+fn register_loader_graphs(runtime: &PlecRuntime) {
+    runtime
+        .register_graph(
+            "loader-transfer.tsx#Root".into(),
+            serde_wasm_bindgen::to_value(&loader_layout_artifact()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "loader-transfer.tsx#Page".into(),
+            serde_wasm_bindgen::to_value(&loader_page_artifact()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "loader-transfer.tsx#Error".into(),
+            serde_wasm_bindgen::to_value(&loader_error_artifact()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "loader-transfer.tsx#Next".into(),
+            serde_wasm_bindgen::to_value(&loader_plain_artifact()).unwrap(),
+        )
+        .unwrap();
+}
+
+/// The server HTML for the loader route: layout marker plus the page's
+/// single bound text under the `root/outlet:main` instance path.
+fn loader_route_html(server_text: &str) -> String {
+    format!(
+        "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
+         <!--plec:text:root:2-->layout</p>\
+         <p data-plec-node=\"root/outlet:main/node:0\">\
+         <!--plec:text:root/outlet:main:1-->{server_text}</p></main>"
+    )
+}
+
+fn loader_route_error_html(message: &str) -> String {
+    format!(
+        "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
+         <!--plec:text:root:2-->layout</p>\
+         <div data-plec-node=\"root/outlet:main/node:0\">\
+         <!--plec:text:root/outlet:main:1-->{message}\
+         <button data-plec-node=\"root/outlet:main/node:2\">\
+         <!--plec:text:root/outlet:main:3-->Retry</button></div></main>"
+    )
+}
+
+fn start_loader_transfer(
+    runtime: &PlecRuntime,
+    root: &Element,
+    html: &str,
+    phase: &str,
+    loaders: serde_json::Value,
+) -> Result<(), JsValue> {
+    root.set_inner_html(html);
+    register_loader_graphs(runtime);
+    let snapshot = serde_wasm_bindgen::to_value(&serde_json::json!({
+        "version": 1,
+        "revision": "rev-1",
+        "routes": [{"routeId": "page", "params": {}, "phase": phase}],
+        "public": {"location": "/todos", "exports": {}},
+        "loaders": loaders,
+        "structure": {"graphs": {"root/outlet:main": {"graphId": "loader-transfer.tsx#Root"}}}
+    }))
+    .unwrap();
+    runtime.start_adopt_snapshot(
+        root.clone(),
+        loader_manifest(phase == "error").into(),
+        snapshot,
+    )
+}
+
+fn loader_route_text(root: &Element) -> String {
+    root.text_content().unwrap_or_default()
+}
+
+#[wasm_bindgen_test]
+fn loader_snapshot_import_resumes_without_client_refetch() {
+    let _location = reset_browser_location_to("/todos");
+    // An empty fetch queue makes any client loader refetch fail loudly, so
+    // the imported value rendering proves the loader never re-ran.
+    let _fetch = install_plec_fetch_queue(r#"[]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_loader_transfer(
+        &runtime,
+        &root,
+        &loader_route_html("loaded-value"),
+        "active",
+        serde_json::json!([{
+            "graphId": "loader-transfer.tsx#Page",
+            "action": 0,
+            "state": {"kind": "resolved", "value": "loaded-value"}
+        }]),
+    )
+    .unwrap();
+    assert_eq!(loader_route_text(&root), "layoutloaded-value");
+    assert_eq!(runtime.ssr_text_divergences(), 0);
+}
+
+#[wasm_bindgen_test]
+fn loader_snapshot_import_without_outcome_fails_closed() {
+    let _location = reset_browser_location_to("/todos");
+    let snapshot = start_loader_transfer(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &loader_route_html("x"),
+        "active",
+        serde_json::json!([]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        snapshot.as_string().unwrap_or_default(),
+        "mismatch:ssr-route-chain:phase:0:loader"
+    );
+}
+
+#[wasm_bindgen_test]
+fn legacy_loader_adoption_without_snapshot_fails_closed() {
+    let _location = reset_browser_location_to("/todos");
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    root.set_inner_html(&loader_route_html("x"));
+    register_loader_graphs(&runtime);
+    let error = runtime
+        .start_adopt(root.clone(), loader_manifest(true).into())
+        .unwrap_err();
+    assert!(error
+        .as_string()
+        .unwrap_or_default()
+        .starts_with("mismatch:ssr-loader:loader-transfer.tsx#Page#action:0"));
+}
+
+#[wasm_bindgen_test(async)]
+async fn rejected_loader_snapshot_restores_error_phase_and_retry_runs_loader() {
+    let _location = reset_browser_location_to("/todos");
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_loader_transfer(
+        &runtime,
+        &root,
+        &loader_route_error_html("fetch failed"),
+        "error",
+        serde_json::json!([{
+            "graphId": "loader-transfer.tsx#Page",
+            "action": 0,
+            "state": {"kind": "rejected", "message": "fetch failed"}
+        }]),
+    )
+    .unwrap();
+    // The recorded error restored the error phase from the snapshot instead
+    // of refetching: the imported message is what the error graph renders.
+    assert!(loader_route_text(&root).contains("fetch failed"));
+
+    // Retry from the restored phase re-enters the loader and succeeds.
+    let _fetch = install_plec_fetch_queue(r#"[{"body":"\"retry-value\""}]"#);
+    click_fetch(&root);
+    settle_fetch().await;
+    assert!(loader_route_text(&root).contains("retry-value"));
+}
+
+#[wasm_bindgen_test(async)]
+async fn adopted_loader_route_runs_loader_on_fresh_navigation() {
+    let _location = reset_browser_location_to("/todos");
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_loader_transfer(
+        &runtime,
+        &root,
+        &loader_route_html("loaded-value"),
+        "active",
+        serde_json::json!([{
+            "graphId": "loader-transfer.tsx#Page",
+            "action": 0,
+            "state": {"kind": "resolved", "value": "loaded-value"}
+        }]),
+    )
+    .unwrap();
+    assert!(loader_route_text(&root).contains("loaded-value"));
+
+    // Away to a plain route, then back: the fresh page instance is not the
+    // imported one, so its loader executes normally.
+    runtime.navigate("/next".into(), false).unwrap();
+    assert!(loader_route_text(&root).contains("next-page"));
+    let _fetch = install_plec_fetch_queue(r#"[{"body":"\"second-value\""}]"#);
+    runtime.navigate("/todos".into(), false).unwrap();
+    settle_fetch().await;
+    assert!(loader_route_text(&root).contains("second-value"));
+}

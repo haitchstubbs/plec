@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "yarn dev:rebuild",
+    "build:plec": "plec build src/app.tsx --out-dir dist --title \"Plec fullstack playground\"",
+    "build:css": "tailwindcss -i src/styles.css -o dist/public/assets/styles.css",
     "dev:rebuild": "yarn check:no-react && yarn --cwd ../.. exec turbo run build --filter=@wasm-runtime/fullstack && node --watch dist/server.mjs",
-    "build": "yarn check:no-react && node scripts/build.mjs",
+    "build": "yarn check:no-react && yarn build:plec && node scripts/build.mjs && yarn build:css",
     "bench:navigation": "node scripts/bench-navigation.mjs",
     "bench:navigation:smoke": "node scripts/bench-navigation-smoke.mjs",
     "test:acceptance": "yarn --cwd ../.. exec turbo run build --filter=@wasm-runtime/fullstack && node scripts/acceptance-todos.mjs",
@@ -24,7 +26,7 @@
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.3",
     "esbuild": "^0.27.4",
-    "playwright": "^1.55.0",
+    "playwright": "1.62.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vitest": "^3.2.4"

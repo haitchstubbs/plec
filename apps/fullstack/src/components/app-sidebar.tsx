@@ -1,10 +1,13 @@
 import { CircleHelp } from '@wasm-runtime/lucide-plec/icons/circle-help';
 import { House } from '@wasm-runtime/lucide-plec/icons/house';
 import { ListChecks } from '@wasm-runtime/lucide-plec/icons/list-checks';
+import { NotebookText } from '@wasm-runtime/lucide-plec/icons/notebook-text';
 import { Workflow } from '@wasm-runtime/lucide-plec/icons/workflow';
+import { Beaker } from '@wasm-runtime/lucide-plec/icons/beaker';
 import {
   Link as PlecLink,
   useHostRef,
+  useLocation,
   useReaction,
   useRef,
 } from 'plec';
@@ -14,42 +17,42 @@ const NavLink = ({
   Icon,
   children,
   onCloseMobile,
-  pathname,
 }: {
   href: string;
   Icon:
     | typeof House
     | typeof CircleHelp
     | typeof ListChecks
+    | typeof NotebookText
     | typeof Workflow
-    | typeof TestIcon;
-  pathname: string;
+    | typeof Beaker;
   onCloseMobile?: () => void;
   children?: unknown;
-}) => (
-  <PlecLink
-    to={href}
-    onClick={onCloseMobile}
-    aria-current={pathname === href ? 'page' : undefined}
-    className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium no-underline transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-sidebar-accent-foreground md:data-[collapsed=true]:justify-center md:data-[collapsed=true]:px-2"
-  >
-    <Icon className="size-4 shrink-0" />
-    <span className="md:data-[collapsed=true]:hidden">{children}</span>
-  </PlecLink>
-);
+}) => {
+  const location = useLocation();
+  return (
+    <PlecLink
+      to={href}
+      onClick={onCloseMobile}
+      aria-current={location.pathname === href ? 'page' : undefined}
+      className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium no-underline transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-sidebar-accent-foreground md:data-[collapsed=true]:justify-center md:data-[collapsed=true]:px-2"
+    >
+      <Icon className="size-4 shrink-0" />
+      <span className="md:data-[collapsed=true]:hidden">{children}</span>
+    </PlecLink>
+  );
+};
 
 export function AppSidebar({
   collapsed,
   mobileOpen,
   onMobileToggle,
   onCloseMobile,
-  pathname,
 }: {
   collapsed: boolean;
   mobileOpen: boolean;
   onMobileToggle(): void;
   onCloseMobile(): void;
-  pathname: string;
 }) {
   const panelRef = useHostRef<HTMLElement>();
   const previousFocus = useRef<Element | null>(null);
@@ -58,6 +61,7 @@ export function AppSidebar({
       previousFocus.current = document.activeElement;
       panelRef.current?.focus();
     } else {
+      // @ts-ignore: previousFocus.current might not be an HTMLElement
       previousFocus.current?.focus();
     }
   }, [mobileOpen]);
@@ -110,7 +114,6 @@ export function AppSidebar({
           <NavLink
             href="/"
             Icon={House}
-            pathname={pathname}
             onCloseMobile={onCloseMobile}
           >
             Home
@@ -118,7 +121,6 @@ export function AppSidebar({
           <NavLink
             href="/about"
             Icon={CircleHelp}
-            pathname={pathname}
             onCloseMobile={onCloseMobile}
           >
             About
@@ -126,15 +128,20 @@ export function AppSidebar({
           <NavLink
             href="/todos"
             Icon={ListChecks}
-            pathname={pathname}
             onCloseMobile={onCloseMobile}
           >
             Todos
           </NavLink>
           <NavLink
+            href="/notes"
+            Icon={NotebookText}
+            onCloseMobile={onCloseMobile}
+          >
+            Notes
+          </NavLink>
+          <NavLink
             href="/stress"
-            Icon={TestIcon}
-            pathname={pathname}
+            Icon={Beaker}
             onCloseMobile={onCloseMobile}
           >
             Runtime stress
@@ -144,16 +151,3 @@ export function AppSidebar({
     </div>
   );
 }
-
-const TestIcon = (props: Record<string, unknown>) => (
-  <svg
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={2}
-    {...props}
-  >
-    <circle cx="12" cy="12" r="10" />
-    <path d="M12 17h.01" />
-  </svg>
-);

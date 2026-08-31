@@ -1,23 +1,14 @@
 // scripts/browser-harness.mjs
 
-import { accessSync, constants, readdirSync } from 'node:fs';
+import { accessSync, constants } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
-import os from 'node:os';
 import path from 'node:path';
+import { findPlaywrightChromium } from './utils.js';
 
-const repoRoot = path.resolve(
-  import.meta.dirname,
-  '..',
-);
+const repoRoot = path.resolve(import.meta.dirname, '..');
 
-const runtimeCrate = path.join(
-  repoRoot,
-  'packages',
-  'plec-runtime',
-  'crates',
-  'runtime',
-);
+const runtimeCrate = path.join(repoRoot, 'crates', 'plec-runtime');
 
 function chromeDriverTarget() {
   if (process.platform === 'win32') {
@@ -66,39 +57,15 @@ function resolveChromeDriver() {
     return path.resolve(process.env.CHROMEDRIVER);
   }
 
-  const { directory, executable } =
-    chromeDriverTarget();
+  const { directory, executable } = chromeDriverTarget();
 
-  return path.join(
-    repoRoot,
-    directory,
-    executable,
-  );
+  return path.join(repoRoot, '.tools', directory, executable);
 }
 
 function resolveBrowserExecutable() {
-  if (process.env.PLEC_CHROME_EXECUTABLE) {
-    return process.env.PLEC_CHROME_EXECUTABLE;
-  }
-  // The setup script provisions ChromeDriver without a browser; the only
-  // Chrome on this machine comes from the Playwright cache. Pick the newest
-  // installed Chromium so the driver can be matched to its major version.
-  const cache = path.join(
-    os.homedir(),
-    '.cache',
-    'ms-playwright',
-  );
-  try {
-    const newest = readdirSync(cache)
-      .filter((entry) => /^chromium-\d+$/.test(entry))
-      .sort()
-      .pop();
-    const binary = path.join(cache, newest, 'chrome-linux64', 'chrome');
-    accessSync(binary, constants.X_OK);
-    return binary;
-  } catch {
-    return undefined;
-  }
+  // The setup script provisions ChromeDriver to match the Playwright-managed
+  // Chromium; reuse the same lookup so harness and setup agree on the browser.
+  return findPlaywrightChromium();
 }
 
 function majorVersion(binary, versionFlag) {
@@ -108,45 +75,45 @@ function majorVersion(binary, versionFlag) {
 
 const chromeDriver = resolveChromeDriver();
 const browserExecutable = resolveBrowserExecutable();
-const driverExecutable = (() => {
-  const browserMajor = browserExecutable
-    ? majorVersion(browserExecutable, '--version')
-    : undefined;
-  const driverMajor = majorVersion(chromeDriver, '--version');
-  if (!browserMajor || browserMajor === driverMajor) return chromeDriver;
-  // setup.mjs installs the stable driver; a browser from a different release
-  // channel needs its matching major from the same tooling directory.
-  const matched = path.join(
-    path.dirname(chromeDriver),
-    `chromedriver-${browserMajor}`,
-  );
-  try {
-    accessSync(matched, constants.X_OK);
-    return matched;
-  } catch {
-    return chromeDriver;
-  }
-})();
 
 try {
-  accessSync(driverExecutable, constants.X_OK);
+  accessSync(chromeDriver, constants.X_OK);
 } catch {
   console.error(
-    `ChromeDriver is not installed or executable:\n  ${driverExecutable}`,
+    `ChromeDriver is not installed or executable:\n  ${chromeDriver}`,
   );
   console.error(
-    '\nRun `yarn setup` to install the required browser tooling.',
+    '\nRun `yarn install:build-tools` to install the required browser tooling.',
   );
 
   process.exitCode = 1;
 }
 
 if (!process.exitCode) {
-  const driverDir = path.dirname(driverExecutable);
+  const driverMajor = majorVersion(chromeDriver, '--version');
+  const browserMajor = browserExecutable
+    ? majorVersion(browserExecutable, '--version')
+    : undefined;
 
-  console.log(
-    `Using ChromeDriver: ${driverExecutable}`,
-  );
+  // A mismatched driver fails deep inside wasm-pack with an opaque session
+  // error; fail here with the versions and the fix instead.
+  if (driverMajor && browserMajor && driverMajor !== browserMajor) {
+    console.error(
+      `ChromeDriver ${driverMajor}.x does not match Chrome ${browserMajor}.x:\n` +
+        `  driver:  ${chromeDriver}\n` +
+        `  browser: ${browserExecutable}\n` +
+        `\nRun \`yarn install:build-tools\` to provision a matching ChromeDriver,\n` +
+        `or point CHROMEDRIVER at a ChromeDriver built for Chrome ${browserMajor}.`,
+    );
+
+    process.exitCode = 1;
+  }
+}
+
+if (!process.exitCode) {
+  const driverDir = path.dirname(chromeDriver);
+
+  console.log(`Using ChromeDriver: ${chromeDriver}`);
   if (browserExecutable) {
     console.log(`Using Chrome browser: ${browserExecutable}`);
   }
@@ -186,14 +153,11 @@ if (!process.exitCode) {
 
         // wasm-bindgen/wasm-pack can locate the driver
         // either through CHROMEDRIVER or PATH.
-        CHROMEDRIVER: driverExecutable,
+        CHROMEDRIVER: chromeDriver,
         ...(webdriverJson
           ? { WASM_BINDGEN_TEST_WEBDRIVER_JSON: webdriverJson }
           : {}),
-        PATH: [
-          driverDir,
-          process.env.PATH,
-        ]
+        PATH: [driverDir, process.env.PATH]
           .filter(Boolean)
           .join(path.delimiter),
       },
@@ -201,9 +165,7 @@ if (!process.exitCode) {
   );
 
   if (result.error) {
-    console.error(
-      `Failed to run wasm-pack: ${result.error.message}`,
-    );
+    console.error(`Failed to run wasm-pack: ${result.error.message}`);
 
     process.exitCode = 1;
   } else {

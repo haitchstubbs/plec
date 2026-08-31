@@ -62,12 +62,8 @@ async function collect() {
   run('yarn', ['workspace', 'plec-runtime', 'build:wasm']);
   run('yarn', ['workspace', '@wasm-runtime/fullstack', 'build']);
   const artifacts = await Promise.all([
-    bytes(
-      'packages/plec-runtime/crates/runtime/dist/runtime/runtime_bg.wasm',
-    ),
-    bytes(
-      'packages/plec-runtime/crates/runtime/dist/runtime/runtime.js',
-    ),
+    bytes('crates/plec-runtime/dist/runtime/runtime_bg.wasm'),
+    bytes('crates/plec-runtime/dist/runtime/runtime.js'),
     bytes('apps/fullstack/dist/public/runtime/runtime_bg.wasm'),
     bytes('apps/fullstack/dist/public/runtime/runtime.js'),
     bytes('apps/fullstack/dist/public/route-manifest.json'),

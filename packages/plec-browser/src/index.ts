@@ -574,26 +574,43 @@ export async function startPlecRouter(
     });
   } else if (bootstrap) {
     const expectedRevision = (manifest as any).revision as string | undefined;
-    const route = (manifest as any).routes?.find(
-      (entry: any) => entry.id === bootstrap.routeId,
+    // The server-published route chain is the adoption cause. A legacy v1
+    // bootstrap degrades to the single route id it carries. The gate only
+    // checks chain shape; whether the chain matches the current URL is the
+    // WASM runtime's cross-validation decision.
+    const chain: unknown = bootstrap.kind === 'snapshot'
+      ? (bootstrap.snapshot as any).routes
+      : bootstrap.routeId
+        ? [{ routeId: bootstrap.routeId }]
+        : [];
+    const chainDetail = validateSsrRouteChain(
+      (manifest as any).routes ?? [],
+      chain,
     );
-    const currentPath = window.location.pathname.replace(/^\/+/, '');
-    const routeMatches = route && (route.path === currentPath || (route.path === '' && currentPath === '') || route.path === '*');
     if (expectedRevision !== bootstrap.revision) {
       emitAdoptionDiagnostic(options, {
         outcome: 'fallback', expectedRevision, observedRevision: bootstrap.revision,
         routeId: bootstrap.routeId, mismatchCodes: ['stale-revision'],
       });
-    } else if (!routeMatches) {
+    } else if (chainDetail !== null) {
       emitAdoptionDiagnostic(options, {
         outcome: 'fallback', expectedRevision, observedRevision: bootstrap.revision,
-        routeId: bootstrap.routeId, mismatchCodes: ['route-mismatch'],
+        routeId: bootstrap.routeId,
+        mismatchCodes: [`mismatch:ssr-route-chain:${chainDetail}`],
       });
     } else {
       try {
-        // The initial route graph is needed before WASM can reconstruct the
-        // existing outlet; later route graphs remain lazy.
-        if (!compiled) await loadGraph(route.graphId);
+        // Every chain graph must be registered before WASM claims DOM; graphs
+        // outside the initial chain stay lazy.
+        if (!compiled) {
+          const routeIds = (chain as any[]).map((entry) => entry.routeId);
+          for (const routeId of routeIds) {
+            const entry = (manifest as any).routes?.find(
+              (candidate: any) => candidate.id === routeId,
+            );
+            if (entry?.graphId) await loadGraph(entry.graphId);
+          }
+        }
         const snapshotImported = bootstrap.kind === 'snapshot';
         if (snapshotImported) {
           runtime.start_adopt_snapshot(
@@ -749,6 +766,41 @@ export function readSsrBootstrap(): SsrBootstrap {
 function adoptionMismatchCode(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/^Error:\s*/, '') || 'adoption-error';
+}
+
+/** Structural validation of the server-published route chain. Returns a
+ * mismatch detail string, or null when the chain is well-formed and every
+ * entry references a manifest route. This is deliberately weaker than the
+ * WASM cross-validation: the gate never re-matches routes against the URL. */
+export function validateSsrRouteChain(
+  routes: unknown,
+  chain: unknown,
+): string | null {
+  if (!Array.isArray(chain) || chain.length === 0) return 'empty';
+  const known = Array.isArray(routes)
+    ? new Set(
+        routes.map((entry: any) => entry?.id).filter((id) => typeof id === 'string'),
+      )
+    : new Set<string>();
+  for (const [index, entry] of chain.entries()) {
+    const routeId = (entry as any)?.routeId;
+    if (typeof routeId !== 'string' || routeId.length === 0)
+      return `instance:${index}`;
+    if (!known.has(routeId)) return `unknown-route:${routeId}`;
+    const params = (entry as any)?.params;
+    if (
+      params !== undefined &&
+      (params === null ||
+        typeof params !== 'object' ||
+        Array.isArray(params) ||
+        Object.values(params).some((value) => typeof value !== 'string'))
+    )
+      return `params:${index}`;
+    const phase = (entry as any)?.phase;
+    if (phase !== undefined && !['active', 'pending', 'error'].includes(phase))
+      return `phase:${index}`;
+  }
+  return null;
 }
 
 function emitAdoptionDiagnostic(

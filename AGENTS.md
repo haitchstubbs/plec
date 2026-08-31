@@ -56,7 +56,7 @@ packages/
   plec/                 Framework runtime: jsx-runtime, state hooks, router
   plec-ir/              Shared IR schema (Zod)
   plec-browser/         Browser glue: startPlecRouter, graph loading
-  plec-runtime/         Rust -> WASM runtime (crate at crates/runtime)
+  plec-runtime/         Rust -> WASM runtime (crate at crates/plec-runtime)
   ui/                   React/shadcn UI kit
   lucide-plec/          Generated Lucide icon components for Plec
 
@@ -68,8 +68,7 @@ crates/                 Rust compiler workspace (the compiler authority)
 
 The build integration described below for `packages/vite-plugin` is
 currently realized by `apps/fullstack/scripts/build.mjs` (esbuild + the
-`plec-route-manifest` binary); no vite plugin exists. The runtime crate is
-`packages/plec-runtime/crates/runtime`, a member of the root Cargo
+`plec-route-manifest` binary); no vite plugin exists. The runtime crate is `crates/plec-runtime`, a member of the root Cargo
 workspace alongside `crates/*`.
 
 Responsibilities:

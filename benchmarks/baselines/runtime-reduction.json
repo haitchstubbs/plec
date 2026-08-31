@@ -18,13 +18,13 @@
   },
   "artifacts": [
     {
-      "path": "packages/plec-runtime/crates/runtime/dist/runtime/runtime_bg.wasm",
+      "path": "crates/plec-runtime/dist/runtime/runtime_bg.wasm",
       "raw": 724862,
       "gzip": 236289,
       "brotliQ11": 173641
     },
     {
-      "path": "packages/plec-runtime/crates/runtime/dist/runtime/runtime.js",
+      "path": "crates/plec-runtime/dist/runtime/runtime.js",
       "raw": 49203,
       "gzip": 8962,
       "brotliQ11": 7519

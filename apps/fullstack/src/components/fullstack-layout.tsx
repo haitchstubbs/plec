@@ -40,16 +40,17 @@ export function FullstackLayout() {
         ? 'About'
         : location.pathname === '/todos'
           ? 'Todos'
-          : location.pathname === '/stress'
-            ? 'Runtime stress'
-          : 'Not found';
+          : location.pathname === '/notes'
+            ? 'Notes'
+            : location.pathname === '/stress'
+              ? 'Runtime stress'
+            : 'Not found';
 
   return (
     <div className="min-h-svh md:[&_.plec-sidebar-inset]:ml-[17rem] md:has-[[data-collapsed=true]]:[&_.plec-sidebar-inset]:ml-16">
       <AppSidebar
         collapsed={collapsed}
         mobileOpen={mobileOpen}
-        pathname={location.pathname}
         onMobileToggle={() => {
           setMobileOpen(!mobileOpen);
         }}

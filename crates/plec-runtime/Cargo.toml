@@ -1,0 +1,30 @@
+[package]
+name = "plec-runtime"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["router", "fetch"]
+router = []
+fetch = ["dep:wasm-bindgen-futures", "web-sys/AbortController", "web-sys/AbortSignal", "web-sys/Headers", "web-sys/Request", "web-sys/RequestInit", "web-sys/Response"]
+
+# The benchmark already instruments unoptimised runtime behaviour. Avoid the
+# external wasm-opt binary so builds remain reproducible on locked-down hosts.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[dependencies]
+plec-ir = { path = "../plec-ir" }
+js-sys = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde-wasm-bindgen = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+web-sys = { workspace = true }
+
+[dev-dependencies]
+wasm-bindgen-test = { workspace = true }

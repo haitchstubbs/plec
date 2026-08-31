@@ -181,6 +181,7 @@ pub(crate) struct TypedRuntime {
     /// from the server-rendered text, and that divergence is counted instead
     /// of being treated as an adoption failure.
     pub(crate) ssr_imported: bool,
+    pub(crate) allow_unrecorded_ssr_conditionals: bool,
 }
 
 /** Mutable typed graph ownership. Definitions live in `typed_registry`; this
@@ -260,6 +261,10 @@ impl PlecRuntime {
             typed_host_inputs: Rc::new(RefCell::new(HashMap::new())),
             typed_ssr_host_inputs: Rc::new(RefCell::new(HashSet::new())),
             typed_ssr_imported: Rc::new(RefCell::new(false)),
+            typed_ssr_route_chain: Rc::new(RefCell::new(None)),
+            typed_ssr_loaders: Rc::new(RefCell::new(HashMap::new())),
+            typed_ssr_branches: Rc::new(RefCell::new(HashMap::new())),
+            typed_ssr_loops: Rc::new(RefCell::new(HashMap::new())),
             typed_components: Rc::new(RefCell::new(None)),
             snapshot_inputs: Rc::new(RefCell::new(HashMap::new())),
             cookie_policy: Rc::new(RefCell::new(None)),
@@ -488,6 +493,7 @@ impl PlecRuntime {
                 runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
                 runtime.graph_generation = self.next_typed_generation();
                 if let Some(adoption) = request.adoption.as_ref() {
+                    runtime.allow_unrecorded_ssr_conditionals = true;
                     runtime.adopt(
                         adoption.root.clone(),
                         TypedAdoptionScope::Range {
@@ -495,6 +501,8 @@ impl PlecRuntime {
                             end: request.end.clone(),
                         },
                         &adoption.path,
+                        &HashMap::new(),
+                        &HashMap::new(),
                     )?;
                 } else {
                     runtime.mount_before(&request.end)?;
@@ -754,6 +762,7 @@ impl TypedRuntime {
             #[cfg(feature = "fetch")]
             abort_controllers: HashMap::new(),
             ssr_imported: false,
+            allow_unrecorded_ssr_conditionals: false,
         })
     }
 }
@@ -878,6 +887,8 @@ impl TypedRuntime {
         root: Element,
         scope: TypedAdoptionScope,
         path: &str,
+        branches: &HashMap<usize, plec_ir::SsrSelectedBranch>,
+        loops: &HashMap<usize, Vec<String>>,
     ) -> Result<MountMetrics, JsValue> {
         self.invalidate_fetches();
         self.clear_listeners();
@@ -889,7 +900,19 @@ impl TypedRuntime {
         self.slot_requests.clear();
 
         let markers = TypedAdoptionIndex::build(scope)?;
+        // Handles below an unselected conditional branch have no
+        // server-rendered DOM: the walk must not try to claim them.
+        let mut skipped: HashSet<usize> = HashSet::new();
+        // A row template is stored in the same flat node table as its loop
+        // anchor and may precede that anchor. Precompute all template handles
+        // so the outer graph walk never claims one with an unscoped path.
+        for loop_def in &self.app.loops {
+            self.collect_branch_handles(loop_def.row_template, &mut skipped);
+        }
         for (index, node) in self.app.nodes.clone().into_iter().enumerate() {
+            if skipped.contains(&index) {
+                continue;
+            }
             match node {
                 TypedNode::Element { tag, host_ref, .. } => {
                     let marker = format!("{path}/node:{index}");
@@ -943,22 +966,23 @@ impl TypedRuntime {
                     };
                     self.nodes.insert(index, text);
                 }
-                TypedNode::Component { component, props, children, .. } => {
+                TypedNode::Component {
+                    component,
+                    props,
+                    children,
+                    ..
+                } => {
                     self.queue_adopted_component(
-                        index,
-                        component,
-                        props,
-                        children,
-                        &root,
-                        &markers,
-                        path,
+                        index, component, props, children, &root, &markers, path, None, 0, None,
                     )?;
                 }
                 TypedNode::Slot { .. } => {
                     let start = markers
                         .get(&format!("plec:slot:{path}:{index}"))
                         .cloned()
-                        .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-slot:{path}:{index}")))?;
+                        .ok_or_else(|| {
+                            JsValue::from_str(&format!("missing:ssr-slot:{path}:{index}"))
+                        })?;
                     let end = markers
                         .get(&format!("plec:slot-end:{path}:{index}"))
                         .cloned()
@@ -968,14 +992,21 @@ impl TypedRuntime {
                     self.nodes.insert(index, start.clone());
                     self.slot_requests.push(TypedSlotRequest { start, end });
                 }
-                // These regions require an SSR row/branch ownership record,
-                // which this first adoption slice has not emitted yet.  Fail
-                // loudly so dev/test callers see a structured fallback.
-                TypedNode::Loop { .. } => return Err(JsValue::from_str("unsupported:ssr-loop")),
-                TypedNode::Conditional { .. } => {
-                    return Err(JsValue::from_str("unsupported:ssr-conditional"))
+                TypedNode::Loop { r#loop, .. } => {
+                    let keys = loops.get(&index).ok_or_else(|| {
+                        JsValue::from_str(&format!("missing:ssr-loop:{path}:{index}"))
+                    })?;
+                    self.adopt_loop_rows(index, r#loop, path, keys, &root, &markers, &mut skipped)?;
                 }
-                TypedNode::DynamicComponent { prop, props, children, .. } => {
+                TypedNode::Conditional { .. } => {
+                    self.adopt_conditional_region(index, path, branches, &markers, &mut skipped)?;
+                }
+                TypedNode::DynamicComponent {
+                    prop,
+                    props,
+                    children,
+                    ..
+                } => {
                     let component = self
                         .app
                         .runtime_component_props
@@ -983,23 +1014,613 @@ impl TypedRuntime {
                         .and_then(|value| *value)
                         .ok_or_else(|| JsValue::from_str("missing:ssr-dynamic-component"))?;
                     self.queue_adopted_component(
-                        index,
-                        component,
-                        props,
-                        children,
-                        &root,
-                        &markers,
-                        path,
+                        index, component, props, children, &root, &markers, path, None, 0, None,
                     )?;
                 }
             }
         }
         self.root = Some(root);
+        // Adopted regions own the branch DOM the walk just claimed. Branch
+        // node handles resolve their markers like any other node, so the
+        // region's node map is collected after the walk completes, then
+        // listeners attach under the conditional owner exactly as a fresh
+        // reconcile would.
+        let adopted_regions = self
+            .conditionals
+            .iter()
+            .filter(|(_, region)| region.nodes.is_empty())
+            .map(|(conditional, region)| (*conditional, region.selected, region.generation))
+            .collect::<Vec<_>>();
+        for (conditional, selected, generation) in adopted_regions {
+            let mut nodes = HashMap::new();
+            if let Some(handle) = selected {
+                self.collect_branch_nodes(handle, &mut nodes);
+            }
+            if let Some(region) = self.conditionals.get_mut(&conditional) {
+                region.nodes = nodes;
+            }
+            let owner = TypedListenerOwner::Conditional {
+                conditional,
+                generation,
+                row: None,
+            };
+            let claimed = self
+                .conditionals
+                .get(&conditional)
+                .map(|region| {
+                    region
+                        .nodes
+                        .iter()
+                        .map(|(target, node)| (*target, node.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            for (target, node) in claimed {
+                self.queue_listener(target, node, owner.clone());
+            }
+        }
         self.apply_static_bindings()?;
         self.queue_static_listeners();
         Ok(MountMetrics {
             bindings: self.app.bindings.len() as u32,
+            row_count: self.loops.values().map(|rows| rows.order.len() as u32).sum(),
             ..Default::default()
+        })
+    }
+
+    fn ssr_row_path(path: &str, loop_index: usize, key: &str) -> String {
+        format!(
+            "{path}/loop:{loop_index}/key:{}",
+            key.replace('%', "%25").replace('/', "%2F")
+        )
+    }
+
+    fn adopt_loop_rows(
+        &mut self,
+        loop_node: usize,
+        loop_index: usize,
+        path: &str,
+        expected: &[String],
+        root: &Element,
+        markers: &TypedAdoptionIndex,
+        skipped: &mut HashSet<usize>,
+    ) -> Result<usize, JsValue> {
+        let loop_def = self
+            .app
+            .loops
+            .get(loop_index)
+            .ok_or_else(|| JsValue::from_str("loop handle out of range"))?
+            .clone();
+        let values = typed_eval(&self.app, loop_def.source_expression, &self.states, None, 0)?;
+        let rows = values
+            .array()
+            .ok_or_else(|| JsValue::from_str("LOOP_SOURCE_NOT_ARRAY"))?;
+        let mut projection = Vec::new();
+        let mut computed = Vec::new();
+        for (index, value) in rows.iter().cloned().enumerate() {
+            let row = value
+                .record()
+                .cloned()
+                .ok_or_else(|| JsValue::from_str("LOOP_ROW_NOT_OBJECT"))?;
+            let key = typed_value_string(&typed_eval(
+                &self.app,
+                loop_def.key_expression,
+                &self.states,
+                Some(&row),
+                index,
+            )?);
+            if computed.iter().any(|existing| existing == &key) {
+                return Err(JsValue::from_str(&format!("duplicate:ssr-row-key:{key}")));
+            }
+            computed.push(key.clone());
+            projection.push((key, row));
+        }
+        for key in expected {
+            if !computed.iter().any(|candidate| candidate == key) {
+                return Err(JsValue::from_str(&format!("missing:ssr-row:{key}")));
+            }
+        }
+        for key in &computed {
+            if !expected.iter().any(|candidate| candidate == key) {
+                return Err(JsValue::from_str(&format!("extra:ssr-row:{key}")));
+            }
+        }
+        if computed != expected {
+            return Err(JsValue::from_str(&format!(
+                "mismatch:ssr-row-order:{path}:{loop_node}"
+            )));
+        }
+
+        // Template handles are not top-level mounted nodes. Keep the outer
+        // adoption walk from trying to claim them with the unscoped path.
+        self.collect_branch_handles(loop_def.row_template, skipped);
+        let parent_handle = match self.app.nodes.get(loop_node) {
+            Some(TypedNode::Loop { parent, .. }) => parent
+                .ok_or_else(|| JsValue::from_str("loop parent missing"))?,
+            _ => return Err(JsValue::from_str("loop node expected")),
+        };
+        let parent = self
+            .nodes
+            .get(&parent_handle)
+            .cloned()
+            .ok_or_else(|| JsValue::from_str("loop parent not adopted"))?;
+        let template = loop_def.row_template;
+        let root_kind = self
+            .app
+            .nodes
+            .get(template)
+            .cloned()
+            .ok_or_else(|| JsValue::from_str("row template handle out of range"))?;
+        let actual_keys = self.row_root_keys(path, loop_node, template, &root_kind, markers);
+        let mut seen_dom = HashSet::new();
+        for encoded in actual_keys {
+            let key = Self::decode_ssr_segment(&encoded);
+            if !seen_dom.insert(key.clone()) {
+                return Err(JsValue::from_str(&format!("duplicate:ssr-row-key:{key}")));
+            }
+            if !expected.iter().any(|candidate| candidate == &key) {
+                return Err(JsValue::from_str(&format!("extra:ssr-row:{key}")));
+            }
+        }
+        let mut claimed_roots = Vec::new();
+        for (row_index, (key, values)) in projection.into_iter().enumerate() {
+            let row_path = Self::ssr_row_path(path, loop_node, &key);
+            let mut nodes = HashMap::new();
+            let mut conditionals = HashMap::new();
+            let (root, end) = self.adopt_row_node(
+                template,
+                &row_path,
+                &values,
+                row_index,
+                &TypedRowContext { loop_index, row_key: key.clone() },
+                root,
+                markers,
+                &mut nodes,
+                &mut conditionals,
+                skipped,
+            )?;
+            if !root
+                .parent_node()
+                .is_some_and(|owner| owner.is_same_node(Some(&parent)))
+            {
+                return Err(JsValue::from_str(&format!("mismatch:ssr-row:{key}")));
+            }
+            self.apply_bindings_to_nodes(&nodes, Some(&values), &mut UpdateMetrics::default())?;
+            let generation = self.next_generation;
+            self.next_generation += 1;
+            self.loops.entry(loop_index).or_default().rows.insert(
+                key.clone(),
+                TypedRow {
+                    root: root.clone(),
+                    end,
+                    values,
+                    nodes,
+                    conditionals,
+                    generation,
+                },
+            );
+            self.queue_row_listeners(loop_index, &key);
+            let row = self.loops.get(&loop_index).unwrap().rows.get(&key).unwrap();
+            let row_owner = TypedListenerOwner::Row {
+                loop_index,
+                row_key: key.clone(),
+                generation: row.generation,
+            };
+            let requests = row
+                .conditionals
+                .iter()
+                .flat_map(|(conditional, region)| {
+                    let owner = TypedListenerOwner::Conditional {
+                        conditional: *conditional,
+                        generation: region.generation,
+                        row: Some(Box::new(row_owner.clone())),
+                    };
+                    region
+                        .nodes
+                        .iter()
+                        .map(move |(target, node)| (*target, node.clone(), owner.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            for (target, node, owner) in requests {
+                self.queue_listener(target, node, owner);
+            }
+            claimed_roots.push(root);
+        }
+        let actual_order = claimed_roots
+            .iter()
+            .filter_map(|root| {
+                root.parent_node().and_then(|owner| {
+                    let children = owner.child_nodes();
+                    (0..children.length()).find_map(|position| {
+                        children
+                            .item(position)
+                            .filter(|candidate| candidate.is_same_node(Some(root)))
+                            .map(|_| position as usize)
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        if actual_order.windows(2).any(|pair| pair[0] > pair[1]) {
+            return Err(JsValue::from_str(&format!(
+                "mismatch:ssr-row-order:{path}:{loop_node}"
+            )));
+        }
+        self.loops.entry(loop_index).or_default().order = expected.to_vec();
+        Ok(expected.len())
+    }
+
+    fn decode_ssr_segment(value: &str) -> String {
+        value.replace("%2F", "/").replace("%25", "%")
+    }
+
+    fn row_root_keys(
+        &self,
+        path: &str,
+        loop_index: usize,
+        template: usize,
+        node: &TypedNode,
+        markers: &TypedAdoptionIndex,
+    ) -> Vec<String> {
+        let base = format!("{path}/loop:{loop_index}/key:");
+        let (prefix, suffix) = match node {
+            TypedNode::Element { .. } => (base, format!("/node:{template}")),
+            TypedNode::Text { .. } => (format!("plec:text:{base}"), format!(":{template}")),
+            TypedNode::Component { .. } => (format!("plec:component:{base}"), format!(":{template}")),
+            TypedNode::DynamicComponent { .. } => (format!("plec:component:{base}"), format!(":{template}")),
+            TypedNode::Conditional { .. } => (format!("plec:conditional:{base}"), format!(":{template}")),
+            TypedNode::Slot { .. } => (format!("plec:slot:{base}"), format!(":{template}")),
+            TypedNode::Loop { .. } => return vec![],
+        };
+        markers
+            .markers_for_prefix(&prefix)
+            .into_iter()
+            .filter_map(|marker| {
+                marker
+                    .strip_prefix(&prefix)
+                    .and_then(|value| value.strip_suffix(&suffix))
+                    .map(str::to_owned)
+            })
+            .collect()
+    }
+
+    fn adopt_row_node(
+        &mut self,
+        index: usize,
+        path: &str,
+        row: &HashMap<String, RuntimeValue>,
+        row_index: usize,
+        row_context: &TypedRowContext,
+        adoption_root: &Element,
+        markers: &TypedAdoptionIndex,
+        local: &mut HashMap<usize, Node>,
+        regions: &mut HashMap<usize, TypedConditionalRegion>,
+        skipped: &mut HashSet<usize>,
+    ) -> Result<(Node, Option<Node>), JsValue> {
+        let node = self
+            .app
+            .nodes
+            .get(index)
+            .cloned()
+            .ok_or_else(|| JsValue::from_str("row node handle out of range"))?;
+        match node {
+            TypedNode::Element { tag, children, host_ref, .. } => {
+                let marker = format!("{path}/node:{index}");
+                let element = markers.element(&marker)?;
+                let expected_tag = self
+                    .app
+                    .strings
+                    .get(tag)
+                    .ok_or_else(|| JsValue::from_str("adoption tag handle out of range"))?;
+                if element.tag_name().to_ascii_lowercase() != expected_tag.to_ascii_lowercase() {
+                    return Err(JsValue::from_str(&format!("mismatch:ssr-tag:{marker}")));
+                }
+                let dom_node: Node = element.into();
+                if let Some(reference) = host_ref {
+                    *self.host_ref_nodes.get_mut(reference).ok_or_else(|| {
+                        JsValue::from_str("adoption host ref handle out of range")
+                    })? = Some(dom_node.clone());
+                }
+                local.insert(index, dom_node.clone());
+                for child in children {
+                    self.adopt_row_node(child, path, row, row_index, row_context, adoption_root, markers, local, regions, skipped)?;
+                }
+                Ok((dom_node, None))
+            }
+            TypedNode::Text { .. } => {
+                let marker = format!("plec:text:{path}:{index}");
+                let marker_node = markers.get(&marker).ok_or_else(|| {
+                    JsValue::from_str(&format!("missing:ssr-row-text:{path}:{index}"))
+                })?;
+                let text = marker_node
+                    .next_sibling()
+                    .filter(|candidate| candidate.node_type() == Node::TEXT_NODE)
+                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-text:{path}:{index}")))?;
+                local.insert(index, text.clone());
+                Ok((text, None))
+            }
+            TypedNode::Conditional { test, consequent, alternate, .. } => {
+                let start = markers
+                    .get(&format!("plec:conditional:{path}:{index}"))
+                    .cloned()
+                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-branch:{path}:{index}")))?;
+                let end = markers
+                    .get(&format!("plec:conditional-end:{path}:{index}"))
+                    .cloned()
+                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-branch-end:{path}:{index}")))?;
+                let selected = if typed_truthy(&typed_eval(&self.app, test, &self.states, Some(row), row_index)?) {
+                    Some(consequent)
+                } else {
+                    alternate
+                };
+                if let Some(branch) = selected {
+                    let expected = self.branch_ownership_marker(path, branch)?;
+                    if !start.next_sibling().is_some_and(|node| {
+                        ownership_marker(&node).is_some_and(|marker| marker == expected)
+                    }) {
+                        return Err(JsValue::from_str(&format!("mismatch:ssr-row-branch:{path}:{index}")));
+                    }
+                } else if !start.next_sibling().is_some_and(|node| node.is_same_node(Some(&end))) {
+                    return Err(JsValue::from_str(&format!("mismatch:ssr-row-branch:{path}:{index}")));
+                }
+                let generation = self.next_generation;
+                self.next_generation += 1;
+                local.insert(index, start.clone());
+                if let Some(branch) = selected {
+                    self.adopt_row_node(branch, path, row, row_index, row_context, adoption_root, markers, local, regions, skipped)?;
+                } else {
+                    self.collect_branch_handles(consequent, skipped);
+                    if let Some(alternate) = alternate {
+                        self.collect_branch_handles(alternate, skipped);
+                    }
+                }
+                let mut nodes = HashMap::new();
+                if let Some(branch) = selected {
+                    self.collect_instantiated_branch_nodes(branch, local, &mut nodes);
+                }
+                regions.insert(index, TypedConditionalRegion { start: start.clone(), end: end.clone(), selected, nodes, generation });
+                Ok((start, Some(end)))
+            }
+            TypedNode::Component { component, props, children, .. } => {
+                let start = markers
+                    .get(&format!("plec:component:{path}:{index}"))
+                    .cloned()
+                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-component:{path}:{index}")))?;
+                let end = markers
+                    .get(&format!("plec:component-end:{path}:{index}"))
+                    .cloned()
+                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-component-end:{path}:{index}")))?;
+                self.queue_adopted_component(index, component, props, children, adoption_root, markers, path, Some(row), row_index, Some(row_context.clone()))?;
+                local.insert(index, start.clone());
+                Ok((start, Some(end)))
+            }
+            TypedNode::DynamicComponent { prop, props, children, .. } => {
+                let component = self
+                    .app
+                    .runtime_component_props
+                    .get(prop)
+                    .and_then(|value| *value)
+                    .ok_or_else(|| JsValue::from_str("missing:ssr-dynamic-component"))?;
+                let start = markers
+                    .get(&format!("plec:component:{path}:{index}"))
+                    .cloned()
+                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-component:{path}:{index}")))?;
+                let end = markers
+                    .get(&format!("plec:component-end:{path}:{index}"))
+                    .cloned()
+                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-component-end:{path}:{index}")))?;
+                self.queue_adopted_component(index, component, props, children, adoption_root, markers, path, Some(row), row_index, Some(row_context.clone()))?;
+                local.insert(index, start.clone());
+                Ok((start, Some(end)))
+            }
+            TypedNode::Slot { .. } => {
+                let start = markers
+                    .get(&format!("plec:slot:{path}:{index}"))
+                    .cloned()
+                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-slot:{path}:{index}")))?;
+                let end = markers
+                    .get(&format!("plec:slot-end:{path}:{index}"))
+                    .cloned()
+                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-slot-end:{path}:{index}")))?;
+                local.insert(index, start.clone());
+                Ok((start, Some(end)))
+            }
+            TypedNode::Loop { .. } => Err(JsValue::from_str("unsupported:ssr-nested-loop")),
+        }
+    }
+
+    /// Claims one server-rendered conditional region. The snapshot's branch
+    /// record is the ownership cause; the markers prove where the region is.
+    /// Nested component ranges do not have graph-level records yet, so their
+    /// ownership marker is used only after component adoption enables this
+    /// narrow fallback.
+    fn adopt_conditional_region(
+        &mut self,
+        index: usize,
+        path: &str,
+        branches: &HashMap<usize, plec_ir::SsrSelectedBranch>,
+        markers: &TypedAdoptionIndex,
+        skipped: &mut HashSet<usize>,
+    ) -> Result<(), JsValue> {
+        let selected = branches.get(&index).copied();
+        let start = markers
+            .get(&format!("plec:conditional:{path}:{index}"))
+            .cloned()
+            .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-branch:{path}:{index}")))?;
+        let end = markers
+            .get(&format!("plec:conditional-end:{path}:{index}"))
+            .cloned()
+            .ok_or_else(|| {
+                JsValue::from_str(&format!("missing:ssr-branch-end:{path}:{index}"))
+            })?;
+        let TypedNode::Conditional {
+            consequent,
+            alternate,
+            ..
+        } = self
+            .app
+            .nodes
+            .get(index)
+            .ok_or_else(|| JsValue::from_str("conditional handle out of range"))?
+            .clone()
+        else {
+            return Err(JsValue::from_str("conditional node expected"));
+        };
+        let selected = match selected {
+            Some(selected) => selected,
+            None if self.allow_unrecorded_ssr_conditionals => {
+                let inner = start.next_sibling();
+                if inner.as_ref().is_some_and(|node| node.is_same_node(Some(&end)))
+                    || inner.is_none()
+                {
+                    plec_ir::SsrSelectedBranch::None
+                } else {
+                    let marker = ownership_marker(inner.as_ref().unwrap()).ok_or_else(|| {
+                        JsValue::from_str(&format!("mismatch:ssr-branch:{path}:{index}"))
+                    })?;
+                    let expected = self.branch_ownership_marker(path, consequent)?;
+                    if marker == expected {
+                        plec_ir::SsrSelectedBranch::Consequent
+                    } else if let Some(alternate) = alternate {
+                        if marker == self.branch_ownership_marker(path, alternate)? {
+                            plec_ir::SsrSelectedBranch::Alternate
+                        } else {
+                            return Err(JsValue::from_str(&format!(
+                                "mismatch:ssr-branch:{path}:{index}"
+                            )));
+                        }
+                    } else {
+                        return Err(JsValue::from_str(&format!(
+                            "mismatch:ssr-branch:{path}:{index}"
+                        )));
+                    }
+                }
+            }
+            None => {
+                return Err(JsValue::from_str(&format!("missing:ssr-branch:{path}:{index}")));
+            }
+        };
+        let selected_node = match selected {
+            plec_ir::SsrSelectedBranch::Consequent => Some(consequent),
+            // Snapshot validation gates an alternate selection on the node
+            // declaring one, so the mismatch arm is a defensive closed door.
+            plec_ir::SsrSelectedBranch::Alternate => match alternate {
+                Some(handle) => Some(handle),
+                None => {
+                    return Err(JsValue::from_str(&format!(
+                        "mismatch:ssr-branch:{path}:{index}"
+                    )));
+                }
+            },
+            plec_ir::SsrSelectedBranch::None => None,
+        };
+        let inner = start.next_sibling();
+        match selected_node {
+            // A `none` region owns no DOM: the markers must enclose exactly
+            // nothing, otherwise the record contradicts the markup.
+            None => {
+                let empty = match inner {
+                    Some(node) => node.is_same_node(Some(&end)),
+                    None => true,
+                };
+                if !empty {
+                    return Err(JsValue::from_str(&format!(
+                        "mismatch:ssr-branch:{path}:{index}"
+                    )));
+                }
+            }
+            Some(handle) => {
+                let expected = self.branch_ownership_marker(path, handle)?;
+                let agrees = inner.is_some_and(|node| {
+                    ownership_marker(&node).is_some_and(|marker| marker == expected)
+                });
+                if !agrees {
+                    return Err(JsValue::from_str(&format!(
+                        "mismatch:ssr-branch:{path}:{index}"
+                    )));
+                }
+            }
+        }
+        let generation = self.next_generation;
+        self.next_generation += 1;
+        self.conditionals.insert(
+            index,
+            TypedConditionalRegion {
+                start,
+                end,
+                selected: selected_node,
+                nodes: HashMap::new(),
+                generation,
+            },
+        );
+        // The unrendered sides' whole subtrees are absent from the markup.
+        match selected_node {
+            Some(handle) => {
+                let unselected = if handle == consequent { alternate } else { Some(consequent) };
+                if let Some(side) = unselected {
+                    self.collect_branch_handles(side, skipped);
+                }
+            }
+            None => {
+                self.collect_branch_handles(consequent, skipped);
+                if let Some(alternate) = alternate {
+                    self.collect_branch_handles(alternate, skipped);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Every graph handle that lives below `index`, mirroring the branch
+    /// recursion used for claiming so a skipped side covers exactly the
+    /// nodes a fresh instantiation of that side would have created.
+    fn collect_branch_handles(&self, index: usize, output: &mut HashSet<usize>) {
+        output.insert(index);
+        match self.app.nodes.get(index) {
+            Some(TypedNode::Element { children, .. })
+            | Some(TypedNode::Component { children, .. })
+            | Some(TypedNode::DynamicComponent { children, .. }) => {
+                for child in children {
+                    self.collect_branch_handles(*child, output);
+                }
+            }
+            Some(TypedNode::Conditional {
+                consequent,
+                alternate,
+                ..
+            }) => {
+                self.collect_branch_handles(*consequent, output);
+                if let Some(alternate) = alternate {
+                    self.collect_branch_handles(*alternate, output);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The ownership marker the first node inside a claimed branch region
+    /// must carry for the adoption to trust the recorded side.
+    fn branch_ownership_marker(&self, path: &str, handle: usize) -> Result<String, JsValue> {
+        let node = self
+            .app
+            .nodes
+            .get(handle)
+            .ok_or_else(|| JsValue::from_str("branch node handle out of range"))?;
+        Ok(match node {
+            TypedNode::Element { .. } => format!("{path}/node:{handle}"),
+            TypedNode::Text { .. } => format!("plec:text:{path}:{handle}"),
+            TypedNode::Component { .. } | TypedNode::DynamicComponent { .. } => {
+                format!("plec:component:{path}:{handle}")
+            }
+            TypedNode::Conditional { .. } => format!("plec:conditional:{path}:{handle}"),
+            TypedNode::Slot { .. } => format!("plec:slot:{path}:{handle}"),
+            // The server renders nothing for a loop branch, so a recorded
+            // selection can never legitimately point at one.
+            TypedNode::Loop { .. } => {
+                return Err(JsValue::from_str(&format!(
+                    "mismatch:ssr-branch:{path}:{handle}"
+                )));
+            }
         })
     }
 
@@ -1012,13 +1633,14 @@ impl TypedRuntime {
         root: &Element,
         markers: &TypedAdoptionIndex,
         path: &str,
+        row: Option<&HashMap<String, RuntimeValue>>,
+        row_index: usize,
+        row_context: Option<TypedRowContext>,
     ) -> Result<(), JsValue> {
         let start = markers
             .get(&format!("plec:component:{path}:{index}"))
             .cloned()
-            .ok_or_else(|| {
-                JsValue::from_str(&format!("missing:ssr-component:{path}:{index}"))
-            })?;
+            .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-component:{path}:{index}")))?;
         let end = markers
             .get(&format!("plec:component-end:{path}:{index}"))
             .cloned()
@@ -1037,10 +1659,13 @@ impl TypedRuntime {
                 .clone();
             match prop {
                 TypedComponentProp::Value { expression, .. } => {
-                    values.insert(name, typed_eval(&self.app, expression, &self.states, None, 0)?);
+                    values.insert(
+                        name,
+                        typed_eval(&self.app, expression, &self.states, row, row_index)?,
+                    );
                 }
                 TypedComponentProp::Callable { action, .. } => {
-                    callbacks.insert(name, TypedCallbackSpec { action, row: None });
+                    callbacks.insert(name, TypedCallbackSpec { action, row: row.cloned() });
                 }
                 TypedComponentProp::Component { component, .. } => {
                     component_props.insert(name, component);
@@ -1057,7 +1682,7 @@ impl TypedRuntime {
             callbacks,
             component_props,
             children,
-            row_context: None,
+            row_context,
             start,
             end,
             key,
@@ -1150,6 +1775,14 @@ impl TypedAdoptionIndex {
         self.markers.get(marker)
     }
 
+    fn markers_for_prefix(&self, prefix: &str) -> Vec<String> {
+        self.markers
+            .keys()
+            .filter(|marker| marker.starts_with(prefix))
+            .cloned()
+            .collect()
+    }
+
     /// Element claims only ever resolve markers this index registered from
     /// `data-plec-node` attributes, so the cast failure below is
     /// unreachable; it maps to the nearest existing diagnostic.
@@ -1164,6 +1797,19 @@ impl TypedAdoptionIndex {
     }
 }
 
+/// The ownership marker a concrete DOM node carries, if any: comment nodes
+/// own their text; elements own their `data-plec-node` attribute value.
+fn ownership_marker(node: &Node) -> Option<String> {
+    match node.node_type() {
+        Node::COMMENT_NODE => node.node_value(),
+        Node::ELEMENT_NODE => node
+            .dyn_ref::<Element>()
+            .and_then(|element| element.get_attribute("data-plec-node")),
+        _ => None,
+    }
+}
+
+#[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     /// Test instrumentation for the adoption index: DOM nodes visited by
     /// index builds since the last reset. Scoped adoptions visit each owned
@@ -1408,9 +2054,19 @@ impl TypedRuntime {
     }
 
     fn queue_static_listeners(&mut self) {
+        // Nodes owned by a conditional region already receive their listener
+        // under the region's conditional owner (whose generation the first
+        // branch flip disposes). A second Static-owned listener would double
+        // every dispatch on the branch DOM.
+        let conditional_owned: HashSet<usize> = self
+            .conditionals
+            .values()
+            .flat_map(|region| region.nodes.keys().copied())
+            .collect();
         let nodes = self
             .nodes
             .iter()
+            .filter(|(target, _)| !conditional_owned.contains(target))
             .map(|(target, node)| (*target, node.clone()))
             .collect::<Vec<_>>();
         for (target, node) in nodes {
@@ -2566,10 +3222,7 @@ impl TypedRuntime {
                 .filter(|binding| binding.sink == "text")
                 .filter_map(|binding| {
                     let node = self.nodes.get(&binding.target)?;
-                    Some((
-                        binding.target,
-                        node.text_content().unwrap_or_default(),
-                    ))
+                    Some((binding.target, node.text_content().unwrap_or_default()))
                 })
                 .collect::<HashMap<usize, String>>()
         } else {
@@ -2584,9 +3237,7 @@ impl TypedRuntime {
             if let Some(node) = self.nodes.get(&target) {
                 let after = node.text_content().unwrap_or_default();
                 if after != before {
-                    SSR_TEXT_DIVERGENCES.with(|count| {
-                        count.set(count.get().saturating_add(1))
-                    });
+                    SSR_TEXT_DIVERGENCES.with(|count| count.set(count.get().saturating_add(1)));
                 }
             }
         }

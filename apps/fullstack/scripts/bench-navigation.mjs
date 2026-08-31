@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { chromium } from 'playwright';
+import { launchBrowser } from './browser.mjs';
 import {
   aggregatePhase,
   configuredPhases,
@@ -15,7 +15,6 @@ const sampleCount = Number(process.env.PLEC_BENCH_SAMPLES ?? 10);
 const port = 3199;
 const origin = process.env.PLEC_BENCHMARK_ORIGIN;
 const headless = process.env.PLEC_BENCH_HEADLESS === '1';
-const executablePath = process.env.PLEC_CHROME_EXECUTABLE;
 const localBase = `http://127.0.0.1:${port}`;
 let server;
 
@@ -155,11 +154,7 @@ async function main() {
     windowsHide: true,
   });
   await waitForLocalServer();
-  const browser = await chromium.launch({
-    headless,
-    channel: executablePath ? undefined : 'chrome',
-    executablePath,
-  });
+  const browser = await launchBrowser({ headless });
   try {
     const browserVersion = browser.version();
     const phases = [];
@@ -191,7 +186,10 @@ async function main() {
     await mkdir(resultsDir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const json = path.join(resultsDir, `plec-navigation-${stamp}.json`);
-    const markdown = path.join(resultsDir, `plec-navigation-${stamp}.md`);
+    const markdown = path.join(
+      resultsDir,
+      `plec-navigation-${stamp}.md`,
+    );
     await writeFile(json, JSON.stringify(payload, null, 2));
     await writeFile(markdown, renderMarkdown(payload));
     console.log(

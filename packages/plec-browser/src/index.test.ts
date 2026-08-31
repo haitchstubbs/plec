@@ -2,9 +2,71 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   markPlecTiming,
   adaptLiveCollection,
+  validateSsrRouteChain,
   wireRoutedInputs,
   type LiveCollectionChange,
 } from './index';
+
+describe('ssr route chain gate', () => {
+  const manifestRoutes = [
+    { id: 'root#layout', path: '' },
+    { id: 'routes/home.tsx#Route', path: '' },
+    { id: 'routes/project.tsx#Route', path: 'projects/$id' },
+    { id: 'routes/about.tsx#Route', path: 'about' },
+    { id: 'routes/not-found.tsx#Route', path: '*' },
+  ];
+
+  it('accepts flat, parameterized, catch-all, and nested chains', () => {
+    expect(
+      validateSsrRouteChain(manifestRoutes, [
+        { routeId: 'routes/home.tsx#Route', params: {}, phase: 'active' },
+      ]),
+    ).toBeNull();
+    expect(
+      validateSsrRouteChain(manifestRoutes, [
+        {
+          routeId: 'routes/project.tsx#Route',
+          params: { id: 'a b' },
+          phase: 'active',
+        },
+      ]),
+    ).toBeNull();
+    expect(
+      validateSsrRouteChain(manifestRoutes, [
+        { routeId: 'routes/not-found.tsx#Route', params: {} },
+      ]),
+    ).toBeNull();
+    // A nested layout chain is shape-checked only; URL agreement is the WASM
+    // runtime's cross-validation decision.
+    expect(
+      validateSsrRouteChain(manifestRoutes, [
+        { routeId: 'root#layout', params: {} },
+        { routeId: 'routes/home.tsx#Route', params: {} },
+      ]),
+    ).toBeNull();
+  });
+
+  it('rejects empty, malformed, and unknown chains with chain details', () => {
+    expect(validateSsrRouteChain(manifestRoutes, [])).toBe('empty');
+    expect(validateSsrRouteChain(manifestRoutes, undefined)).toBe('empty');
+    expect(
+      validateSsrRouteChain(manifestRoutes, [{ routeId: 'ghost#Route' }]),
+    ).toBe('unknown-route:ghost#Route');
+    expect(
+      validateSsrRouteChain(manifestRoutes, [{ params: {} }]),
+    ).toBe('instance:0');
+    expect(
+      validateSsrRouteChain(manifestRoutes, [
+        { routeId: 'routes/project.tsx#Route', params: { id: 7 } },
+      ]),
+    ).toBe('params:0');
+    expect(
+      validateSsrRouteChain(manifestRoutes, [
+        { routeId: 'routes/home.tsx#Route', phase: 'paused' },
+      ]),
+    ).toBe('phase:0');
+  });
+});
 
 describe('compiled browser adapter', () => {
   it('emits named Plec mount boundaries through User Timing', () => {
