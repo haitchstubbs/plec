@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregatePhase, configuredPhases } from './bench-utils.mjs';
+import { aggregatePhase, configuredPhases } from './bench-utils';
 
 describe('navigation benchmark aggregation', () => {
   it('aggregates valid timings and preserves unavailable metric reasons', () => {
@@ -24,9 +24,14 @@ describe('navigation benchmark aggregation', () => {
   });
 
   it('gates deployed-origin measurements on configuration', () => {
-    expect(configuredPhases(undefined)).toHaveLength(2);
     expect(
-      configuredPhases('https://example.test/').at(-1),
+      configuredPhases(undefined, 'http://127.0.0.1:3216'),
+    ).toHaveLength(2);
+    expect(
+      configuredPhases(
+        'https://example.test/',
+        'http://127.0.0.1:3216',
+      ).at(-1),
     ).toMatchObject({ id: 'deployed-origin' });
   });
 });

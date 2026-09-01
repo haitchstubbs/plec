@@ -23,10 +23,13 @@ compiler emits graphs at build time; there is no HMR.
 ## Test
 
 ```sh
-yarn workspace @wasm-runtime/fullstack test             # vitest + check:no-react
-yarn workspace @wasm-runtime/fullstack test:acceptance  # build + headless-Chrome todos acceptance (port 3201)
-yarn workspace @wasm-runtime/fullstack bench:navigation
+yarn workspace @wasm-runtime/fullstack test  # vitest + check:no-react
+yarn test:e2e                                # Playwright smoke gate (repo root)
+yarn test:acceptance                         # Playwright full behavioral suites
 ```
+
+Playwright (`packages/plec-e2e`) owns the server lifecycle for e2e tiers —
+never start `dist/server.mjs` manually for tests.
 
 Prerequisites, the WASM rebuild loop, and the stale-`.br` trap:
 [docs/getting-started.md](../../docs/getting-started.md).
