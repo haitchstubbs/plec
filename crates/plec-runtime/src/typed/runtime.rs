@@ -779,6 +779,7 @@ impl TypedRuntime {
         &mut self,
         nodes: Vec<(usize, Node)>,
         row: Option<&HashMap<String, RuntimeValue>>,
+        row_index: usize,
     ) -> Result<(), JsValue> {
         for (call, start) in nodes {
             let Some(props) = self
@@ -809,7 +810,7 @@ impl TypedRuntime {
                         .get(name)
                         .ok_or_else(|| JsValue::from_str("component prop name out of range"))?
                         .clone();
-                    let value = typed_eval(&self.app, expression, &self.states, row, 0)?;
+                    let value = typed_eval(&self.app, expression, &self.states, row, row_index)?;
                     Ok((name, value))
                 })
                 .collect::<Result<HashMap<_, _>, JsValue>>()?;
@@ -826,6 +827,7 @@ impl TypedRuntime {
                 .map(|(call, node)| (*call, node.clone()))
                 .collect(),
             None,
+            0,
         )
     }
 
@@ -833,8 +835,9 @@ impl TypedRuntime {
         &mut self,
         nodes: HashMap<usize, Node>,
         values: &HashMap<String, RuntimeValue>,
+        row_index: usize,
     ) -> Result<(), JsValue> {
-        self.queue_component_refreshes(nodes.into_iter().collect(), Some(values))
+        self.queue_component_refreshes(nodes.into_iter().collect(), Some(values), row_index)
     }
 
     pub(crate) fn mount(&mut self, root: Element) -> Result<MountMetrics, JsValue> {
@@ -1193,7 +1196,12 @@ impl TypedRuntime {
             {
                 return Err(JsValue::from_str(&format!("mismatch:ssr-row:{key}")));
             }
-            self.apply_bindings_to_nodes(&nodes, Some(&values), &mut UpdateMetrics::default())?;
+            self.apply_bindings_to_nodes(
+                &nodes,
+                Some(&values),
+                row_index,
+                &mut UpdateMetrics::default(),
+            )?;
             let generation = self.next_generation;
             self.next_generation += 1;
             self.loops.entry(loop_index).or_default().rows.insert(
@@ -2057,7 +2065,12 @@ impl TypedRuntime {
         }
         parent.insert_before(&fragment, Some(end))?;
         if let Some(context) = row_context {
-            self.apply_bindings_to_nodes(&local, row.as_ref(), &mut UpdateMetrics::default())?;
+            self.apply_bindings_to_nodes(
+                &local,
+                row.as_ref(),
+                row_index,
+                &mut UpdateMetrics::default(),
+            )?;
             let generation = self
                 .loops
                 .get(&context.loop_index)
@@ -2655,7 +2668,7 @@ impl TypedRuntime {
             )?;
             parent.insert_before(&child, Some(&region.end))?;
             self.collect_branch_nodes(selected, &mut region.nodes);
-            self.apply_bindings_to_nodes(&region.nodes, None, metrics)?;
+            self.apply_bindings_to_nodes(&region.nodes, None, 0, metrics)?;
         }
         self.conditionals.insert(conditional, region);
         let region = self.conditionals.get(&conditional).unwrap();
@@ -2742,11 +2755,12 @@ impl TypedRuntime {
         &self,
         nodes: &HashMap<usize, Node>,
         row: Option<&HashMap<String, RuntimeValue>>,
+        row_index: usize,
         metrics: &mut UpdateMetrics,
     ) -> Result<(), JsValue> {
         for binding in &self.app.bindings {
             if let Some(node) = nodes.get(&binding.target) {
-                typed_apply_binding(&self.app, binding, node, &self.states, row, 0)?;
+                typed_apply_binding(&self.app, binding, node, &self.states, row, row_index)?;
                 metrics.bindings_touched += 1;
             }
         }
@@ -2756,7 +2770,9 @@ impl TypedRuntime {
             };
             for write in &program.writes {
                 let value = match write.expression {
-                    Some(expression) => typed_eval(&self.app, expression, &self.states, row, 0)?,
+                    Some(expression) => {
+                        typed_eval(&self.app, expression, &self.states, row, row_index)?
+                    }
                     None => write
                         .constant
                         .and_then(|index| self.app.constants.get(index))
@@ -3177,7 +3193,7 @@ impl TypedRuntime {
             .and_then(|rows| rows.rows.get(key))
             .map(|row| (row.nodes.clone(), row.values.clone()))
             .ok_or_else(|| JsValue::from_str("row missing"))?;
-        self.queue_row_component_refreshes(nodes, &values)?;
+        self.queue_row_component_refreshes(nodes, &values, row_index)?;
         Ok(())
     }
 
@@ -3364,7 +3380,16 @@ impl TypedRuntime {
         } else {
             HashMap::new()
         };
+        let row_targets = self
+            .loops
+            .values()
+            .flat_map(|rows| rows.rows.values())
+            .flat_map(|row| row.nodes.keys().copied())
+            .collect::<HashSet<_>>();
         for binding in self.app.bindings.clone() {
+            if row_targets.contains(&binding.target) {
+                continue;
+            }
             if let Some(node) = self.nodes.get(&binding.target) {
                 typed_apply_binding(&self.app, &binding, node, &self.states, None, 0)?;
             }
@@ -3378,6 +3403,9 @@ impl TypedRuntime {
             }
         }
         for program in self.app.prop_programs.clone() {
+            if row_targets.contains(&program.target) {
+                continue;
+            }
             let Some(node) = self.nodes.get(&program.target) else {
                 continue;
             };
@@ -3396,6 +3424,34 @@ impl TypedRuntime {
                     typed_apply_value(&self.app, &write.kind, write.name, node, value)?;
                 }
             }
+        }
+        let rows = self
+            .loops
+            .iter()
+            .flat_map(|(loop_index, rows)| {
+                rows.order
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(row_index, key)| {
+                        rows.rows.get(key).map(|row| {
+                            (
+                                *loop_index,
+                                row_index,
+                                row.nodes.clone(),
+                                row.values.clone(),
+                            )
+                        })
+                    })
+            })
+            .collect::<Vec<_>>();
+        for (_, row_index, nodes, values) in rows {
+            self.apply_bindings_to_nodes(
+                &nodes,
+                Some(&values),
+                row_index,
+                &mut UpdateMetrics::default(),
+            )?;
+            self.queue_row_component_refreshes(nodes, &values, row_index)?;
         }
         Ok(())
     }
@@ -3574,7 +3630,7 @@ impl TypedRuntime {
             .into_iter()
             .filter(|(node, _)| self.component_uses_changed_field(*node, &changed))
             .collect::<HashMap<_, _>>();
-        self.queue_row_component_refreshes(component_nodes, &values)?;
+        self.queue_row_component_refreshes(component_nodes, &values, row_index)?;
         Ok(())
     }
 
@@ -3663,6 +3719,7 @@ impl TypedRuntime {
                 .filter(|(node, _)| self.component_uses_index(*node))
                 .collect(),
             &values,
+            row_index,
         )?;
         Ok(())
     }

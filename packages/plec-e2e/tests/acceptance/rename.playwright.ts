@@ -3,10 +3,7 @@ import { forwardTodoRequest } from '../support/helpers';
 
 // Rename requires the full native-event chain: a real keydown on the edit
 // input, a PATCH emitted by Plec, a 2xx response, and the row text updating.
-// Blocked by wasm-runtime-hv3: the adopted SSR row renders the editing
-// branch (no Edit button) because adopted loop-row re-evaluation loses the
-// row scope. Un-skip once that is fixed.
-test.fixme('rename emits native keydown, PATCH, and updates the row', async ({
+test('rename emits native keydown, PATCH, and updates the row', async ({
   page,
 }) => {
   page.setDefaultTimeout(3000);

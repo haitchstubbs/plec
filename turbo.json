@@ -11,6 +11,14 @@
     },
     "plec-runtime#build": {
       "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../../Cargo.lock",
+        "../../Cargo.toml",
+        "../../crates/plec-ir/**",
+        "../../crates/plec-runtime/**",
+        "../../scripts/build-wasm.mjs"
+      ],
       "outputs": ["dist/**"]
     },
     "@wasm-runtime/fullstack#build": {
