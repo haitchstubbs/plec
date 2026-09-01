@@ -1149,6 +1149,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@playwright/test@npm:^1.62.1":
+  version: 1.62.1
+  resolution: "@playwright/test@npm:1.62.1"
+  dependencies:
+    playwright: "npm:1.62.1"
+  bin:
+    playwright: cli.js
+  checksum: 10c0/4b76f2f717723f84a73601f74fde97f5d92e4b5c869cf87c0f5628bf247fa1d18c9dc6c8e136463303233239e8ce58f902513d4281a9fabc3c426e911ded2c83
+  languageName: node
+  linkType: hard
+
 "@rollup/rollup-android-arm-eabi@npm:4.62.4":
   version: 4.62.4
   resolution: "@rollup/rollup-android-arm-eabi@npm:4.62.4"
@@ -4321,6 +4332,14 @@ __metadata:
   dependencies:
     comlink: "npm:^4.4.2"
     vitest: "npm:^3.2.4"
+  languageName: unknown
+  linkType: soft
+
+"plec-e2e@workspace:packages/plec-e2e":
+  version: 0.0.0-use.local
+  resolution: "plec-e2e@workspace:packages/plec-e2e"
+  dependencies:
+    "@playwright/test": "npm:^1.62.1"
   languageName: unknown
   linkType: soft
 
