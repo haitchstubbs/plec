@@ -84,13 +84,17 @@ yarn workspace plec-runtime test                 # cargo test --lib
 yarn workspace plec-runtime test:core            # cargo test --no-default-features
 yarn workspace plec-runtime test:wasm            # browser harness (wasm-pack test --headless --chrome)
 yarn workspace @wasm-runtime/fullstack test      # vitest + check:no-react
-yarn workspace @wasm-runtime/fullstack test:acceptance   # build + full route acceptance in headless Chrome (port 3201)
+yarn test:e2e                                    # Playwright smoke gate (E2E_PORT, default 3216)
+yarn test:acceptance                             # Playwright full behavioral suites — opt-in
 ```
 
-`test:acceptance` is the repo's end-to-end gate: it rebuilds the fullstack
-app, spawns the server on port 3201, and drives a real Chrome through the
-todos routes. The browser harness needs the matching chromedriver on `PATH`
-(see Prerequisites).
+`packages/plec-e2e` is the canonical end-to-end runner. Playwright owns the
+fullstack server for every tier: turbo builds the app, the `webServer`
+config starts `dist/server.mjs`, waits for HTTP readiness, and kills the
+process group afterwards — no manual spawning, no leftover ports. The port
+comes from `E2E_PORT` in `.env.devports` (the canonical port registry);
+override it per run with `E2E_PORT=…`. Specs are named `*.playwright.ts`.
+See `packages/plec-e2e/README.md` and the E2E section of `AGENTS.md`.
 
 Type checking: `yarn typecheck` (turbo). For the fullstack app this also
 runs `cargo check -p plec-compiler`.
@@ -100,9 +104,14 @@ runs `cargo check -p plec-compiler`.
 ```sh
 yarn measure:runtime-baseline           # runtime baseline metrics
 yarn measure:runtime-baseline:verify    # verify against committed baselines
-yarn workspace @wasm-runtime/fullstack bench:navigation         # navigation benchmark
-yarn workspace @wasm-runtime/fullstack bench:navigation:smoke   # fast smoke variant
+yarn bench                              # Playwright navigation benchmark into benchmarks/results/
 ```
+
+The navigation benchmark runs through `packages/plec-e2e` with one browser
+context per sample, cache disabled via CDP, and an optional fast-4G
+throttled phase. `PLEC_BENCH_SAMPLES` (default 10) controls sample count;
+`PLEC_BENCHMARK_ORIGIN` adds a deployed-origin phase. Reports land in
+`benchmarks/results/`.
 
 ## Formatting and lint
 

@@ -413,6 +413,35 @@ Use `insta` where useful for Rust runtime representations.
 
 Prefer explicit IDs and deterministic output so snapshots remain stable.
 
+## E2E testing
+
+`packages/plec-e2e` is the canonical Playwright runner. Playwright owns the
+fullstack server: turbo builds `@wasm-runtime/fullstack`, the `webServer`
+config starts `dist/server.mjs`, waits for HTTP readiness, and kills the
+process group afterwards.
+
+Never spawn `dist/server.mjs` manually, and never leave a dev server
+running for tests. Playwright starts, watches, and stops the server.
+
+Tiers (run from the repo root):
+
+```text
+yarn test:e2e          # smoke gate — fast; run this while spiking
+yarn test:acceptance   # full behavioral suites — opt-in
+yarn bench             # navigation benchmark into benchmarks/results/ — opt-in
+```
+
+Rules:
+
+- Specs live in `packages/plec-e2e/tests/{smoke,acceptance,bench}` and are
+  named `*.playwright.ts`. New deep suites go under `acceptance/`; keep the
+  smoke tier fast.
+- The port comes from `E2E_PORT` in `.env.devports` — the canonical port
+  registry. For parallel spikes override it instead of editing the file:
+  `E2E_PORT=3311 yarn test:e2e`.
+- `reuseExistingServer: false` is intentional: a stale server on the port
+  must fail the run loudly instead of being silently adopted.
+
 ## Benchmark requirements
 
 Create a small benchmark harness comparing the normal implementation and compiled runtime where practical.

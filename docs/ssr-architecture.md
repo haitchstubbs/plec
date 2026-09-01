@@ -167,7 +167,7 @@ The claim walk itself (`TypedRuntime::adopt`, `typed/runtime.rs:841`) is deliber
 - Event handlers (`on*` props) are dropped in SSR output — a page that fails adoption is inert until the remount completes.
 - `.expect("adopted route exists")` panic path in the adopt chain (`router/navigation.rs:69`) — infallible in practice, but a WASM trap if state were inconsistent.
 - `phases.dedup()` only removes _adjacent_ duplicates; the shipped artifact contains `FullstackLayout` twice (harmless today, latent confusion later).
-- No Rust-side unit tests for the adopt path — coverage is solely the Playwright script `apps/fullstack/scripts/acceptance-adoption.mjs`.
+- No Rust-side unit tests for the adopt path — coverage is solely the Playwright suite `packages/plec-e2e/tests/acceptance/adoption.playwright.ts`.
 
 ## Error code reference
 
@@ -185,14 +185,14 @@ All adoption failures are structured strings, surfaced as mismatch codes in `ple
 
 ## Key file map
 
-| Area     | File                                             | Role                                              |
-| -------- | ------------------------------------------------ | ------------------------------------------------- |
-| Compiler | `crates/plec-compiler/src/routes.rs`             | Route/artifact lowering, `stable_revision`        |
-| Compiler | `crates/plec-lowering/src/node.rs`               | Deterministic node indices (= marker coordinates) |
-| Compiler | `crates/plec-ir/src/lib.rs`                      | Manifest schema + v3 validation                   |
-| Server   | `packages/plec-server/src/index.ts`              | HTTP host + SSR graph interpreter                 |
-| Browser  | `packages/plec-browser/src/index.ts`             | `startPlecRouter`, adoption gate, diagnostics     |
-| Runtime  | `crates/plec-runtime/src/runtime/lifecycle.rs`   | `start_adopt` / `abandon_adoption`                |
-| Runtime  | `crates/plec-runtime/src/router/navigation.rs`   | Route-chain adoption, outlet resolution           |
-| Runtime  | `crates/plec-runtime/src/typed/runtime.rs`       | `TypedRuntime::adopt` claim walk                  |
-| E2E      | `apps/fullstack/scripts/acceptance-adoption.mjs` | The only adoption path test                       |
+| Area     | File                                                        | Role                                              |
+| -------- | ----------------------------------------------------------- | ------------------------------------------------- |
+| Compiler | `crates/plec-compiler/src/routes.rs`                        | Route/artifact lowering, `stable_revision`        |
+| Compiler | `crates/plec-lowering/src/node.rs`                          | Deterministic node indices (= marker coordinates) |
+| Compiler | `crates/plec-ir/src/lib.rs`                                 | Manifest schema + v3 validation                   |
+| Server   | `packages/plec-server/src/index.ts`                         | HTTP host + SSR graph interpreter                 |
+| Browser  | `packages/plec-browser/src/index.ts`                        | `startPlecRouter`, adoption gate, diagnostics     |
+| Runtime  | `crates/plec-runtime/src/runtime/lifecycle.rs`              | `start_adopt` / `abandon_adoption`                |
+| Runtime  | `crates/plec-runtime/src/router/navigation.rs`              | Route-chain adoption, outlet resolution           |
+| Runtime  | `crates/plec-runtime/src/typed/runtime.rs`                  | `TypedRuntime::adopt` claim walk                  |
+| E2E      | `packages/plec-e2e/tests/acceptance/adoption.playwright.ts` | The only adoption path test                       |

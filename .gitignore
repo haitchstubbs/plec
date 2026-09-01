@@ -24,6 +24,7 @@ coverage/
 .env
 .env.*
 !.env.benchmark
+!.env.devports
 !.env.example
 *.log
 
@@ -34,6 +35,10 @@ Thumbs.db
 
 # Benchmark artifacts
 benchmarks/results/*
+
+# Playwright artifacts
+test-results/
+playwright-report/
 
 # Generated Icon Files
 packages/lucide-plec/src/icons/

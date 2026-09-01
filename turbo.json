@@ -21,10 +21,29 @@
     "test": {
       "outputs": ["coverage/**"]
     },
+    "test:e2e": {
+      "cache": false,
+      "persistent": false,
+      "dependsOn": ["@wasm-runtime/fullstack#build"],
+      "env": ["E2E_PORT"],
+      "outputs": []
+    },
     "test:acceptance": {
       "cache": false,
-      "dependsOn": ["build"],
+      "persistent": false,
+      "dependsOn": ["@wasm-runtime/fullstack#build"],
+      "env": ["E2E_PORT"],
       "outputs": []
+    },
+    "bench": {
+      "cache": false,
+      "dependsOn": ["@wasm-runtime/fullstack#build"],
+      "env": [
+        "E2E_PORT",
+        "PLEC_BENCH_SAMPLES",
+        "PLEC_BENCHMARK_ORIGIN"
+      ],
+      "outputs": ["benchmarks/results/**"]
     },
     "lint": {
       "outputs": []
