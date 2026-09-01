@@ -601,14 +601,20 @@ export async function startPlecRouter(
     } else {
       try {
         // Every chain graph must be registered before WASM claims DOM; graphs
-        // outside the initial chain stay lazy.
+        // outside the initial chain stay lazy. A server-rendered error phase
+        // claims DOM built from the route's error graph, so that graph must
+        // be registered too before the snapshot import validates structure.
         if (!compiled) {
-          const routeIds = (chain as any[]).map((entry) => entry.routeId);
-          for (const routeId of routeIds) {
-            const entry = (manifest as any).routes?.find(
-              (candidate: any) => candidate.id === routeId,
+          for (const entry of chain as Array<{
+            routeId: string;
+            phase?: string;
+          }>) {
+            const route = (manifest as any).routes?.find(
+              (candidate: any) => candidate.id === entry.routeId,
             );
-            if (entry?.graphId) await loadGraph(entry.graphId);
+            if (route?.graphId) await loadGraph(route.graphId);
+            if (entry.phase === 'error' && route?.errorGraphId)
+              await loadGraph(route.errorGraphId);
           }
         }
         const snapshotImported = bootstrap.kind === 'snapshot';
