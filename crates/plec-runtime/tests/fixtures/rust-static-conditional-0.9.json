@@ -4,34 +4,75 @@
   "strings": ["div", "button", "click"],
   "constants": [false, true],
   "nodes": [
-    {"op":"element","tag":0,"parent":null,"children":[1]},
-    {"op":"conditional","test":1,"parent":0,"consequent":2,"alternate":4},
-    {"op":"element","tag":1,"parent":null,"children":[3]},
-    {"op":"text","text":0,"parent":2},
-    {"op":"element","tag":1,"parent":null,"children":[5]},
-    {"op":"text","text":1,"parent":4}
+    { "op": "element", "tag": 0, "parent": null, "children": [1] },
+    {
+      "op": "conditional",
+      "test": 1,
+      "parent": 0,
+      "consequent": 2,
+      "alternate": 4
+    },
+    { "op": "element", "tag": 1, "parent": null, "children": [3] },
+    { "op": "text", "text": 0, "parent": 2 },
+    { "op": "element", "tag": 1, "parent": null, "children": [5] },
+    { "op": "text", "text": 1, "parent": 4 }
   ],
-  "texts": [{"value":"On"},{"value":"Off"}],
+  "texts": [{ "value": "On" }, { "value": "Off" }],
   "bindings": [],
   "propPrograms": [],
   "events": [
-    {"target":2,"type":2,"action":0},
-    {"target":4,"type":2,"action":1}
+    { "target": 2, "type": 2, "action": 0 },
+    { "target": 4, "type": 2, "action": 1 }
   ],
   "inputs": [],
-  "stateSlots": [{"initialExpression":0,"frameSlot":0}],
+  "stateSlots": [{ "initialExpression": 0, "frameSlot": 0 }],
   "expressions": [
-    {"instructions":[{"op":"constant","constant":0},{"op":"return"}]},
-    {"instructions":[{"op":"loadState","state":0},{"op":"return"}]},
-    {"instructions":[{"op":"constant","constant":0},{"op":"return"}]},
-    {"instructions":[{"op":"constant","constant":1},{"op":"return"}]}
+    {
+      "instructions": [
+        { "op": "constant", "constant": 0 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadState", "state": 0 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "constant", "constant": 0 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "constant", "constant": 1 },
+        { "op": "return" }
+      ]
+    }
   ],
   "actions": [
-    {"instructions":[{"op":"evaluate","expression":2},{"op":"storeState","state":0},{"op":"return"}]},
-    {"instructions":[{"op":"evaluate","expression":3},{"op":"storeState","state":0},{"op":"return"}]}
+    {
+      "instructions": [
+        { "op": "evaluate", "expression": 2 },
+        { "op": "storeState", "state": 0 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "evaluate", "expression": 3 },
+        { "op": "storeState", "state": 0 },
+        { "op": "return" }
+      ]
+    }
   ],
   "loops": [],
   "dependencyEdges": [
-    {"source":{"kind":"state","handle":0},"target":{"kind":"conditional","handle":1}}
+    {
+      "source": { "kind": "state", "handle": 0 },
+      "target": { "kind": "conditional", "handle": 1 }
+    }
   ]
 }

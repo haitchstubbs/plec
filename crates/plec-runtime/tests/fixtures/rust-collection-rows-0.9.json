@@ -1,35 +1,102 @@
 {
   "version": "0.9",
   "rootNode": 0,
-  "strings": ["items", "ul", "id", "li", "title", "done", "button", "click"],
+  "strings": [
+    "items",
+    "ul",
+    "id",
+    "li",
+    "title",
+    "done",
+    "button",
+    "click"
+  ],
   "constants": [""],
   "nodes": [
-    {"op":"element","tag":1,"parent":null,"children":[6]},
-    {"op":"element","tag":3,"parent":null,"children":[2,3]},
-    {"op":"text","text":0,"parent":1},
-    {"op":"conditional","test":4,"parent":1,"consequent":4,"alternate":null},
-    {"op":"element","tag":6,"parent":null,"children":[5]},
-    {"op":"text","text":1,"parent":4},
-    {"op":"loop","loop":0,"parent":0}
+    { "op": "element", "tag": 1, "parent": null, "children": [6] },
+    { "op": "element", "tag": 3, "parent": null, "children": [2, 3] },
+    { "op": "text", "text": 0, "parent": 1 },
+    {
+      "op": "conditional",
+      "test": 4,
+      "parent": 1,
+      "consequent": 4,
+      "alternate": null
+    },
+    { "op": "element", "tag": 6, "parent": null, "children": [5] },
+    { "op": "text", "text": 1, "parent": 4 },
+    { "op": "loop", "loop": 0, "parent": 0 }
   ],
-  "texts": [{"binding":0},{"value":"Done"}],
-  "bindings": [{"target":2,"sink":"text","expression":3}],
+  "texts": [{ "binding": 0 }, { "value": "Done" }],
+  "bindings": [{ "target": 2, "sink": "text", "expression": 3 }],
   "propPrograms": [],
-  "events": [{"target":4,"type":7,"action":0,"loop":0}],
-  "inputs": [{"name":0,"kind":"collection"}],
-  "stateSlots": [{"initialExpression":0,"frameSlot":0}],
+  "events": [{ "target": 4, "type": 7, "action": 0, "loop": 0 }],
+  "inputs": [{ "name": 0, "kind": "collection" }],
+  "stateSlots": [{ "initialExpression": 0, "frameSlot": 0 }],
   "expressions": [
-    {"instructions":[{"op":"constant","constant":0},{"op":"return"}]},
-    {"instructions":[{"op":"makeArray","count":0},{"op":"return"}]},
-    {"instructions":[{"op":"loadRowField","field":2},{"op":"return"}]},
-    {"instructions":[{"op":"loadRowField","field":4},{"op":"return"}]},
-    {"instructions":[{"op":"loadRowField","field":5},{"op":"return"}]},
-    {"instructions":[{"op":"loadRowField","field":4},{"op":"return"}]}
+    {
+      "instructions": [
+        { "op": "constant", "constant": 0 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "makeArray", "count": 0 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadRowField", "field": 2 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadRowField", "field": 4 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadRowField", "field": 5 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadRowField", "field": 4 },
+        { "op": "return" }
+      ]
+    }
   ],
-  "actions": [{"instructions":[{"op":"evaluate","expression":5},{"op":"storeState","state":0},{"op":"return"}]}],
-  "loops": [{"sourceExpression":1,"keyExpression":2,"itemSlot":3,"rowTemplate":1,"input":0}],
+  "actions": [
+    {
+      "instructions": [
+        { "op": "evaluate", "expression": 5 },
+        { "op": "storeState", "state": 0 },
+        { "op": "return" }
+      ]
+    }
+  ],
+  "loops": [
+    {
+      "sourceExpression": 1,
+      "keyExpression": 2,
+      "itemSlot": 3,
+      "rowTemplate": 1,
+      "input": 0
+    }
+  ],
   "dependencyEdges": [
-    {"source":{"kind":"rowField","handle":4,"loop":0},"target":{"kind":"binding","handle":0}},
-    {"source":{"kind":"rowField","handle":5,"loop":0},"target":{"kind":"conditional","handle":3}}
+    {
+      "source": { "kind": "rowField", "handle": 4, "loop": 0 },
+      "target": { "kind": "binding", "handle": 0 }
+    },
+    {
+      "source": { "kind": "rowField", "handle": 5, "loop": 0 },
+      "target": { "kind": "conditional", "handle": 3 }
+    }
   ]
 }
