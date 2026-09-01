@@ -11,11 +11,11 @@ universal reduction rate.
 
 Three subagents:
 
-| Subagent | Job | Use when |
-|----------|-----|----------|
-| `cavecrew-investigator` | Locate code (read-only) | "Where is X defined / what calls Y / list uses of Z" |
-| `cavecrew-builder` | Surgical edit, 1-2 files | Scope is obvious, ≤2 files. Refuses 3+ file scope. |
-| `cavecrew-reviewer` | Diff/file review | One-line findings with severity emoji |
+| Subagent                | Job                      | Use when                                             |
+| ----------------------- | ------------------------ | ---------------------------------------------------- |
+| `cavecrew-investigator` | Locate code (read-only)  | "Where is X defined / what calls Y / list uses of Z" |
+| `cavecrew-builder`      | Surgical edit, 1-2 files | Scope is obvious, ≤2 files. Refuses 3+ file scope.   |
+| `cavecrew-reviewer`     | Diff/file review         | One-line findings with severity emoji                |
 
 Use vanilla `Explore` or `Code Reviewer` when you want prose, architecture commentary, or rationale. Use main thread directly for one-line answers and 3+ file refactors.
 
@@ -39,10 +39,10 @@ Parallel scout: spawn 2-3 `cavecrew-investigator` calls in one message with diff
 
 By default, `cavecrew-reviewer` and `cavecrew-investigator` pin `model: haiku` in their frontmatter; `cavecrew-builder` has no `model:` line (uses the API session default). Set env vars in your shell before launching Claude Code to override per-agent:
 
-| Env var | Agent |
-|---|---|
-| `CAVECREW_REVIEWER_MODEL` | `cavecrew-reviewer` |
-| `CAVECREW_BUILDER_MODEL` | `cavecrew-builder` |
+| Env var                       | Agent                   |
+| ----------------------------- | ----------------------- |
+| `CAVECREW_REVIEWER_MODEL`     | `cavecrew-reviewer`     |
+| `CAVECREW_BUILDER_MODEL`      | `cavecrew-builder`      |
 | `CAVECREW_INVESTIGATOR_MODEL` | `cavecrew-investigator` |
 
 Example: run reviewer on sonnet and keep others on default.

@@ -229,7 +229,11 @@ interface WasmRuntimeInstance {
   register_graph(graphId: string, ir: unknown): void;
   start(root: Element, manifest: unknown): void;
   start_adopt(root: Element, manifest: unknown): void;
-  start_adopt_snapshot(root: Element, manifest: unknown, snapshot: unknown): void;
+  start_adopt_snapshot(
+    root: Element,
+    manifest: unknown,
+    snapshot: unknown,
+  ): void;
   abandon_adoption(): void;
   navigate(href: string, replace: boolean): void;
   ssr_text_divergences(): number;
@@ -573,28 +577,35 @@ export async function startPlecRouter(
       mismatchCodes: ['invalid:ssr-bootstrap'],
     });
   } else if (bootstrap) {
-    const expectedRevision = (manifest as any).revision as string | undefined;
+    const expectedRevision = (manifest as any).revision as
+      string | undefined;
     // The server-published route chain is the adoption cause. A legacy v1
     // bootstrap degrades to the single route id it carries. The gate only
     // checks chain shape; whether the chain matches the current URL is the
     // WASM runtime's cross-validation decision.
-    const chain: unknown = bootstrap.kind === 'snapshot'
-      ? (bootstrap.snapshot as any).routes
-      : bootstrap.routeId
-        ? [{ routeId: bootstrap.routeId }]
-        : [];
+    const chain: unknown =
+      bootstrap.kind === 'snapshot'
+        ? (bootstrap.snapshot as any).routes
+        : bootstrap.routeId
+          ? [{ routeId: bootstrap.routeId }]
+          : [];
     const chainDetail = validateSsrRouteChain(
       (manifest as any).routes ?? [],
       chain,
     );
     if (expectedRevision !== bootstrap.revision) {
       emitAdoptionDiagnostic(options, {
-        outcome: 'fallback', expectedRevision, observedRevision: bootstrap.revision,
-        routeId: bootstrap.routeId, mismatchCodes: ['stale-revision'],
+        outcome: 'fallback',
+        expectedRevision,
+        observedRevision: bootstrap.revision,
+        routeId: bootstrap.routeId,
+        mismatchCodes: ['stale-revision'],
       });
     } else if (chainDetail !== null) {
       emitAdoptionDiagnostic(options, {
-        outcome: 'fallback', expectedRevision, observedRevision: bootstrap.revision,
+        outcome: 'fallback',
+        expectedRevision,
+        observedRevision: bootstrap.revision,
         routeId: bootstrap.routeId,
         mismatchCodes: [`mismatch:ssr-route-chain:${chainDetail}`],
       });
@@ -629,8 +640,11 @@ export async function startPlecRouter(
         }
         adopted = true;
         emitAdoptionDiagnostic(options, {
-          outcome: 'adopted', expectedRevision, observedRevision: bootstrap.revision,
-          routeId: bootstrap.routeId, mismatchCodes: [],
+          outcome: 'adopted',
+          expectedRevision,
+          observedRevision: bootstrap.revision,
+          routeId: bootstrap.routeId,
+          mismatchCodes: [],
           snapshotImported,
           ...(snapshotImported
             ? { textDivergences: runtime.ssr_text_divergences() }
@@ -639,8 +653,11 @@ export async function startPlecRouter(
       } catch (error) {
         runtime.abandon_adoption();
         emitAdoptionDiagnostic(options, {
-          outcome: 'fallback', expectedRevision, observedRevision: bootstrap.revision,
-          routeId: bootstrap.routeId, mismatchCodes: [adoptionMismatchCode(error)],
+          outcome: 'fallback',
+          expectedRevision,
+          observedRevision: bootstrap.revision,
+          routeId: bootstrap.routeId,
+          mismatchCodes: [adoptionMismatchCode(error)],
         });
       }
     }
@@ -754,7 +771,9 @@ export function readSsrBootstrap(): SsrBootstrap {
     return {
       kind: 'snapshot',
       revision:
-        typeof snapshot.revision === 'string' ? snapshot.revision : undefined,
+        typeof snapshot.revision === 'string'
+          ? snapshot.revision
+          : undefined,
       routeId:
         firstRoute && typeof firstRoute.routeId === 'string'
           ? firstRoute.routeId
@@ -764,13 +783,17 @@ export function readSsrBootstrap(): SsrBootstrap {
   }
   return {
     kind: 'legacy',
-    revision: typeof parsed?.revision === 'string' ? parsed.revision : undefined,
+    revision:
+      typeof parsed?.revision === 'string'
+        ? parsed.revision
+        : undefined,
     routeId: parsed?.routeId ?? null,
   };
 }
 
 function adoptionMismatchCode(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message =
+    error instanceof Error ? error.message : String(error);
   return message.replace(/^Error:\s*/, '') || 'adoption-error';
 }
 
@@ -785,7 +808,9 @@ export function validateSsrRouteChain(
   if (!Array.isArray(chain) || chain.length === 0) return 'empty';
   const known = Array.isArray(routes)
     ? new Set(
-        routes.map((entry: any) => entry?.id).filter((id) => typeof id === 'string'),
+        routes
+          .map((entry: any) => entry?.id)
+          .filter((id) => typeof id === 'string'),
       )
     : new Set<string>();
   for (const [index, entry] of chain.entries()) {
@@ -799,11 +824,16 @@ export function validateSsrRouteChain(
       (params === null ||
         typeof params !== 'object' ||
         Array.isArray(params) ||
-        Object.values(params).some((value) => typeof value !== 'string'))
+        Object.values(params).some(
+          (value) => typeof value !== 'string',
+        ))
     )
       return `params:${index}`;
     const phase = (entry as any)?.phase;
-    if (phase !== undefined && !['active', 'pending', 'error'].includes(phase))
+    if (
+      phase !== undefined &&
+      !['active', 'pending', 'error'].includes(phase)
+    )
       return `phase:${index}`;
   }
   return null;
@@ -815,7 +845,9 @@ function emitAdoptionDiagnostic(
 ) {
   options.onAdoptionDiagnostic?.(diagnostic);
   if (typeof window !== 'undefined')
-    window.dispatchEvent(new CustomEvent('plec:adoption', { detail: diagnostic }));
+    window.dispatchEvent(
+      new CustomEvent('plec:adoption', { detail: diagnostic }),
+    );
 }
 
 // SVG instance cache for static icons

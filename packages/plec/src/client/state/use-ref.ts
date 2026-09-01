@@ -16,6 +16,8 @@ export function useRef<T>(initial: T): PlecRef<T> {
 }
 
 /** A ref whose value is owned by host-node mount/disposal rather than user code. */
-export function useHostRef<T extends Element = Element>(): PlecRef<T | null> {
+export function useHostRef<
+  T extends Element = Element,
+>(): PlecRef<T | null> {
   return useRef<T | null>(null);
 }

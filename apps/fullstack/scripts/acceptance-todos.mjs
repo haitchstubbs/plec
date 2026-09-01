@@ -252,7 +252,11 @@ async function loaderErrorThenRetry(browser) {
       `${origin}/api/acceptance/todo-loader-failure`,
       { method: 'POST' },
     );
-    assert.equal(armed.status, 204, 'acceptance fixture must be enabled');
+    assert.equal(
+      armed.status,
+      204,
+      'acceptance fixture must be enabled',
+    );
     await page.goto(`${origin}/todos`, {
       waitUntil: 'domcontentloaded',
     });
@@ -437,7 +441,11 @@ async function main() {
   const graphIds = await assertArtifacts();
   server = spawn(process.execPath, ['dist/server.mjs'], {
     cwd: appDir,
-    env: { ...process.env, PORT: String(port), PLEC_ACCEPTANCE_CONTROL: '1' },
+    env: {
+      ...process.env,
+      PORT: String(port),
+      PLEC_ACCEPTANCE_CONTROL: '1',
+    },
     stdio: 'inherit',
     windowsHide: true,
   });

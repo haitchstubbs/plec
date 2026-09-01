@@ -303,7 +303,11 @@ async function adoptedConditionalBranchFlipsInPlace(browser) {
       'adopted',
       `adoption outcome: ${JSON.stringify(adoption)}`,
     );
-    assert.equal(adoption.snapshotImported, true, 'snapshot must be imported');
+    assert.equal(
+      adoption.snapshotImported,
+      true,
+      'snapshot must be imported',
+    );
 
     // The server rendered the collapsed branch (initial state false) between
     // the conditional markers, and adoption kept that exact DOM in place.
@@ -312,7 +316,8 @@ async function adoptedConditionalBranchFlipsInPlace(browser) {
       return {
         text: element?.textContent ?? '',
         marker: element?.getAttribute('data-plec-node') ?? null,
-        openPresent: document.querySelector('#ssr-branch-open') !== null,
+        openPresent:
+          document.querySelector('#ssr-branch-open') !== null,
       };
     });
     assert.ok(
@@ -334,7 +339,10 @@ async function adoptedConditionalBranchFlipsInPlace(browser) {
       const routeInstance = Object.keys(graphs).find(
         (key) => key !== 'root/outlet:main',
       );
-      return { routeInstance, branches: graphs[routeInstance].branches };
+      return {
+        routeInstance,
+        branches: graphs[routeInstance].branches,
+      };
     });
     assert.equal(
       branchRecord.routeInstance,
@@ -342,14 +350,18 @@ async function adoptedConditionalBranchFlipsInPlace(browser) {
       `route instance key must mirror the runtime grammar: ${branchRecord.routeInstance}`,
     );
     assert.ok(
-      branchRecord.branches.some((branch) => branch.selected === 'alternate'),
+      branchRecord.branches.some(
+        (branch) => branch.selected === 'alternate',
+      ),
       `branch record must name the server-rendered side: ${JSON.stringify(branchRecord.branches)}`,
     );
 
     // Toggling flips the adopted region in place: the server branch is
     // replaced by the instantiated other branch, then restored on a second
     // toggle (branch-flip reconciliation over adopted ownership).
-    await page.getByRole('button', { name: 'Toggle project detail' }).click();
+    await page
+      .getByRole('button', { name: 'Toggle project detail' })
+      .click();
     await page.waitForTimeout(200);
     assert.equal(
       await page.locator('#ssr-branch-open').count(),
@@ -361,7 +373,9 @@ async function adoptedConditionalBranchFlipsInPlace(browser) {
       0,
       'the collapsed branch must be removed on flip',
     );
-    await page.getByRole('button', { name: 'Toggle project detail' }).click();
+    await page
+      .getByRole('button', { name: 'Toggle project detail' })
+      .click();
     await page.waitForTimeout(200);
     assert.equal(
       await page.locator('#ssr-branch-closed').count(),
@@ -372,6 +386,157 @@ async function adoptedConditionalBranchFlipsInPlace(browser) {
       await page.locator('#ssr-branch-open').count(),
       0,
       'the expanded branch must be removed on flip back',
+    );
+    assert.deepEqual(errors, [], errors.join('\n'));
+  } finally {
+    await context.close();
+  }
+}
+
+// Keyed loop structural ownership: the server renders real todo rows, the
+// snapshot records their ordered keys, and adoption claims the row DOM.
+// Afterwards one-row updates stay targeted (row element identity survives)
+// and delta inserts keep the claimed rows in place.
+async function adoptedTodoLoopRowsSurviveAndStayTargeted(browser) {
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 720 },
+  });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.addInitScript(() => {
+    window.__adoptions = [];
+    window.addEventListener('plec:adoption', (event) => {
+      window.__adoptions.push(event.detail);
+    });
+  });
+  try {
+    await page.goto(`${origin}/todos`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(
+      () => (window.__adoptions ?? []).length > 0,
+      undefined,
+      { timeout: 15000 },
+    );
+    const adoption = await page.evaluate(
+      () => window.__adoptions[window.__adoptions.length - 1],
+    );
+    assert.equal(
+      adoption.outcome,
+      'adopted',
+      `adoption outcome: ${JSON.stringify(adoption)}`,
+    );
+    assert.deepEqual(
+      adoption.mismatchCodes,
+      [],
+      `mismatch codes: ${JSON.stringify(adoption.mismatchCodes)}`,
+    );
+    assert.equal(
+      adoption.snapshotImported,
+      true,
+      'snapshot must be imported',
+    );
+
+    // The snapshot records ordered row keys (identity only, no values).
+    const loopRecord = await page.evaluate(() => {
+      const bootstrap = JSON.parse(
+        document.querySelector('#plec-bootstrap').textContent,
+      );
+      const graphs = bootstrap.snapshot.structure.graphs;
+      for (const [instance, structure] of Object.entries(graphs)) {
+        if ((structure.loops ?? []).length) {
+          return { instance, loops: structure.loops };
+        }
+      }
+      return null;
+    });
+    assert.ok(loopRecord, 'snapshot must record loop row keys');
+    assert.ok(
+      loopRecord.loops.every((loopEntry) =>
+        Array.isArray(loopEntry.keys),
+      ),
+      `loop records must carry key lists: ${JSON.stringify(loopRecord)}`,
+    );
+    assert.ok(
+      loopRecord.loops.some((loopEntry) => loopEntry.keys.length > 0),
+      `the todos loop must record its server-rendered keys: ${JSON.stringify(loopRecord)}`,
+    );
+
+    // Server rows survived adoption: row roots keep the runtime row key and
+    // their server ownership markers (a remount would drop both).
+    const stamped = await page.evaluate(() => {
+      const rows = [
+        ...document.querySelectorAll('li[data-runtime-row-key]'),
+      ];
+      rows.forEach((row, index) => {
+        row.setAttribute('data-acceptance-probe', String(index));
+      });
+      return rows.map((row) => ({
+        key: row.getAttribute('data-runtime-row-key'),
+        marker: row.getAttribute('data-plec-node'),
+      }));
+    });
+    assert.ok(
+      stamped.length > 0,
+      'SSR todo rows must exist after adoption',
+    );
+    assert.ok(
+      stamped.every(
+        (row) =>
+          row.marker &&
+          row.marker.includes('/loop:') &&
+          row.marker.includes('/key:'),
+      ),
+      `adopted rows must keep server loop ownership markers: ${JSON.stringify(stamped)}`,
+    );
+
+    // A one-row toggle is targeted: the toggled row updates in place while
+    // every other claimed row keeps its element identity.
+    const firstTitle = stamped[0].key;
+    await page.getByRole('checkbox').first().click();
+    await page.waitForFunction(
+      (key) =>
+        document
+          .querySelector(
+            `li[data-runtime-row-key="${key}"] input[type="checkbox"]`,
+          )
+          ?.getAttribute('aria-label')
+          ?.includes('open'),
+      firstTitle,
+      { timeout: 5000 },
+    );
+    const probesAfterToggle = await page.evaluate(() =>
+      [...document.querySelectorAll('li[data-acceptance-probe]')].map(
+        (row) => row.getAttribute('data-runtime-row-key'),
+      ),
+    );
+    assert.deepEqual(
+      probesAfterToggle,
+      stamped.map((row) => row.key),
+      'toggling one row must keep every claimed row element in place',
+    );
+
+    // Delta insert through the adopted loop: a new row appears with a
+    // runtime row key while the claimed rows stay untouched.
+    await page.fill('#todo-new-title', 'Adoption second todo');
+    await page.getByRole('button', { name: 'Add todo' }).click();
+    await page
+      .getByText('Adoption second todo')
+      .waitFor({ timeout: 5000 });
+    const afterAdd = await page.evaluate(() => ({
+      rows: document.querySelectorAll('li[data-runtime-row-key]')
+        .length,
+      probes: document.querySelectorAll('li[data-acceptance-probe]')
+        .length,
+    }));
+    assert.equal(
+      afterAdd.rows,
+      stamped.length + 1,
+      'the inserted row must appear in the adopted list',
+    );
+    assert.equal(
+      afterAdd.probes,
+      stamped.length,
+      'the claimed rows must keep their identity across the insert',
     );
     assert.deepEqual(errors, [], errors.join('\n'));
   } finally {
@@ -393,6 +558,7 @@ async function main() {
     await adoptedHomeKeepsDomAndActions(browser);
     await adoptedParamRouteUsesServerChain(browser);
     await adoptedConditionalBranchFlipsInPlace(browser);
+    await adoptedTodoLoopRowsSurviveAndStayTargeted(browser);
     console.log('[plec-adoption-acceptance] passed');
   } finally {
     await browser.close();

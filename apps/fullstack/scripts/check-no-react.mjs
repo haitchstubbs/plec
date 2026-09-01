@@ -50,12 +50,19 @@ for (const file of (
     invalidImports.push(path.relative(appDir, file));
 }
 
-const client = await readFile(path.join(appDir, 'src', 'client.tsx'), 'utf8');
+const client = await readFile(
+  path.join(appDir, 'src', 'client.tsx'),
+  'utf8',
+);
 const invalidClientBoundary =
   !client.includes('startPlecRouter(') ||
   /from\s+['"]\.\/routes|\bfetch\s*\(|\/api\//.test(client);
 
-if (reactDependencies.length || invalidImports.length || invalidClientBoundary) {
+if (
+  reactDependencies.length ||
+  invalidImports.length ||
+  invalidClientBoundary
+) {
   const violations = [
     reactDependencies.length &&
       `React dependencies: ${reactDependencies.join(', ')}`,

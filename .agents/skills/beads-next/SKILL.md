@@ -1,6 +1,6 @@
 ---
 name: beads-next
-description: Skill to pick up and complete the next unblocked Beads issue with minimal context burn. Use this skill automatically whenever a user vaguely requests work to be done.
+description: Use when working on the next beads issue, or the user mentions beads. Skill to pick up and complete the next unblocked Beads issue with minimal context burn. Use this skill automatically whenever a user vaguely requests work to be done.
 ---
 
 # Beads Next
@@ -18,13 +18,13 @@ Treat the issue as the authoritative discovery cache for this slice.
 
 Its:
 
-* context
-* repository facts
-* design decisions
-* ownership/files
-* non-goals
-* acceptance criteria
-* verification commands
+- context
+- repository facts
+- design decisions
+- ownership/files
+- non-goals
+- acceptance criteria
+- verification commands
 
 are established constraints.
 
@@ -32,10 +32,10 @@ are established constraints.
 
 Only inspect source when:
 
-* you need the exact code being changed;
-* the issue explicitly leaves a decision unresolved;
-* a cited fact no longer matches the repository;
-* implementation exposes contradictory evidence.
+- you need the exact code being changed;
+- the issue explicitly leaves a decision unresolved;
+- a cited fact no longer matches the repository;
+- implementation exposes contradictory evidence.
 
 Prefer exact/ranged reads over whole-file reads. Never broad-search the repository for a fact already cited by the issue without a concrete reason.
 
@@ -96,11 +96,11 @@ Follow the repository's active commit/push policy.
 
 Report:
 
-* issue completed;
-* important implementation result;
-* verification outcome;
-* changed files;
-* any newly discovered follow-up issue.
+- issue completed;
+- important implementation result;
+- verification outcome;
+- changed files;
+- any newly discovered follow-up issue.
 
 Do not automatically begin another issue unless instructed to continue.
 
@@ -127,19 +127,24 @@ Avoid re-deriving facts or re-evaluating decisions that are already captured in 
 ## Helpful Bash Commands
 
 ### Find information about installed chrome and chromedriver
+
 **browser-info.sh**
+
 ```bash
 .agents/skills/beads-next/scripts/browser-info.sh
 ```
 
 ### Summarize a fixture JSON
+
 **fixture-summary.sh**
+
 ```bash
 .agents/skills/beads-next/scripts/fixture-summary.sh \
   crates/plec-runtime/tests/fixtures/rust-nested-component-0.10.json
 ```
 
 ### Plec CLI
+
 ```bash
 # Usage
 plec --help

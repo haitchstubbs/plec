@@ -192,7 +192,11 @@ function ensureChromeDriver() {
   const executable =
     process.platform === 'win32' ? 'chromedriver.exe' : 'chromedriver';
 
-  const installDir = path.join(repoRoot, '.tools', `chromedriver-${platform}`);
+  const installDir = path.join(
+    repoRoot,
+    '.tools',
+    `chromedriver-${platform}`,
+  );
 
   const target = path.join(installDir, executable);
 
