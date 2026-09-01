@@ -19,7 +19,11 @@ describe('ssr route chain gate', () => {
   it('accepts flat, parameterized, catch-all, and nested chains', () => {
     expect(
       validateSsrRouteChain(manifestRoutes, [
-        { routeId: 'routes/home.tsx#Route', params: {}, phase: 'active' },
+        {
+          routeId: 'routes/home.tsx#Route',
+          params: {},
+          phase: 'active',
+        },
       ]),
     ).toBeNull();
     expect(
@@ -48,9 +52,13 @@ describe('ssr route chain gate', () => {
 
   it('rejects empty, malformed, and unknown chains with chain details', () => {
     expect(validateSsrRouteChain(manifestRoutes, [])).toBe('empty');
-    expect(validateSsrRouteChain(manifestRoutes, undefined)).toBe('empty');
+    expect(validateSsrRouteChain(manifestRoutes, undefined)).toBe(
+      'empty',
+    );
     expect(
-      validateSsrRouteChain(manifestRoutes, [{ routeId: 'ghost#Route' }]),
+      validateSsrRouteChain(manifestRoutes, [
+        { routeId: 'ghost#Route' },
+      ]),
     ).toBe('unknown-route:ghost#Route');
     expect(
       validateSsrRouteChain(manifestRoutes, [{ params: {} }]),

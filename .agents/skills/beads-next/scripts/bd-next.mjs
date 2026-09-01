@@ -64,12 +64,7 @@ function printCompact(issue) {
 }
 
 function claim(issue) {
-  const output = bd([
-    'update',
-    issue.id,
-    '--claim',
-    '--json',
-  ]);
+  const output = bd(['update', issue.id, '--claim', '--json']);
 
   const result = JSON.parse(output);
   const claimed = Array.isArray(result) ? result[0] : result;
@@ -114,9 +109,7 @@ if (args.has('--list')) {
   const issues = readyIssues();
 
   if (args.has('--json')) {
-    console.log(
-      JSON.stringify(issues.map(compact), null, 2),
-    );
+    console.log(JSON.stringify(issues.map(compact), null, 2));
   } else {
     for (const issue of issues) {
       printCompact(issue);

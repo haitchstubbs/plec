@@ -37,14 +37,14 @@ or `%LOCALAPPDATA%\caveman-compress\backups\<parent-dir-name>\` on Windows. Edit
 
 Real results on real project files:
 
-| File | Original | Compressed | Saved |
-|------|----------:|----------:|------:|
-| `claude-md-preferences.md` | 706 | 285 | 59.6% |
-| `project-notes.md` | 1145 | 535 | 53.3% |
-| `claude-md-project.md` | 1122 | 636 | 43.3% |
-| `todo-list.md` | 627 | 388 | 38.1% |
-| `mixed-with-code.md` | 888 | 560 | 36.9% |
-| Average | 898 | 481 | 46% |
+| File                       | Original | Compressed | Saved |
+| -------------------------- | -------: | ---------: | ----: |
+| `claude-md-preferences.md` |      706 |        285 | 59.6% |
+| `project-notes.md`         |     1145 |        535 | 53.3% |
+| `claude-md-project.md`     |     1122 |        636 | 43.3% |
+| `todo-list.md`             |      627 |        388 | 38.1% |
+| `mixed-with-code.md`       |      888 |        560 | 36.9% |
+| Average                    |      898 |        481 |   46% |
 
 All fixture validations passed: headings, code blocks, URLs, and file paths were
 preserved exactly.
@@ -98,6 +98,7 @@ Requires Python 3.10 or newer.
 ```
 
 Examples:
+
 ```
 /caveman-compress CLAUDE.md
 /caveman-compress docs/preferences.md
@@ -106,12 +107,12 @@ Examples:
 
 ### What files work
 
-| Type | Compress? |
-|------|-----------|
-| `.md`, `.txt`, `.rst`, `.typ`, `.typst`, `.tex` | Yes |
-| Extensionless natural language | Yes |
-| `.py`, `.js`, `.ts`, `.json`, `.yaml` | ❌ Skip (code/config) |
-| `*.original.md` | ❌ Skip (backup files) |
+| Type                                            | Compress?              |
+| ----------------------------------------------- | ---------------------- |
+| `.md`, `.txt`, `.rst`, `.typ`, `.typst`, `.tex` | Yes                    |
+| Extensionless natural language                  | Yes                    |
+| `.py`, `.js`, `.ts`, `.json`, `.yaml`           | ❌ Skip (code/config)  |
+| `*.original.md`                                 | ❌ Skip (backup files) |
 
 ## How It Work
 
