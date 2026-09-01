@@ -6,5 +6,8 @@ export const Route = createRoute({
   getParentRoute: () => rootRoute,
   path: '*',
   component: NotFoundPage,
-  meta: { title: 'Page not found', description: 'The requested Plec route does not exist.' },
+  meta: {
+    title: 'Page not found',
+    description: 'The requested Plec route does not exist.',
+  },
 });

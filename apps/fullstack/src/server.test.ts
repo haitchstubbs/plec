@@ -19,7 +19,9 @@ afterEach(async () => {
 });
 
 async function testServer() {
-  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-fullstack-'));
+  const publicDir = await mkdtemp(
+    path.join(tmpdir(), 'plec-fullstack-'),
+  );
   await writeFile(
     path.join(publicDir, 'index.html'),
     '<div id=app></div>',

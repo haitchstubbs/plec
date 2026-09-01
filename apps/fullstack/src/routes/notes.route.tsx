@@ -15,7 +15,8 @@ export const Route = createRoute({
   component: NotesPage,
   meta: {
     title: 'Server notes',
-    description: 'A loader route whose data the server transfers to the browser.',
+    description:
+      'A loader route whose data the server transfers to the browser.',
   },
 });
 

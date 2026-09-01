@@ -17,7 +17,10 @@ export function FullstackLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
   const setSidebarCollapsed = (next: boolean) => {
-    void cookie.set('sidebar_state', next ? 'false' : 'true', { path: '/', maxAge: 604800 });
+    void cookie.set('sidebar_state', next ? 'false' : 'true', {
+      path: '/',
+      maxAge: 604800,
+    });
     setCollapsed(next);
   };
   const closeMobile = () => setMobileOpen(false);
@@ -44,7 +47,7 @@ export function FullstackLayout() {
             ? 'Notes'
             : location.pathname === '/stress'
               ? 'Runtime stress'
-            : 'Not found';
+              : 'Not found';
 
   return (
     <div className="min-h-svh md:[&_.plec-sidebar-inset]:ml-[17rem] md:has-[[data-collapsed=true]]:[&_.plec-sidebar-inset]:ml-16">
