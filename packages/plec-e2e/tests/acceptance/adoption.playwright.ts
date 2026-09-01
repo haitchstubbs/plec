@@ -311,11 +311,7 @@ test('todo loop rows survive adoption with keys and markers', async ({
   }
 });
 
-// Blocked by wasm-runtime-hv3: on adopted pages the runtime re-evaluates
-// loop-row bindings with a lost row scope, so the toggle never rebinds the
-// checkbox/aria-label and the conditional renders the editing branch.
-// Un-skip once adopted loop-row re-evaluation is fixed.
-test.fixme('todo loop rows stay targeted across toggle and insert', async ({
+test('todo loop rows stay targeted across toggle and insert', async ({
   browser,
 }) => {
   const { context, page } = await adoptedPage(browser, '/todos');
