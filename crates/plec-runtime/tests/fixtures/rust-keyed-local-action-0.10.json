@@ -1,1 +1,127 @@
-{"version":"0.10","rootComponent":0,"components":[{"id":"rust-keyed-local-action.tsx#Todos","rootNode":0,"strings":["items","main","p","ul","id","li","button","title","click"],"constants":[""],"nodes":[{"op":"element","tag":1,"parent":null,"children":[1,3]},{"op":"element","tag":2,"parent":0,"children":[2]},{"op":"text","text":0,"parent":1},{"op":"element","tag":3,"parent":0,"children":[7]},{"op":"element","tag":5,"parent":null,"children":[5]},{"op":"element","tag":6,"parent":4,"children":[6]},{"op":"text","text":1,"parent":5},{"op":"loop","loop":0,"parent":3}],"texts":[{"binding":0},{"binding":1}],"bindings":[{"target":2,"sink":"text","expression":2},{"target":6,"sink":"text","expression":5}],"propPrograms":[],"events":[{"target":5,"type":8,"action":1,"loop":0}],"inputs":[{"name":0,"kind":"collection"}],"stateSlots":[{"initialExpression":0,"frameSlot":0}],"parameters":[],"expressions":[{"instructions":[{"op":"constant","constant":0},{"op":"return"}]},{"instructions":[{"op":"loadFrame","slot":0},{"op":"return"}]},{"instructions":[{"op":"loadState","state":0},{"op":"return"}]},{"instructions":[{"op":"makeArray","count":0},{"op":"return"}]},{"instructions":[{"op":"loadRowField","field":4},{"op":"return"}]},{"instructions":[{"op":"loadRowField","field":7},{"op":"return"}]},{"instructions":[{"op":"loadRowField","field":7},{"op":"return"}]}],"actions":[{"frameSlots":1,"parameterSlots":[0],"instructions":[{"op":"evaluate","expression":1},{"op":"storeState","state":0},{"op":"return"}]},{"instructions":[{"op":"call","action":0,"arguments":[6]},{"op":"return"}]}],"loops":[{"sourceExpression":3,"keyExpression":4,"itemSlot":5,"rowTemplate":4,"input":0}],"dependencyEdges":[{"source":{"kind":"state","handle":0},"target":{"kind":"binding","handle":0}},{"source":{"kind":"rowField","handle":7,"loop":0},"target":{"kind":"binding","handle":1}}]}]}
+{
+  "version": "0.10",
+  "rootComponent": 0,
+  "components": [
+    {
+      "id": "rust-keyed-local-action.tsx#Todos",
+      "rootNode": 0,
+      "strings": [
+        "items",
+        "main",
+        "p",
+        "ul",
+        "id",
+        "li",
+        "button",
+        "title",
+        "click"
+      ],
+      "constants": [""],
+      "nodes": [
+        {
+          "op": "element",
+          "tag": 1,
+          "parent": null,
+          "children": [1, 3]
+        },
+        { "op": "element", "tag": 2, "parent": 0, "children": [2] },
+        { "op": "text", "text": 0, "parent": 1 },
+        { "op": "element", "tag": 3, "parent": 0, "children": [7] },
+        { "op": "element", "tag": 5, "parent": null, "children": [5] },
+        { "op": "element", "tag": 6, "parent": 4, "children": [6] },
+        { "op": "text", "text": 1, "parent": 5 },
+        { "op": "loop", "loop": 0, "parent": 3 }
+      ],
+      "texts": [{ "binding": 0 }, { "binding": 1 }],
+      "bindings": [
+        { "target": 2, "sink": "text", "expression": 2 },
+        { "target": 6, "sink": "text", "expression": 5 }
+      ],
+      "propPrograms": [],
+      "events": [{ "target": 5, "type": 8, "action": 1, "loop": 0 }],
+      "inputs": [{ "name": 0, "kind": "collection" }],
+      "stateSlots": [{ "initialExpression": 0, "frameSlot": 0 }],
+      "parameters": [],
+      "expressions": [
+        {
+          "instructions": [
+            { "op": "constant", "constant": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadFrame", "slot": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadState", "state": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "makeArray", "count": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadRowField", "field": 4 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadRowField", "field": 7 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadRowField", "field": 7 },
+            { "op": "return" }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "frameSlots": 1,
+          "parameterSlots": [0],
+          "instructions": [
+            { "op": "evaluate", "expression": 1 },
+            { "op": "storeState", "state": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "call", "action": 0, "arguments": [6] },
+            { "op": "return" }
+          ]
+        }
+      ],
+      "loops": [
+        {
+          "sourceExpression": 3,
+          "keyExpression": 4,
+          "itemSlot": 5,
+          "rowTemplate": 4,
+          "input": 0
+        }
+      ],
+      "dependencyEdges": [
+        {
+          "source": { "kind": "state", "handle": 0 },
+          "target": { "kind": "binding", "handle": 0 }
+        },
+        {
+          "source": { "kind": "rowField", "handle": 7, "loop": 0 },
+          "target": { "kind": "binding", "handle": 1 }
+        }
+      ]
+    }
+  ]
+}

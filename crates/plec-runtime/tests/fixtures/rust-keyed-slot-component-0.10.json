@@ -1,1 +1,173 @@
-{"version":"0.10","rootComponent":0,"components":[{"id":"rust-keyed-slot-component.tsx#Todos","rootNode":0,"strings":["items","main","p","ul","id","button","title","click","done","strong","em"],"constants":[""],"nodes":[{"op":"element","tag":1,"parent":null,"children":[1,3]},{"op":"element","tag":2,"parent":0,"children":[2]},{"op":"text","text":0,"parent":1},{"op":"element","tag":3,"parent":0,"children":[12]},{"op":"element","tag":5,"parent":null,"children":[5]},{"op":"text","text":1,"parent":4},{"op":"conditional","test":6,"parent":null,"consequent":7,"alternate":9},{"op":"element","tag":9,"parent":null,"children":[8]},{"op":"text","text":2,"parent":7},{"op":"element","tag":10,"parent":null,"children":[10]},{"op":"text","text":3,"parent":9},{"op":"component","component":1,"parent":null,"props":[],"children":[4,6]},{"op":"loop","loop":0,"parent":3}],"texts":[{"binding":0},{"binding":1},{"value":"Done"},{"value":"Open"}],"bindings":[{"target":2,"sink":"text","expression":1},{"target":5,"sink":"text","expression":4}],"propPrograms":[],"events":[{"target":4,"type":7,"action":0,"loop":0}],"inputs":[{"name":0,"kind":"collection"}],"stateSlots":[{"initialExpression":0,"frameSlot":0}],"parameters":[],"expressions":[{"instructions":[{"op":"constant","constant":0},{"op":"return"}]},{"instructions":[{"op":"loadState","state":0},{"op":"return"}]},{"instructions":[{"op":"makeArray","count":0},{"op":"return"}]},{"instructions":[{"op":"loadRowField","field":4},{"op":"return"}]},{"instructions":[{"op":"loadRowField","field":6},{"op":"return"}]},{"instructions":[{"op":"loadRowField","field":6},{"op":"return"}]},{"instructions":[{"op":"loadRowField","field":8},{"op":"return"}]}],"actions":[{"instructions":[{"op":"evaluate","expression":5},{"op":"storeState","state":0},{"op":"return"}]}],"loops":[{"sourceExpression":2,"keyExpression":3,"itemSlot":3,"rowTemplate":11,"input":0}],"dependencyEdges":[{"source":{"kind":"state","handle":0},"target":{"kind":"binding","handle":0}},{"source":{"kind":"rowField","handle":6,"loop":0},"target":{"kind":"binding","handle":1}},{"source":{"kind":"rowField","handle":8,"loop":0},"target":{"kind":"conditional","handle":6}}]},{"id":"rust-keyed-slot-component.tsx#Frame","rootNode":0,"strings":["children","li"],"constants":[],"nodes":[{"op":"element","tag":1,"parent":null,"children":[1]},{"op":"slot","parent":0}],"texts":[],"bindings":[],"propPrograms":[],"events":[],"inputs":[],"stateSlots":[],"parameters":[{"name":0,"callable":false}],"expressions":[],"actions":[],"loops":[],"dependencyEdges":[]}]}
+{
+  "version": "0.10",
+  "rootComponent": 0,
+  "components": [
+    {
+      "id": "rust-keyed-slot-component.tsx#Todos",
+      "rootNode": 0,
+      "strings": [
+        "items",
+        "main",
+        "p",
+        "ul",
+        "id",
+        "button",
+        "title",
+        "click",
+        "done",
+        "strong",
+        "em"
+      ],
+      "constants": [""],
+      "nodes": [
+        {
+          "op": "element",
+          "tag": 1,
+          "parent": null,
+          "children": [1, 3]
+        },
+        { "op": "element", "tag": 2, "parent": 0, "children": [2] },
+        { "op": "text", "text": 0, "parent": 1 },
+        { "op": "element", "tag": 3, "parent": 0, "children": [12] },
+        { "op": "element", "tag": 5, "parent": null, "children": [5] },
+        { "op": "text", "text": 1, "parent": 4 },
+        {
+          "op": "conditional",
+          "test": 6,
+          "parent": null,
+          "consequent": 7,
+          "alternate": 9
+        },
+        { "op": "element", "tag": 9, "parent": null, "children": [8] },
+        { "op": "text", "text": 2, "parent": 7 },
+        {
+          "op": "element",
+          "tag": 10,
+          "parent": null,
+          "children": [10]
+        },
+        { "op": "text", "text": 3, "parent": 9 },
+        {
+          "op": "component",
+          "component": 1,
+          "parent": null,
+          "props": [],
+          "children": [4, 6]
+        },
+        { "op": "loop", "loop": 0, "parent": 3 }
+      ],
+      "texts": [
+        { "binding": 0 },
+        { "binding": 1 },
+        { "value": "Done" },
+        { "value": "Open" }
+      ],
+      "bindings": [
+        { "target": 2, "sink": "text", "expression": 1 },
+        { "target": 5, "sink": "text", "expression": 4 }
+      ],
+      "propPrograms": [],
+      "events": [{ "target": 4, "type": 7, "action": 0, "loop": 0 }],
+      "inputs": [{ "name": 0, "kind": "collection" }],
+      "stateSlots": [{ "initialExpression": 0, "frameSlot": 0 }],
+      "parameters": [],
+      "expressions": [
+        {
+          "instructions": [
+            { "op": "constant", "constant": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadState", "state": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "makeArray", "count": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadRowField", "field": 4 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadRowField", "field": 6 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadRowField", "field": 6 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadRowField", "field": 8 },
+            { "op": "return" }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "instructions": [
+            { "op": "evaluate", "expression": 5 },
+            { "op": "storeState", "state": 0 },
+            { "op": "return" }
+          ]
+        }
+      ],
+      "loops": [
+        {
+          "sourceExpression": 2,
+          "keyExpression": 3,
+          "itemSlot": 3,
+          "rowTemplate": 11,
+          "input": 0
+        }
+      ],
+      "dependencyEdges": [
+        {
+          "source": { "kind": "state", "handle": 0 },
+          "target": { "kind": "binding", "handle": 0 }
+        },
+        {
+          "source": { "kind": "rowField", "handle": 6, "loop": 0 },
+          "target": { "kind": "binding", "handle": 1 }
+        },
+        {
+          "source": { "kind": "rowField", "handle": 8, "loop": 0 },
+          "target": { "kind": "conditional", "handle": 6 }
+        }
+      ]
+    },
+    {
+      "id": "rust-keyed-slot-component.tsx#Frame",
+      "rootNode": 0,
+      "strings": ["children", "li"],
+      "constants": [],
+      "nodes": [
+        { "op": "element", "tag": 1, "parent": null, "children": [1] },
+        { "op": "slot", "parent": 0 }
+      ],
+      "texts": [],
+      "bindings": [],
+      "propPrograms": [],
+      "events": [],
+      "inputs": [],
+      "stateSlots": [],
+      "parameters": [{ "name": 0, "callable": false }],
+      "expressions": [],
+      "actions": [],
+      "loops": [],
+      "dependencyEdges": []
+    }
+  ]
+}

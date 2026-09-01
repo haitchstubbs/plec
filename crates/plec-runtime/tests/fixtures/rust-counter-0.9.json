@@ -1,22 +1,14 @@
 {
   "version": "0.9",
   "rootNode": 0,
-  "strings": [
-    "button",
-    "click"
-  ],
-  "constants": [
-    0.0,
-    1.0
-  ],
+  "strings": ["button", "click"],
+  "constants": [0.0, 1.0],
   "nodes": [
     {
       "op": "element",
       "tag": 0,
       "parent": null,
-      "children": [
-        1
-      ]
+      "children": [1]
     },
     {
       "op": "text",
