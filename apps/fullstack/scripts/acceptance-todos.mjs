@@ -219,9 +219,19 @@ async function loaderPendingThenSuccess(browser) {
     await page.goto(`${origin}/todos`, {
       waitUntil: 'domcontentloaded',
     });
-    await page.getByText('Loading todos…', { exact: true }).waitFor();
-    await page.getByRole('heading', { name: 'Todos' }).waitFor();
+    // SSR executes the loader server-side and transfers the outcome in the
+    // snapshot, so adoption may land directly in the active Todos state. Only
+    // when no active result transfers does the client loader run behind the
+    // delayed interception and render the pending phase first.
+    const pending = page.getByText('Loading todos…', { exact: true });
+    const heading = page.getByRole('heading', { name: 'Todos' });
+    await pending.or(heading).waitFor();
+    if (await pending.isVisible()) await heading.waitFor();
     await waitForMount(page);
+    // Mounted success looks identical on both paths: the active page is
+    // interactive and no pending phase remains.
+    await heading.waitFor();
+    await pending.waitFor({ state: 'detached' });
     done();
   } finally {
     await context.close();
@@ -232,20 +242,25 @@ async function loaderErrorThenRetry(browser) {
   const context = await browser.newContext();
   const page = await context.newPage();
   const done = watch(page);
-  let failed = false;
-  await page.route('**/api/todos', async (route) => {
-    if (route.request().method() === 'GET' && !failed) {
-      failed = true;
-      await route.fulfill({ status: 500, body: '{}' });
-    } else await forwardTodoRequest(route);
-  });
   try {
+    // SSR executes the route loader server-side, so the failure must be armed
+    // on the server instead of intercepting a browser request that only fires
+    // after SSR. The one-shot fixture rejects exactly the GET /api/todos the
+    // SSR loader performs; the browser adopts the server-rendered error phase
+    // from the rejected loader snapshot, and the retry refetches successfully.
+    const armed = await fetch(
+      `${origin}/api/acceptance/todo-loader-failure`,
+      { method: 'POST' },
+    );
+    assert.equal(armed.status, 204, 'acceptance fixture must be enabled');
     await page.goto(`${origin}/todos`, {
       waitUntil: 'domcontentloaded',
     });
     await page
       .getByText('Could not load todos.', { exact: true })
       .waitFor();
+    // SSR markup is inert until runtime ownership transfers.
+    await waitForMount(page);
     await page.getByRole('button', { name: 'Try again' }).click();
     await page.getByRole('heading', { name: 'Todos' }).waitFor();
     done();
@@ -422,7 +437,7 @@ async function main() {
   const graphIds = await assertArtifacts();
   server = spawn(process.execPath, ['dist/server.mjs'], {
     cwd: appDir,
-    env: { ...process.env, PORT: String(port) },
+    env: { ...process.env, PORT: String(port), PLEC_ACCEPTANCE_CONTROL: '1' },
     stdio: 'inherit',
     windowsHide: true,
   });
