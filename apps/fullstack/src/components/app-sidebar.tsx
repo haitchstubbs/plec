@@ -38,7 +38,9 @@ const NavLink = ({
       className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium no-underline transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-sidebar-accent-foreground md:data-[collapsed=true]:justify-center md:data-[collapsed=true]:px-2"
     >
       <Icon className="size-4 shrink-0" />
-      <span className="md:data-[collapsed=true]:hidden">{children}</span>
+      <span className="md:data-[collapsed=true]:hidden">
+        {children}
+      </span>
     </PlecLink>
   );
 };
@@ -111,11 +113,7 @@ export function AppSidebar({
           className="flex flex-col gap-1 p-2"
           aria-label="Primary navigation"
         >
-          <NavLink
-            href="/"
-            Icon={House}
-            onCloseMobile={onCloseMobile}
-          >
+          <NavLink href="/" Icon={House} onCloseMobile={onCloseMobile}>
             Home
           </NavLink>
           <NavLink

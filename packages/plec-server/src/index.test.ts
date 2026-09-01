@@ -696,3 +696,283 @@ it('renders the error phase and records the rejection when the loader fetch fail
     'status 500',
   );
 });
+
+it('renders keyed loop rows with row-scoped component props and records their keys', async () => {
+  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
+  // The route page renders one keyed loop whose row template is a component
+  // call. The row prop transfers the whole row record (`loadRowRecord`), so
+  // the child renders the row title from its prop.
+  const loopPage = {
+    rootComponent: 0,
+    components: [
+      {
+        rootNode: 0,
+        strings: ['section', 'ul', 'li', 'title', 'id'],
+        constants: ['one', 'One', 'two', 'Two'],
+        nodes: [
+          { op: 'element', tag: 0, children: [1] },
+          { op: 'element', tag: 1, parent: 0, children: [2] },
+          { op: 'loop', loop: 0, parent: 1 },
+          {
+            op: 'component',
+            component: 1,
+            parent: null,
+            props: [{ kind: 'value', name: 3, expression: 0 }],
+          },
+        ],
+        texts: [],
+        bindings: [],
+        propPrograms: [],
+        stateSlots: [],
+        parameters: [],
+        expressions: [
+          {
+            instructions: [{ op: 'loadRowRecord' }, { op: 'return' }],
+          },
+          {
+            instructions: [
+              { op: 'loadRowField', field: 4 },
+              { op: 'return' },
+            ],
+          },
+          {
+            instructions: [
+              { op: 'constant', constant: 0 },
+              { op: 'constant', constant: 1 },
+              { op: 'makeRecord', fields: [4, 3] },
+              { op: 'constant', constant: 2 },
+              { op: 'constant', constant: 3 },
+              { op: 'makeRecord', fields: [4, 3] },
+              { op: 'makeArray', count: 2 },
+              { op: 'return' },
+            ],
+          },
+        ],
+        actions: [],
+        loops: [
+          {
+            sourceExpression: 2,
+            keyExpression: 1,
+            itemSlot: 0,
+            rowTemplate: 3,
+          },
+        ],
+        routeOutlets: [],
+      },
+      {
+        rootNode: 0,
+        strings: ['li', 'span', 'title'],
+        constants: [],
+        nodes: [
+          { op: 'element', tag: 0, children: [1] },
+          { op: 'element', tag: 1, parent: 0, children: [2] },
+          { op: 'text', text: 0, parent: 1 },
+        ],
+        texts: [{ binding: 0 }],
+        bindings: [{ target: 2, sink: 'text', expression: 0 }],
+        propPrograms: [],
+        stateSlots: [],
+        parameters: [{ name: 2, callable: false }],
+        expressions: [
+          {
+            instructions: [
+              { op: 'loadProp', prop: 0 },
+              { op: 'field', field: 2 },
+              { op: 'return' },
+            ],
+          },
+        ],
+        loops: [],
+        routeOutlets: [],
+      },
+    ],
+  };
+  await writeFile(
+    path.join(publicDir, 'route-artifact.json'),
+    JSON.stringify({
+      manifest: {
+        revision: 'test-revision',
+        rootGraphId: 'root',
+        routes: [
+          { id: 'home', path: '', graphId: 'home', outletId: 'main' },
+        ],
+      },
+      graphs: [
+        {
+          graphId: 'root',
+          graph: {
+            rootComponent: 0,
+            components: [
+              {
+                rootNode: 0,
+                strings: ['main'],
+                constants: [],
+                nodes: [{ op: 'element', tag: 0, children: [] }],
+                texts: [],
+                bindings: [],
+                propPrograms: [],
+                stateSlots: [],
+                parameters: [],
+                expressions: [],
+                loops: [],
+                routeOutlets: [{ id: 'main', node: 0 }],
+              },
+            ],
+          },
+        },
+        { graphId: 'home', graph: loopPage },
+      ],
+    }),
+  );
+  const server = createPlecServer({
+    publicDir,
+    artifactPath: path.join(publicDir, 'route-artifact.json'),
+  });
+  servers.push(server);
+  server.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('missing test address');
+  const html = await (
+    await fetch(`http://127.0.0.1:${address.port}/`)
+  ).text();
+
+  // Each row renders between the runtime's loop marker grammar with the
+  // row key stamped on its root, and the child component received the row
+  // record: the title text comes from the transferred prop.
+  expect(html).toContain(
+    '<!--plec:loop:root/outlet:main/loop:2/key:one-->',
+  );
+  expect(html).toContain(
+    '<!--plec:loop-end:root/outlet:main/loop:2/key:one-->',
+  );
+  expect(html).toContain('data-runtime-row-key="one"');
+  expect(html).toContain('data-runtime-row-key="two"');
+  expect(html).toContain('>One</span>');
+  expect(html).toContain('>Two</span>');
+  const bootstrap = JSON.parse(
+    html.match(
+      /<script id="plec-bootstrap" type="application\/json">([^<]+)<\/script>/,
+    )![1]!,
+  ) as {
+    snapshot: {
+      structure: {
+        graphs: Record<
+          string,
+          { loops?: Array<{ node: number; keys: string[] }> }
+        >;
+      };
+    };
+  };
+  const graphs = Object.values(bootstrap.snapshot.structure.graphs);
+  const instance = graphs.find(
+    (entry) => (entry.loops ?? []).length > 0,
+  );
+  expect(instance!.loops).toEqual([{ node: 2, keys: ['one', 'two'] }]);
+});
+
+it('fails the document render when a loop produces duplicate keys', async () => {
+  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
+  const duplicatePage = {
+    rootComponent: 0,
+    components: [
+      {
+        rootNode: 0,
+        strings: ['section', 'ul', 'li', 'id'],
+        constants: ['one', 'Same', 'one', 'Again'],
+        nodes: [
+          { op: 'element', tag: 0, children: [1] },
+          { op: 'element', tag: 1, parent: 0, children: [2] },
+          { op: 'loop', loop: 0, parent: 1 },
+          { op: 'element', tag: 2, parent: null, children: [] },
+        ],
+        texts: [],
+        bindings: [],
+        propPrograms: [],
+        stateSlots: [],
+        parameters: [],
+        expressions: [
+          {
+            instructions: [
+              { op: 'constant', constant: 0 },
+              { op: 'makeRecord', fields: [3] },
+              { op: 'constant', constant: 0 },
+              { op: 'makeRecord', fields: [3] },
+              { op: 'makeArray', count: 2 },
+              { op: 'return' },
+            ],
+          },
+          {
+            instructions: [
+              { op: 'loadRowField', field: 3 },
+              { op: 'return' },
+            ],
+          },
+        ],
+        actions: [],
+        loops: [
+          {
+            sourceExpression: 0,
+            keyExpression: 1,
+            itemSlot: 0,
+            rowTemplate: 3,
+          },
+        ],
+        routeOutlets: [],
+      },
+    ],
+  };
+  await writeFile(
+    path.join(publicDir, 'route-artifact.json'),
+    JSON.stringify({
+      manifest: {
+        revision: 'test-revision',
+        rootGraphId: 'root',
+        routes: [
+          { id: 'home', path: '', graphId: 'home', outletId: 'main' },
+        ],
+      },
+      graphs: [
+        {
+          graphId: 'root',
+          graph: {
+            rootComponent: 0,
+            components: [
+              {
+                rootNode: 0,
+                strings: ['main'],
+                constants: [],
+                nodes: [{ op: 'element', tag: 0, children: [] }],
+                texts: [],
+                bindings: [],
+                propPrograms: [],
+                stateSlots: [],
+                parameters: [],
+                expressions: [],
+                loops: [],
+                routeOutlets: [{ id: 'main', node: 0 }],
+              },
+            ],
+          },
+        },
+        { graphId: 'home', graph: duplicatePage },
+      ],
+    }),
+  );
+  const server = createPlecServer({
+    publicDir,
+    artifactPath: path.join(publicDir, 'route-artifact.json'),
+    development: true,
+  });
+  servers.push(server);
+  server.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('missing test address');
+  const response = await fetch(`http://127.0.0.1:${address.port}/`);
+  // A duplicate key is a render failure, never a silently degraded page.
+  expect(response.status).toBe(500);
+  expect(await response.text()).toContain('DUPLICATE_LOOP_KEY:one');
+});

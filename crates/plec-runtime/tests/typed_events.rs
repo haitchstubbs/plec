@@ -2898,6 +2898,847 @@ fn ssr_conditional_none_branch_adopts_empty_region_and_flips() {
 }
 
 // ---------------------------------------------------------------------------
+// SSR keyed loop adoption
+//
+// The demo todos shape: a keyed loop whose source is state seeded from the
+// transferred `loaderData` export. The server renders real rows (loop
+// markers + `data-runtime-row-key`), the snapshot records ordered keys as
+// the ownership record, and adoption claims the row DOM into `TypedLoopRows`.
+// A collection-input variant adopts its empty loop and receives rows through
+// the normal delta path afterwards.
+// ---------------------------------------------------------------------------
+
+/// The route page graph. Node 2 is the loop anchor; node 3 is the row
+/// template (title binding + row button). The loop source reads state 0,
+/// whose initialiser is the `loaderData` host slot, so the server's rows and
+/// the client projection derive from the same imported cause.
+fn loop_route_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "ssr-loop.tsx#Home",
+            "rootNode": 0,
+            "strings": ["section", "ul", "li", "title", "click", "button", "Pick", "p", "id"],
+            "constants": [""],
+            "nodes": [
+                {"op": "element", "tag": 0, "parent": null, "children": [1, 7]},
+                {"op": "element", "tag": 1, "parent": 0, "children": [2]},
+                {"op": "loop", "loop": 0, "parent": 1},
+                {"op": "element", "tag": 2, "parent": null, "children": [4, 5]},
+                {"op": "text", "text": 0, "parent": 3},
+                {"op": "element", "tag": 5, "parent": 3, "children": [6]},
+                {"op": "text", "text": 1, "parent": 5},
+                {"op": "element", "tag": 7, "parent": 0, "children": [8]},
+                {"op": "text", "text": 2, "parent": 7}
+            ],
+            "texts": [{"binding": 0}, {"value": "Pick"}, {"binding": 1}],
+            "bindings": [
+                {"target": 4, "sink": "text", "expression": 1},
+                {"target": 8, "sink": "text", "expression": 3}
+            ],
+            "propPrograms": [],
+            "events": [{"target": 5, "type": 4, "action": 0, "loop": 0, "fields": []}],
+            "inputs": [],
+            "hostSlots": [{"kind": "loaderData"}],
+            "stateSlots": [
+                {"initialExpression": 0, "frameSlot": 0},
+                {"initialExpression": 2, "frameSlot": 1}
+            ],
+            "parameters": [],
+            "expressions": [
+                {"instructions": [{"op": "loadHost", "host": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadRowField", "field": 3}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadState", "state": 1}, {"op": "return"}]},
+                {"instructions": [{"op": "loadRowField", "field": 8}, {"op": "return"}]}
+            ],
+            "actions": [{"frameSlots": 0, "instructions": [
+                {"op": "evaluate", "expression": 1},
+                {"op": "storeState", "state": 1},
+                {"op": "return"}
+            ]}],
+            "loops": [{"sourceExpression": 0, "keyExpression": 4, "itemSlot": 0, "rowTemplate": 3, "input": null}],
+            "dependencyEdges": [
+                {"source": {"kind": "state", "handle": 0}, "target": {"kind": "loop", "handle": 0}},
+                {"source": {"kind": "state", "handle": 1}, "target": {"kind": "binding", "handle": 1}},
+                {"source": {"kind": "rowField", "handle": 3, "loop": 0}, "target": {"kind": "binding", "handle": 0}}
+            ],
+            "routeOutlets": []
+        }]
+    })
+}
+
+/// Rows the `loaderData` export transfers; the loop recomputes keys from it.
+fn loop_rows_json(pairs: &[(&str, &str)]) -> serde_json::Value {
+    serde_json::json!(pairs
+        .iter()
+        .map(|(id, title)| serde_json::json!({"id": id, "title": title}))
+        .collect::<Vec<_>>())
+}
+
+/// The server markup the route graph renders: ordered keyed rows between
+/// loop markers, row roots stamped `data-runtime-row-key`, plus the empty
+/// static output paragraph.
+fn loop_server_dom(rows: &[(&str, &str)]) -> String {
+    let list = rows
+        .iter()
+        .map(|(key, title)| {
+            let rp = format!("root/outlet:main/loop:2/key:{key}");
+            format!(
+                "<!--plec:loop:{rp}-->\
+                 <li data-runtime-row-key=\"{key}\" data-plec-node=\"{rp}/node:3\">\
+                 <!--plec:text:{rp}:4-->{title}\
+                 <button data-plec-node=\"{rp}/node:5\">\
+                 <!--plec:text:{rp}:6-->Pick</button></li>\
+                 <!--plec:loop-end:{rp}-->"
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<ul data-plec-node=\"root/outlet:main/node:1\">{list}</ul>\
+         <p data-plec-node=\"root/outlet:main/node:7\">\
+         <!--plec:text:root/outlet:main:8--></p>"
+    )
+}
+
+/// Snapshot with the route instance's ordered loop keys and the public
+/// `loaderData` export the state initialiser reads.
+fn loop_snapshot(keys: &[&str], rows: serde_json::Value) -> serde_json::Value {
+    let mut snapshot = snapshot_chain_fixture(
+        "rev-1",
+        "x",
+        "/",
+        "ssr-snapshot.tsx#App",
+        serde_json::json!({}),
+    );
+    snapshot["public"]["exports"]["loaderData"]["value"] = rows;
+    snapshot["structure"]["graphs"]["root%2Foutlet:main/outlet:main"] = serde_json::json!({
+        "graphId": "ssr-loop.tsx#Home",
+        "loops": [{"node": 2, "keys": keys}],
+    });
+    snapshot
+}
+
+fn start_loop_fixture(
+    runtime: &PlecRuntime,
+    root: &Element,
+    outlet_dom: &str,
+    snapshot: serde_json::Value,
+) -> Result<(), JsValue> {
+    root.set_inner_html(&format!(
+        "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
+         <!--plec:text:root:2-->ignored</p>\
+         <section data-plec-node=\"root/outlet:main/node:0\">{outlet_dom}</section></main>"
+    ));
+    runtime
+        .register_graph(
+            "ssr-loop.tsx#Home".into(),
+            serde_wasm_bindgen::to_value(&loop_route_artifact()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "ssr-snapshot.tsx#App".into(),
+            serde_wasm_bindgen::to_value(&snapshot_fixture_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        r#"{"version":3,"revision":"rev-1","rootGraphId":"ssr-snapshot.tsx#App",
+            "routes":[{"id":"ssr-snapshot.tsx#Home","path":"",
+            "graphId":"ssr-loop.tsx#Home","outletId":"main"}]}"#,
+    )
+    .unwrap();
+    let snapshot = serde_wasm_bindgen::to_value(&snapshot).unwrap();
+    runtime.start_adopt_snapshot(root.clone(), manifest, snapshot)
+}
+
+fn loop_row<'a>(root: &Element, key: &str) -> web_sys::Element {
+    root.query_selector(&format!("[data-runtime-row-key='{key}']"))
+        .unwrap()
+        .unwrap_or_else(|| panic!("adopted row {key} missing"))
+}
+
+#[wasm_bindgen_test]
+fn ssr_keyed_loop_adopts_server_rows_and_keeps_row_actions_live() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    let rows = loop_rows_json(&[("one", "One"), ("two", "Two")]);
+    start_loop_fixture(
+        &runtime,
+        &root,
+        &loop_server_dom(&[("one", "One"), ("two", "Two")]),
+        loop_snapshot(&["one", "two"], rows),
+    )
+    .unwrap();
+    // The server-rendered rows survived: keys claimed, values intact, and
+    // the row-root attribute the event delegation depends on is present.
+    let one = loop_row(&root, "one");
+    let two = loop_row(&root, "two");
+    assert_eq!(one.text_content().unwrap(), "OnePick");
+    assert_eq!(two.text_content().unwrap(), "TwoPick");
+    // Clicking an adopted row's button runs the row-scoped action through
+    // event delegation and updates the static output binding, with the other
+    // row's DOM untouched (no remount).
+    let one_node: web_sys::Node = one.clone().into();
+    two.query_selector("button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(
+        root.query_selector("[data-plec-node='root/outlet:main/node:7']")
+            .unwrap()
+            .unwrap()
+            .text_content(),
+        Some("Two".to_string())
+    );
+    assert!(one.parent_node().is_some());
+    assert!(one_node.is_same_node(Some(loop_row(&root, "one").unchecked_ref())));
+}
+
+#[wasm_bindgen_test]
+fn ssr_keyed_loop_missing_snapshot_record_fails_closed() {
+    let _location = reset_browser_location();
+    let mut snapshot = loop_snapshot(&["one"], loop_rows_json(&[("one", "One")]));
+    snapshot["structure"]["graphs"]["root%2Foutlet:main/outlet:main"]
+        .as_object_mut()
+        .unwrap()
+        .remove("loops");
+    let error = start_loop_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &loop_server_dom(&[("one", "One")]),
+        snapshot,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "missing:ssr-loop:root/outlet:main:2"
+    );
+}
+
+#[wasm_bindgen_test]
+fn ssr_keyed_loop_projection_mismatches_fail_closed_per_row() {
+    let cases: &[(&str, serde_json::Value, &[&str], &str)] = &[
+        (
+            // The transferred keys name a row the imported state lacks.
+            "missing",
+            loop_rows_json(&[("one", "One")]),
+            &["one", "two"],
+            "missing:ssr-row:two",
+        ),
+        (
+            // The imported state has a row the transferred keys do not.
+            "extra",
+            loop_rows_json(&[("one", "One"), ("two", "Two")]),
+            &["one"],
+            "extra:ssr-row:two",
+        ),
+        (
+            // Same keys, different order: identity ordering is the record.
+            "order",
+            loop_rows_json(&[("one", "One"), ("two", "Two")]),
+            &["two", "one"],
+            "mismatch:ssr-row-order:root/outlet:main:2",
+        ),
+        (
+            // A duplicated imported key is a hard error, client-side too.
+            "duplicate",
+            loop_rows_json(&[("one", "One"), ("one", "Again")]),
+            &["one", "two"],
+            "duplicate:ssr-row-key:one",
+        ),
+    ];
+    for (name, rows, keys, expected) in cases {
+        let error = start_loop_fixture(
+            &PlecRuntime::new(),
+            &mount_root(),
+            &loop_server_dom(&[("one", "One"), ("two", "Two")]),
+            loop_snapshot(keys, rows.clone()),
+        )
+        .unwrap_err()
+        .as_string()
+        .unwrap_or_default();
+        assert_eq!(&error, expected, "case {name}");
+    }
+}
+
+#[wasm_bindgen_test]
+fn ssr_keyed_loop_missing_dom_row_fails_closed_at_claim() {
+    let _location = reset_browser_location();
+    // Keys and projection agree on two rows, but the server only rendered
+    // one: the claim cannot invent the missing row DOM.
+    let error = start_loop_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &loop_server_dom(&[("one", "One")]),
+        loop_snapshot(
+            &["one", "two"],
+            loop_rows_json(&[("one", "One"), ("two", "Two")]),
+        ),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "missing:ssr-node:root/outlet:main/loop:2/key:two/node:3"
+    );
+}
+
+#[wasm_bindgen_test]
+fn ssr_keyed_loop_duplicate_dom_row_markers_fail_closed() {
+    let _location = reset_browser_location();
+    // Two server rows claim the same key segment: the ownership index
+    // rejects the duplicated marker instead of last-wins claiming.
+    let error = start_loop_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &loop_server_dom(&[("one", "One"), ("one", "One")]),
+        loop_snapshot(&["one"], loop_rows_json(&[("one", "One")])),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "duplicate:ssr-marker:plec:loop:root/outlet:main/loop:2/key:one"
+    );
+}
+
+/// The collection-input variant: the loop source compiles to an empty
+/// literal because rows arrive through the input, so the server renders no
+/// rows and the snapshot records an empty key list. Adoption claims the
+/// empty loop; rows then flow through the normal delta path.
+fn collection_loop_route_artifact() -> serde_json::Value {
+    let mut app = loop_route_artifact();
+    let component = &mut app["components"][0];
+    component["strings"] = serde_json::json!([
+        "section", "ul", "li", "title", "click", "button", "Pick", "p", "id", "items"
+    ]);
+    component["inputs"] = serde_json::json!([{"name": 9, "kind": "collection"}]);
+    component["hostSlots"] = serde_json::json!([]);
+    component["stateSlots"] = serde_json::json!([{"initialExpression": 2, "frameSlot": 0}]);
+    component["actions"] = serde_json::json!([{"frameSlots": 0, "instructions": [
+        {"op": "evaluate", "expression": 1},
+        {"op": "storeState", "state": 0},
+        {"op": "return"}
+    ]}]);
+    component["expressions"] = serde_json::json!([
+        {"instructions": [{"op": "makeArray", "count": 0, "spreads": []}, {"op": "return"}]},
+        {"instructions": [{"op": "loadRowField", "field": 3}, {"op": "return"}]},
+        {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+        {"instructions": [{"op": "loadState", "state": 0}, {"op": "return"}]},
+        {"instructions": [{"op": "loadRowField", "field": 8}, {"op": "return"}]}
+    ]);
+    component["loops"] = serde_json::json!([{"sourceExpression": 0, "keyExpression": 4, "itemSlot": 0, "rowTemplate": 3, "input": 0}]);
+    component["dependencyEdges"] = serde_json::json!([
+        {"source": {"kind": "rowField", "handle": 3, "loop": 0}, "target": {"kind": "binding", "handle": 0}},
+        {"source": {"kind": "state", "handle": 0}, "target": {"kind": "binding", "handle": 1}}
+    ]);
+    app
+}
+
+fn start_collection_loop_fixture(runtime: &PlecRuntime, root: &Element) -> Result<(), JsValue> {
+    let mut snapshot = snapshot_chain_fixture(
+        "rev-1",
+        "x",
+        "/",
+        "ssr-snapshot.tsx#App",
+        serde_json::json!({}),
+    );
+    snapshot["structure"]["graphs"]["root%2Foutlet:main/outlet:main"] = serde_json::json!({
+        "graphId": "ssr-loop.tsx#Home",
+        "loops": [{"node": 2, "keys": []}],
+    });
+    root.set_inner_html(
+        "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
+         <!--plec:text:root:2-->ignored</p>\
+         <section data-plec-node=\"root/outlet:main/node:0\">\
+         <ul data-plec-node=\"root/outlet:main/node:1\"></ul>\
+         <p data-plec-node=\"root/outlet:main/node:7\">\
+         <!--plec:text:root/outlet:main:8--></p></section></main>",
+    );
+    runtime
+        .register_graph(
+            "ssr-loop.tsx#Home".into(),
+            serde_wasm_bindgen::to_value(&collection_loop_route_artifact()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "ssr-snapshot.tsx#App".into(),
+            serde_wasm_bindgen::to_value(&snapshot_fixture_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        r#"{"version":3,"revision":"rev-1","rootGraphId":"ssr-snapshot.tsx#App",
+            "routes":[{"id":"ssr-snapshot.tsx#Home","path":"",
+            "graphId":"ssr-loop.tsx#Home","outletId":"main"}]}"#,
+    )
+    .unwrap();
+    runtime.start_adopt_snapshot(
+        root.clone(),
+        manifest,
+        serde_wasm_bindgen::to_value(&snapshot).unwrap(),
+    )
+}
+
+#[wasm_bindgen_test]
+fn ssr_collection_loop_adopts_empty_and_receives_rows_through_deltas() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_collection_loop_fixture(&runtime, &root).unwrap();
+    assert!(root.query_selector("li").unwrap().is_none());
+    // Post-adoption input hydration reconciles rows into the claimed loop
+    // parent with the same keyed-row identity the mount path produces.
+    initialize_rows(&runtime, loop_rows_json(&[("one", "One"), ("two", "Two")]));
+    let one = loop_row(&root, "one");
+    let one_node: web_sys::Node = one.clone().into();
+    assert_eq!(one.text_content().unwrap(), "OnePick");
+
+    // A one-row field update is targeted: no structural DOM mutation, the
+    // other row untouched, and the changed row keeps its element identity.
+    reset_plec_dom_mutations();
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"update","input_id":"items","row_key":"one","changes":{"title":"Updated"}}),
+    );
+    let mutations = plec_dom_mutations();
+    assert_eq!(mutations, "{\"append\":0,\"insertBefore\":0,\"remove\":0}");
+    let one_after = loop_row(&root, "one");
+    assert!(one_node.is_same_node(Some(one_after.unchecked_ref())));
+    assert_eq!(one_after.text_content().unwrap(), "UpdatedPick");
+    assert_eq!(loop_row(&root, "two").text_content().unwrap(), "TwoPick");
+
+    // Add, move, and remove flow through the adopted loop's reconcile.
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"insert","input_id":"items","row_key":"three","row":{"id":"three","title":"Three"},"before_row_key":"one"}),
+    );
+    assert_eq!(
+        loop_row(&root, "three").text_content().unwrap(),
+        "ThreePick"
+    );
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"move","input_id":"items","row_key":"two","before_row_key":"one"}),
+    );
+    // Order after the insert and move: three, two, one.
+    assert!(loop_row(&root, "two").is_same_node(
+        root.query_selector_all("li")
+            .unwrap()
+            .item(1)
+            .as_ref()
+            .map(|node| node.unchecked_ref())
+    ));
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"remove","input_id":"items","row_key":"one"}),
+    );
+    assert!(!one_after.is_connected());
+    assert!(root
+        .query_selector("[data-runtime-row-key='one']")
+        .unwrap()
+        .is_none());
+}
+
+// ---------------------------------------------------------------------------
+// SSR row-scoped conditional adoption
+//
+// A conditional inside the row template adopts through the loop slice: the
+// server encloses the rendered branch in the shared boundary grammar, the
+// claim recomputes the test and validates the region, and the registered
+// row region flips through normal state reconciliation afterwards.
+// ---------------------------------------------------------------------------
+
+fn row_conditional_route_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "ssr-loop.tsx#Home",
+            "rootNode": 0,
+            "strings": ["section", "ul", "li", "title", "click", "button", "Done", "p", "id", "toggle", ""],
+            "constants": ["", true],
+            "nodes": [
+                {"op": "element", "tag": 0, "parent": null, "children": [1, 8, 9]},
+                {"op": "element", "tag": 1, "parent": 0, "children": [2]},
+                {"op": "loop", "loop": 0, "parent": 1},
+                {"op": "element", "tag": 2, "parent": null, "children": [4, 5]},
+                {"op": "text", "text": 0, "parent": 3},
+                {"op": "conditional", "test": 5, "parent": 3, "consequent": 6, "alternate": null},
+                {"op": "element", "tag": 5, "parent": null, "children": [7]},
+                {"op": "text", "text": 1, "parent": 6},
+                {"op": "element", "tag": 5, "parent": 0, "children": []},
+                {"op": "element", "tag": 7, "parent": 0, "children": [10]},
+                {"op": "text", "text": 2, "parent": 9}
+            ],
+            "texts": [{"binding": 0}, {"value": "Done"}, {"binding": 1}],
+            "bindings": [
+                {"target": 4, "sink": "text", "expression": 1},
+                {"target": 10, "sink": "text", "expression": 3}
+            ],
+            "propPrograms": [],
+            "events": [
+                {"target": 6, "type": 4, "action": 0, "loop": 0, "fields": []},
+                {"target": 8, "type": 4, "action": 1, "fields": []}
+            ],
+            "inputs": [],
+            "hostSlots": [{"kind": "loaderData"}],
+            "stateSlots": [
+                {"initialExpression": 0, "frameSlot": 0},
+                {"initialExpression": 2, "frameSlot": 1},
+                {"initialExpression": 7, "frameSlot": 2}
+            ],
+            "parameters": [],
+            "expressions": [
+                {"instructions": [{"op": "loadHost", "host": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadRowField", "field": 3}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadState", "state": 1}, {"op": "return"}]},
+                {"instructions": [{"op": "loadRowField", "field": 8}, {"op": "return"}]},
+                {"instructions": [{"op": "loadState", "state": 2}, {"op": "return"}]},
+                {"instructions": [{"op": "loadState", "state": 2}, {"op": "unary", "kind": "not"}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 1}, {"op": "return"}]}
+            ],
+            "actions": [
+                {"frameSlots": 0, "instructions": [
+                    {"op": "evaluate", "expression": 1},
+                    {"op": "storeState", "state": 1},
+                    {"op": "return"}
+                ]},
+                {"frameSlots": 0, "instructions": [
+                    {"op": "evaluate", "expression": 6},
+                    {"op": "storeState", "state": 2},
+                    {"op": "return"}
+                ]}
+            ],
+            "loops": [{"sourceExpression": 0, "keyExpression": 4, "itemSlot": 0, "rowTemplate": 3, "input": null}],
+            "dependencyEdges": [
+                {"source": {"kind": "state", "handle": 0}, "target": {"kind": "loop", "handle": 0}},
+                {"source": {"kind": "state", "handle": 1}, "target": {"kind": "binding", "handle": 1}},
+                {"source": {"kind": "state", "handle": 2}, "target": {"kind": "conditional", "handle": 5}},
+                {"source": {"kind": "rowField", "handle": 3, "loop": 0}, "target": {"kind": "binding", "handle": 0}}
+            ],
+            "routeOutlets": []
+        }]
+    })
+}
+
+/// Row markup whose template contains the conditional region. `branch`
+/// selects whether the server rendered the consequent button inside the
+/// region boundaries.
+fn row_conditional_server_dom(with_button: bool) -> String {
+    let rows = [("one", "One"), ("two", "Two")]
+        .iter()
+        .map(|(key, title)| {
+            let rp = format!("root/outlet:main/loop:2/key:{key}");
+            let region = if with_button {
+                format!(
+                    "<!--plec:conditional:{rp}:5-->\
+                     <button data-plec-node=\"{rp}/node:6\">\
+                     <!--plec:text:{rp}:7-->Done</button>\
+                     <!--plec:conditional-end:{rp}:5-->"
+                )
+            } else {
+                format!(
+                    "<!--plec:conditional:{rp}:5-->\
+                     <!--plec:conditional-end:{rp}:5-->"
+                )
+            };
+            format!(
+                "<!--plec:loop:{rp}-->\
+                 <li data-runtime-row-key=\"{key}\" data-plec-node=\"{rp}/node:3\">\
+                 <!--plec:text:{rp}:4-->{title}{region}</li>\
+                 <!--plec:loop-end:{rp}-->"
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<ul data-plec-node=\"root/outlet:main/node:1\">{rows}</ul>\
+         <button data-plec-node=\"root/outlet:main/node:8\"></button>\
+         <p data-plec-node=\"root/outlet:main/node:9\">\
+         <!--plec:text:root/outlet:main:10--></p>"
+    )
+}
+
+fn start_row_conditional_fixture(
+    runtime: &PlecRuntime,
+    root: &Element,
+    outlet_dom: &str,
+) -> Result<(), JsValue> {
+    root.set_inner_html(&format!(
+        "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
+         <!--plec:text:root:2-->ignored</p>\
+         <section data-plec-node=\"root/outlet:main/node:0\">{outlet_dom}</section></main>"
+    ));
+    runtime
+        .register_graph(
+            "ssr-loop.tsx#Home".into(),
+            serde_wasm_bindgen::to_value(&row_conditional_route_artifact()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "ssr-snapshot.tsx#App".into(),
+            serde_wasm_bindgen::to_value(&snapshot_fixture_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        r#"{"version":3,"revision":"rev-1","rootGraphId":"ssr-snapshot.tsx#App",
+            "routes":[{"id":"ssr-snapshot.tsx#Home","path":"",
+            "graphId":"ssr-loop.tsx#Home","outletId":"main"}]}"#,
+    )
+    .unwrap();
+    let mut snapshot = snapshot_chain_fixture(
+        "rev-1",
+        "x",
+        "/",
+        "ssr-snapshot.tsx#App",
+        serde_json::json!({}),
+    );
+    snapshot["public"]["exports"]["loaderData"]["value"] =
+        loop_rows_json(&[("one", "One"), ("two", "Two")]);
+    snapshot["structure"]["graphs"]["root%2Foutlet:main/outlet:main"] = serde_json::json!({
+        "graphId": "ssr-loop.tsx#Home",
+        "loops": [{"node": 2, "keys": ["one", "two"]}],
+    });
+    runtime.start_adopt_snapshot(
+        root.clone(),
+        manifest,
+        serde_wasm_bindgen::to_value(&snapshot).unwrap(),
+    )
+}
+
+fn graph_toggle_button(root: &Element) -> web_sys::EventTarget {
+    root.query_selector("[data-plec-node='root/outlet:main/node:8']")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+}
+
+#[wasm_bindgen_test]
+fn ssr_row_conditional_adopts_region_and_flips_through_reconcile() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    // Toggle state starts true, so the server rendered the consequent
+    // button inside every row's conditional region.
+    start_row_conditional_fixture(&runtime, &root, &row_conditional_server_dom(true)).unwrap();
+    let one = loop_row(&root, "one");
+    assert_eq!(one.text_content().unwrap(), "OneDone");
+    // The claimed region's button runs the row action through the
+    // conditional listener owner.
+    one.query_selector("button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(
+        root.query_selector("[data-plec-node='root/outlet:main/node:9']")
+            .unwrap()
+            .unwrap()
+            .text_content(),
+        Some("One".to_string())
+    );
+    // The toggle flips state 2, and the adopted row regions reconcile to the
+    // empty branch: server buttons are removed, not remounted.
+    let adopted_button = one.query_selector("button").unwrap().unwrap();
+    graph_toggle_button(&root)
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert!(!adopted_button.is_connected());
+    assert_eq!(one.text_content().unwrap(), "One");
+    // And back: freshly instantiated client buttons appear in the regions.
+    graph_toggle_button(&root)
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert!(loop_row(&root, "one")
+        .query_selector("[data-runtime-node='6']")
+        .unwrap()
+        .is_some());
+}
+
+#[wasm_bindgen_test]
+fn ssr_row_conditional_branch_disagreement_fails_closed() {
+    let _location = reset_browser_location();
+    // Toggle state is true, so the recomputed selection claims the
+    // consequent — but the server rendered an empty region. The ownership
+    // cause contradicts the markup: fail closed per row template.
+    let error = start_row_conditional_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &row_conditional_server_dom(false),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "mismatch:ssr-row-branch:root/outlet:main/loop:2/key:one:5"
+    );
+}
+
+/// The demo todos shape: the row template is a component call whose value
+/// props read the row (`title`, `done`), and the child renders a text
+/// binding plus a prop-driven conditional. Regression: a row-scoped
+/// component call must stay owned by its row — a graph-level entry would
+/// let static refresh sweeps re-evaluate its props without the row (empty
+/// record, `done` falsy), blanking the text and flipping the branch.
+fn component_row_route_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [
+            {
+                "id": "ssr-loop.tsx#Home",
+                "rootNode": 0,
+                "strings": ["section", "ul", "li", "title", "done", "id"],
+                "constants": [],
+                "nodes": [
+                    {"op": "element", "tag": 0, "parent": null, "children": [1]},
+                    {"op": "element", "tag": 1, "parent": 0, "children": [2]},
+                    {"op": "loop", "loop": 0, "parent": 1},
+                    {"op": "component", "component": 1, "parent": null, "props": [
+                        {"kind": "value", "name": 3, "expression": 0},
+                        {"kind": "value", "name": 4, "expression": 1}
+                    ]}
+                ],
+                "texts": [],
+                "bindings": [],
+                "propPrograms": [],
+                "events": [],
+                "inputs": [],
+                "hostSlots": [{"kind": "loaderData"}],
+                "stateSlots": [],
+                "parameters": [],
+                "expressions": [
+                    {"instructions": [{"op": "loadRowField", "field": 3}, {"op": "return"}]},
+                    {"instructions": [{"op": "loadRowField", "field": 4}, {"op": "return"}]},
+                    {"instructions": [{"op": "loadHost", "host": 0}, {"op": "return"}]},
+                    {"instructions": [{"op": "loadRowField", "field": 5}, {"op": "return"}]}
+                ],
+                "actions": [],
+                "loops": [{"sourceExpression": 2, "keyExpression": 3, "itemSlot": 0, "rowTemplate": 3, "input": null}],
+                "dependencyEdges": [],
+                "routeOutlets": []
+            },
+            {
+                "id": "ssr-loop.tsx#Row",
+                "rootNode": 0,
+                "strings": ["li", "span", "button", "title", "done", "Done"],
+                "constants": [],
+                "nodes": [
+                    {"op": "element", "tag": 0, "parent": null, "children": [1, 3]},
+                    {"op": "element", "tag": 1, "parent": 0, "children": [2]},
+                    {"op": "text", "text": 0, "parent": 1},
+                    {"op": "conditional", "test": 1, "parent": 0, "consequent": 4, "alternate": null},
+                    {"op": "element", "tag": 2, "parent": null, "children": [5]},
+                    {"op": "text", "text": 1, "parent": 4}
+                ],
+                "texts": [{"binding": 0}, {"value": "Done"}],
+                "bindings": [{"target": 2, "sink": "text", "expression": 0}],
+                "propPrograms": [],
+                "events": [],
+                "inputs": [],
+                "hostSlots": [],
+                "stateSlots": [],
+                "parameters": [{"name": 3, "callable": false}, {"name": 4, "callable": false}],
+                "expressions": [
+                    {"instructions": [{"op": "loadProp", "prop": 0}, {"op": "return"}]},
+                    {"instructions": [{"op": "loadProp", "prop": 1}, {"op": "return"}]}
+                ],
+                "actions": [],
+                "loops": [],
+                "dependencyEdges": [
+                    {"source": {"kind": "prop", "handle": 0}, "target": {"kind": "binding", "handle": 0}},
+                    {"source": {"kind": "prop", "handle": 1}, "target": {"kind": "conditional", "handle": 3}}
+                ],
+                "routeOutlets": []
+            }
+        ]
+    })
+}
+
+fn component_row_server_dom() -> String {
+    let rp = "root/outlet:main/loop:2/key:one";
+    format!(
+        "<ul data-plec-node=\"root/outlet:main/node:1\">\
+         <!--plec:loop:{rp}-->\
+         <!--plec:component:{rp}:3-->\
+         <li data-runtime-row-key=\"one\" data-plec-node=\"{rp}/component:3/node:0\">\
+         <span data-plec-node=\"{rp}/component:3/node:1\">\
+         <!--plec:text:{rp}/component:3:2-->One</span>\
+         <!--plec:conditional:{rp}/component:3:3-->\
+         <button data-plec-node=\"{rp}/component:3/node:4\">\
+         <!--plec:text:{rp}/component:3:5-->Done</button>\
+         <!--plec:conditional-end:{rp}/component:3:3-->\
+         </li>\
+         <!--plec:component-end:{rp}:3-->\
+         <!--plec:loop-end:{rp}--></ul>"
+    )
+}
+
+#[wasm_bindgen_test]
+fn ssr_component_row_template_keeps_server_content_and_props() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    root.set_inner_html(&format!(
+        "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
+         <!--plec:text:root:2-->ignored</p>\
+         <section data-plec-node=\"root/outlet:main/node:0\">{}</section></main>",
+        component_row_server_dom()
+    ));
+    runtime
+        .register_graph(
+            "ssr-loop.tsx#Home".into(),
+            serde_wasm_bindgen::to_value(&component_row_route_artifact()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "ssr-snapshot.tsx#App".into(),
+            serde_wasm_bindgen::to_value(&snapshot_fixture_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        r#"{"version":3,"revision":"rev-1","rootGraphId":"ssr-snapshot.tsx#App",
+            "routes":[{"id":"ssr-snapshot.tsx#Home","path":"",
+            "graphId":"ssr-loop.tsx#Home","outletId":"main"}]}"#,
+    )
+    .unwrap();
+    let mut snapshot = snapshot_chain_fixture(
+        "rev-1",
+        "x",
+        "/",
+        "ssr-snapshot.tsx#App",
+        serde_json::json!({}),
+    );
+    snapshot["public"]["exports"]["loaderData"]["value"] =
+        serde_json::json!([{"id": "one", "title": "One", "done": true}]);
+    snapshot["structure"]["graphs"]["root%2Foutlet:main/outlet:main"] = serde_json::json!({
+        "graphId": "ssr-loop.tsx#Home",
+        "loops": [{"node": 2, "keys": ["one"]}],
+    });
+    runtime
+        .start_adopt_snapshot(
+            root.clone(),
+            manifest,
+            serde_wasm_bindgen::to_value(&snapshot).unwrap(),
+        )
+        .unwrap();
+    // The claimed row keeps the server-rendered title and branch: row-scoped
+    // component props were not recomputed without their row by any sweep.
+    let row = loop_row(&root, "one");
+    assert_eq!(row.text_content().unwrap(), "OneDone");
+    assert!(row.query_selector("button").unwrap().is_some());
+}
+
+// ---------------------------------------------------------------------------
 // Loader state transfer: SSR executes route loaders, the browser resumes.
 //
 // The route page reads the `loaderData` host slot, so a resolved imported

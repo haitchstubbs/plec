@@ -1063,7 +1063,11 @@ impl TypedRuntime {
         self.queue_static_listeners();
         Ok(MountMetrics {
             bindings: self.app.bindings.len() as u32,
-            row_count: self.loops.values().map(|rows| rows.order.len() as u32).sum(),
+            row_count: self
+                .loops
+                .values()
+                .map(|rows| rows.order.len() as u32)
+                .sum(),
             ..Default::default()
         })
     }
@@ -1135,8 +1139,9 @@ impl TypedRuntime {
         // adoption walk from trying to claim them with the unscoped path.
         self.collect_branch_handles(loop_def.row_template, skipped);
         let parent_handle = match self.app.nodes.get(loop_node) {
-            Some(TypedNode::Loop { parent, .. }) => parent
-                .ok_or_else(|| JsValue::from_str("loop parent missing"))?,
+            Some(TypedNode::Loop { parent, .. }) => {
+                parent.ok_or_else(|| JsValue::from_str("loop parent missing"))?
+            }
             _ => return Err(JsValue::from_str("loop node expected")),
         };
         let parent = self
@@ -1172,7 +1177,10 @@ impl TypedRuntime {
                 &row_path,
                 &values,
                 row_index,
-                &TypedRowContext { loop_index, row_key: key.clone() },
+                &TypedRowContext {
+                    loop_index,
+                    row_key: key.clone(),
+                },
                 root,
                 markers,
                 &mut nodes,
@@ -1266,9 +1274,15 @@ impl TypedRuntime {
         let (prefix, suffix) = match node {
             TypedNode::Element { .. } => (base, format!("/node:{template}")),
             TypedNode::Text { .. } => (format!("plec:text:{base}"), format!(":{template}")),
-            TypedNode::Component { .. } => (format!("plec:component:{base}"), format!(":{template}")),
-            TypedNode::DynamicComponent { .. } => (format!("plec:component:{base}"), format!(":{template}")),
-            TypedNode::Conditional { .. } => (format!("plec:conditional:{base}"), format!(":{template}")),
+            TypedNode::Component { .. } => {
+                (format!("plec:component:{base}"), format!(":{template}"))
+            }
+            TypedNode::DynamicComponent { .. } => {
+                (format!("plec:component:{base}"), format!(":{template}"))
+            }
+            TypedNode::Conditional { .. } => {
+                (format!("plec:conditional:{base}"), format!(":{template}"))
+            }
             TypedNode::Slot { .. } => (format!("plec:slot:{base}"), format!(":{template}")),
             TypedNode::Loop { .. } => return vec![],
         };
@@ -1304,7 +1318,12 @@ impl TypedRuntime {
             .cloned()
             .ok_or_else(|| JsValue::from_str("row node handle out of range"))?;
         match node {
-            TypedNode::Element { tag, children, host_ref, .. } => {
+            TypedNode::Element {
+                tag,
+                children,
+                host_ref,
+                ..
+            } => {
                 let marker = format!("{path}/node:{index}");
                 let element = markers.element(&marker)?;
                 let expected_tag = self
@@ -1323,7 +1342,18 @@ impl TypedRuntime {
                 }
                 local.insert(index, dom_node.clone());
                 for child in children {
-                    self.adopt_row_node(child, path, row, row_index, row_context, adoption_root, markers, local, regions, skipped)?;
+                    self.adopt_row_node(
+                        child,
+                        path,
+                        row,
+                        row_index,
+                        row_context,
+                        adoption_root,
+                        markers,
+                        local,
+                        regions,
+                        skipped,
+                    )?;
                 }
                 Ok((dom_node, None))
             }
@@ -1335,20 +1365,37 @@ impl TypedRuntime {
                 let text = marker_node
                     .next_sibling()
                     .filter(|candidate| candidate.node_type() == Node::TEXT_NODE)
-                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-text:{path}:{index}")))?;
+                    .ok_or_else(|| {
+                        JsValue::from_str(&format!("missing:ssr-row-text:{path}:{index}"))
+                    })?;
                 local.insert(index, text.clone());
                 Ok((text, None))
             }
-            TypedNode::Conditional { test, consequent, alternate, .. } => {
+            TypedNode::Conditional {
+                test,
+                consequent,
+                alternate,
+                ..
+            } => {
                 let start = markers
                     .get(&format!("plec:conditional:{path}:{index}"))
                     .cloned()
-                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-branch:{path}:{index}")))?;
+                    .ok_or_else(|| {
+                        JsValue::from_str(&format!("missing:ssr-row-branch:{path}:{index}"))
+                    })?;
                 let end = markers
                     .get(&format!("plec:conditional-end:{path}:{index}"))
                     .cloned()
-                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-branch-end:{path}:{index}")))?;
-                let selected = if typed_truthy(&typed_eval(&self.app, test, &self.states, Some(row), row_index)?) {
+                    .ok_or_else(|| {
+                        JsValue::from_str(&format!("missing:ssr-row-branch-end:{path}:{index}"))
+                    })?;
+                let selected = if typed_truthy(&typed_eval(
+                    &self.app,
+                    test,
+                    &self.states,
+                    Some(row),
+                    row_index,
+                )?) {
                     Some(consequent)
                 } else {
                     alternate
@@ -1358,16 +1405,34 @@ impl TypedRuntime {
                     if !start.next_sibling().is_some_and(|node| {
                         ownership_marker(&node).is_some_and(|marker| marker == expected)
                     }) {
-                        return Err(JsValue::from_str(&format!("mismatch:ssr-row-branch:{path}:{index}")));
+                        return Err(JsValue::from_str(&format!(
+                            "mismatch:ssr-row-branch:{path}:{index}"
+                        )));
                     }
-                } else if !start.next_sibling().is_some_and(|node| node.is_same_node(Some(&end))) {
-                    return Err(JsValue::from_str(&format!("mismatch:ssr-row-branch:{path}:{index}")));
+                } else if !start
+                    .next_sibling()
+                    .is_some_and(|node| node.is_same_node(Some(&end)))
+                {
+                    return Err(JsValue::from_str(&format!(
+                        "mismatch:ssr-row-branch:{path}:{index}"
+                    )));
                 }
                 let generation = self.next_generation;
                 self.next_generation += 1;
                 local.insert(index, start.clone());
                 if let Some(branch) = selected {
-                    self.adopt_row_node(branch, path, row, row_index, row_context, adoption_root, markers, local, regions, skipped)?;
+                    self.adopt_row_node(
+                        branch,
+                        path,
+                        row,
+                        row_index,
+                        row_context,
+                        adoption_root,
+                        markers,
+                        local,
+                        regions,
+                        skipped,
+                    )?;
                 } else {
                     self.collect_branch_handles(consequent, skipped);
                     if let Some(alternate) = alternate {
@@ -1378,23 +1443,57 @@ impl TypedRuntime {
                 if let Some(branch) = selected {
                     self.collect_instantiated_branch_nodes(branch, local, &mut nodes);
                 }
-                regions.insert(index, TypedConditionalRegion { start: start.clone(), end: end.clone(), selected, nodes, generation });
+                regions.insert(
+                    index,
+                    TypedConditionalRegion {
+                        start: start.clone(),
+                        end: end.clone(),
+                        selected,
+                        nodes,
+                        generation,
+                    },
+                );
                 Ok((start, Some(end)))
             }
-            TypedNode::Component { component, props, children, .. } => {
+            TypedNode::Component {
+                component,
+                props,
+                children,
+                ..
+            } => {
                 let start = markers
                     .get(&format!("plec:component:{path}:{index}"))
                     .cloned()
-                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-component:{path}:{index}")))?;
+                    .ok_or_else(|| {
+                        JsValue::from_str(&format!("missing:ssr-row-component:{path}:{index}"))
+                    })?;
                 let end = markers
                     .get(&format!("plec:component-end:{path}:{index}"))
                     .cloned()
-                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-component-end:{path}:{index}")))?;
-                self.queue_adopted_component(index, component, props, children, adoption_root, markers, path, Some(row), row_index, Some(row_context.clone()))?;
+                    .ok_or_else(|| {
+                        JsValue::from_str(&format!("missing:ssr-row-component-end:{path}:{index}"))
+                    })?;
+                self.queue_adopted_component(
+                    index,
+                    component,
+                    props,
+                    children,
+                    adoption_root,
+                    markers,
+                    path,
+                    Some(row),
+                    row_index,
+                    Some(row_context.clone()),
+                )?;
                 local.insert(index, start.clone());
                 Ok((start, Some(end)))
             }
-            TypedNode::DynamicComponent { prop, props, children, .. } => {
+            TypedNode::DynamicComponent {
+                prop,
+                props,
+                children,
+                ..
+            } => {
                 let component = self
                     .app
                     .runtime_component_props
@@ -1404,12 +1503,27 @@ impl TypedRuntime {
                 let start = markers
                     .get(&format!("plec:component:{path}:{index}"))
                     .cloned()
-                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-component:{path}:{index}")))?;
+                    .ok_or_else(|| {
+                        JsValue::from_str(&format!("missing:ssr-row-component:{path}:{index}"))
+                    })?;
                 let end = markers
                     .get(&format!("plec:component-end:{path}:{index}"))
                     .cloned()
-                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-component-end:{path}:{index}")))?;
-                self.queue_adopted_component(index, component, props, children, adoption_root, markers, path, Some(row), row_index, Some(row_context.clone()))?;
+                    .ok_or_else(|| {
+                        JsValue::from_str(&format!("missing:ssr-row-component-end:{path}:{index}"))
+                    })?;
+                self.queue_adopted_component(
+                    index,
+                    component,
+                    props,
+                    children,
+                    adoption_root,
+                    markers,
+                    path,
+                    Some(row),
+                    row_index,
+                    Some(row_context.clone()),
+                )?;
                 local.insert(index, start.clone());
                 Ok((start, Some(end)))
             }
@@ -1417,11 +1531,15 @@ impl TypedRuntime {
                 let start = markers
                     .get(&format!("plec:slot:{path}:{index}"))
                     .cloned()
-                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-slot:{path}:{index}")))?;
+                    .ok_or_else(|| {
+                        JsValue::from_str(&format!("missing:ssr-row-slot:{path}:{index}"))
+                    })?;
                 let end = markers
                     .get(&format!("plec:slot-end:{path}:{index}"))
                     .cloned()
-                    .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-row-slot-end:{path}:{index}")))?;
+                    .ok_or_else(|| {
+                        JsValue::from_str(&format!("missing:ssr-row-slot-end:{path}:{index}"))
+                    })?;
                 local.insert(index, start.clone());
                 Ok((start, Some(end)))
             }
@@ -1450,9 +1568,7 @@ impl TypedRuntime {
         let end = markers
             .get(&format!("plec:conditional-end:{path}:{index}"))
             .cloned()
-            .ok_or_else(|| {
-                JsValue::from_str(&format!("missing:ssr-branch-end:{path}:{index}"))
-            })?;
+            .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-branch-end:{path}:{index}")))?;
         let TypedNode::Conditional {
             consequent,
             alternate,
@@ -1470,7 +1586,9 @@ impl TypedRuntime {
             Some(selected) => selected,
             None if self.allow_unrecorded_ssr_conditionals => {
                 let inner = start.next_sibling();
-                if inner.as_ref().is_some_and(|node| node.is_same_node(Some(&end)))
+                if inner
+                    .as_ref()
+                    .is_some_and(|node| node.is_same_node(Some(&end)))
                     || inner.is_none()
                 {
                     plec_ir::SsrSelectedBranch::None
@@ -1497,7 +1615,9 @@ impl TypedRuntime {
                 }
             }
             None => {
-                return Err(JsValue::from_str(&format!("missing:ssr-branch:{path}:{index}")));
+                return Err(JsValue::from_str(&format!(
+                    "missing:ssr-branch:{path}:{index}"
+                )));
             }
         };
         let selected_node = match selected {
@@ -1556,7 +1676,11 @@ impl TypedRuntime {
         // The unrendered sides' whole subtrees are absent from the markup.
         match selected_node {
             Some(handle) => {
-                let unselected = if handle == consequent { alternate } else { Some(consequent) };
+                let unselected = if handle == consequent {
+                    alternate
+                } else {
+                    Some(consequent)
+                };
                 if let Some(side) = unselected {
                     self.collect_branch_handles(side, skipped);
                 }
@@ -1665,7 +1789,13 @@ impl TypedRuntime {
                     );
                 }
                 TypedComponentProp::Callable { action, .. } => {
-                    callbacks.insert(name, TypedCallbackSpec { action, row: row.cloned() });
+                    callbacks.insert(
+                        name,
+                        TypedCallbackSpec {
+                            action,
+                            row: row.cloned(),
+                        },
+                    );
                 }
                 TypedComponentProp::Component { component, .. } => {
                     component_props.insert(name, component);
@@ -1674,7 +1804,13 @@ impl TypedRuntime {
         }
         let key = format!("{index}:{}", self.next_component_instance);
         self.next_component_instance += 1;
-        self.nodes.insert(index, start.clone());
+        // A row-scoped component call is owned by its row (`TypedRow.nodes`),
+        // never by the graph: a graph-level entry would make static refresh
+        // sweeps re-evaluate its props without the row, and a record prop
+        // like `todo` recomputes empty (flipping prop-driven row branches).
+        if row.is_none() {
+            self.nodes.insert(index, start.clone());
+        }
         self.component_requests.push(TypedComponentRequest {
             call: index,
             component,

@@ -941,6 +941,9 @@ function evaluate(
           scope.row?.[component.strings[instruction.field as number]!],
         );
         break;
+      case 'loadRowRecord':
+        stack.push(scope.row);
+        break;
       case 'field': {
         const value = stack.pop() as
           Record<string, unknown> | undefined;

@@ -19,9 +19,14 @@ export function HomePage() {
         experimental fullstack runtime.
       </p>
       <p id="ssr-request" className="m-0 text-sm text-muted-foreground">
-        Requested {location.pathname}{location.search}
+        Requested {location.pathname}
+        {location.search}
       </p>
-      <button id="ssr-counter" type="button" onClick={() => setCount(count + 1)}>
+      <button
+        id="ssr-counter"
+        type="button"
+        onClick={() => setCount(count + 1)}
+      >
         SSR counter: {count}
       </button>
       <div className="grid gap-4 md:grid-cols-2">
