@@ -79,6 +79,7 @@ type Component = {
       kind: string;
       constant?: number;
       expression?: number;
+      spread?: boolean;
     }>;
   }>;
   hostSlots?: Array<{ kind: string; name?: number }>;
@@ -813,60 +814,101 @@ function renderNode(
       );
     const child = target.app.components[target.component]!;
     const props: unknown[] = [];
+    // Dynamic targets keep their props as named values (`className`), while a
+    // direct `(props)` parameter reads the whole named record — the SSR
+    // mirror of `component_runtime_props` (crates/plec-runtime).
+    const namedProps: Record<string, unknown> = {};
     const componentProps: Record<
       number,
       { app: App; component: number }
     > = {};
     for (const prop of node.props ?? []) {
       const name = component.strings[prop.name]!;
+      if (prop.kind === 'component') {
+        if (prop.component !== undefined) {
+          const parameter = child.parameters.findIndex(
+            (candidate) => child.strings[candidate.name] === name,
+          );
+          if (parameter >= 0)
+            componentProps[parameter] = { app, component: prop.component };
+        }
+        continue;
+      }
+      if (prop.kind !== 'value') continue;
+      const value = evaluate(component, prop.expression!, scope);
+      namedProps[name] = value;
       const parameter = child.parameters.findIndex(
         (candidate) => child.strings[candidate.name] === name,
       );
-      if (parameter < 0) continue;
-      if (prop.kind === 'value')
-        props[parameter] = evaluate(component, prop.expression!, scope);
-      if (prop.kind === 'component' && prop.component !== undefined)
-        componentProps[parameter] = { app, component: prop.component };
+      if (parameter >= 0) props[parameter] = value;
     }
+    const directParameter = child.parameters.findIndex(
+      (candidate) => child.strings[candidate.name] === '__plec_props',
+    );
+    if (
+      directParameter >= 0 &&
+      props[directParameter] === undefined &&
+      !node.props?.some(
+        (prop) => component.strings[prop.name] === '__plec_props',
+      )
+    )
+      props[directParameter] = namedProps;
     const componentPath = `${scope.path}/component:${index}`;
     return `<!--plec:component:${scope.path}:${index}-->${renderComponent(target.app, target.component, { ...scope, props, componentProps, path: componentPath, slot: { app, component: componentIndex, nodes: node.children ?? [], scope } })}<!--plec:component-end:${scope.path}:${index}-->`;
   }
   if (node.op !== 'element') return '';
   const tag = component.strings[node.tag!]!;
-  const props = new Map<
-    number,
-    {
-      name?: number;
-      kind: string;
-      constant?: number;
-      expression?: number;
-    }
-  >();
+  // Writes keep program order: a spread bag is written where it occurs, and
+  // later writes overwrite earlier attribute names (same-key overwrites keep
+  // their original position), mirroring the runtime's sequential application.
+  const attributes = new Map<string, string | null>();
+  const writeAttribute = (name: string, value: unknown) => {
+    if (name.startsWith('on')) return;
+    if (value === false || value === null || value === undefined) return;
+    const attr = name === 'className' ? 'class' : name;
+    attributes.set(attr, value === true ? null : String(value));
+  };
   component.propPrograms
     .filter((program) => program.target === index)
     .flatMap((program) => program.writes)
-    .forEach((write) => props.set(write.name ?? -1, write));
-  const attributes = [...props.values()].flatMap((write) => {
-    const name = component.strings[write.name ?? -1];
-    if (!name || name.startsWith('on')) return [];
-    const value =
-      write.expression === undefined
-        ? component.constants[write.constant!]
-        : evaluate(component, write.expression, scope);
-    if (value === false || value === null || value === undefined)
-      return [];
-    const attr = name === 'className' ? 'class' : name;
-    return value === true
-      ? [attr]
-      : [`${attr}="${escapeAttribute(String(value))}"`];
-  });
+    .forEach((write) => {
+      // Component props reach an element through a `{...props}` spread
+      // (e.g. generated icons); serialize the record so the first paint
+      // already carries final attributes like `class`. This mirrors
+      // `typed_apply_spread` (crates/plec-runtime dom/bindings).
+      if (write.spread) {
+        const bag = evaluate(
+          component,
+          write.expression!,
+          scope,
+        ) as Record<string, unknown> | null | undefined;
+        if (bag !== null && bag !== undefined && typeof bag === 'object')
+          for (const [name, value] of Object.entries(bag))
+            writeAttribute(name, value);
+        return;
+      }
+      const name = component.strings[write.name ?? -1];
+      if (!name) return;
+      const value =
+        write.expression === undefined
+          ? component.constants[write.constant!]
+          : evaluate(component, write.expression, scope);
+      writeAttribute(name, value);
+    });
   if (scope.rowRoot && scope.rowKey !== undefined)
-    attributes.push(
-      `data-runtime-row-key="${escapeAttribute(scope.rowKey)}"`,
+    attributes.set(
+      'data-runtime-row-key',
+      escapeAttribute(scope.rowKey),
     );
-  attributes.push(
-    `data-plec-node="${escapeAttribute(`${scope.path}/node:${index}`)}"`,
+  attributes.set(
+    'data-plec-node',
+    escapeAttribute(`${scope.path}/node:${index}`),
   );
+  const attributeText = [...attributes]
+    .map(([attr, value]) =>
+      value === null ? attr : `${attr}="${escapeAttribute(value)}"`,
+    )
+    .join(' ');
   const children = (node.children ?? [])
     .map((child) =>
       renderNode(app, componentIndex, child, {
@@ -888,7 +930,7 @@ function renderNode(
           rootComponent: scope.outlet.rootComponent,
         })
       : '';
-  return `<${tag}${attributes.length ? ` ${attributes.join(' ')}` : ''}>${children}${outletHtml}</${tag}>`;
+  return `<${tag}${attributeText ? ` ${attributeText}` : ''}>${children}${outletHtml}</${tag}>`;
 }
 function evaluate(
   component: Component,
