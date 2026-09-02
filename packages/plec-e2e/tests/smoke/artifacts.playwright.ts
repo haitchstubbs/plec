@@ -8,8 +8,19 @@ const publicDir = path.resolve(
   'apps/fullstack/dist/public',
 );
 
+interface RouteManifestEntry {
+  path: string;
+  loaderAction?: number;
+  graphId?: string;
+  pendingGraphId?: string;
+  errorGraphId?: string;
+}
+
 test('compiled route artifacts are typed graphs', async () => {
-  const manifest = JSON.parse(
+  const manifest: {
+    rootGraphId: string;
+    routes: RouteManifestEntry[];
+  } = JSON.parse(
     await readFile(path.join(publicDir, 'route-manifest.json'), 'utf8'),
   );
   const todos = manifest.routes.find((route) => route.path === 'todos');
@@ -29,7 +40,7 @@ test('compiled route artifacts are typed graphs', async () => {
     manifest.rootGraphId,
     ...manifest.routes.flatMap((route) =>
       [route.graphId, route.pendingGraphId, route.errorGraphId].filter(
-        Boolean,
+        (id): id is string => Boolean(id),
       ),
     ),
   ]);
@@ -44,8 +55,8 @@ test('compiled route artifacts are typed graphs', async () => {
     expect(graph.version, `${id} is not a typed graph`).toBe('0.10');
   }
 
-  const stressGraphFile = stress.graphId
-    .replace(/[\/\\]/g, '--')
+  const stressGraphFile = stress!
+    .graphId!.replace(/[\/\\]/g, '--')
     .replace('#', '--');
   const stressGraph = JSON.parse(
     await readFile(

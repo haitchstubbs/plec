@@ -41,10 +41,7 @@ test('untouched keyed rows retain their DOM node', async ({
       .locator('aside')
       .filter({ hasText: 'Runtime telemetry' })
       .innerText();
-    expect(telemetry).toMatch(
-      /DOM operations\s+[1-9]/,
-      'the developer panel should report targeted runtime work',
-    );
+    expect(telemetry).toMatch(/DOM operations\s+[1-9]/);
     await done();
   } finally {
     await context.close();

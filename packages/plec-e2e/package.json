@@ -11,7 +11,8 @@
     "test:e2e:debug": "playwright test --debug",
     "test:acceptance": "playwright test --config playwright.acceptance.config.ts",
     "test:bench": "playwright test --config playwright.bench.config.ts --grep-invert @smoke",
-    "test:bench:smoke": "playwright test --config playwright.bench.config.ts --grep @smoke"
+    "test:bench:smoke": "playwright test --config playwright.bench.config.ts --grep @smoke",
+    "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec-e2e/tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

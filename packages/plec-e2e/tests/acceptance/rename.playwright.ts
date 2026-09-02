@@ -58,10 +58,11 @@ test('rename emits native keydown, PATCH, and updates the row', async ({
 
   await rename.evaluate((el) => {
     el.addEventListener('keydown', (event) => {
+      const key = event as KeyboardEvent;
       console.log(
         '[native keydown]',
-        event.key,
-        event.code,
+        key.key,
+        key.code,
         (el as HTMLInputElement).value,
       );
     });

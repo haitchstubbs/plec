@@ -7,6 +7,7 @@ import {
   type BrowserContext,
 } from '@playwright/test';
 import { baseURL } from '../../config.shared';
+import type { PlecPerformanceSnapshot } from '../support/helpers';
 import {
   aggregatePhase,
   configuredPhases,
@@ -14,7 +15,6 @@ import {
   metricsFrom,
   type AggregatedPhase,
   type Phase,
-  type PlecPerformanceSnapshot,
   type Sample,
 } from './bench-utils';
 

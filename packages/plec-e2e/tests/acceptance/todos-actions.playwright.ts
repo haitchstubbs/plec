@@ -41,11 +41,12 @@ test('todo create, complete, rename, and delete stay targeted', async ({
       async (route) => {
         if (route.request().method() === 'POST' && post === 'delay') {
           post = 'done';
+          const contentType = route.request().headers()['content-type'];
           const response = await fetch(route.request().url(), {
             method: route.request().method(),
-            headers: {
-              'content-type': route.request().headers()['content-type'],
-            },
+            ...(contentType
+              ? { headers: { 'content-type': contentType } }
+              : {}),
             body: route.request().postData(),
           });
           await sleep(250);
