@@ -19,6 +19,13 @@ export function createAppServer(
     artifactPath: path.join(publicDir, 'route-artifact.json'),
     clientScript: '/assets/client.js',
     stylesHref: '/assets/styles.css',
+    // Self-hosted variable fonts: without preloading they are discovered only
+    // after the stylesheet finishes parsing, so first paint uses fallback
+    // metrics and reflows when the woff2 lands (font swap flash).
+    preloads: [
+      '/assets/files/outfit-latin-wght-normal.woff2',
+      '/assets/files/raleway-latin-wght-normal.woff2',
+    ],
     document: {
       title: 'Plec fullstack playground',
       description: 'Plec fullstack runtime experiment.',
