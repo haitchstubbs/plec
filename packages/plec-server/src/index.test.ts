@@ -93,6 +93,64 @@ it('renders a route artifact with document metadata and public request location'
   expect(html).toContain('"location":"/?source=test"');
 });
 
+it('emits font preload links before the stylesheet', async () => {
+  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
+  const graph = {
+    rootComponent: 0,
+    components: [
+      {
+        rootNode: 0,
+        strings: ['main'],
+        constants: [],
+        nodes: [{ op: 'element', tag: 0, children: [] }],
+        texts: [],
+        bindings: [],
+        propPrograms: [],
+        stateSlots: [],
+        parameters: [],
+        expressions: [],
+        loops: [],
+        routeOutlets: [{ id: 'main', node: 0 }],
+      },
+    ],
+  };
+  await writeFile(
+    path.join(publicDir, 'route-artifact.json'),
+    JSON.stringify({
+      manifest: {
+        revision: 'test-revision',
+        rootGraphId: 'root',
+        routes: [{ id: 'home', path: '', graphId: 'home', outletId: 'main' }],
+      },
+      graphs: [
+        { graphId: 'root', graph },
+        { graphId: 'home', graph },
+      ],
+    }),
+  );
+  const server = createPlecServer({
+    publicDir,
+    artifactPath: path.join(publicDir, 'route-artifact.json'),
+    stylesHref: '/assets/styles.css',
+    preloads: ['/assets/files/outfit-latin-wght-normal.woff2'],
+  });
+  servers.push(server);
+  server.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('missing test address');
+  const html = await (
+    await fetch(`http://127.0.0.1:${address.port}/`)
+  ).text();
+  expect(html).toContain(
+    '<link rel="preload" as="font" type="font/woff2" crossorigin href="/assets/files/outfit-latin-wght-normal.woff2">',
+  );
+  expect(html.indexOf('rel="preload"')).toBeLessThan(
+    html.indexOf('rel="stylesheet"'),
+  );
+});
+
 it('publishes matched $param routes with their params in the snapshot chain', async () => {
   const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
   const component = (tag: string, text?: string) => ({

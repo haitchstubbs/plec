@@ -33,6 +33,10 @@ export type PlecServerOptions = {
   artifactPath: string;
   clientScript?: string;
   stylesHref?: string;
+  /** Font URLs (same origin, under `publicDir`) emitted as `<link
+   * rel="preload" as="font">` before the stylesheet so variable-font woff2
+   * files start downloading during CSS parse instead of after it. */
+  preloads?: string[];
   document?: { title: string; description: string };
   handleAppRequest?: AppRequestHandler;
   development?: boolean;
@@ -388,6 +392,12 @@ function sendHtml(
 ) {
   const title = escapeHtml(metadata.title ?? 'Plec application');
   const description = escapeHtml(metadata.description ?? '');
+  const preloads = (options.preloads ?? [])
+    .map(
+      (href) =>
+        `<link rel="preload" as="font" type="font/woff2" crossorigin href="${escapeAttribute(href)}">`,
+    )
+    .join('');
   const styles = options.stylesHref
     ? `<link rel="stylesheet" href="${escapeAttribute(options.stylesHref)}">`
     : '';
@@ -402,7 +412,7 @@ function sendHtml(
     ...(gating.length ? { 'x-plec-ssr-gating': gating.join(',') } : {}),
   });
   response.end(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>${description ? `<meta name="description" content="${escapeAttribute(description)}">` : ''}${styles}</head><body><div id="app">${body}</div><script id="plec-bootstrap" type="application/json">${bootstrap}</script>${script}</body></html>`,
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>${description ? `<meta name="description" content="${escapeAttribute(description)}">` : ''}${preloads}${styles}</head><body><div id="app">${body}</div><script id="plec-bootstrap" type="application/json">${bootstrap}</script>${script}</body></html>`,
   );
 }
 
