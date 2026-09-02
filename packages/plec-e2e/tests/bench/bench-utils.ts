@@ -42,7 +42,7 @@ export function percentile(values: number[], fraction: number): number {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[
     Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)
-  ];
+  ]!;
 }
 
 export function aggregatePhase(samples: Sample[]): AggregatedPhase {

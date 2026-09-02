@@ -34,10 +34,7 @@ test('desktop sidebar collapses and restores', async ({ browser }) => {
     await page.getByRole('button', { name: 'Toggle sidebar' }).click();
     await expect(
       page.locator('[data-collapsed]').first(),
-    ).toHaveAttribute('data-collapsed', 'true', {
-      message:
-        'the desktop control should collapse the desktop sidebar',
-    });
+    ).toHaveAttribute('data-collapsed', 'true');
     await page.getByRole('button', { name: 'Toggle sidebar' }).click();
     await expect(
       page.locator('[data-collapsed]').first(),
@@ -62,9 +59,7 @@ test('mobile navigation drawer opens', async ({ browser }) => {
       .click();
     await expect(
       page.locator('[data-mobile-open]').first(),
-    ).toHaveAttribute('data-mobile-open', 'true', {
-      message: 'the mobile control should open the navigation drawer',
-    });
+    ).toHaveAttribute('data-mobile-open', 'true');
     await done();
   } finally {
     await context.close();

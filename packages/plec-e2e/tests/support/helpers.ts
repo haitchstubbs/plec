@@ -18,6 +18,7 @@ export interface AdoptionDetail {
   outcome: string;
   mismatchCodes: string[];
   snapshotImported?: boolean;
+  textDivergences?: number;
   [key: string]: unknown;
 }
 
@@ -44,7 +45,7 @@ export async function forwardTodoRequest(route: Route): Promise<void> {
   await route.fulfill({
     status: response.status,
     ...(response.headers.get('content-type')
-      ? { contentType: response.headers.get('content-type') }
+      ? { contentType: response.headers.get('content-type')! }
       : {}),
     body: await response.text(),
   });
@@ -73,7 +74,8 @@ export function watch(page: Page): () => Promise<void> {
   });
   page.on('response', (response) => {
     const match = /\/graphs\/([^/?]+)\.json/.exec(response.url());
-    if (match) graphs.add(match[1]);
+    const graphKey = match?.[1];
+    if (graphKey) graphs.add(graphKey);
   });
   return async () => {
     expect(
@@ -101,6 +103,6 @@ export async function lastAdoption(
     { timeout: 15_000 },
   );
   return page.evaluate(
-    () => window.__adoptions![window.__adoptions!.length - 1],
+    () => window.__adoptions![window.__adoptions!.length - 1]!,
   );
 }

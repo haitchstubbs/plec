@@ -35,6 +35,12 @@ async function adoptedPage(
     adoption.mismatchCodes,
     `mismatch codes: ${JSON.stringify(adoption.mismatchCodes)}`,
   ).toEqual([]);
+  // Server and client agree everywhere on an untampered page: the
+  // divergence diagnostic must stay silent.
+  expect(
+    adoption.textDivergences,
+    `text divergences: ${JSON.stringify(adoption)}`,
+  ).toBe(0);
   return { context, page, adoption };
 }
 
@@ -193,12 +199,13 @@ test('conditional branch flips in place after adoption', async ({
       routeInstance,
       `route instance key must mirror the runtime grammar: ${routeInstance}`,
     ).toBe('root%2Foutlet:main/outlet:main');
+    const routeGraph = graphs[routeInstance!];
     expect(
-      graphs[routeInstance].branches.some(
+      routeGraph.branches.some(
         (branch: { selected: string }) =>
           branch.selected === 'alternate',
       ),
-      `branch record must name the server-rendered side: ${JSON.stringify(graphs[routeInstance].branches)}`,
+      `branch record must name the server-rendered side: ${JSON.stringify(routeGraph.branches)}`,
     ).toBe(true);
 
     // Toggling flips the adopted region in place: the server branch is
@@ -332,7 +339,7 @@ test('todo loop rows stay targeted across toggle and insert', async ({
 
     // A one-row toggle is targeted: the toggled row updates in place while
     // every other claimed row keeps its element identity.
-    const firstTitle = stamped[0].key;
+    const firstTitle = stamped[0]!.key;
     await page.getByRole('checkbox').first().click();
     await page.waitForFunction(
       (key) =>
@@ -376,6 +383,33 @@ test('todo loop rows stay targeted across toggle and insert', async ({
       afterAdd.probes,
       'the claimed rows must keep their identity across the insert',
     ).toBe(stamped.length);
+
+    // Delta removal through the adopted loop: the deleted row's element is
+    // disconnected while every other claimed row keeps its identity.
+    await page.getByRole('button', { name: 'Delete' }).first().click();
+    await page.waitForFunction(
+      (count) =>
+        document.querySelectorAll('li[data-runtime-row-key]').length ===
+        count,
+      stamped.length,
+      { timeout: 5_000 },
+    );
+    const afterRemove = await page.evaluate(() => ({
+      rows: [
+        ...document.querySelectorAll('li[data-runtime-row-key]'),
+      ].map((row) => row.getAttribute('data-runtime-row-key')),
+      probes: document.querySelectorAll('li[data-acceptance-probe]')
+        .length,
+    }));
+    expect(
+      afterRemove.rows,
+      'the deleted row must leave the adopted list',
+    ).not.toContain(stamped[0]!.key);
+    expect(afterRemove.rows).toHaveLength(stamped.length);
+    expect(
+      afterRemove.probes,
+      'only the deleted claimed row may lose its probe (the insert has none)',
+    ).toBe(stamped.length - 1);
   } finally {
     await context.close();
   }
