@@ -976,3 +976,265 @@ it('fails the document render when a loop produces duplicate keys', async () => 
   expect(response.status).toBe(500);
   expect(await response.text()).toContain('DUPLICATE_LOOP_KEY:one');
 });
+
+it('serializes `{...props}` spreads so island icons paint with their class attribute', async () => {
+  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
+  // Mirrors a generated lucide icon: the svg element carries explicit
+  // attributes followed by `{...props}`, and the island call passes a
+  // className through the direct props bag (`__plec_props`). SSR must
+  // serialize the spread so the first paint already has `class="..."`.
+  const iconPage = {
+    rootComponent: 0,
+    components: [
+      {
+        rootNode: 0,
+        strings: ['section', '__plec_props', 'className'],
+        constants: ['size-4 shrink-0'],
+        nodes: [
+          { op: 'element', tag: 0, children: [1] },
+          {
+            op: 'component',
+            component: 1,
+            parent: 0,
+            props: [{ kind: 'value', name: 1, expression: 0 }],
+          },
+        ],
+        texts: [],
+        bindings: [],
+        propPrograms: [],
+        stateSlots: [],
+        parameters: [],
+        expressions: [
+          {
+            instructions: [
+              { op: 'constant', constant: 0 },
+              { op: 'makeRecord', fields: [2] },
+              { op: 'return' },
+            ],
+          },
+        ],
+        loops: [],
+        routeOutlets: [],
+      },
+      {
+        rootNode: 0,
+        strings: ['svg', '__plec_props', 'xmlns', 'width', 'height'],
+        constants: ['http://www.w3.org/2000/svg', '24', '24'],
+        nodes: [{ op: 'element', tag: 0, children: [] }],
+        texts: [],
+        bindings: [],
+        propPrograms: [
+          {
+            target: 0,
+            writes: [
+              { name: 2, kind: 'attribute', constant: 0 },
+              { name: 3, kind: 'attribute', constant: 1 },
+              { name: 4, kind: 'attribute', constant: 2 },
+              { kind: 'attribute', expression: 0, spread: true },
+            ],
+          },
+        ],
+        stateSlots: [],
+        parameters: [{ name: 1, callable: false }],
+        expressions: [
+          {
+            instructions: [{ op: 'loadProp', prop: 0 }, { op: 'return' }],
+          },
+        ],
+        loops: [],
+        routeOutlets: [],
+      },
+    ],
+  };
+  await writeFile(
+    path.join(publicDir, 'route-artifact.json'),
+    JSON.stringify({
+      manifest: {
+        revision: 'test-revision',
+        rootGraphId: 'root',
+        routes: [
+          { id: 'home', path: '', graphId: 'home', outletId: 'main' },
+        ],
+      },
+      graphs: [
+        {
+          graphId: 'root',
+          graph: {
+            rootComponent: 0,
+            components: [
+              {
+                rootNode: 0,
+                strings: ['main'],
+                constants: [],
+                nodes: [{ op: 'element', tag: 0, children: [] }],
+                texts: [],
+                bindings: [],
+                propPrograms: [],
+                stateSlots: [],
+                parameters: [],
+                expressions: [],
+                loops: [],
+                routeOutlets: [{ id: 'main', node: 0 }],
+              },
+            ],
+          },
+        },
+        { graphId: 'home', graph: iconPage },
+      ],
+    }),
+  );
+  const server = createPlecServer({
+    publicDir,
+    artifactPath: path.join(publicDir, 'route-artifact.json'),
+  });
+  servers.push(server);
+  server.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('missing test address');
+  const html = await (
+    await fetch(`http://127.0.0.1:${address.port}/`)
+  ).text();
+  // The spread lands after the explicit attributes, exactly where the icon
+  // writes it, so the painted svg already carries its final CSS size class.
+  expect(html).toContain(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" class="size-4 shrink-0"',
+  );
+});
+
+it('passes named props to a dynamic island component and serializes its spread', async () => {
+  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
+  // NavLink-style call: `<Icon className="size-4 shrink-0" />` where `Icon`
+  // arrives as a component prop. The dynamic call keeps its props named, and
+  // the icon's direct `(props)` parameter reads the whole named record.
+  const dynamicIconPage = {
+    rootComponent: 0,
+    components: [
+      {
+        rootNode: 0,
+        strings: ['section', 'Icon'],
+        constants: [],
+        nodes: [
+          { op: 'element', tag: 0, children: [1] },
+          {
+            op: 'component',
+            component: 1,
+            parent: 0,
+            props: [{ kind: 'component', name: 1, component: 2 }],
+          },
+        ],
+        texts: [],
+        bindings: [],
+        propPrograms: [],
+        stateSlots: [],
+        parameters: [],
+        expressions: [],
+        loops: [],
+        routeOutlets: [],
+      },
+      {
+        rootNode: 0,
+        strings: ['Icon', 'className'],
+        constants: ['size-4 shrink-0'],
+        nodes: [
+          {
+            op: 'dynamicComponent',
+            prop: 0,
+            parent: null,
+            props: [{ kind: 'value', name: 1, expression: 0 }],
+          },
+        ],
+        texts: [],
+        bindings: [],
+        propPrograms: [],
+        stateSlots: [],
+        parameters: [{ name: 0, component: true }],
+        expressions: [
+          {
+            instructions: [{ op: 'constant', constant: 0 }, { op: 'return' }],
+          },
+        ],
+        loops: [],
+        routeOutlets: [],
+      },
+      {
+        rootNode: 0,
+        strings: ['svg', '__plec_props', 'width'],
+        constants: ['24'],
+        nodes: [{ op: 'element', tag: 0, children: [] }],
+        texts: [],
+        bindings: [],
+        propPrograms: [
+          {
+            target: 0,
+            writes: [
+              { name: 2, kind: 'attribute', constant: 0 },
+              { kind: 'attribute', expression: 0, spread: true },
+            ],
+          },
+        ],
+        stateSlots: [],
+        parameters: [{ name: 1, callable: false }],
+        expressions: [
+          {
+            instructions: [{ op: 'loadProp', prop: 0 }, { op: 'return' }],
+          },
+        ],
+        loops: [],
+        routeOutlets: [],
+      },
+    ],
+  };
+  await writeFile(
+    path.join(publicDir, 'route-artifact.json'),
+    JSON.stringify({
+      manifest: {
+        revision: 'test-revision',
+        rootGraphId: 'root',
+        routes: [
+          { id: 'home', path: '', graphId: 'home', outletId: 'main' },
+        ],
+      },
+      graphs: [
+        {
+          graphId: 'root',
+          graph: {
+            rootComponent: 0,
+            components: [
+              {
+                rootNode: 0,
+                strings: ['main'],
+                constants: [],
+                nodes: [{ op: 'element', tag: 0, children: [] }],
+                texts: [],
+                bindings: [],
+                propPrograms: [],
+                stateSlots: [],
+                parameters: [],
+                expressions: [],
+                loops: [],
+                routeOutlets: [{ id: 'main', node: 0 }],
+              },
+            ],
+          },
+        },
+        { graphId: 'home', graph: dynamicIconPage },
+      ],
+    }),
+  );
+  const server = createPlecServer({
+    publicDir,
+    artifactPath: path.join(publicDir, 'route-artifact.json'),
+  });
+  servers.push(server);
+  server.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('missing test address');
+  const html = await (
+    await fetch(`http://127.0.0.1:${address.port}/`)
+  ).text();
+  expect(html).toContain('<svg width="24" class="size-4 shrink-0"');
+});
