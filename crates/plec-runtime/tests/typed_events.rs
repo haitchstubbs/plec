@@ -2479,6 +2479,60 @@ fn adopted_missing_and_mismatched_markers_fail_closed_with_unchanged_codes() {
         .contains("mismatch:ssr-tag:root/node:0"));
 }
 
+#[wasm_bindgen_test]
+fn text_marker_adjacency_element_injection_fails_closed() {
+    // An element between the marker and its value breaks the adjacency
+    // contract: the claim must fail closed, never synthesize around the
+    // injected node and leave the served text stale.
+    let html = nested_adoption_html(false).replace(
+        "<!--plec:text:root/component:1/component:1:2-->one",
+        "<!--plec:text:root/component:1/component:1:2--><i></i>one",
+    );
+    let error = start_adopt_fixture(&PlecRuntime::new(), &mount_root(), &html).unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "adjacency:ssr-text:root/component:1/component:1:2"
+    );
+}
+
+#[wasm_bindgen_test]
+fn empty_text_sentinel_synthesizes_the_text_node_and_binding_writes_target_it() {
+    // The server serializes an empty value as the empty-comment sentinel:
+    // adoption must synthesize the text node at the marker position, and
+    // the later binding write must land in the synthesized node.
+    let html = nested_adoption_html(false).replace(
+        "<!--plec:text:root/component:1/component:1:4-->0",
+        "<!--plec:text:root/component:1/component:1:4--><!---->",
+    );
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_adopt_fixture(&runtime, &root, &html).unwrap();
+    let button = root.query_selector("div button").unwrap().unwrap();
+    let children = button.child_nodes();
+    assert_eq!(children.length(), 3, "marker, synthesized text, sentinel");
+    assert_eq!(children.get(0).unwrap().node_type(), 8);
+    let synthesized = children.get(1).unwrap();
+    assert_eq!(synthesized.node_type(), 3);
+    // The adoption recompute rewrote the synthesized node with the evaluated
+    // value; the node identity is what proves the synthesis path ran.
+    assert_eq!(synthesized.text_content().unwrap(), "0");
+    assert_eq!(children.get(2).unwrap().node_type(), 8);
+    button
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(
+        root.query_selector("div button")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "1",
+        "the binding write must update the synthesized node"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // SSR snapshot import pipeline
 //
@@ -3480,6 +3534,80 @@ fn ssr_keyed_loop_duplicate_dom_row_markers_fail_closed() {
     assert_eq!(
         error.as_string().unwrap_or_default(),
         "duplicate:ssr-marker:plec:loop:root/outlet:main/loop:2/key:one"
+    );
+}
+
+#[wasm_bindgen_test]
+fn row_text_marker_adjacency_element_injection_fails_closed() {
+    let _location = reset_browser_location();
+    let dom = loop_server_dom(&[("one", "One")]).replace(
+        "<!--plec:text:root/outlet:main/loop:2/key:one:4-->One",
+        "<!--plec:text:root/outlet:main/loop:2/key:one:4--><i></i>One",
+    );
+    let error = start_loop_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &dom,
+        loop_snapshot(&["one"], loop_rows_json(&[("one", "One")])),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "adjacency:ssr-row-text:root/outlet:main/loop:2/key:one:4"
+    );
+}
+
+#[wasm_bindgen_test]
+fn row_text_empty_sentinel_synthesizes_the_row_text_node() {
+    let _location = reset_browser_location();
+    // The row title serialized empty (sentinel): the row claim synthesizes
+    // the text node between marker and sentinel, and row identity stays
+    // live for later writes.
+    let dom = loop_server_dom(&[("one", "One")]).replace(
+        "<!--plec:text:root/outlet:main/loop:2/key:one:4-->One",
+        "<!--plec:text:root/outlet:main/loop:2/key:one:4--><!---->",
+    );
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_loop_fixture(
+        &runtime,
+        &root,
+        &dom,
+        loop_snapshot(&["one"], loop_rows_json(&[("one", "One")])),
+    )
+    .unwrap();
+    let one = loop_row(&root, "one");
+    // The snapshot-backed row refresh rewrote the synthesized node with the
+    // row value; only the button label remains around it.
+    assert_eq!(one.text_content().unwrap(), "OnePick");
+    let children = one.child_nodes();
+    let mut synthesized: Option<web_sys::Node> = None;
+    for index in 0..children.length() {
+        let child = children.get(index).unwrap();
+        if child.node_type() == 8
+            && child.node_value().as_deref() == Some("plec:text:root/outlet:main/loop:2/key:one:4")
+        {
+            synthesized = children.get(index + 1);
+            break;
+        }
+    }
+    let synthesized = synthesized.expect("no synthesized text node after the row marker");
+    assert_eq!(synthesized.node_type(), 3);
+    assert_eq!(synthesized.text_content().unwrap(), "One");
+    // The row action still runs through the adopted row identity.
+    one.query_selector("button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(
+        root.query_selector("[data-plec-node='root/outlet:main/node:7']")
+            .unwrap()
+            .unwrap()
+            .text_content(),
+        Some("One".to_string())
     );
 }
 
@@ -4857,4 +4985,224 @@ async fn adopted_loader_route_runs_loader_on_fresh_navigation() {
     runtime.navigate("/todos".into(), false).unwrap();
     settle_fetch().await;
     assert!(loader_route_text(&root).contains("second-value"));
+}
+
+// ---------------------------------------------------------------------------
+// Keyed loop reorder cost
+//
+// Reconciliation must leave LIS-stable rows untouched, relocate every other
+// surviving row exactly once as an indivisible DOM range, and keep the
+// accounting honest: `rowMoves` counts logical moves, `domNodesMoved` counts
+// physically displaced nodes, `domOperations` counts every mutation call
+// (staging appends plus the single range splice).
+// ---------------------------------------------------------------------------
+
+fn initialize_rows_with_metrics(
+    runtime: &PlecRuntime,
+    rows: serde_json::Value,
+) -> serde_json::Value {
+    serde_wasm_bindgen::from_value(
+        runtime
+            .initialize_input("items".into(), serde_wasm_bindgen::to_value(&rows).unwrap())
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+fn row_order(root: &Element) -> Vec<String> {
+    let list = root.query_selector_all("li").unwrap();
+    (0..list.length())
+        .map(|index| {
+            list.item(index)
+                .unwrap()
+                .dyn_into::<Element>()
+                .unwrap()
+                .get_attribute("data-runtime-row-key")
+                .unwrap()
+        })
+        .collect()
+}
+
+fn metrics_number(metrics: &serde_json::Value, key: &str) -> u32 {
+    metrics
+        .get(key)
+        .and_then(|value| value.as_u64())
+        .unwrap_or_else(|| panic!("metrics missing {key}")) as u32
+}
+
+#[wasm_bindgen_test]
+fn keyed_reorder_noop_reconcile_performs_zero_dom_operations() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, keyed_row_artifact(), &root);
+    initialize_rows_with_metrics(
+        &runtime,
+        loop_rows_json(&[("a", "A"), ("b", "B"), ("c", "C")]),
+    );
+    let rows: Vec<web_sys::Node> = ["a", "b", "c"]
+        .iter()
+        .map(|key| loop_row(&root, key).clone().into())
+        .collect();
+
+    reset_plec_dom_mutations();
+    let metrics = initialize_rows_with_metrics(
+        &runtime,
+        loop_rows_json(&[("a", "A"), ("b", "B"), ("c", "C")]),
+    );
+    assert_eq!(metrics_number(&metrics, "domOperations"), 0);
+    assert_eq!(metrics_number(&metrics, "rowMoves"), 0);
+    assert_eq!(metrics_number(&metrics, "domNodesMoved"), 0);
+    assert_eq!(
+        plec_dom_mutations(),
+        "{\"append\":0,\"insertBefore\":0,\"remove\":0}"
+    );
+    assert_eq!(row_order(&root), vec!["a", "b", "c"]);
+    for (key, node) in ["a", "b", "c"].iter().zip(&rows) {
+        let current: web_sys::Node = loop_row(&root, key).clone().into();
+        assert!(node.is_same_node(Some(&current)));
+    }
+}
+
+#[wasm_bindgen_test]
+fn keyed_reorder_adjacent_swap_relocates_one_range_with_honest_accounting() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, keyed_row_artifact(), &root);
+    initialize_rows_with_metrics(
+        &runtime,
+        loop_rows_json(&[("a", "A"), ("b", "B"), ("c", "C")]),
+    );
+    let row_b: web_sys::Node = loop_row(&root, "b").clone().into();
+    let row_c: web_sys::Node = loop_row(&root, "c").clone().into();
+
+    reset_plec_dom_mutations();
+    let metrics = initialize_rows_with_metrics(
+        &runtime,
+        loop_rows_json(&[("a", "A"), ("c", "C"), ("b", "B")]),
+    );
+    assert_eq!(metrics_number(&metrics, "rowMoves"), 1);
+    // The moved row is [comment, li, comment]: three displaced nodes, staged
+    // with three appends and spliced back with one insertBefore.
+    assert_eq!(metrics_number(&metrics, "domNodesMoved"), 3);
+    assert_eq!(metrics_number(&metrics, "domOperations"), 4);
+    assert_eq!(
+        plec_dom_mutations(),
+        "{\"append\":3,\"insertBefore\":1,\"remove\":0}"
+    );
+    assert_eq!(row_order(&root), vec!["a", "c", "b"]);
+    // Keyed identity: the very same elements moved, nothing was recreated.
+    let current_b: web_sys::Node = loop_row(&root, "b").clone().into();
+    let current_c: web_sys::Node = loop_row(&root, "c").clone().into();
+    assert!(row_c.is_same_node(Some(&current_c)));
+    assert!(row_b.is_same_node(Some(&current_b)));
+}
+
+#[wasm_bindgen_test]
+fn keyed_reorder_single_move_in_large_list_is_constant_cost() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, keyed_row_artifact(), &root);
+    initialize_rows_with_metrics(
+        &runtime,
+        loop_rows_json(&[
+            ("a", "A"),
+            ("b", "B"),
+            ("c", "C"),
+            ("d", "D"),
+            ("e", "E"),
+            ("f", "F"),
+            ("g", "G"),
+            ("h", "H"),
+        ]),
+    );
+    let metrics = initialize_rows_with_metrics(
+        &runtime,
+        loop_rows_json(&[
+            ("a", "A"),
+            ("b", "B"),
+            ("d", "D"),
+            ("c", "C"),
+            ("e", "E"),
+            ("f", "F"),
+            ("g", "G"),
+            ("h", "H"),
+        ]),
+    );
+    assert_eq!(metrics_number(&metrics, "rowMoves"), 1);
+    assert_eq!(metrics_number(&metrics, "domNodesMoved"), 3);
+    assert_eq!(metrics_number(&metrics, "domOperations"), 4);
+    assert_eq!(
+        row_order(&root),
+        vec!["a", "b", "d", "c", "e", "f", "g", "h"]
+    );
+}
+
+#[wasm_bindgen_test]
+fn keyed_reorder_reversal_moves_each_non_lis_row_once() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, keyed_row_artifact(), &root);
+    initialize_rows_with_metrics(
+        &runtime,
+        loop_rows_json(&[("a", "A"), ("b", "B"), ("c", "C"), ("d", "D")]),
+    );
+    let metrics = initialize_rows_with_metrics(
+        &runtime,
+        loop_rows_json(&[("d", "D"), ("c", "C"), ("b", "B"), ("a", "A")]),
+    );
+    assert_eq!(metrics_number(&metrics, "rowMoves"), 3);
+    assert_eq!(metrics_number(&metrics, "domNodesMoved"), 9);
+    assert_eq!(row_order(&root), vec!["d", "c", "b", "a"]);
+}
+
+#[wasm_bindgen_test]
+fn keyed_reorder_mixed_insert_remove_move_preserves_identity_and_actions() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, keyed_row_artifact(), &root);
+    initialize_rows_with_metrics(
+        &runtime,
+        loop_rows_json(&[("a", "A"), ("b", "B"), ("c", "C")]),
+    );
+    let row_a: web_sys::Node = loop_row(&root, "a").clone().into();
+
+    // Remove b, insert x before a: a and c are LIS-stable, zero moves.
+    let metrics = initialize_rows_with_metrics(
+        &runtime,
+        loop_rows_json(&[("x", "X"), ("a", "A"), ("c", "C")]),
+    );
+    assert_eq!(metrics_number(&metrics, "rowInserts"), 1);
+    assert_eq!(metrics_number(&metrics, "rowMoves"), 0);
+    assert_eq!(row_order(&root), vec!["x", "a", "c"]);
+    let current_a: web_sys::Node = loop_row(&root, "a").clone().into();
+    assert!(row_a.is_same_node(Some(&current_a)));
+
+    // Move c to the front while updating a's title in the same reconcile.
+    // [x,a,c] -> [c,a,x] is a rotation: LIS keeps only x, so c and a
+    // each relocate once — the minimum for a 3-cycle.
+    let metrics = initialize_rows_with_metrics(
+        &runtime,
+        loop_rows_json(&[("c", "C"), ("a", "A2"), ("x", "X")]),
+    );
+    assert_eq!(metrics_number(&metrics, "rowMoves"), 2);
+    assert!(metrics_number(&metrics, "bindingsTouched") >= 1);
+    assert_eq!(row_order(&root), vec!["c", "a", "x"]);
+    assert_eq!(loop_row(&root, "a").text_content().unwrap(), "A2");
+
+    // The row button survived every move: clicking writes the row title to
+    // the static output text.
+    loop_row(&root, "a")
+        .query_selector("button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(static_output(&root), "A2");
 }

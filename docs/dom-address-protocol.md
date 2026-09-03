@@ -46,7 +46,7 @@ Row keys `{k}` are escaped exactly like the server renderer's
 | DOM construct      | Address / marker                                                                                                       | Emitted by      |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------- | --------------- |
 | Element            | attribute `data-plec-node="{path}/node:{i}"`                                                                           | SSR **and** CSR |
-| Text (server side) | comment `<!--plec:text:{path}:{i}-->` immediately before the text                                                      | SSR only¹       |
+| Text (server side) | comment `<!--plec:text:{path}:{i}-->` immediately before the text¹                                                     | SSR only¹       |
 | Conditional region | `<!--plec:conditional:{path}:{i}-->` … `<!--plec:conditional-end:{path}:{i}-->`                                        | SSR **and** CSR |
 | Component call     | `<!--plec:component:{path}:{i}-->` … `<!--plec:component-end:{path}:{i}-->`                                            | SSR **and** CSR |
 | Slot               | `<!--plec:slot:{path}:{i}-->` … `<!--plec:slot-end:{path}:{i}-->`                                                      | SSR **and** CSR |
@@ -55,11 +55,50 @@ Row keys `{k}` are escaped exactly like the server renderer's
 ¹ CSR-created text nodes carry no marker: the runtime owns them by direct
 reference, and text is never a claim boundary. Text markers exist only
 because server text cannot carry attributes; the marker-before-text
-adjacency contract is specified in wasm-runtime-ixk.6.
+adjacency contract is specified below ("Text-marker adjacency contract").
 
 There is deliberately **no loop-position anchor**. The server emits none;
 rows are self-delimiting regions. A bare `plec:loop:{index}` comment is a
 retired competitor grammar, not a valid address.
+
+## Text-marker adjacency contract
+
+Text nodes cannot carry attributes, so server-rendered text is claimed
+through the marker that immediately precedes it. The contract in one line:
+**a `plec:text:{path}:{i}` marker claims exactly the node that immediately
+follows it** — nothing may sit between a marker and its text.
+
+| Served shape after the marker                      | Meaning                                                        | Runtime behaviour                                                                                    |
+| -------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| text node                                          | the value                                                      | claimed as the binding sink                                                                          |
+| empty comment `<!---->` (the empty-value sentinel) | the value was `""`, which serializes to no node at all         | a text node is synthesized between marker and sentinel; the binding owns it from adoption onward     |
+| any other node (element, foreign comment, …)       | markup was injected between the marker and its value           | adoption fails closed: `adjacency:ssr-text:*` (row claims: `adjacency:ssr-row-text:*`), then remount |
+| nothing (the marker is its parent's last child)    | a legacy document serialized an empty value without a sentinel | a text node is appended at the marker position                                                       |
+
+Rules and caveats:
+
+- **The sentinel is part of the emission contract.** An empty value
+  serializes as `<!--plec:text:…--><!---->`, never as a bare marker, so an
+  adopter can distinguish "empty value" from "something was injected"
+  purely from DOM shape. Documents produced before the sentinel may carry
+  another `plec:*` boundary comment after an empty-value marker; comments
+  are runtime-emitted grammar, so a comment following the marker is still
+  trusted as an empty value and heals through synthesis.
+- **Injected bare whitespace merges, it does not break.** Whitespace
+  inserted between a marker and its text is contiguous with the served
+  text, so the HTML parser merges it into the claimed node and the
+  snapshot-backed recompute rewrites the merged data with the true value.
+  The visible output is exact; only a non-text node between marker and
+  value breaks the claim.
+- **Synthesis is position-exact and one-time.** The runtime stores the
+  direct `Text` reference at adoption; later binding writes target the
+  synthesized node by reference and never re-resolve the marker.
+- **Failure is closed.** `adjacency:ssr-text` and
+  `adjacency:ssr-row-text` mean "text marker not immediately followed by
+  its text": the document is remounted from scratch instead of anchoring a
+  binding at a guessed position. Post-processing, middleware, browser
+  extensions, and copy-paste sanitizers that rewrite served markup surface
+  as this diagnostic — never as silently stale text.
 
 ## Uniqueness and ownership
 
@@ -90,11 +129,11 @@ failure for what is really an authoring mistake. Ownership comments
 (`<!--plec:…-->`) cannot collide with attributes, but the `plec:*` grammar
 is reserved anyway so no future attribute form can split the namespace.
 
-| Reservation        | Scope            | Covers                                                                         |
-| ------------------ | ---------------- | ------------------------------------------------------------------------------ |
-| `data-plec-*`      | **permanent**    | `data-plec-node`, `data-plec-spread-keys`                                      |
-| `plec:*`           | **permanent**    | boundary comments (`plec:text/conditional/component/slot/loop`) and any future `plec:`-prefixed name |
-| `data-runtime-*`   | **migration window only** | `data-runtime-row-key`, `data-runtime-action`, `data-runtime-event`, `data-runtime-field`, and the legacy `data-runtime-node` |
+| Reservation      | Scope                     | Covers                                                                                                                        |
+| ---------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `data-plec-*`    | **permanent**             | `data-plec-node`, `data-plec-spread-keys`                                                                                     |
+| `plec:*`         | **permanent**             | boundary comments (`plec:text/conditional/component/slot/loop`) and any future `plec:`-prefixed name                          |
+| `data-runtime-*` | **migration window only** | `data-runtime-row-key`, `data-runtime-action`, `data-runtime-event`, `data-runtime-field`, and the legacy `data-runtime-node` |
 
 `data-runtime-node` is excluded from the protocol (see the retired-grammars
 table above) but stays reserved until its legacy consumers are removed by
@@ -152,14 +191,17 @@ Adoption diagnostics keep their contract (see the SSR audit's table):
 `missing:ssr-*`, `mismatch:ssr-*`, `duplicate:ssr-*`, `detached:ssr-text`.
 The protocol adds:
 
-| Code                              | Meaning                                                                                                                                             |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `invariant:adoption-once`         | Adoption attempted while typed DOM is already materialized (one-shot lifecycle invariant).                                                          |
-| `address:loop-row-prefix-missing` | A delta row insert found no recorded structural prefix for its loop — the loop was never instantiated or adopted through the protocol. Fail-closed. |
+| Code                                   | Meaning                                                                                                                                             |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `invariant:adoption-once`              | Adoption attempted while typed DOM is already materialized (one-shot lifecycle invariant).                                                          |
+| `address:loop-row-prefix-missing`      | A delta row insert found no recorded structural prefix for its loop — the loop was never instantiated or adopted through the protocol. Fail-closed. |
+| `adjacency:ssr-text:{path}:{i}`        | A non-text node sits between a text marker and the text it anchors; the claim fails closed (see the text-marker adjacency contract).                |
+| `adjacency:ssr-row-text:{rowPath}:{i}` | Same adjacency break, detected while claiming a loop row's text. Fail-closed.                                                                       |
 
 ## Related contracts
 
 - Reserved attribute namespace (`data-plec-*`, `data-runtime-*`, `plec:*`):
   defined and enforced above ("Reserved DOM metadata namespace").
-- Text-marker adjacency: wasm-runtime-ixk.6.
+- Text-marker adjacency: defined above ("Text-marker adjacency contract"),
+  implemented and tested by wasm-runtime-ixk.6.
 - Legacy 0.8/0.9 marker/adoption isolation: wasm-runtime-ixk.7.

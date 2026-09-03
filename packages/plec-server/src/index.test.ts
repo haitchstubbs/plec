@@ -93,6 +93,98 @@ it('renders a route artifact with document metadata and public request location'
   expect(html).toContain('"location":"/?source=test"');
 });
 
+it('serializes an empty text value as the empty-comment sentinel', async () => {
+  // Text-marker adjacency contract (docs/dom-address-protocol.md): an empty
+  // value serializes to no text node, so the marker is followed by the
+  // empty-comment sentinel instead — adoption can then tell an empty value
+  // from injected markup sitting between the marker and its text.
+  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
+  await writeFile(
+    path.join(publicDir, 'route-artifact.json'),
+    JSON.stringify({
+      manifest: {
+        revision: 'test-revision',
+        rootGraphId: 'root',
+        routes: [
+          { id: 'home', path: '', graphId: 'home', outletId: 'main' },
+        ],
+      },
+      graphs: [
+        {
+          graphId: 'root',
+          graph: {
+            rootComponent: 0,
+            components: [
+              {
+                rootNode: 0,
+                strings: ['main'],
+                constants: [],
+                nodes: [{ op: 'element', tag: 0, children: [] }],
+                texts: [],
+                bindings: [],
+                propPrograms: [],
+                stateSlots: [],
+                parameters: [],
+                expressions: [],
+                loops: [],
+                routeOutlets: [{ id: 'main', node: 0 }],
+              },
+            ],
+          },
+        },
+        {
+          graphId: 'home',
+          graph: {
+            rootComponent: 0,
+            components: [
+              {
+                rootNode: 0,
+                strings: ['p'],
+                constants: [''],
+                nodes: [
+                  { op: 'element', tag: 0, children: [1, 2] },
+                  { op: 'text', text: 0, parent: 0 },
+                  { op: 'text', text: 1, parent: 0 },
+                ],
+                texts: [{ binding: 0 }, { value: 'after' }],
+                bindings: [{ target: 0, sink: 'text', expression: 0 }],
+                propPrograms: [],
+                stateSlots: [],
+                parameters: [],
+                loops: [],
+                routeOutlets: [],
+                expressions: [
+                  {
+                    instructions: [
+                      { op: 'constant', constant: 0 },
+                      { op: 'return' },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    }),
+  );
+  const server = createPlecServer({
+    publicDir,
+    artifactPath: path.join(publicDir, 'route-artifact.json'),
+  });
+  servers.push(server);
+  server.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('missing test address');
+  const html = await (
+    await fetch(`http://127.0.0.1:${address.port}/`)
+  ).text();
+  expect(html).toContain('<!--plec:text:root/outlet:main:1--><!---->');
+  expect(html).toContain('<!--plec:text:root/outlet:main:2-->after');
+});
+
 it('emits font preload links before the stylesheet', async () => {
   const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
   const graph = {
@@ -1423,7 +1515,9 @@ it('fails the render closed when a reserved attribute is written literally', asy
     throw new Error('missing test address');
   const response = await fetch(`http://127.0.0.1:${address.port}/`);
   expect(response.status).toBe(500);
-  expect(await response.text()).toContain('RESERVED_ATTRIBUTE:data-plec-node');
+  expect(await response.text()).toContain(
+    'RESERVED_ATTRIBUTE:data-plec-node',
+  );
 });
 
 it('fails the render closed when a spread bag carries a reserved attribute', async () => {
@@ -1444,7 +1538,9 @@ it('fails the render closed when a spread bag carries a reserved attribute', asy
         propPrograms: [
           {
             target: 0,
-            writes: [{ kind: 'attribute', expression: 0, spread: true }],
+            writes: [
+              { kind: 'attribute', expression: 0, spread: true },
+            ],
           },
         ],
         stateSlots: [],

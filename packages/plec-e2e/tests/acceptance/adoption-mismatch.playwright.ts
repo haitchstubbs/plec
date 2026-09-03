@@ -205,6 +205,34 @@ test('duplicated text marker fails closed instead of hijacking a claim', async (
   }
 });
 
+test('element injected between a text marker and its value fails closed with adjacency:ssr-text', async ({
+  browser,
+}) => {
+  // Text-marker adjacency contract (docs/dom-address-protocol.md): the
+  // marker claims the node that immediately follows it. An injected element
+  // between the two must fail the claim closed — synthesizing around it
+  // would leave the served text stale next to a rewritten sink. The
+  // row-level variant of this claim (`adopt_row_node`, diagnostic
+  // `adjacency:ssr-row-text`) is covered by the Rust wasm suite in
+  // crates/plec-runtime/tests/typed_events.rs: the demo app renders every
+  // SSR row through a nested component or fills collections client-side,
+  // so no served document reaches that claim path.
+  const { context, page, adoption } = await interceptedPage(
+    browser,
+    '/',
+    (html) =>
+      html.replace(/(<!--plec:text:[^>]+-->)([^<])/, '$1<i></i>$2'),
+  );
+  try {
+    expect(adoption.outcome, JSON.stringify(adoption)).toBe('fallback');
+    expect(adoption.mismatchCodes).toHaveLength(1);
+    expect(adoption.mismatchCodes[0]).toMatch(/^adjacency:ssr-text:/);
+    await fallbackRemounted(page);
+  } finally {
+    await context.close();
+  }
+});
+
 test('unparseable bootstrap fails closed with invalid:ssr-bootstrap', async ({
   browser,
 }) => {
@@ -267,6 +295,134 @@ test('binding divergence is allowed, recomputed, and reported', async ({
     // the client-evaluated one in place.
     expect(await page.locator('#ssr-request').textContent()).toBe(
       'Requested/',
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test('whitespace injected between a text marker and its value merges into the claimed node and self-heals', async ({
+  browser,
+}) => {
+  // Bare injected whitespace is contiguous with the served text, so the
+  // HTML parser merges it into one text node and the claim still lands on
+  // the right node. The adjacency contract covers this explicitly: the
+  // snapshot-backed recompute rewrites the merged data, so the visible
+  // value is exact even though the served bytes were mangled. Only a
+  // non-text node between marker and value breaks the claim (fail-closed).
+  const { context, page, adoption } = await interceptedPage(
+    browser,
+    '/',
+    (html) => {
+      const idAt = html.indexOf('id="ssr-request"');
+      if (idAt < 0) return html;
+      const firstMarker = html.indexOf('<!--plec:text:', idAt);
+      if (firstMarker < 0) return html;
+      const markerAt = html.indexOf('<!--plec:text:', firstMarker + 1);
+      if (markerAt < 0) return html;
+      const markerEnd = html.indexOf('-->', markerAt) + 3;
+      return html.slice(0, markerEnd) + '\n  ' + html.slice(markerEnd);
+    },
+  );
+  try {
+    expect(adoption.outcome, JSON.stringify(adoption)).toBe('adopted');
+    expect(
+      adoption.textDivergences,
+      `text divergences: ${JSON.stringify(adoption)}`,
+    ).toBeGreaterThanOrEqual(1);
+    expect(await page.locator('#ssr-request').textContent()).toBe(
+      'Requested/',
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test('an empty server text value adopts through marker synthesis', async ({
+  browser,
+}) => {
+  // The search binding renders '' at '/': the server serializes the marker
+  // followed by the empty-comment sentinel, and adoption synthesizes the
+  // text node between the two so the binding owns a sink from the start.
+  const { context, page, adoption } = await interceptedPage(
+    browser,
+    '/',
+    (html) => html,
+  );
+  try {
+    expect(adoption.outcome, JSON.stringify(adoption)).toBe('adopted');
+    expect(adoption.mismatchCodes).toEqual([]);
+    const afterMarker = await page.evaluate(() => {
+      const paragraph = document.querySelector('#ssr-request')!;
+      const children = Array.from(paragraph.childNodes);
+      let lastMarker = -1;
+      children.forEach((node, index) => {
+        if (
+          node.nodeType === Node.COMMENT_NODE &&
+          (node.nodeValue ?? '').startsWith('plec:text:')
+        ) {
+          lastMarker = index;
+        }
+      });
+      return children.slice(lastMarker + 1).map((node) => ({
+        type: node.nodeType,
+        data: node.nodeValue ?? '',
+      }));
+    });
+    expect(
+      afterMarker,
+      'marker must be followed by the synthesized empty text node and the sentinel',
+    ).toEqual([
+      { type: 3, data: '' },
+      { type: 8, data: '' },
+    ]);
+  } finally {
+    await context.close();
+  }
+});
+
+test('binding writes target the text node synthesized for an empty server value', async ({
+  browser,
+}) => {
+  // Stripping the served counter value leaves its marker with no text node
+  // at all (the value was not empty, so no sentinel was emitted): adoption
+  // synthesizes the node, the snapshot recompute seeds the evaluated value
+  // into it, and the later click writes land in that same synthesized node.
+  // The surgery targets the binding's marker (the last one in the button),
+  // not the static "SSR counter: " text's own marker.
+  const { context, page, adoption } = await interceptedPage(
+    browser,
+    '/',
+    (html) => {
+      const idAt = html.indexOf('id="ssr-counter"');
+      if (idAt < 0) return html;
+      const buttonEnd = html.indexOf('</button>', idAt);
+      if (buttonEnd < 0) return html;
+      const markerAt = html.lastIndexOf('<!--plec:text:', buttonEnd);
+      if (markerAt < 0) return html;
+      const valueStart = html.indexOf('-->', markerAt) + 3;
+      const valueEnd = html.indexOf('<', valueStart);
+      if (valueEnd < 0 || valueEnd > buttonEnd) return html;
+      return html.slice(0, valueStart) + html.slice(valueEnd);
+    },
+  );
+  try {
+    expect(adoption.outcome, JSON.stringify(adoption)).toBe('adopted');
+    expect(adoption.snapshotImported, JSON.stringify(adoption)).toBe(
+      true,
+    );
+    // The recompute seeded the synthesized node with the evaluated value,
+    // and the click's binding write landed in that same synthesized node —
+    // the runtime holds only the direct Text reference, so this proves the
+    // write targeted the synthesis, not a marker re-resolution. (The
+    // compiler elides the trailing space before the expression, so the
+    // static prefix is 'SSR counter:'.)
+    expect(await page.locator('#ssr-counter').textContent()).toMatch(
+      /^SSR counter:\s?0$/,
+    );
+    await page.locator('#ssr-counter').click();
+    expect(await page.locator('#ssr-counter').textContent()).toMatch(
+      /^SSR counter:\s?1$/,
     );
   } finally {
     await context.close();

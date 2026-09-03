@@ -152,6 +152,7 @@ export interface CompiledUpdateMetrics {
   rowInserts: number;
   rowRemoves: number;
   rowMoves: number;
+  domNodesMoved: number;
   wasmDomUs: number;
 }
 export interface RuntimeMountMetrics {
@@ -1059,6 +1060,7 @@ function publishDeltas(
     rowInserts: 0,
     rowRemoves: 0,
     rowMoves: 0,
+    domNodesMoved: 0,
     wasmDomUs: 0,
   };
   if (deltas.length > 0) addMetrics(total, applyBatch(runtime, deltas));
@@ -1144,6 +1146,7 @@ function addMetrics(
   total.rowInserts += next.rowInserts;
   total.rowRemoves += next.rowRemoves;
   total.rowMoves += next.rowMoves;
+  total.domNodesMoved += next.domNodesMoved;
   total.wasmDomUs += next.wasmDomUs;
 }
 

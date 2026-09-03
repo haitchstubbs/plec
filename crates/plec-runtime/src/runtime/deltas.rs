@@ -123,6 +123,7 @@ impl PlecRuntime {
             total.row_inserts += metrics.row_inserts;
             total.row_removes += metrics.row_removes;
             total.row_moves += metrics.row_moves;
+            total.dom_nodes_moved += metrics.dom_nodes_moved;
             total.wasm_dom_us += metrics.wasm_dom_us;
         }
         serde_wasm_bindgen::to_value(&total).map_err(error)

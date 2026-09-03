@@ -6,6 +6,7 @@ use crate::typed::cookie::*;
 use crate::typed::events::*;
 #[cfg(feature = "fetch")]
 use crate::typed::fetch::*;
+use crate::typed::reorder::keyed_reorder_plan;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
@@ -1028,27 +1029,39 @@ impl TypedRuntime {
                     let marker_node = markers.get(&marker).ok_or_else(|| {
                         JsValue::from_str(&format!("missing:ssr-text:{path}:{index}"))
                     })?;
-                    let text = match marker_node
-                        .next_sibling()
-                        .filter(|candidate| candidate.node_type() == Node::TEXT_NODE)
-                    {
-                        Some(text) => text,
-                        // An empty server-rendered value parses to no text
-                        // node at all, but binding writes need one to own.
-                        // The marker still proves the exact location.
+                    let text = match marker_node.next_sibling() {
+                        // The value itself. Injected bare whitespace merges
+                        // into this node at parse time; the snapshot recompute
+                        // rewrites the merged data with the true value.
+                        Some(sibling) if sibling.node_type() == Node::TEXT_NODE => sibling,
+                        // An empty server value serializes as the empty-comment
+                        // sentinel instead of a text node (and legacy documents
+                        // may have another plec boundary marker there): the
+                        // marker still proves the exact position, so synthesize
+                        // the text node the binding will own.
+                        Some(sibling) if sibling.node_type() == Node::COMMENT_NODE => {
+                            let parent = marker_node.parent_node().ok_or_else(|| {
+                                JsValue::from_str(&format!("detached:ssr-text:{path}:{index}"))
+                            })?;
+                            let text = document()?.create_text_node("");
+                            parent.insert_before(&text, Some(&sibling))?;
+                            text.into()
+                        }
+                        // Anything else sits between the marker and the text
+                        // it anchors: the adjacency contract is broken, so the
+                        // claim must fail closed instead of anchoring the
+                        // binding at a guessed position.
+                        Some(_) => {
+                            return Err(JsValue::from_str(&format!(
+                                "adjacency:ssr-text:{path}:{index}"
+                            )));
+                        }
                         None => {
                             let parent = marker_node.parent_node().ok_or_else(|| {
                                 JsValue::from_str(&format!("detached:ssr-text:{path}:{index}"))
                             })?;
                             let text = document()?.create_text_node("");
-                            match marker_node.next_sibling() {
-                                Some(reference) => {
-                                    parent.insert_before(&text, Some(&reference))?;
-                                }
-                                None => {
-                                    parent.append_child(&text)?;
-                                }
-                            }
+                            parent.append_child(&text)?;
                             text.into()
                         }
                     };
@@ -1459,12 +1472,35 @@ impl TypedRuntime {
                 let marker_node = markers.get(&marker).ok_or_else(|| {
                     JsValue::from_str(&format!("missing:ssr-row-text:{path}:{index}"))
                 })?;
-                let text = marker_node
-                    .next_sibling()
-                    .filter(|candidate| candidate.node_type() == Node::TEXT_NODE)
-                    .ok_or_else(|| {
-                        JsValue::from_str(&format!("missing:ssr-row-text:{path}:{index}"))
-                    })?;
+                // Same adjacency contract as the graph-level text claim: a
+                // text node is the value (merged injected whitespace heals
+                // through the recompute), a comment is the empty-value
+                // sentinel, anything else is broken adjacency and fails
+                // closed.
+                let text = match marker_node.next_sibling() {
+                    Some(sibling) if sibling.node_type() == Node::TEXT_NODE => sibling,
+                    Some(sibling) if sibling.node_type() == Node::COMMENT_NODE => {
+                        let parent = marker_node.parent_node().ok_or_else(|| {
+                            JsValue::from_str(&format!("detached:ssr-row-text:{path}:{index}"))
+                        })?;
+                        let text = document()?.create_text_node("");
+                        parent.insert_before(&text, Some(&sibling))?;
+                        text.into()
+                    }
+                    Some(_) => {
+                        return Err(JsValue::from_str(&format!(
+                            "adjacency:ssr-row-text:{path}:{index}"
+                        )));
+                    }
+                    None => {
+                        let parent = marker_node.parent_node().ok_or_else(|| {
+                            JsValue::from_str(&format!("detached:ssr-row-text:{path}:{index}"))
+                        })?;
+                        let text = document()?.create_text_node("");
+                        parent.append_child(&text)?;
+                        text.into()
+                    }
+                };
                 local.insert(index, text.clone());
                 Ok((text, None))
             }
@@ -3173,49 +3209,106 @@ impl TypedRuntime {
                 }
             }
         }
-        for (position, (key, values)) in projection.into_iter().enumerate() {
+        let mut fresh_keys: HashSet<String> = HashSet::new();
+        for (key, values) in projection.iter() {
             let existing = self
                 .loops
                 .get(&loop_index)
-                .and_then(|rows| rows.rows.get(&key))
+                .and_then(|rows| rows.rows.get(key))
                 .map(|row| row.values.clone());
             if let Some(previous) = existing {
-                if previous != values {
-                    self.update_typed_row(loop_index, &key, values, None, metrics)?;
+                if previous != *values {
+                    self.update_typed_row(loop_index, key, values.clone(), None, metrics)?;
                 }
             } else {
+                fresh_keys.insert(key.clone());
+            }
+        }
+        // LIS members of the surviving previous order are already in their
+        // final relative position and must not be touched; every other
+        // surviving row relocates exactly once, and new rows splice in at
+        // their anchor. The right-to-left walk keeps the anchor one row to
+        // the right, so placements never disturb unprocessed rows. Rows move
+        // as indivisible DOM ranges (fragment-staged, single splice).
+        let previous_order = self
+            .loops
+            .get(&loop_index)
+            .map(|rows| rows.order.clone())
+            .unwrap_or_default();
+        let surviving = previous_order
+            .iter()
+            .filter(|key| {
+                self.loops
+                    .get(&loop_index)
+                    .is_some_and(|rows| rows.rows.contains_key(*key) && desired.contains(key))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let stable = keyed_reorder_plan(&surviving, &desired);
+        let mut anchor: Option<Node> = None;
+        for position in (0..desired.len()).rev() {
+            let (key, values) = &projection[position];
+            let root = if fresh_keys.contains(key) {
                 self.insert_typed_row(
                     loop_index,
                     parent,
                     key.clone(),
-                    values,
+                    values.clone(),
                     position,
-                    None,
+                    anchor.clone(),
                     metrics,
                 )?;
-            }
-        }
-        let roots = self
-            .loops
-            .get(&loop_index)
-            .map(|rows| {
-                desired
-                    .iter()
-                    .flat_map(|key| {
-                        rows.rows
-                            .get(key)
-                            .map(|row| Self::row_dom_nodes(&row.root, row.end.as_ref()))
-                            .unwrap_or_default()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        for root in roots {
-            parent.append_child(&root)?;
-            metrics.dom_operations += 1;
+                self.loops
+                    .get(&loop_index)
+                    .and_then(|rows| rows.rows.get(key))
+                    .map(|row| row.root.clone())
+                    .ok_or_else(|| JsValue::from_str("inserted row missing"))?
+            } else if !stable[position] {
+                self.relocate_typed_row(loop_index, parent, key, anchor.as_ref(), metrics)?
+            } else {
+                self.loops
+                    .get(&loop_index)
+                    .and_then(|rows| rows.rows.get(key))
+                    .map(|row| row.root.clone())
+                    .ok_or_else(|| JsValue::from_str("row missing"))?
+            };
+            anchor = Some(root);
         }
         self.loops.entry(loop_index).or_default().order = desired;
         Ok(())
+    }
+
+    /// Move one keyed row's claimed DOM range so it sits directly before
+    /// `anchor` (or at the parent's tail when `anchor` is `None`). The range
+    /// is treated as indivisible: its nodes stage into a detached fragment
+    /// and splice back with one mutation, so the live tree never shows a
+    /// partially moved row. Accounting stays honest: each staged node counts
+    /// as one DOM operation and one moved node, the splice counts as one more
+    /// DOM operation, and the whole relocation counts as one logical row move.
+    fn relocate_typed_row(
+        &mut self,
+        loop_index: usize,
+        parent: &Node,
+        key: &str,
+        anchor: Option<&Node>,
+        metrics: &mut UpdateMetrics,
+    ) -> Result<Node, JsValue> {
+        let (root, end) = self
+            .loops
+            .get(&loop_index)
+            .and_then(|rows| rows.rows.get(key))
+            .map(|row| (row.root.clone(), row.end.clone()))
+            .ok_or_else(|| JsValue::from_str("row missing"))?;
+        let fragment: Node = document()?.create_document_fragment().into();
+        for node in Self::row_dom_nodes(&root, end.as_ref()) {
+            fragment.append_child(&node)?;
+            metrics.dom_operations += 1;
+            metrics.dom_nodes_moved += 1;
+        }
+        parent.insert_before(&fragment, anchor)?;
+        metrics.dom_operations += 1;
+        metrics.row_moves += 1;
+        Ok(root)
     }
 }
 
@@ -4012,14 +4105,7 @@ impl TypedRuntime {
         let parent = root
             .parent_node()
             .ok_or_else(|| JsValue::from_str("row parent missing"))?;
-        for node in Self::row_dom_nodes(&root, end.as_ref()) {
-            if let Some(anchor) = anchor.as_ref() {
-                parent.insert_before(&node, Some(anchor))?;
-            } else {
-                parent.append_child(&node)?;
-            }
-            metrics.dom_operations += 1;
-        }
+        self.relocate_typed_row(loop_index, &parent, key, anchor.as_ref(), metrics)?;
         let rows = self
             .loops
             .get_mut(&loop_index)

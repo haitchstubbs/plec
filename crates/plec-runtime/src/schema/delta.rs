@@ -107,6 +107,11 @@ pub struct UpdateMetrics {
     pub row_inserts: u32,
     pub row_removes: u32,
     pub row_moves: u32,
+    /// Physical relocation cost: how many DOM nodes a row move displaced,
+    /// distinct from the logical `row_moves` count and from `dom_operations`
+    /// (one mutation call per staged node plus one range splice).
+    #[serde(default)]
+    pub dom_nodes_moved: u32,
     pub wasm_dom_us: f64,
 }
 
