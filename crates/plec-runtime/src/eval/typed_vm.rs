@@ -408,11 +408,6 @@ pub(crate) fn typed_eval_frame(
             TypedExpressionInstruction::Return => {
                 return Ok(stack.pop().unwrap_or(RuntimeValue::Null))
             }
-            _ => {
-                return Err(JsValue::from_str(
-                    "unsupported typed expression instruction",
-                ))
-            }
         };
         pc += 1;
     }

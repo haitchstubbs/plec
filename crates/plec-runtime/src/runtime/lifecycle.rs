@@ -43,9 +43,6 @@ pub(crate) struct GraphInstance {
     pub(crate) parent_id: Option<String>,
     pub(crate) outlet_id: String,
     // tell rust analyer to ignore
-
-    //
-    pub(crate) key: Option<String>,
     pub(crate) graph_id: Option<String>,
     // These resources are deliberately owned by the topology instance rather
     // than the application definition. They are the boundary required for a
@@ -60,7 +57,6 @@ pub(crate) struct GraphInstance {
     pub(crate) next_request_id: u64,
     #[cfg(feature = "fetch")]
     pub(crate) abort_controllers: HashMap<u64, AbortController>,
-    pub(crate) active_effects: usize,
     pub(crate) active_listeners: usize,
 }
 
@@ -345,7 +341,6 @@ impl PlecRuntime {
             root_instance_id.clone(),
             None,
             "main".into(),
-            None,
             manifest.root_graph_id.clone(),
         )?;
         self.mount_instance(&root_instance_id, root, true)?;
@@ -772,7 +767,6 @@ impl PlecRuntime {
             instance_id.clone(),
             None,
             "main".into(),
-            None,
             "__legacy__".into(),
         )?;
         let app = self.app_for_instance(&instance_id)?;
@@ -885,7 +879,6 @@ impl PlecRuntime {
             GraphInstance {
                 parent_id: parent_instance_id,
                 outlet_id,
-                key,
                 graph_id: None,
                 local_state: HashMap::new(),
                 dom_nodes: HashMap::new(),
@@ -897,7 +890,6 @@ impl PlecRuntime {
                 next_request_id: 0,
                 #[cfg(feature = "fetch")]
                 abort_controllers: HashMap::new(),
-                active_effects: 0,
                 active_listeners: 0,
             },
         );
@@ -976,13 +968,7 @@ impl PlecRuntime {
         }
         let outlet = self.outlet_element(&parent_instance_id, &outlet_id)?;
         let id = graph_instance_id(Some(&parent_instance_id), &outlet_id, None);
-        self.create_instance(
-            id.clone(),
-            Some(parent_instance_id),
-            outlet_id,
-            None,
-            graph_id,
-        )?;
+        self.create_instance(id.clone(), Some(parent_instance_id), outlet_id, graph_id)?;
         self.mount_instance(&id, outlet, false)?;
         Ok(id)
     }
@@ -1021,7 +1007,6 @@ impl PlecRuntime {
         id: String,
         parent_id: Option<String>,
         outlet_id: String,
-        key: Option<String>,
         graph_id: String,
     ) -> Result<(), JsValue> {
         let app = self
@@ -1044,7 +1029,6 @@ impl PlecRuntime {
             GraphInstance {
                 parent_id,
                 outlet_id,
-                key,
                 graph_id: Some(graph_id),
                 local_state: values,
                 dom_nodes: HashMap::new(),
@@ -1056,7 +1040,6 @@ impl PlecRuntime {
                 next_request_id: 0,
                 #[cfg(feature = "fetch")]
                 abort_controllers: HashMap::new(),
-                active_effects: 0,
                 active_listeners: 0,
             },
         );
