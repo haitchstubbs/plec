@@ -285,3 +285,5 @@ The Plec compiler produces a graph.
 Debug it as a graph.
 
 Use the inspector as the canonical human/agent interface to compiler artifacts rather than repeatedly building one-off methods for understanding the same structure.
+
+Protocol, artifact, and test-suite questions are a different domain: use the `plec-dev-cli` skill (`plec dev contract/trace/artifact/test/doctor`) for those.

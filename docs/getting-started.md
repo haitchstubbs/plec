@@ -62,6 +62,12 @@ yarn workspace plec-runtime build:wasm   # wasm-pack -> packages/plec-runtime/di
 yarn workspace @wasm-runtime/fullstack build   # copies wasm into the app and regenerates brotli
 ```
 
+Verify what you just built (and what the app stages) before testing:
+
+```sh
+plec dev artifact stale   # non-zero when dist/staged WASM is stale or protocol-drifted
+```
+
 **Stale `.br` trap:** the dev server serves `.br` brotli variants when the
 client sends `accept-encoding: br`. If you hand-copy fresh `runtime.js` /
 `runtime_bg.wasm` into `apps/fullstack/dist/public/runtime/` without
@@ -75,6 +81,15 @@ without logging (for example generation mismatches in typed fetch). When a
 change silently does nothing, add `web_sys::console::error_1` markers at
 each early-return and reproduce with a Playwright probe capturing
 `page.on('console')`.
+
+## Dev CLI
+
+The `plec` binary ships a dev-only workflow group for workspace
+investigation — capturing/querying WASM test runs, checking SSR protocol
+versions, tracing symbols and error codes, artifact provenance, and an SSR
+adoption doctor. Install it with `yarn install:plec-cli:dev`; the command
+reference lives in [crates/plec-cli/README.md](../crates/plec-cli/README.md)
+and the agent-facing rules in `AGENTS.md` ("Dev CLI").
 
 ## Tests
 

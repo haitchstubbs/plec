@@ -124,7 +124,7 @@ When the issue already contains the answer, use it.
 
 Avoid re-deriving facts or re-evaluating decisions that are already captured in the issue. This ensures minimal context burn and efficient progress on the next unblocked issue.
 
-## Helpful Bash Commands
+## Helpful Commands
 
 ### Find information about installed chrome and chromedriver
 

@@ -413,6 +413,46 @@ Use `insta` where useful for Rust runtime representations.
 
 Prefer explicit IDs and deterministic output so snapshots remain stable.
 
+## Dev CLI (workflow helpers)
+
+The `plec` binary has a dev-only `plec dev` group that encodes this
+workspace's validation and investigation workflows. Agents MUST prefer these
+commands over hand-rolled `grep`/`tail`/`grep -A`/`grep -B` pipelines and
+manual reconstruction of repo topology, protocol invariants, or test
+failures — that reconstruction is exactly the context churn they eliminate.
+
+Install/refresh the dev frontend (the workspace default `.env.plec` builds
+the release frontend, which has no `dev` group):
+
+```bash
+yarn install:plec-cli:dev
+```
+
+Commands (all accept `--json`; see `crates/plec-cli/README.md` for details):
+
+```text
+plec dev test wasm [filters] [--failures]   # run the WASM suite once, capture it
+plec dev test last [--failure <substr>]     # query the captured run — never re-run to re-read failures
+plec dev contract ssr [--check]             # SSR protocol versions across Rust/TS/e2e/docs
+plec dev trace <symbol|error-code>          # categorized: DEFINED/PRODUCED/ASSERTED/DOCUMENTED
+plec dev artifact provenance runtime        # built/staged WASM identity + protocol
+plec dev artifact stale                     # terse staleness gate (non-zero on problems)
+plec dev doctor adoption [--html f] [--snapshot f] [--route p]   # adoption health end to end
+```
+
+Conventions:
+
+- `plec dev test wasm` captures to `.cache/plec/test-wasm/`; query it with
+  `plec dev test last` instead of re-running the suite.
+- `plec dev artifact stale` must pass after any runtime/WASM rebuild before
+  trusting browser or e2e results — a stale staged binary reports
+  `STALE: implements snapshot protocol N, source is M`.
+- `plec dev contract ssr --check` must pass after touching any
+  `*_VERSION`-style protocol constant; intentional legacy fixtures are
+  reported with `~`, real conflicts with `CONFLICT`.
+- When an investigation reveals a recurring question that none of these
+  commands answer, extend the dev CLI rather than solving it ad hoc again.
+
 ## E2E testing
 
 `packages/plec-e2e` is the canonical Playwright runner. Playwright owns the

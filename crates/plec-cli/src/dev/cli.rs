@@ -1,4 +1,5 @@
 use crate::com;
+use crate::dev;
 
 use clap::{Parser, Subcommand};
 use plec_compiler::{lower_route_manifest, lower_routes};
@@ -51,6 +52,12 @@ enum Command {
         #[arg(long)]
         no_optimize: bool,
     },
+
+    /// Developer workflow helpers for working on Plec itself.
+    Dev {
+        #[command(subcommand)]
+        command: dev::DevCommand,
+    },
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -102,6 +109,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 result.revision,
                 result.out_dir.display()
             );
+        }
+
+        Command::Dev { command } => {
+            return dev::dispatch(command).map_err(std::convert::Into::into);
         }
     }
     Ok(())
