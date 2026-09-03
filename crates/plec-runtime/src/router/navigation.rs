@@ -182,48 +182,6 @@ impl PlecRuntime {
         self.refresh_navigation_state(&location.pathname)
     }
 
-    pub(crate) fn navigate_internal(&self, href: &str, replace: bool) -> Result<(), JsValue> {
-        let state = self
-            .router
-            .borrow()
-            .clone()
-            .ok_or_else(|| JsValue::from_str("runtime has not been started"))?;
-        let pathname = href.split(['?', '#']).next().unwrap_or(href);
-        let route = state
-            .manifest
-            .routes
-            .iter()
-            .find(|route| route.path == pathname.trim_start_matches('/'))
-            .or_else(|| state.manifest.routes.iter().find(|route| route.path == "*"))
-            .cloned()
-            .ok_or_else(|| JsValue::from_str("no compiled route for pathname"))?;
-        if replace {
-            window()?
-                .history()?
-                .replace_state_with_url(&JsValue::NULL, "", Some(href))?;
-        } else {
-            window()?
-                .history()?
-                .push_state_with_url(&JsValue::NULL, "", Some(href))?;
-        }
-        self.refresh_navigation_state(pathname)?;
-        let instance_id =
-            self.replace_outlet_instance(state.root_instance_id, route.outlet_id, route.graph_id)?;
-        if let Some(loader) = route.loader {
-            let app = self.app_for_instance(&instance_id)?;
-            self.execute_action_operations(
-                &instance_id,
-                &app,
-                &loader.operations,
-                &HashMap::new(),
-                None,
-                &mut UpdateMetrics::default(),
-                None,
-            )?;
-        }
-        Ok(())
-    }
-
     pub(crate) fn refresh_navigation_state(&self, pathname: &str) -> Result<(), JsValue> {
         let location = window()?.location();
         let location = [
@@ -1318,8 +1276,6 @@ mod tests {
             pending_mode: "replace".into(),
             error_graph_id: None,
             outlet_id: "main".into(),
-            loader: None,
-            loader_state_slot_id: None,
             loader_action: None,
         }
     }

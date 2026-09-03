@@ -2,9 +2,13 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { brotliCompress, constants as zlibConstants } from 'node:zlib';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findInPath, isWindows } from './utils.js';
+
+const brotliCompressAsync = promisify(brotliCompress);
 /**
  * Get relative path from one directory to another.
  *
@@ -139,6 +143,7 @@ export async function buildWasm({
     await stampProtocolSection(
       path.join(absoluteOutDir, `${outName}_bg.wasm`),
     );
+    await writeBrotliSidecars(absoluteOutDir, outName);
     await writeProvenance(absoluteOutDir, {
       outName,
       profile,
@@ -215,6 +220,31 @@ async function renameFile(oldPath, newPath) {
     } else {
       throw error;
     }
+  }
+}
+
+/**
+ * Emit maximum-quality Brotli sidecars (`<artifact>.br`) next to the runtime
+ * artifacts. The app stager (crates/plec-cli/src/com/stage.rs) copies them
+ * when present and `plec-server` serves them negotiated by
+ * `Accept-Encoding`; every rebuild overwrites them so a sidecar can never
+ * outlive the bytes it compresses.
+ *
+ * @param {string} outDir - Output directory containing the artifacts
+ * @param {string} outName - Name of the artifacts (without extension)
+ */
+async function writeBrotliSidecars(outDir, outName) {
+  const params = {
+    [zlibConstants.BROTLI_PARAM_QUALITY]: zlibConstants.BROTLI_MAX_QUALITY,
+  };
+  for (const name of [`${outName}.js`, `${outName}_bg.wasm`]) {
+    const filePath = path.join(outDir, name);
+    const source = await readFile(filePath);
+    const compressed = await brotliCompressAsync(source, { params });
+    await writeFile(`${filePath}.br`, compressed);
+    console.log(
+      `Brotli sidecar: ${name} ${source.length} -> ${compressed.length} bytes`,
+    );
   }
 }
 

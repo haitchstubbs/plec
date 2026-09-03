@@ -8,6 +8,17 @@
 >
 > Decision of record: 2026-09-03 (wasm-runtime-ixk.2) — one canonical
 > path-qualified structural address grammar across SSR and CSR.
+>
+> **Supported contract (single statement of record, wasm-runtime-ixk.7):**
+> the supported application/adoption contract is **IR 0.10 component
+> applications + route manifest v3 + the SSR v2 execution snapshot**.
+> IR 0.9 single-graph typed applications remain a *compatibility input*
+> (typed runtime test fixtures, standalone single-graph mounts, and the
+> typed router's lazy-graph fallback); they emit this same protocol. The
+> historical IR 0.8 string-id graph scheme — its registry, string-id
+> renderer, `[data-runtime-node]` adoption scan, and unqualified
+> `plec:conditional:{id}` markers — was **removed** from the runtime; the
+> compiler never emitted it.
 
 ## Principle
 
@@ -133,13 +144,17 @@ is reserved anyway so no future attribute form can split the namespace.
 | ---------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `data-plec-*`    | **permanent**             | `data-plec-node`, `data-plec-spread-keys`                                                                                     |
 | `plec:*`         | **permanent**             | boundary comments (`plec:text/conditional/component/slot/loop`) and any future `plec:`-prefixed name                          |
-| `data-runtime-*` | **migration window only** | `data-runtime-row-key`, `data-runtime-action`, `data-runtime-event`, `data-runtime-field`, and the legacy `data-runtime-node` |
+| `data-runtime-*` | **migration window only** | `data-runtime-row-key` (emitted on keyed loop rows and resolved by the typed event dispatcher)                                 |
 
-`data-runtime-node` is excluded from the protocol (see the retired-grammars
-table above) but stays reserved until its legacy consumers are removed by
-wasm-runtime-ixk.7; after that the `data-runtime-*` reservation shrinks to
-the typed runtime surface still in use. `data-plec-*` and `plec:*` never
-shrink. Plain `data-*` attributes remain available to applications.
+`data-runtime-node` is excluded from the protocol and was **removed** with
+its last producers and consumers (the IR 0.8 string-id renderer and its
+adoption scan, wasm-runtime-ixk.7); it is no longer emitted, resolved, or
+reserved. The same removal retired `data-runtime-action`, `data-runtime-event`,
+and `data-runtime-field` (the IR 0.8 event-delegation attributes) — no
+producer or consumer survives. The remaining `data-runtime-*` reservation
+covers only `data-runtime-row-key`, the typed runtime surface still in use.
+`data-plec-*` and `plec:*` never shrink.
+Plain `data-*` attributes remain available to applications.
 
 ### Enforcement
 
@@ -172,18 +187,20 @@ must.
 ## Retired grammars and consumer classification
 
 `data-runtime-node` is **not** part of this protocol. Historical consumers
-are classified:
+were classified during wasm-runtime-ixk.2 and their final disposition is
+recorded here:
 
-| Consumer                                                              | Classification          | Disposition                                                                    |
-| --------------------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------ |
+| Consumer                                                              | Classification          | Disposition                                            |
+| --------------------------------------------------------------------- | ----------------------- | ------------------------------------------------------ |
 | `packages/plec-browser` `outlet()`                                    | structural graph lookup | migrated: canonical `data-plec-node="root/node:{node}"` reference, root-scoped |
-| `packages/plec-browser` `mountIslands()` placeholder lookup           | host/island bridging    | legacy (no IR producer exists); root-scoped; isolated by wasm-runtime-ixk.7    |
-| `crates/plec-runtime/src/dom/instantiate.rs` (string-id renderer)     | legacy 0.8/0.9 scheme   | isolated by wasm-runtime-ixk.7                                                 |
-| `crates/plec-runtime/src/runtime/lifecycle.rs` `adopt()` (string ids) | legacy 0.8/0.9 scheme   | isolated by wasm-runtime-ixk.7                                                 |
-| `crates/plec-runtime/src/runtime/deltas.rs` conditional markers       | legacy 0.8/0.9 scheme   | isolated by wasm-runtime-ixk.7                                                 |
+| `packages/plec-browser` `mountIslands()` placeholder lookup           | host/island bridging    | removed (wasm-runtime-ixk.7): no IR producer emits `ir.islands` |
+| `crates/plec-runtime/src/dom/instantiate.rs` (string-id renderer)     | legacy 0.8/0.9 scheme   | removed (wasm-runtime-ixk.7)                            |
+| `crates/plec-runtime/src/runtime/lifecycle.rs` `adopt()` (string ids) | legacy 0.8/0.9 scheme   | removed (wasm-runtime-ixk.7)                            |
+| `crates/plec-runtime/src/runtime/deltas.rs` conditional markers       | legacy 0.8/0.9 scheme   | removed (wasm-runtime-ixk.7)                            |
 
-Legacy queries are always scoped to their owning root; no consumer may
-resolve markers through document-global first-match `querySelector`.
+Surviving consumer queries are always scoped to their owning root; no
+consumer may resolve markers through document-global first-match
+`querySelector`.
 
 ## Diagnostics
 
@@ -204,4 +221,6 @@ The protocol adds:
   defined and enforced above ("Reserved DOM metadata namespace").
 - Text-marker adjacency: defined above ("Text-marker adjacency contract"),
   implemented and tested by wasm-runtime-ixk.6.
-- Legacy 0.8/0.9 marker/adoption isolation: wasm-runtime-ixk.7.
+- Legacy 0.8/0.9 marker/adoption isolation: completed by wasm-runtime-ixk.7
+  (retired-grammar consumers removed; supported contract stated in the
+  header of this document).

@@ -1,7 +1,5 @@
 use serde::Deserialize;
 
-use crate::schema::app::Action;
-
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteManifest {
@@ -27,19 +25,9 @@ pub struct RouteManifestEntry {
     pub error_graph_id: Option<String>,
     pub outlet_id: String,
     #[serde(default)]
-    pub loader: Option<Action>,
-    #[serde(default)]
-    pub loader_state_slot_id: Option<String>,
-    #[serde(default)]
     pub loader_action: Option<usize>,
 }
 
 fn default_pending_mode() -> String {
     "replace".into()
-}
-
-#[derive(Clone)]
-pub struct RouterState {
-    pub manifest: RouteManifest,
-    pub root_instance_id: String,
 }

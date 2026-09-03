@@ -1,7 +1,15 @@
-use crate::dom::listeners::*;
 use crate::runtime::lifecycle::*;
 use crate::schema::typed::TypedActionInstruction;
 use crate::typed::runtime::TypedRoutePhase;
+
+/// One live DOM event listener owned by a typed instance. Moved here from the
+/// removed legacy listener registry (wasm-runtime-ixk.7); typed listeners are
+/// the only DOM listeners the runtime installs.
+pub(crate) struct Listener {
+    pub(crate) element: Element,
+    pub(crate) event_type: String,
+    pub(crate) callback: Closure<dyn FnMut(Event)>,
+}
 
 pub(crate) struct TypedListener {
     pub(crate) listener: Listener,

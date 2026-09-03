@@ -293,9 +293,6 @@ impl PlecRuntime {
     #[wasm_bindgen(constructor)]
     pub fn new() -> PlecRuntime {
         PlecRuntime {
-            registry: Rc::new(RefCell::new(HashMap::new())),
-            instances: Rc::new(RefCell::new(HashMap::new())),
-            router: Rc::new(RefCell::new(None)),
             router_listeners: Rc::new(RefCell::new(Vec::new())),
             typed: Rc::new(RefCell::new(HashMap::new())),
             typed_root: Rc::new(RefCell::new(None)),
@@ -321,20 +318,7 @@ impl PlecRuntime {
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn mount(&self, root: Element) -> Result<JsValue, JsValue> {
-        if !self.typed.borrow().is_empty() {
-            return self.mount_typed(root);
-        }
-        let instance_id = graph_instance_id(None, "main", None);
-        if self.instances.borrow().contains_key(&instance_id) {
-            self.dispose_graph_instance(instance_id.clone())?;
-        }
-        self.create_instance(
-            instance_id.clone(),
-            None,
-            "main".into(),
-            "__legacy__".into(),
-        )?;
-        self.mount_instance(&instance_id, root, true)
+        self.mount_typed(root)
     }
 }
 
@@ -364,11 +348,47 @@ impl TypedRuntime {
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn apply_delta(&self, delta: JsValue) -> Result<JsValue, JsValue> {
-        if !self.typed.borrow().is_empty() {
-            return self.apply_typed_delta(delta);
-        }
-        let instance_id = self.legacy_instance_id()?;
-        self.apply_delta_for(&instance_id, delta)
+        self.apply_typed_delta(delta)
+    }
+
+    /// Keyed-delta entry point for routed and standalone host inputs. The
+    /// legacy per-instance fallback (removed with the IR 0.8 graph scheme,
+    /// wasm-runtime-ixk.7) used to dispatch here only when a typed instance
+    /// forest was live; typed instances are now the only execution state.
+    pub fn apply_deltas(&self, deltas: JsValue) -> Result<JsValue, JsValue> {
+        let deltas: Vec<Delta> = serde_wasm_bindgen::from_value(deltas).map_err(error)?;
+        let deltas = coalesce_deltas(deltas);
+        self.apply_typed_deltas(deltas)
+    }
+
+    pub fn initialize_input(&self, input_id: String, rows: JsValue) -> Result<JsValue, JsValue> {
+        self.initialize_typed_input(&input_id, rows)
+    }
+
+    pub fn list_input_instances(&self, input_id: String) -> Result<JsValue, JsValue> {
+        let ids = self
+            .typed
+            .borrow()
+            .iter()
+            .filter_map(|(id, instance)| {
+                instance
+                    .runtime
+                    .app
+                    .inputs
+                    .iter()
+                    .any(|input| {
+                        instance
+                            .runtime
+                            .app
+                            .strings
+                            .get(input.name)
+                            .map(String::as_str)
+                            == Some(input_id.as_str())
+                    })
+                    .then(|| id.clone())
+            })
+            .collect::<Vec<_>>();
+        serde_wasm_bindgen::to_value(&ids).map_err(error)
     }
 }
 

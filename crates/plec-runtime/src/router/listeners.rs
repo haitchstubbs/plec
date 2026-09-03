@@ -58,8 +58,6 @@ impl PlecRuntime {
                 if let Some(runtime) = runtime.as_ref() {
                     if let Some(root) = runtime.typed_root.borrow().clone() {
                         let _ = runtime.navigate_typed_route(&href, root, false, true);
-                    } else {
-                        let _ = runtime.navigate_internal(&href, false);
                     }
                 }
             }
@@ -86,8 +84,6 @@ impl PlecRuntime {
                 }) {
                     if let Some(root) = runtime.typed_root.borrow().clone() {
                         let _ = runtime.navigate_typed_route(&location, root, false, false);
-                    } else {
-                        let _ = runtime.navigate_internal(&location, true);
                     }
                 }
             }
