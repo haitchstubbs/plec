@@ -88,14 +88,14 @@ Two things ship in the HTML. The typed execution snapshot below carries route id
 
 **2. Ownership markers** — the path grammar is the contract; paths compose as `root → /outlet:{id} → /component:{i} → /node:{i}`. The **authoritative protocol definition** — grammar, uniqueness, ownership, the one-shot adoption lifecycle invariant, and the `data-runtime-node` retirement — lives in [dom-address-protocol.md](./dom-address-protocol.md); the table below summarizes the SSR emission and claim mechanics:
 
-| Construct   | Marker emitted by server                                                                                | Claimed by runtime via                       |
-| ----------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| Element     | `data-plec-node="{path}/node:{i}"` attribute                                                            | `querySelector` + case-insensitive tag check |
-| Text        | `<!--plec:text:{path}:{i}-->` before the text                                                           | marker's `nextSibling` if a text node        |
-| Slot        | `<!--plec:slot…-->` … `<!--plec:slot-end…-->`                                                           | comment pair lookup                          |
-| Component   | `<!--plec:component…-->` … `<!--plec:component-end…-->`                                                 | comment pair, child adopted recursively      |
-| Conditional | chosen branch rendered between `<!--plec:conditional:{path}:{i}-->` … `-end` markers                    | comment pair + snapshot branch record        |
-| Loop        | keyed rows between `<!--plec:loop:{path}-->` … `-end` markers, row roots stamped `data-runtime-row-key` | comment pairs + snapshot ordered key list    |
+| Construct   | Marker emitted by server                                                                                | Claimed by runtime via                                                              |
+| ----------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Element     | `data-plec-node="{path}/node:{i}"` attribute                                                            | `querySelector` + case-insensitive tag check                                        |
+| Text        | `<!--plec:text:{path}:{i}-->` before the text, `<!---->` sentinel when the value is empty               | adjacency claim (see the text-marker adjacency contract in dom-address-protocol.md) |
+| Slot        | `<!--plec:slot…-->` … `<!--plec:slot-end…-->`                                                           | comment pair lookup                                                                 |
+| Component   | `<!--plec:component…-->` … `<!--plec:component-end…-->`                                                 | comment pair, child adopted recursively                                             |
+| Conditional | chosen branch rendered between `<!--plec:conditional:{path}:{i}-->` … `-end` markers                    | comment pair + snapshot branch record                                               |
+| Loop        | keyed rows between `<!--plec:loop:{path}-->` … `-end` markers, row roots stamped `data-runtime-row-key` | comment pairs + snapshot ordered key list                                           |
 
 Slot children render under the _caller's_ path — the caller's own adopt pass claims them directly, which is why slot-child mounting is skipped under adoption (`typed/runtime.rs:480`).
 

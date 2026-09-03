@@ -815,7 +815,13 @@ function renderNode(
               scope,
             ) ?? '',
           );
-    return `<!--plec:text:${scope.path}:${index}-->${escapeHtml(binding)}`;
+    // An empty value serializes to no text node at all, which would leave
+    // the marker ambiguous during adoption. The empty-comment sentinel keeps
+    // the position occupied so the runtime can distinguish an empty value
+    // from injected markup between the marker and its text. See the
+    // text-marker adjacency contract in docs/dom-address-protocol.md.
+    const value = escapeHtml(binding);
+    return `<!--plec:text:${scope.path}:${index}-->${value === '' ? '<!---->' : value}`;
   }
   if (node.op === 'conditional') {
     const truthy = truthyValue(evaluate(component, node.test!, scope));
