@@ -39,7 +39,11 @@ impl Ctx<'_> {
             HirCallable::Inline { parameters, body } => {
                 self.action(body, parameters, self.active_loop.is_some())
             }
-            HirCallable::Conditional { test, consequent, alternate } => {
+            HirCallable::Conditional {
+                test,
+                consequent,
+                alternate,
+            } => {
                 let consequent_action = self.callable(consequent)?;
                 let alternate_action = self.callable(alternate)?;
                 let test_expr = self.expression(*test, false)?.0;
@@ -47,7 +51,9 @@ impl Ctx<'_> {
                 let mut code = vec![];
 
                 // Evaluate test expression
-                code.push(ActionInstruction::Evaluate { expression: test_expr });
+                code.push(ActionInstruction::Evaluate {
+                    expression: test_expr,
+                });
 
                 // JumpIfFalse to alternate branch (placeholder target)
                 let jump_false_idx = code.len();
@@ -86,7 +92,9 @@ impl Ctx<'_> {
                 // `code.len()` is one past the final instruction and therefore
                 // is not a valid action-program counter.
                 let end = code.len() - 1;
-                code[jump_false_idx] = ActionInstruction::JumpIfFalse { target: alternate_start };
+                code[jump_false_idx] = ActionInstruction::JumpIfFalse {
+                    target: alternate_start,
+                };
                 code[jump_end_idx] = ActionInstruction::Jump { target: end };
 
                 self.app.actions.push(ActionProgram {
@@ -98,7 +106,6 @@ impl Ctx<'_> {
                 });
                 Ok(action)
             }
-            _ => Err(self.err("callable is not executable in the first IR slice")),
         }
     }
     pub(crate) fn action(
@@ -228,12 +235,16 @@ impl Ctx<'_> {
                 _ => unreachable!("async failure source changed during lowering"),
             }
         }
-        for (pc, error_slot, expression, catch_start) in std::mem::take(&mut self.try_failure_relays) {
+        for (pc, error_slot, expression, catch_start) in
+            std::mem::take(&mut self.try_failure_relays)
+        {
             let relay = code.len();
             code[pc] = ActionInstruction::Jump { target: relay };
             code.push(ActionInstruction::Evaluate { expression });
             code.push(ActionInstruction::StoreFrame { slot: error_slot });
-            code.push(ActionInstruction::Jump { target: catch_start });
+            code.push(ActionInstruction::Jump {
+                target: catch_start,
+            });
         }
         self.action_parameters = previous;
         self.async_slots = previous_async_slots;
@@ -258,15 +269,24 @@ impl Ctx<'_> {
         for stmt in stmts {
             match stmt {
                 HirStmt::CaptureActiveElement { reference, .. } => {
-                    let reference = *self.refs.get(reference).ok_or_else(|| self.err("ref used before lowering"))?;
+                    let reference = *self
+                        .refs
+                        .get(reference)
+                        .ok_or_else(|| self.err("ref used before lowering"))?;
                     code.push(ActionInstruction::CaptureActiveElement { reference });
                 }
                 HirStmt::FocusHostRef { reference, .. } => {
-                    let reference = *self.host_refs.get(reference).ok_or_else(|| self.err("hostRef used before lowering"))?;
+                    let reference = *self
+                        .host_refs
+                        .get(reference)
+                        .ok_or_else(|| self.err("hostRef used before lowering"))?;
                     code.push(ActionInstruction::FocusHostRef { reference });
                 }
                 HirStmt::FocusRef { reference, .. } => {
-                    let reference = *self.refs.get(reference).ok_or_else(|| self.err("ref used before lowering"))?;
+                    let reference = *self
+                        .refs
+                        .get(reference)
+                        .ok_or_else(|| self.err("ref used before lowering"))?;
                     code.push(ActionInstruction::FocusRef { reference });
                 }
                 HirStmt::PreventDefault { .. } => code.push(ActionInstruction::PreventDefault),
@@ -282,10 +302,12 @@ impl Ctx<'_> {
                     let (url, _) = self.expression(*url, row)?;
                     let headers = headers
                         .iter()
-                        .map(|(name, value)| Ok(plec_ir::FetchHeader {
-                            name: self.string(name),
-                            value: self.expression(*value, row)?.0,
-                        }))
+                        .map(|(name, value)| {
+                            Ok(plec_ir::FetchHeader {
+                                name: self.string(name),
+                                value: self.expression(*value, row)?.0,
+                            })
+                        })
                         .collect::<Result<Vec<_>, LoweringError>>()?;
                     let body = body
                         .map(|value| self.expression(value, row).map(|(value, _)| value))
@@ -321,28 +343,78 @@ impl Ctx<'_> {
                         error_slot,
                     });
                 }
-                HirStmt::AwaitCookie { target, operation, name, value, path, same_site, secure, max_age, .. } => {
+                HirStmt::AwaitCookie {
+                    target,
+                    operation,
+                    name,
+                    value,
+                    path,
+                    same_site,
+                    secure,
+                    max_age,
+                    ..
+                } => {
                     let operation = match operation.as_str() {
-                        "get" => "get", "set" => "set", "delete" => "delete",
+                        "get" => "get",
+                        "set" => "set",
+                        "delete" => "delete",
                         _ => return Err(self.err("unsupported cookie operation")),
                     };
-                    self.cookie_capability(operation, name, path, same_site.as_deref(), *secure, *max_age)?;
-                    let value = value.map(|value| self.expression(value, row).map(|(expression, _)| expression)).transpose()?;
-                    let result_slot = target.and_then(|binding| self.async_slots.get(&binding).copied()).unwrap_or_else(|| {
-                        let slot = *frame_slots; *frame_slots += 1; slot
-                    });
-                    let error_slot = { let slot = *frame_slots; *frame_slots += 1; slot };
+                    self.cookie_capability(
+                        operation,
+                        name,
+                        path,
+                        same_site.as_deref(),
+                        *secure,
+                        *max_age,
+                    )?;
+                    let value = value
+                        .map(|value| {
+                            self.expression(value, row)
+                                .map(|(expression, _)| expression)
+                        })
+                        .transpose()?;
+                    let result_slot = target
+                        .and_then(|binding| self.async_slots.get(&binding).copied())
+                        .unwrap_or_else(|| {
+                            let slot = *frame_slots;
+                            *frame_slots += 1;
+                            slot
+                        });
+                    let error_slot = {
+                        let slot = *frame_slots;
+                        *frame_slots += 1;
+                        slot
+                    };
                     code.push(ActionInstruction::CapabilityRequest {
                         request: CapabilityRequest::Cookie {
-                            operation, name: self.string(name), value, path: path.clone(),
-                            same_site: same_site.clone(), secure: *secure,
-                            expiry: if max_age.is_some() { "maxAge" } else { "session" }, max_age: *max_age,
+                            operation,
+                            name: self.string(name),
+                            value,
+                            path: path.clone(),
+                            same_site: same_site.clone(),
+                            secure: *secure,
+                            expiry: if max_age.is_some() {
+                                "maxAge"
+                            } else {
+                                "session"
+                            },
+                            max_age: *max_age,
                         },
-                        success_pc: usize::MAX, failure_pc: usize::MAX, finally_pc: None, result_slot, error_slot,
+                        success_pc: usize::MAX,
+                        failure_pc: usize::MAX,
+                        finally_pc: None,
+                        result_slot,
+                        error_slot,
                     });
                 }
-                HirStmt::RefUpdate { reference, value, .. } => {
-                    let reference = *self.refs.get(reference).ok_or_else(|| self.err("ref used before lowering"))?;
+                HirStmt::RefUpdate {
+                    reference, value, ..
+                } => {
+                    let reference = *self
+                        .refs
+                        .get(reference)
+                        .ok_or_else(|| self.err("ref used before lowering"))?;
                     let (expression, _) = self.expression(*value, row)?;
                     code.push(ActionInstruction::Evaluate { expression });
                     code.push(ActionInstruction::StoreRef { reference });
@@ -356,7 +428,10 @@ impl Ctx<'_> {
                     // Check if the callee is a callable parameter (either a component prop callback or an action parameter)
                     let parameter_slot = self.callback_props.get(callee).copied().or_else(|| {
                         if let Some(binding_kind) = self.component.bindings.get(callee.0 as usize) {
-                            if matches!(binding_kind.kind, plec_hir::HirBindingKind::Parameter { callable: true }) {
+                            if matches!(
+                                binding_kind.kind,
+                                plec_hir::HirBindingKind::Parameter { callable: true }
+                            ) {
                                 self.action_parameters.get(callee).copied()
                             } else {
                                 None
@@ -394,39 +469,36 @@ impl Ctx<'_> {
                         });
                     } else {
                         // This is a component callable
-                        let action = *self
-                            .callables
-                            .get(callee)
-                            .ok_or_else(|| {
-                                self.err(&format!(
-                                    "awaited action is not a component callable: {:?}",
-                                    callee
-                                ))
-                            })?;
-                    let arguments = arguments
-                        .iter()
-                        .map(|argument| self.expression(*argument, row).map(|(value, _)| value))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let result_slot = target
-                        .and_then(|binding| self.async_slots.get(&binding).copied())
-                        .unwrap_or_else(|| {
+                        let action = *self.callables.get(callee).ok_or_else(|| {
+                            self.err(&format!(
+                                "awaited action is not a component callable: {:?}",
+                                callee
+                            ))
+                        })?;
+                        let arguments = arguments
+                            .iter()
+                            .map(|argument| self.expression(*argument, row).map(|(value, _)| value))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let result_slot = target
+                            .and_then(|binding| self.async_slots.get(&binding).copied())
+                            .unwrap_or_else(|| {
+                                let slot = *frame_slots;
+                                *frame_slots += 1;
+                                slot
+                            });
+                        let error_slot = {
                             let slot = *frame_slots;
                             *frame_slots += 1;
                             slot
+                        };
+                        code.push(ActionInstruction::Call {
+                            action,
+                            arguments,
+                            success_pc: Some(code.len() + 1),
+                            failure_pc: Some(usize::MAX),
+                            result_slot: Some(result_slot),
+                            error_slot: Some(error_slot),
                         });
-                    let error_slot = {
-                        let slot = *frame_slots;
-                        *frame_slots += 1;
-                        slot
-                    };
-                    code.push(ActionInstruction::Call {
-                        action,
-                        arguments,
-                        success_pc: Some(code.len() + 1),
-                        failure_pc: Some(usize::MAX),
-                        result_slot: Some(result_slot),
-                        error_slot: Some(error_slot),
-                    });
                     }
                 }
                 HirStmt::StateUpdate { state, value, .. } => {
@@ -485,7 +557,9 @@ impl Ctx<'_> {
                         value: Some(value),
                     });
                 }
-                HirStmt::OptionalCall { callee, arguments, .. } => {
+                HirStmt::OptionalCall {
+                    callee, arguments, ..
+                } => {
                     let prop = *self.callback_props.get(callee).ok_or_else(|| {
                         self.err("optional calls require a callable component prop")
                     })?;
@@ -549,8 +623,12 @@ impl Ctx<'_> {
                                 value: Some(expression),
                             } = &code[pc]
                             {
-                                self.try_failure_relays
-                                    .push((pc, error_slot, *expression, catch_start));
+                                self.try_failure_relays.push((
+                                    pc,
+                                    error_slot,
+                                    *expression,
+                                    catch_start,
+                                ));
                             }
                         }
                         self.statements(statements, code, row, frame_slots)?;
@@ -721,7 +799,6 @@ impl Ctx<'_> {
             .collect::<Result<Vec<_>, _>>()?;
         Ok((prop, arguments))
     }
-
 }
 
 fn callable_body_may_suspend(body: &HirCallableBody) -> bool {
