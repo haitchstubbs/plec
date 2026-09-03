@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findInPath, isWindows } from './utils.js';
@@ -131,6 +133,19 @@ export async function buildWasm({
       await optimizeWasm(outDir, outName);
     }
 
+    // Stamp the implemented protocol versions into the binary and record
+    // build identity, so staleness is detectable downstream
+    // (`plec dev artifact provenance` / `plec dev artifact stale`).
+    await stampProtocolSection(
+      path.join(absoluteOutDir, `${outName}_bg.wasm`),
+    );
+    await writeProvenance(absoluteOutDir, {
+      outName,
+      profile,
+      features: selectedFeatures,
+      optimize,
+    });
+
     return { wasmPath: path.join(outDir, `${outName}_bg.wasm`) };
   } finally {
     // Clean up temp directory
@@ -211,6 +226,195 @@ async function renameFile(oldPath, newPath) {
 async function findWasmTools() {
   const exeName = isWindows() ? 'wasm-tools.exe' : 'wasm-tools';
   return await findInPath(exeName);
+}
+
+// ---------------------------------------------------------------------------
+// Protocol stamping and build provenance
+//
+// The runtime embeds the serialized protocol versions it implements in a
+// `plec-protocol` WASM custom section (see crates/plec-runtime/src/lib.rs,
+// which emits the section from the plec-ir constants at compile time). The
+// Rust static can be dropped by toolchain stripping, so this step guarantees
+// the section exists in the final artifact: verify first, append if missing.
+// `provenance.json` records build identity so `plec dev artifact provenance`
+// can distinguish source, package dist, and staged app artifacts.
+// ---------------------------------------------------------------------------
+
+const PROTOCOL_SECTION_NAME = 'plec-protocol';
+
+/**
+ * Read `SSR_SNAPSHOT_VERSION` from the plec-ir source. The Rust constant is
+ * the single source of truth; this parses the source text so the build
+ * script never hard-codes a protocol version.
+ */
+function readSsrSnapshotVersion() {
+  const source = readFileSync(
+    path.join(repoRoot, 'crates', 'plec-ir', 'src', 'lib.rs'),
+    'utf8',
+  );
+  const match = /pub const SSR_SNAPSHOT_VERSION: u32 = (\d+);/.exec(
+    source,
+  );
+  if (!match) {
+    throw new Error(
+      'SSR_SNAPSHOT_VERSION not found in crates/plec-ir/src/lib.rs',
+    );
+  }
+  return Number(match[1]);
+}
+
+function encodeLeb(value) {
+  const bytes = [];
+  let remaining = value;
+  do {
+    let byte = remaining & 0x7f;
+    remaining >>>= 7;
+    if (remaining !== 0) byte |= 0x80;
+    bytes.push(byte);
+  } while (remaining !== 0);
+  return bytes;
+}
+
+function decodeLeb(bytes, offset) {
+  let result = 0;
+  let shift = 0;
+  let position = offset;
+  for (;;) {
+    const byte = bytes[position++];
+    result += (byte & 0x7f) * 2 ** shift;
+    if ((byte & 0x80) === 0) break;
+    shift += 7;
+  }
+  return [result, position];
+}
+
+function customSectionBytes(name, payload) {
+  const nameBytes = [...Buffer.from(name, 'utf8')];
+  const nameLengthBytes = encodeLeb(nameBytes.length);
+  const sectionPayloadLength =
+    nameLengthBytes.length + nameBytes.length + payload.length;
+  return [
+    0,
+    ...encodeLeb(sectionPayloadLength),
+    ...nameLengthBytes,
+    ...nameBytes,
+    ...payload,
+  ];
+}
+
+/**
+ * Locate a custom section's payload in a WASM binary.
+ *
+ * @returns {Buffer|null} payload bytes, or null when absent
+ */
+function findCustomSection(wasm, name) {
+  if (wasm.length < 8 || wasm[0] !== 0x00 || wasm[1] !== 0x61)
+    return null;
+  let position = 8;
+  while (position < wasm.length) {
+    const id = wasm[position++];
+    const [size, payloadStart] = decodeLeb(wasm, position);
+    position = payloadStart;
+    if (id === 0) {
+      const [nameLength, nameStart] = decodeLeb(wasm, position);
+      const nameEnd = nameStart + nameLength;
+      if (
+        wasm.subarray(nameStart, nameEnd).toString('utf8') === name &&
+        nameEnd <= payloadStart + size
+      ) {
+        return wasm.subarray(nameEnd, payloadStart + size);
+      }
+    }
+    position += size;
+  }
+  return null;
+}
+
+async function stampProtocolSection(wasmPath) {
+  const version = readSsrSnapshotVersion();
+  const expected = Buffer.from(
+    JSON.stringify({ ssrSnapshot: version }),
+  );
+
+  const wasm = await readFile(wasmPath);
+  const existing = findCustomSection(wasm, PROTOCOL_SECTION_NAME);
+
+  if (existing) {
+    if (!existing.equals(expected)) {
+      throw new Error(
+        `${PROTOCOL_SECTION_NAME} section in ${wasmPath} reports ` +
+          `${existing.toString('utf8')} but plec-ir says ${expected.toString('utf8')} — ` +
+          'the crate needs a rebuild before stamping',
+      );
+    }
+    console.log(
+      `Protocol section present: ${PROTOCOL_SECTION_NAME} ${expected.toString('utf8')}`,
+    );
+    return;
+  }
+
+  // A custom section may appear anywhere between other sections, including
+  // at the end of the file.
+  const stamped = Buffer.concat([
+    wasm,
+    Buffer.from(customSectionBytes(PROTOCOL_SECTION_NAME, expected)),
+  ]);
+  await writeFile(wasmPath, stamped);
+  console.log(
+    `Injected protocol section: ${PROTOCOL_SECTION_NAME} ${expected.toString('utf8')}`,
+  );
+}
+
+async function writeProvenance(
+  outDir,
+  { outName, profile, features, optimize },
+) {
+  const wasmPath = path.join(outDir, `${outName}_bg.wasm`);
+  const jsPath = path.join(outDir, `${outName}.js`);
+
+  const sha256 = (filePath) =>
+    createHash('sha256').update(readFileSync(filePath)).digest('hex');
+
+  let gitFingerprint = '';
+  let gitDirty = false;
+  try {
+    gitFingerprint = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    }).trim();
+    gitDirty =
+      execFileSync('git', ['status', '--porcelain'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      }).trim().length > 0;
+  } catch {
+    // Not a git checkout (or git unavailable): provenance still records
+    // hashes and timestamps.
+  }
+
+  const provenance = {
+    builtAt: new Date().toISOString(),
+    builder: 'scripts/build-wasm.mjs',
+    crate: 'crates/plec-runtime',
+    profile,
+    features: features ?? null,
+    optimize,
+    gitFingerprint: gitFingerprint.slice(0, 12),
+    gitDirty,
+    wasmSha256: sha256(wasmPath),
+    jsSha256: sha256(jsPath),
+    protocol: {
+      ssrSnapshot: readSsrSnapshotVersion(),
+    },
+  };
+
+  await writeFile(
+    path.join(outDir, 'provenance.json'),
+    JSON.stringify(provenance, null, 2) + '\n',
+  );
+  console.log(
+    `Provenance written: ${path.join(outDir, 'provenance.json')}`,
+  );
 }
 
 // CLI interface for direct execution

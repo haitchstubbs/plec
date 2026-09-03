@@ -9,6 +9,7 @@
   "scripts": {
     "install:build-tools": "node scripts/setup.mjs",
     "install:plec-cli": "cargo install --path crates/plec-cli",
+    "install:plec-cli:dev": "PLEC_CLI_VERSION=dev cargo install --path crates/plec-cli --force",
     "roadmap": "dotenv -e .env.devports -- sh -c 'bdui start --port \"$BEADS_UI_PORT\"'",
     "roadmap:stop": "yarn bdui stop",
     "setup": "yarn install:build-tools && yarn install && yarn build --force",
