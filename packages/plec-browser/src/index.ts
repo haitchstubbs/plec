@@ -2,12 +2,6 @@
 // this field to decide which independently-produced graph to fetch.
 type PlecRouteManifest = { rootGraphId: string };
 
-// SVG icon function marker and type
-export interface SvgIconFunction {
-  (props: Record<string, unknown>): Element;
-  __plecSvgIcon: true;
-}
-
 export type RuntimeDelta =
   | {
       type: 'update';
@@ -116,13 +110,6 @@ export interface CompiledMountOptions {
     currentYear?: number | string;
     location?: { pathname: string };
   };
-  islands?: Record<
-    string,
-    (
-      placeholder: Element,
-      props: Record<string, unknown>,
-    ) => void | (() => void)
-  >;
   onNavigate?: (navigation: {
     href: string;
     replace?: boolean;
@@ -212,7 +199,6 @@ interface WasmRuntimeInstance {
     policy: PlecRouterMountOptions['cookiePolicy'] | null,
   ): void;
   load_application(ir: unknown): void;
-  adopt(root: Element): RuntimeMountMetrics | null;
   mount(root: Element): RuntimeMountMetrics;
   initialize_input(inputId: string, rows: unknown): RuntimeMountMetrics;
   initialize_snapshot_input(
@@ -264,14 +250,7 @@ export interface PlecRouterMountOptions {
       path?: string;
     }
   >;
-  islands?: Record<
-    string,
-    (
-      placeholder: Element,
-      props: Record<string, unknown>,
-    ) => void | (() => void)
-  >;
-  /** Optional host-owned reactive inputs for routed compiled graphs. This is
+  /** Host-owned reactive inputs for routed compiled graphs. This is
    * the same producer boundary accepted by `mountPlecApplication`. */
   inputs?: Record<string, CompiledInputProducer<any>>;
   onQueryUpdate?: (update: CompiledQueryUpdate) => void;
@@ -364,8 +343,7 @@ export function markPlecTiming(name: PlecTimingMark): void {
     performance.mark(name);
 }
 
-export async function mountPlecApplication(
-  options: CompiledMountOptions,
+export async function mountPlecApplication(  options: CompiledMountOptions,
 ): Promise<CompiledRuntimeController> {
   try {
     const fetchStart = performance.now();
@@ -404,11 +382,6 @@ export async function mountPlecApplication(
     const renderMode = 'mount' as const;
     const runtimeLoadMs = performance.now() - loadStart;
     markPlecTiming('plec:runtime-load-end');
-    const disposeIslands = mountIslands(
-      options.root,
-      ir,
-      options.islands ?? {},
-    );
     const applyHostValues = (
       values: NonNullable<CompiledMountOptions['hostValues']>,
     ) => {
@@ -478,7 +451,7 @@ export async function mountPlecApplication(
       // DOM listeners are registered by the WASM renderer. TypeScript has no
       // normal event-execution role.
       activeActionListeners: 0,
-      activeIslands: disposed ? 0 : disposeIslands.length,
+      activeIslands: 0,
       queryIds: Object.keys(options.queries ?? {}),
       inputIds: Object.keys(inputs),
       disposed,
@@ -500,16 +473,7 @@ export async function mountPlecApplication(
         return options.root.querySelector(
           `[data-plec-node="root/node:${descriptor.node}"]`,
         );
-      // Legacy v1 layout descriptors keep the legacy string-id scheme
-      // (root-scoped, graph-unique ids); isolated by wasm-runtime-ixk.7.
-      const legacy = ((ir as any).layout?.routeOutlets ?? []).find(
-        (entry: any) => entry.id === id,
-      );
-      return legacy
-        ? options.root.querySelector(
-            `[data-runtime-node="${legacy.elementId}"]`,
-          )
-        : null;
+      return null;
     };
     return {
       mountMetrics,
@@ -521,7 +485,6 @@ export async function mountPlecApplication(
         if (disposed) return;
         disposed = true;
         runtime.dispose();
-        disposeIslands.forEach((dispose) => dispose());
         subscriptions.forEach((dispose) => dispose());
       },
     };
@@ -583,14 +546,13 @@ export async function startPlecRouter(
     runtime.register_graph(graphId, graph);
     return graph;
   };
-  const graphs = compiled
-    ? [compiled.application]
-    : [await loadGraph(manifest.rootGraphId)];
   if (compiled) {
     runtime.register_graph(
       '__rust_application__',
       compiled.application,
     );
+  } else {
+    await loadGraph(manifest.rootGraphId);
   }
   let adopted = false;
   if (bootstrap?.kind === 'invalid') {
@@ -735,14 +697,6 @@ export async function startPlecRouter(
   window.addEventListener('popstate', scheduleRoutedInputHydration);
   markPlecTiming('plec:mount-end');
 
-  // Mount islands for the initial root graph
-  const rootGraph =
-    !compiled &&
-    graphs.find((g: any) => g.graphId === manifest.rootGraphId);
-  const disposeIslands = rootGraph
-    ? mountIslands(options.root, rootGraph, options.islands ?? {})
-    : [];
-
   return {
     dispose: () => {
       window.removeEventListener('plec:graph-needed', onGraphNeeded);
@@ -752,7 +706,6 @@ export async function startPlecRouter(
         scheduleRoutedInputHydration,
       );
       routedInputBridge.dispose();
-      disposeIslands.forEach((dispose) => dispose());
       runtime.dispose();
     },
   };
@@ -877,70 +830,6 @@ function emitAdoptionDiagnostic(
     window.dispatchEvent(
       new CustomEvent('plec:adoption', { detail: diagnostic }),
     );
-}
-
-// SVG instance cache for static icons
-const svgInstanceCache = new Map<string, Element>();
-
-function mountIslands(
-  root: Element,
-  ir: any,
-  registry: NonNullable<CompiledMountOptions['islands']>,
-) {
-  // LEGACY bridge (wasm-runtime-ixk.7): island placeholders belong to the
-  // legacy string-id renderer (`data-runtime-node` + `ir.islands`, which no
-  // current compiler emits). Not part of the structural address protocol;
-  // queries are deliberately scoped to the owning root, never document-wide.
-  const disposers: Array<() => void> = [];
-
-  // SVG islands (cached)
-  for (const island of (ir.islands ?? []).filter(
-    (i: any) =>
-      (registry[i.componentId] as any)?.__plecSvgIcon === true,
-  )) {
-    const Icon = registry[
-      island.componentId
-    ] as unknown as SvgIconFunction;
-    const placeholder = root.querySelector<HTMLElement>(
-      `[data-runtime-node="${island.placeholderNodeId}"]`,
-    );
-    if (!Icon || !placeholder) continue;
-
-    // Build cache key from icon ID and static props
-    const staticProps = ['className', 'size', 'color', 'strokeWidth']
-      .filter((p) => island.props?.[p] !== undefined)
-      .map((p) => `${p}:${String(island.props?.[p])}`)
-      .join(',');
-    const cacheKey = `${island.componentId}:${staticProps}`;
-
-    let svgElement = svgInstanceCache.get(cacheKey);
-    if (!svgElement) {
-      svgElement = Icon(island.props ?? {});
-      if (svgElement) svgInstanceCache.set(cacheKey, svgElement);
-    }
-
-    if (svgElement) {
-      // Clone cached instance (elements can't be in multiple places)
-      const clone = svgElement.cloneNode(true) as Element;
-      placeholder.replaceWith(clone);
-    }
-  }
-
-  // Component islands (existing logic)
-  for (const island of (ir.islands ?? []).filter(
-    (i: any) =>
-      (registry[i.componentId] as any)?.__plecSvgIcon !== true,
-  )) {
-    const mount = registry[island.componentId];
-    const placeholder = root.querySelector<HTMLElement>(
-      `[data-runtime-node="${island.placeholderNodeId}"]`,
-    );
-    if (!mount || !placeholder) continue;
-    const dispose = mount(placeholder, island.props ?? {});
-    if (typeof dispose === 'function') disposers.push(dispose);
-  }
-
-  return disposers;
 }
 
 function mergeMountMetrics(

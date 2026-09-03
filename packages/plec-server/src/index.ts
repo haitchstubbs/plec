@@ -338,10 +338,13 @@ async function serveAsset(
   if (!filePath.startsWith(`${root}${path.sep}`))
     return sendJson(response, 400, { error: 'invalid asset path' });
   const encoding = selectEncoding(request.headers['accept-encoding']);
-  const compressed =
-    encoding && pathname.startsWith('/runtime/')
-      ? `${filePath}.${encoding === 'gzip' ? 'gz' : 'br'}`
-      : undefined;
+  // Precompressed-sidecar model: a `<file>.br` / `<file>.gz` sibling is
+  // served negotiated by `Accept-Encoding`; its presence is the opt-in, and
+  // the producer that emits the asset must also regenerate its sidecar.
+  // Assets without a sidecar fall back to identity bytes.
+  const compressed = encoding
+    ? `${filePath}.${encoding === 'gzip' ? 'gz' : 'br'}`
+    : undefined;
   try {
     const [body, compressedServed] = compressed
       ? await readFile(compressed)

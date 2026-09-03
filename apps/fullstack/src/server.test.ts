@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
-import { gzipSync } from 'node:zlib';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -156,6 +156,34 @@ describe('Plec application server', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-encoding')).toBeNull();
     expect(await response.text()).toBe('export default {};');
+  });
+
+  it('serves a precompressed sidecar outside the runtime directory', async () => {
+    const publicDir = await mkdtemp(
+      path.join(tmpdir(), 'plec-fullstack-'),
+    );
+    await mkdir(path.join(publicDir, 'assets'), { recursive: true });
+    await writeFile(
+      path.join(publicDir, 'assets', 'client.js'),
+      'export {};',
+    );
+    await writeFile(
+      path.join(publicDir, 'assets', 'client.js.br'),
+      brotliCompressSync('export {};'),
+    );
+    const server = createAppServer(publicDir);
+    servers.push(server);
+    server.listen(0);
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string')
+      throw new Error('missing test port');
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/assets/client.js`,
+      { headers: { 'accept-encoding': 'br' } },
+    );
+    expect(response.headers.get('content-encoding')).toBe('br');
+    expect(await response.text()).toBe('export {};');
   });
 
   it('serves published font files with the font MIME type', async () => {
