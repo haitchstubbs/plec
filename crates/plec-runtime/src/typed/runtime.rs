@@ -332,7 +332,6 @@ impl PlecRuntime {
             instance_id.clone(),
             None,
             "main".into(),
-            None,
             "__legacy__".into(),
         )?;
         self.mount_instance(&instance_id, root, true)
