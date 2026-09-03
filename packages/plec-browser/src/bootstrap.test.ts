@@ -34,7 +34,7 @@ describe('ssr bootstrap reader', () => {
       textContent: JSON.stringify({
         version: 2,
         snapshot: {
-          version: 1,
+          version: 2,
           revision: 'rev-1',
           routes: [
             { routeId: 'routes.tsx#Home', params: {}, phase: 'active' },
@@ -49,7 +49,7 @@ describe('ssr bootstrap reader', () => {
       kind: 'snapshot',
       revision: 'rev-1',
       routeId: 'routes.tsx#Home',
-      snapshot: expect.objectContaining({ version: 1 }),
+      snapshot: expect.objectContaining({ version: 2 }),
     });
   });
 

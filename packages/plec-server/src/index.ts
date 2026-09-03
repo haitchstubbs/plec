@@ -65,6 +65,9 @@ type Route = {
 type DocumentMetadata = { title?: string; description?: string };
 type App = { rootComponent: number; components: Component[] };
 type Component = {
+  /** The compiled component id (`module#Name`); nested structure records
+   * reference it so snapshot validation resolves the right node table. */
+  id?: string;
   rootNode: number;
   strings: string[];
   constants: unknown[];
@@ -136,6 +139,16 @@ type SsrLoopRecord = { node: number; keys: string[] };
 type SsrBranchGraph = Map<string, Map<number, BranchSide>>;
 /** Graph instance id -> keyed loop rows (node-handle keyed). */
 type SsrLoopGraph = Map<string, Map<number, string[]>>;
+/** Recorded execution state for one nested component instance, addressed by
+ * its marker path (`SsrStructure.nested` in crates/plec-ir). The compiled
+ * component id is the graph reference snapshot validation resolves. */
+type SsrNestedRecord = {
+  graphId: string;
+  branches: Map<number, BranchSide>;
+  loops: Map<number, string[]>;
+};
+/** Nested component marker path -> recorded execution state. */
+type SsrNestedGraph = Map<string, SsrNestedRecord>;
 
 /** One instance-id segment (`graph_instance_id` escapes `/` as `%2F` and
  * `%` as `%25`), so nested snapshot keys match runtime instance ids. */
@@ -203,6 +216,7 @@ export function createPlecServer(options: PlecServerOptions): Server {
             loader,
             rendered.branches,
             rendered.loops,
+            rendered.nested,
             rendered.childGraph,
           ),
         ).replace(/</g, '\\u003c');
@@ -507,6 +521,7 @@ function bootstrapPayload(
   loader: LoaderOutcome | undefined,
   branches: SsrBranchGraph,
   loops: SsrLoopGraph,
+  nested: SsrNestedGraph,
   childGraph: { instance: string; graphId: string } | undefined,
 ) {
   if (!match?.route) {
@@ -540,10 +555,36 @@ function bootstrapPayload(
       ? { loops: loopRecords(instance) }
       : {}),
   });
+  // Nested component records are the ownership cause for component instances
+  // below the graph root, keyed by the exact marker path the client adopter
+  // derives. Deterministic order: sort by path, node handle within a record.
+  const nestedRecords = [...nested.entries()]
+    .sort(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    )
+    .flatMap(([path, record]) => {
+      const branches = [...record.branches.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([node, selected]) => ({ node, selected }));
+      const loops = [...record.loops.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([node, keys]) => ({ node, keys }));
+      if (!branches.length && !loops.length) return [];
+      return [
+        [
+          path,
+          {
+            graphId: record.graphId,
+            branches,
+            ...(loops.length ? { loops } : {}),
+          },
+        ] as const,
+      ];
+    });
   return {
     version: 2,
     snapshot: {
-      version: 1,
+      version: 2,
       revision: bundle.manifest.revision,
       // A rejected loader rendered the error phase; the browser resumes that
       // phase from the snapshot instead of refetching on first paint.
@@ -578,6 +619,9 @@ function bootstrapPayload(
               }
             : {}),
         },
+        ...(nestedRecords.length
+          ? { nested: Object.fromEntries(nestedRecords) }
+          : {}),
       },
     },
   };
@@ -633,6 +677,7 @@ function renderApplication(
   body: string;
   branches: SsrBranchGraph;
   loops: SsrLoopGraph;
+  nested: SsrNestedGraph;
   childGraph?: { instance: string; graphId: string };
 } {
   const graph = new Map(
@@ -659,6 +704,7 @@ function renderApplication(
   const loops: SsrLoopGraph = new Map([
     ['root/outlet:main', new Map()],
   ]);
+  const nested: SsrNestedGraph = new Map();
   const childGraph =
     child && route
       ? {
@@ -681,8 +727,9 @@ function renderApplication(
     rootComponent: root.rootComponent,
     branches,
     loops,
+    nested,
   });
-  return { body, branches, loops, childGraph };
+  return { body, branches, loops, nested, childGraph };
 }
 type Scope = {
   request: RequestContext;
@@ -702,9 +749,33 @@ type Scope = {
   rootComponent?: number;
   branches?: SsrBranchGraph;
   loops?: SsrLoopGraph;
+  /** Shared nested component records for the whole document render. */
+  nested?: SsrNestedGraph;
+  /** Marker path of the nested component instance currently being rendered;
+   * branch/loop records below it address this component's node table. */
+  nestedKey?: string;
+  /** Compiled component id of the nested instance at `nestedKey`. */
+  nestedGraphId?: string;
 };
 function renderApp(app: App, scope: Scope): string {
   return renderComponent(app, app.rootComponent, scope);
+}
+/** Returns (creating if needed) the nested record for the instance being
+ * rendered. A component id is required: snapshot validation resolves the
+ * node table through it, so an unnamed component cannot carry records. */
+function nestedRecord(scope: Scope): SsrNestedRecord | undefined {
+  if (!scope.nested || !scope.nestedKey || !scope.nestedGraphId)
+    return undefined;
+  let record = scope.nested.get(scope.nestedKey);
+  if (!record) {
+    record = {
+      graphId: scope.nestedGraphId,
+      branches: new Map(),
+      loops: new Map(),
+    };
+    scope.nested.set(scope.nestedKey, record);
+  }
+  return record;
 }
 function renderComponent(
   app: App,
@@ -753,9 +824,13 @@ function renderNode(
       : node.alternate == null
         ? 'none'
         : 'alternate';
-    // Only root-component conditionals are recordable: snapshot branch
-    // records address nodes within the graph's own component table.
-    if (
+    // Root-component conditionals record into the graph instance's own
+    // branch map; nested component conditionals record into the nested
+    // entry addressed by the component's marker path, so adoption claims
+    // the server-selected branch instead of inferring it from DOM shape.
+    if (scope.nestedKey) {
+      nestedRecord(scope)?.branches.set(index, selected);
+    } else if (
       scope.branches &&
       scope.instance &&
       componentIndex === scope.rootComponent &&
@@ -803,7 +878,13 @@ function renderNode(
         return `<!--plec:loop:${rowPath}-->${renderNode(app, componentIndex, loop.rowTemplate, { ...scope, path: rowPath, row, rowIndex, rowKey: key, rowRoot: true })}<!--plec:loop-end:${rowPath}-->`;
       })
       .join('');
-    if (
+    // Loop records follow the same split as branch records: graph-level
+    // loops belong to the instance map, nested component loops to the
+    // component's marker-path entry. Without the nested record the client
+    // adopter fails closed with `missing:ssr-loop`.
+    if (scope.nestedKey) {
+      nestedRecord(scope)?.loops.set(index, keys);
+    } else if (
       scope.loops &&
       scope.instance &&
       componentIndex === scope.rootComponent
@@ -840,7 +921,10 @@ function renderNode(
             (candidate) => child.strings[candidate.name] === name,
           );
           if (parameter >= 0)
-            componentProps[parameter] = { app, component: prop.component };
+            componentProps[parameter] = {
+              app,
+              component: prop.component,
+            };
         }
         continue;
       }
@@ -864,7 +948,27 @@ function renderNode(
     )
       props[directParameter] = namedProps;
     const componentPath = `${scope.path}/component:${index}`;
-    return `<!--plec:component:${scope.path}:${index}-->${renderComponent(target.app, target.component, { ...scope, props, componentProps, path: componentPath, slot: { app, component: componentIndex, nodes: node.children ?? [], scope } })}<!--plec:component-end:${scope.path}:${index}-->`;
+    return `<!--plec:component:${scope.path}:${index}-->${renderComponent(
+      target.app,
+      target.component,
+      {
+        ...scope,
+        props,
+        componentProps,
+        path: componentPath,
+        // Records rendered below this call address the child's node table
+        // under the child's marker path, exactly the address the client
+        // adopter derives for the instance.
+        nestedKey: componentPath,
+        nestedGraphId: child.id,
+        slot: {
+          app,
+          component: componentIndex,
+          nodes: node.children ?? [],
+          scope,
+        },
+      },
+    )}<!--plec:component-end:${scope.path}:${index}-->`;
   }
   if (node.op !== 'element') return '';
   const tag = component.strings[node.tag!]!;
@@ -872,9 +976,21 @@ function renderNode(
   // later writes overwrite earlier attribute names (same-key overwrites keep
   // their original position), mirroring the runtime's sequential application.
   const attributes = new Map<string, string | null>();
+  // Backstop for the reserved DOM metadata namespace
+  // (docs/dom-address-protocol.md): literal JSX collisions already fail at
+  // compile time, but spread bags are evaluated at render time, so the only
+  // cheap enforcement left is here. Fail the render closed — a reserved name
+  // that reached markup would collide with adoption markers.
   const writeAttribute = (name: string, value: unknown) => {
+    if (
+      name.startsWith('data-plec-') ||
+      name.startsWith('data-runtime-') ||
+      name.startsWith('plec:')
+    )
+      throw new Error(`RESERVED_ATTRIBUTE:${name}`);
     if (name.startsWith('on')) return;
-    if (value === false || value === null || value === undefined) return;
+    if (value === false || value === null || value === undefined)
+      return;
     const attr = name === 'className' ? 'class' : name;
     attributes.set(attr, value === true ? null : String(value));
   };
@@ -887,12 +1003,13 @@ function renderNode(
       // already carries final attributes like `class`. This mirrors
       // `typed_apply_spread` (crates/plec-runtime dom/bindings).
       if (write.spread) {
-        const bag = evaluate(
-          component,
-          write.expression!,
-          scope,
-        ) as Record<string, unknown> | null | undefined;
-        if (bag !== null && bag !== undefined && typeof bag === 'object')
+        const bag = evaluate(component, write.expression!, scope) as
+          Record<string, unknown> | null | undefined;
+        if (
+          bag !== null &&
+          bag !== undefined &&
+          typeof bag === 'object'
+        )
           for (const [name, value] of Object.entries(bag))
             writeAttribute(name, value);
         return;

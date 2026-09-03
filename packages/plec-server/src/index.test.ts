@@ -120,7 +120,9 @@ it('emits font preload links before the stylesheet', async () => {
       manifest: {
         revision: 'test-revision',
         rootGraphId: 'root',
-        routes: [{ id: 'home', path: '', graphId: 'home', outletId: 'main' }],
+        routes: [
+          { id: 'home', path: '', graphId: 'home', outletId: 'main' },
+        ],
       },
       graphs: [
         { graphId: 'root', graph },
@@ -930,6 +932,185 @@ it('renders keyed loop rows with row-scoped component props and records their ke
   expect(instance!.loops).toEqual([{ node: 2, keys: ['one', 'two'] }]);
 });
 
+it('records nested component conditionals and loops under their marker paths', async () => {
+  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
+  // The route page calls one nested component that renders a conditional
+  // and a keyed loop. Their records must land under the component's marker
+  // path in `structure.nested` (snapshot v2), not under the graph instance.
+  const page = {
+    rootComponent: 0,
+    components: [
+      {
+        id: 'nested.tsx#Page',
+        rootNode: 0,
+        strings: ['section'],
+        constants: [],
+        nodes: [
+          { op: 'element', tag: 0, children: [1] },
+          { op: 'component', component: 1, parent: 0 },
+        ],
+        texts: [],
+        bindings: [],
+        propPrograms: [],
+        stateSlots: [],
+        parameters: [],
+        loops: [],
+        routeOutlets: [],
+        expressions: [],
+      },
+      {
+        id: 'nested.tsx#Panel',
+        rootNode: 0,
+        strings: ['section', 'p', 'ul', 'li', 'span', 'id', 'title'],
+        constants: [true, 'one', 'One', 'two', 'Two'],
+        nodes: [
+          { op: 'element', tag: 0, children: [1, 2] },
+          { op: 'conditional', test: 0, parent: 0, consequent: 4 },
+          { op: 'loop', loop: 0, parent: 0 },
+          { op: 'element', tag: 2, parent: null, children: [5] },
+          { op: 'element', tag: 1, parent: null, children: [] },
+          { op: 'text', text: 0, parent: 3 },
+        ],
+        texts: [{ binding: 0 }],
+        bindings: [{ target: 5, sink: 'text', expression: 3 }],
+        propPrograms: [],
+        stateSlots: [],
+        parameters: [],
+        loops: [
+          {
+            sourceExpression: 1,
+            keyExpression: 2,
+            itemSlot: 0,
+            rowTemplate: 3,
+          },
+        ],
+        routeOutlets: [],
+        expressions: [
+          {
+            instructions: [
+              { op: 'constant', constant: 0 },
+              { op: 'return' },
+            ],
+          },
+          {
+            instructions: [
+              { op: 'constant', constant: 1 },
+              { op: 'constant', constant: 2 },
+              { op: 'makeRecord', fields: [5, 6] },
+              { op: 'constant', constant: 3 },
+              { op: 'constant', constant: 4 },
+              { op: 'makeRecord', fields: [5, 6] },
+              { op: 'makeArray', count: 2 },
+              { op: 'return' },
+            ],
+          },
+          {
+            instructions: [
+              { op: 'loadRowField', field: 5 },
+              { op: 'return' },
+            ],
+          },
+          {
+            instructions: [
+              { op: 'loadRowField', field: 6 },
+              { op: 'return' },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  await writeFile(
+    path.join(publicDir, 'route-artifact.json'),
+    JSON.stringify({
+      manifest: {
+        revision: 'test-revision',
+        rootGraphId: 'root',
+        routes: [
+          { id: 'home', path: '', graphId: 'home', outletId: 'main' },
+        ],
+      },
+      graphs: [
+        {
+          graphId: 'root',
+          graph: {
+            rootComponent: 0,
+            components: [
+              {
+                rootNode: 0,
+                strings: ['main'],
+                constants: [],
+                nodes: [{ op: 'element', tag: 0, children: [] }],
+                texts: [],
+                bindings: [],
+                propPrograms: [],
+                stateSlots: [],
+                parameters: [],
+                expressions: [],
+                loops: [],
+                routeOutlets: [{ id: 'main', node: 0 }],
+              },
+            ],
+          },
+        },
+        { graphId: 'home', graph: page },
+      ],
+    }),
+  );
+  const server = createPlecServer({
+    publicDir,
+    artifactPath: path.join(publicDir, 'route-artifact.json'),
+  });
+  servers.push(server);
+  server.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('missing test address');
+  const html = await (
+    await fetch(`http://127.0.0.1:${address.port}/`)
+  ).text();
+
+  // The nested component's markers address it through the component path.
+  expect(html).toContain('<!--plec:component:root/outlet:main:1-->');
+  expect(html).toContain(
+    '<!--plec:conditional:root/outlet:main/component:1:1-->',
+  );
+  expect(html).toContain(
+    '<!--plec:loop:root/outlet:main/component:1/loop:2/key:one-->',
+  );
+  const bootstrap = JSON.parse(
+    html.match(
+      /<script id="plec-bootstrap" type="application\/json">([^<]+)<\/script>/,
+    )![1]!,
+  ) as {
+    snapshot: {
+      version: number;
+      structure: {
+        graphs: Record<string, unknown>;
+        nested?: Record<
+          string,
+          {
+            graphId: string;
+            branches: Array<{ node: number; selected: string }>;
+            loops?: Array<{ node: number; keys: string[] }>;
+          }
+        >;
+      };
+    };
+  };
+  expect(bootstrap.snapshot.version).toBe(2);
+  // The nested record is the ownership cause the client adopter consumes;
+  // the graph instance maps stay untouched by component-internal state.
+  expect(bootstrap.snapshot.structure.nested).toEqual({
+    'root/outlet:main/component:1': {
+      graphId: 'nested.tsx#Panel',
+      branches: [{ node: 1, selected: 'consequent' }],
+      loops: [{ node: 2, keys: ['one', 'two'] }],
+    },
+  });
+});
+
 it('fails the document render when a loop produces duplicate keys', async () => {
   const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
   const duplicatePage = {
@@ -1096,7 +1277,10 @@ it('serializes `{...props}` spreads so island icons paint with their class attri
         parameters: [{ name: 1, callable: false }],
         expressions: [
           {
-            instructions: [{ op: 'loadProp', prop: 0 }, { op: 'return' }],
+            instructions: [
+              { op: 'loadProp', prop: 0 },
+              { op: 'return' },
+            ],
           },
         ],
         loops: [],
@@ -1161,6 +1345,179 @@ it('serializes `{...props}` spreads so island icons paint with their class attri
   );
 });
 
+it('fails the render closed when a reserved attribute is written literally', async () => {
+  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
+  // Compiler rejects authored literals; this hand-written artifact simulates
+  // a reserved name still reaching the serializer. It must never reach HTML.
+  const reservedPage = {
+    rootComponent: 0,
+    components: [
+      {
+        rootNode: 0,
+        strings: ['div', 'data-plec-node'],
+        constants: ['user-value'],
+        nodes: [{ op: 'element', tag: 0, children: [] }],
+        texts: [],
+        bindings: [],
+        propPrograms: [
+          {
+            target: 0,
+            writes: [{ name: 1, kind: 'attribute', constant: 0 }],
+          },
+        ],
+        stateSlots: [],
+        parameters: [],
+        expressions: [],
+        loops: [],
+        routeOutlets: [],
+      },
+    ],
+  };
+  await writeFile(
+    path.join(publicDir, 'route-artifact.json'),
+    JSON.stringify({
+      manifest: {
+        revision: 'test-revision',
+        rootGraphId: 'root',
+        routes: [
+          { id: 'home', path: '', graphId: 'home', outletId: 'main' },
+        ],
+      },
+      graphs: [
+        {
+          graphId: 'root',
+          graph: {
+            rootComponent: 0,
+            components: [
+              {
+                rootNode: 0,
+                strings: ['main'],
+                constants: [],
+                nodes: [{ op: 'element', tag: 0, children: [] }],
+                texts: [],
+                bindings: [],
+                propPrograms: [],
+                stateSlots: [],
+                parameters: [],
+                expressions: [],
+                loops: [],
+                routeOutlets: [{ id: 'main', node: 0 }],
+              },
+            ],
+          },
+        },
+        { graphId: 'home', graph: reservedPage },
+      ],
+    }),
+  );
+  const server = createPlecServer({
+    publicDir,
+    artifactPath: path.join(publicDir, 'route-artifact.json'),
+    development: true,
+  });
+  servers.push(server);
+  server.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('missing test address');
+  const response = await fetch(`http://127.0.0.1:${address.port}/`);
+  expect(response.status).toBe(500);
+  expect(await response.text()).toContain('RESERVED_ATTRIBUTE:data-plec-node');
+});
+
+it('fails the render closed when a spread bag carries a reserved attribute', async () => {
+  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
+  // Spread contents are unknowable at compile time, so the serializer is the
+  // enforcement point: `{...bag}` with data-runtime-row-key must fail, not
+  // silently collide with the row-key stamp.
+  const reservedSpreadPage = {
+    rootComponent: 0,
+    components: [
+      {
+        rootNode: 0,
+        strings: ['svg', 'data-runtime-row-key'],
+        constants: ['PX0001'],
+        nodes: [{ op: 'element', tag: 0, children: [] }],
+        texts: [],
+        bindings: [],
+        propPrograms: [
+          {
+            target: 0,
+            writes: [{ kind: 'attribute', expression: 0, spread: true }],
+          },
+        ],
+        stateSlots: [],
+        parameters: [],
+        expressions: [
+          {
+            instructions: [
+              { op: 'constant', constant: 0 },
+              { op: 'makeRecord', fields: [1] },
+              { op: 'return' },
+            ],
+          },
+        ],
+        loops: [],
+        routeOutlets: [],
+      },
+    ],
+  };
+  await writeFile(
+    path.join(publicDir, 'route-artifact.json'),
+    JSON.stringify({
+      manifest: {
+        revision: 'test-revision',
+        rootGraphId: 'root',
+        routes: [
+          { id: 'home', path: '', graphId: 'home', outletId: 'main' },
+        ],
+      },
+      graphs: [
+        {
+          graphId: 'root',
+          graph: {
+            rootComponent: 0,
+            components: [
+              {
+                rootNode: 0,
+                strings: ['main'],
+                constants: [],
+                nodes: [{ op: 'element', tag: 0, children: [] }],
+                texts: [],
+                bindings: [],
+                propPrograms: [],
+                stateSlots: [],
+                parameters: [],
+                expressions: [],
+                loops: [],
+                routeOutlets: [{ id: 'main', node: 0 }],
+              },
+            ],
+          },
+        },
+        { graphId: 'home', graph: reservedSpreadPage },
+      ],
+    }),
+  );
+  const server = createPlecServer({
+    publicDir,
+    artifactPath: path.join(publicDir, 'route-artifact.json'),
+    development: true,
+  });
+  servers.push(server);
+  server.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('missing test address');
+  const response = await fetch(`http://127.0.0.1:${address.port}/`);
+  expect(response.status).toBe(500);
+  expect(await response.text()).toContain(
+    'RESERVED_ATTRIBUTE:data-runtime-row-key',
+  );
+});
+
 it('passes named props to a dynamic island component and serializes its spread', async () => {
   const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
   // NavLink-style call: `<Icon className="size-4 shrink-0" />` where `Icon`
@@ -1210,7 +1567,10 @@ it('passes named props to a dynamic island component and serializes its spread',
         parameters: [{ name: 0, component: true }],
         expressions: [
           {
-            instructions: [{ op: 'constant', constant: 0 }, { op: 'return' }],
+            instructions: [
+              { op: 'constant', constant: 0 },
+              { op: 'return' },
+            ],
           },
         ],
         loops: [],
@@ -1236,7 +1596,10 @@ it('passes named props to a dynamic island component and serializes its spread',
         parameters: [{ name: 1, callable: false }],
         expressions: [
           {
-            instructions: [{ op: 'loadProp', prop: 0 }, { op: 'return' }],
+            instructions: [
+              { op: 'loadProp', prop: 0 },
+              { op: 'return' },
+            ],
           },
         ],
         loops: [],

@@ -22,12 +22,37 @@ thread_local! {
     /// reported, never treated as an adoption failure. Exposed through
     /// `PlecRuntime::ssr_text_divergences` for the dev diagnostic channel.
     static SSR_TEXT_DIVERGENCES: Cell<u32> = const { Cell::new(0) };
+    /// Completeness observation: nested component conditionals whose branch
+    /// selection was inferred from DOM shape because the snapshot carried no
+    /// record. Complete v2 snapshots keep this at zero; any nonzero value
+    /// means the producer omitted nested records (legacy snapshot).
+    static SSR_CONDITIONAL_INFERENCES: Cell<u32> = const { Cell::new(0) };
 }
+
+/// Recorded execution state for one nested component instance
+/// (`PlecSsrSnapshot.structure.nested`), keyed by the component's marker
+/// path. Branch records are the ownership cause for the component's own
+/// conditionals; loop records are the claimed row identity and order. Row
+/// values recompute from imported runtime state and are never transferred.
+#[derive(Clone, Default)]
+pub(crate) struct SsrNestedComponentRecords {
+    pub(crate) branches: HashMap<usize, plec_ir::SsrSelectedBranch>,
+    pub(crate) loops: HashMap<usize, Vec<String>>,
+}
+
+/// Nested component records reachable below one runtime, keyed by marker
+/// path. Each adopted component passes its subtree's records down to the
+/// child runtime so arbitrary nesting depth resolves without re-walking.
+pub(crate) type SsrNestedRecords = HashMap<String, SsrNestedComponentRecords>;
 
 #[derive(Default)]
 pub(crate) struct TypedLoopRows {
     pub(crate) order: Vec<String>,
     pub(crate) rows: HashMap<String, TypedRow>,
+    /// The canonical address prefix every row of this loop extends:
+    /// `{parent}/loop:{node}:` — recorded at instantiation/adoption so delta
+    /// inserts emit the same `plec:loop:{rowPath}` grammar the server did.
+    pub(crate) path_base: Option<String>,
 }
 
 pub(crate) struct TypedRow {
@@ -71,14 +96,24 @@ pub(crate) struct TypedComponentRequest {
     pub(crate) start: Node,
     pub(crate) end: Node,
     pub(crate) key: String,
+    /// The child instance's canonical structural address
+    /// (`{parent}/component:{call}`), shared by fresh mounts and adoption so
+    /// CSR-created component DOM carries the server-rendered grammar.
+    pub(crate) path: String,
     /// SSR already owns this range. Component work must bind it rather than
     /// inserting a second copy before the end marker.
     pub(crate) adoption: Option<TypedAdoptionRequest>,
+    /// This child instance's own branch/loop records, extracted from the
+    /// parent's nested map by marker path. Consumed by the child `adopt`.
+    pub(crate) ssr_branches: HashMap<usize, plec_ir::SsrSelectedBranch>,
+    pub(crate) ssr_loops: HashMap<usize, Vec<String>>,
+    /// Deeper nested records below this child, passed down for grandchild
+    /// adoption.
+    pub(crate) ssr_nested: SsrNestedRecords,
 }
 
 pub(crate) struct TypedAdoptionRequest {
     pub(crate) root: Element,
-    pub(crate) path: String,
 }
 
 #[derive(Clone)]
@@ -141,6 +176,11 @@ fn component_runtime_props(
 
 pub(crate) struct TypedRuntime {
     pub(crate) app: TypedApplication,
+    /// This instance's canonical structural address (`root`, or
+    /// `{parent}/outlet:{id}` / `{parent}/component:{call}` below it). Every
+    /// emitted DOM address derives from this prefix plus graph topology —
+    /// never from allocation counters or DOM position.
+    pub(crate) path: String,
     pub(crate) root: Option<Element>,
     pub(crate) nodes: HashMap<usize, Node>,
     pub(crate) states: Vec<RuntimeValue>,
@@ -182,6 +222,10 @@ pub(crate) struct TypedRuntime {
     /// of being treated as an adoption failure.
     pub(crate) ssr_imported: bool,
     pub(crate) allow_unrecorded_ssr_conditionals: bool,
+    /// Nested component records this runtime may hand to adopted children,
+    /// scoped to the subtree below this runtime's path. Empty outside a
+    /// snapshot-backed adoption.
+    pub(crate) ssr_nested: SsrNestedRecords,
 }
 
 /** Mutable typed graph ownership. Definitions live in `typed_registry`; this
@@ -265,6 +309,7 @@ impl PlecRuntime {
             typed_ssr_loaders: Rc::new(RefCell::new(HashMap::new())),
             typed_ssr_branches: Rc::new(RefCell::new(HashMap::new())),
             typed_ssr_loops: Rc::new(RefCell::new(HashMap::new())),
+            typed_ssr_nested: Rc::new(RefCell::new(HashMap::new())),
             typed_components: Rc::new(RefCell::new(None)),
             snapshot_inputs: Rc::new(RefCell::new(HashMap::new())),
             cookie_policy: Rc::new(RefCell::new(None)),
@@ -346,6 +391,29 @@ impl PlecRuntime {
 }
 
 impl PlecRuntime {
+    /// The live instance forest must never overwrite an entry. The monotonic
+    /// component counter and the router's dispose-before-mount discipline
+    /// make id collisions unreachable for well-formed callers, so a
+    /// collision is a broken invariant: it must fail loudly instead of
+    /// silently replacing a live instance and stranding its DOM.
+    pub(crate) fn ensure_typed_instance_absent(
+        &self,
+        id: &str,
+        origin: &str,
+    ) -> Result<(), JsValue> {
+        let existing = self
+            .typed
+            .borrow()
+            .get(id)
+            .map(|instance| (instance.graph_id.clone(), instance.outlet_id.clone()));
+        if let Some((graph_id, outlet_id)) = existing {
+            return Err(error(format!(
+                "typed graph instance id collision: {origin} would overwrite live instance {id} (existing graph {graph_id}, outlet {outlet_id})"
+            )));
+        }
+        Ok(())
+    }
+
     pub(crate) fn flush_component_work(&self) -> Result<(), JsValue> {
         loop {
             self.mount_component_requests()?;
@@ -451,6 +519,14 @@ impl PlecRuntime {
                 return Ok(());
             }
             for (parent_id, request) in requests {
+                let id = format!("{parent_id}/component:{}:{}", request.call, request.key);
+                self.ensure_typed_instance_absent(
+                    &id,
+                    &format!(
+                        "component call {} (key {}, graph component {})",
+                        request.call, request.key, request.component
+                    ),
+                )?;
                 let definitions = self
                     .typed
                     .borrow()
@@ -474,6 +550,7 @@ impl PlecRuntime {
                     .collect::<Result<Vec<_>, JsValue>>()?;
                 let mut runtime = TypedRuntime::new(app)?;
                 runtime.set_component_definitions(definitions);
+                runtime.path = request.path.clone();
                 runtime.callbacks = runtime
                     .app
                     .parameters
@@ -500,9 +577,10 @@ impl PlecRuntime {
                             start: request.start.clone(),
                             end: request.end.clone(),
                         },
-                        &adoption.path,
-                        &HashMap::new(),
-                        &HashMap::new(),
+                        &request.path,
+                        &request.ssr_branches,
+                        &request.ssr_loops,
+                        &request.ssr_nested,
                     )?;
                 } else {
                     runtime.mount_before(&request.end)?;
@@ -538,7 +616,6 @@ impl PlecRuntime {
                             request.row_context.as_ref(),
                         )?;
                 }
-                let id = format!("{parent_id}/component:{}:{}", request.call, request.key);
                 self.typed.borrow_mut().insert(
                     id.clone(),
                     TypedGraphInstance {
@@ -729,6 +806,7 @@ impl TypedRuntime {
         let reaction_cleanups = vec![None; app.reactions.len()];
         Ok(Self {
             app,
+            path: "root".into(),
             root: None,
             nodes: HashMap::new(),
             states,
@@ -763,6 +841,7 @@ impl TypedRuntime {
             abort_controllers: HashMap::new(),
             ssr_imported: false,
             allow_unrecorded_ssr_conditionals: false,
+            ssr_nested: HashMap::new(),
         })
     }
 }
@@ -892,6 +971,7 @@ impl TypedRuntime {
         path: &str,
         branches: &HashMap<usize, plec_ir::SsrSelectedBranch>,
         loops: &HashMap<usize, Vec<String>>,
+        nested: &SsrNestedRecords,
     ) -> Result<MountMetrics, JsValue> {
         self.invalidate_fetches();
         self.clear_listeners();
@@ -901,6 +981,11 @@ impl TypedRuntime {
         self.listener_requests.clear();
         self.component_requests.clear();
         self.slot_requests.clear();
+        // Nested component records below this runtime's path: adopted
+        // children extract their own entry (and their subtree's) at queue
+        // time, so arbitrary nesting depth consumes recorded state instead
+        // of inferring it from DOM shape.
+        self.ssr_nested = nested.clone();
 
         let markers = TypedAdoptionIndex::build(scope)?;
         // Handles below an unselected conditional branch have no
@@ -1137,6 +1222,10 @@ impl TypedRuntime {
                 "mismatch:ssr-row-order:{path}:{loop_node}"
             )));
         }
+        // Adopted loops still grow on the client: record the canonical row
+        // address prefix so delta inserts emit the server's row grammar.
+        self.loops.entry(loop_index).or_default().path_base =
+            Some(format!("{path}/loop:{loop_node}/key:"));
 
         // Template handles are not top-level mounted nodes. Keep the outer
         // adoption walk from trying to claim them with the unscoped path.
@@ -1593,6 +1682,10 @@ impl TypedRuntime {
         let selected = match selected {
             Some(selected) => selected,
             None if self.allow_unrecorded_ssr_conditionals => {
+                // Legacy compatibility path: no record exists, so the branch
+                // is inferred from the first node's ownership marker. Every
+                // use is counted — complete v2 snapshots keep this at zero.
+                SSR_CONDITIONAL_INFERENCES.with(|count| count.set(count.get() + 1));
                 let inner = start.next_sibling();
                 if inner
                     .as_ref()
@@ -1812,6 +1905,23 @@ impl TypedRuntime {
         }
         let key = format!("{index}:{}", self.next_component_instance);
         self.next_component_instance += 1;
+        let component_path = format!("{path}/component:{index}");
+        // This instance's recorded execution state, keyed by exactly the
+        // marker path the server renderer derived for the same call.
+        let record = self.ssr_nested.get(&component_path);
+        let ssr_branches = record
+            .map(|record| record.branches.clone())
+            .unwrap_or_default();
+        let ssr_loops = record
+            .map(|record| record.loops.clone())
+            .unwrap_or_default();
+        let nested_prefix = format!("{component_path}/");
+        let ssr_nested = self
+            .ssr_nested
+            .iter()
+            .filter(|(nested_path, _)| nested_path.starts_with(&nested_prefix))
+            .map(|(nested_path, value)| (nested_path.clone(), value.clone()))
+            .collect();
         // A row-scoped component call is owned by its row (`TypedRow.nodes`),
         // never by the graph: a graph-level entry would make static refresh
         // sweeps re-evaluate its props without the row, and a record prop
@@ -1830,10 +1940,13 @@ impl TypedRuntime {
             start,
             end,
             key,
-            adoption: Some(TypedAdoptionRequest {
-                root: root.clone(),
-                path: format!("{path}/component:{index}"),
-            }),
+            // Identical grammar for adopted and fresh component DOM: the
+            // structural address depends only on the call position.
+            path: component_path,
+            adoption: Some(TypedAdoptionRequest { root: root.clone() }),
+            ssr_branches,
+            ssr_loops,
+            ssr_nested,
         });
         Ok(())
     }
@@ -1976,6 +2089,17 @@ impl PlecRuntime {
 
     pub fn reset_ssr_text_divergences(&self) {
         SSR_TEXT_DIVERGENCES.with(|count| count.set(0));
+    }
+
+    /// Nested component conditionals whose branch selection had to be
+    /// inferred from DOM shape because the snapshot carried no record.
+    /// Zero proves the snapshot's nested records were complete.
+    pub fn ssr_conditional_inferences(&self) -> u32 {
+        SSR_CONDITIONAL_INFERENCES.with(Cell::get)
+    }
+
+    pub fn reset_ssr_conditional_inferences(&self) {
+        SSR_CONDITIONAL_INFERENCES.with(|count| count.set(0));
     }
 }
 
@@ -2248,6 +2372,36 @@ impl TypedRuntime {
 }
 
 impl TypedRuntime {
+    /// The structural address prefix for this emission: the instance path,
+    /// or the owning row's canonical address when the node belongs to a
+    /// keyed loop row. Row addresses extend the loop's recorded `path_base`,
+    /// mirroring the server renderer's `{path}/loop:{node}/key:{key}`.
+    pub(crate) fn address_path(
+        &self,
+        row_context: Option<&TypedRowContext>,
+    ) -> Result<std::borrow::Cow<'_, str>, JsValue> {
+        match row_context {
+            None => Ok(std::borrow::Cow::Borrowed(self.path.as_str())),
+            Some(context) => {
+                let base = self
+                    .loops
+                    .get(&context.loop_index)
+                    .and_then(|rows| rows.path_base.as_deref())
+                    .ok_or_else(|| JsValue::from_str("address:loop-row-prefix-missing"))?;
+                Ok(std::borrow::Cow::Owned(format!(
+                    "{base}{}",
+                    Self::encode_address_segment(&context.row_key)
+                )))
+            }
+        }
+    }
+
+    /// Row keys may contain `/` and `%`; the address grammar escapes them
+    /// exactly like the server renderer's `escapeInstanceSegment`.
+    pub(crate) fn encode_address_segment(key: &str) -> String {
+        key.replace('%', "%25").replace('/', "%2F")
+    }
+
     pub(crate) fn instantiate_node(
         &mut self,
         doc: &Document,
@@ -2283,7 +2437,12 @@ impl TypedRuntime {
                 } else {
                     doc.create_element(tag)?
                 };
-                element.set_attribute("data-runtime-node", &index.to_string())?;
+                // The canonical structural address: identical grammar to the
+                // server-rendered `data-plec-node` marker for the same graph
+                // position, so CSR-created and server-created DOM share one
+                // identity protocol.
+                let address = self.address_path(row_context)?.into_owned();
+                element.set_attribute("data-plec-node", &format!("{address}/node:{index}"))?;
                 let node: Node = element.into();
                 if let Some(parent) = parent {
                     parent.append_child(&node)?;
@@ -2333,15 +2492,41 @@ impl TypedRuntime {
                 Ok(node)
             }
             TypedNode::Loop { r#loop, .. } => {
-                let marker: Node = doc.create_comment(&format!("plec:loop:{}", r#loop)).into();
-                if let Some(parent) = parent {
-                    parent.append_child(&marker)?;
+                // Rows carry their own canonical `plec:loop:{rowPath}` /
+                // `plec:loop-end:{rowPath}` boundary markers, exactly like
+                // server-rendered rows. There is deliberately no separate
+                // loop-position anchor: the server emits none, and a
+                // component-local `plec:loop:{index}` comment would be an
+                // unresolvable competitor grammar.
+                let address = self.address_path(row_context)?.into_owned();
+                let path_base = format!("{address}/loop:{index}/key:");
+                if let Some(rows) = self.loops.get_mut(&r#loop) {
+                    rows.path_base = Some(path_base);
+                } else {
+                    self.loops.insert(
+                        r#loop,
+                        TypedLoopRows {
+                            order: Vec::new(),
+                            rows: HashMap::new(),
+                            path_base: Some(path_base),
+                        },
+                    );
                 }
                 self.render_loop(
                     r#loop,
                     parent.ok_or_else(|| JsValue::from_str("loop parent missing"))?,
                 )?;
-                Ok(marker)
+                let first = self.loops.get(&r#loop).and_then(|state| {
+                    state
+                        .order
+                        .first()
+                        .and_then(|key| state.rows.get(key))
+                        .map(|row| row.root.clone())
+                });
+                match first {
+                    Some(root) => Ok(root),
+                    None => Ok(doc.create_text_node("").into()),
+                }
             }
             TypedNode::DynamicComponent {
                 prop,
@@ -2350,11 +2535,12 @@ impl TypedRuntime {
                 ..
             } => {
                 let parent = parent.ok_or_else(|| JsValue::from_str("component parent missing"))?;
+                let address = self.address_path(row_context)?.into_owned();
                 let start: Node = doc
-                    .create_comment(&format!("plec:component:{index}"))
+                    .create_comment(&format!("plec:component:{address}:{index}"))
                     .into();
                 let end: Node = doc
-                    .create_comment(&format!("plec:component-end:{index}"))
+                    .create_comment(&format!("plec:component-end:{address}:{index}"))
                     .into();
                 parent.append_child(&start)?;
                 parent.append_child(&end)?;
@@ -2415,7 +2601,11 @@ impl TypedRuntime {
                     start: start.clone(),
                     end,
                     key,
+                    path: format!("{address}/component:{index}"),
                     adoption: None,
+                    ssr_branches: HashMap::new(),
+                    ssr_loops: HashMap::new(),
+                    ssr_nested: HashMap::new(),
                 });
                 if row.is_some() {
                     local.insert(index, start.clone());
@@ -2431,11 +2621,12 @@ impl TypedRuntime {
                 ..
             } => {
                 let parent = parent.ok_or_else(|| JsValue::from_str("component parent missing"))?;
+                let address = self.address_path(row_context)?.into_owned();
                 let start: Node = doc
-                    .create_comment(&format!("plec:component:{index}"))
+                    .create_comment(&format!("plec:component:{address}:{index}"))
                     .into();
                 let end: Node = doc
-                    .create_comment(&format!("plec:component-end:{index}"))
+                    .create_comment(&format!("plec:component-end:{address}:{index}"))
                     .into();
                 parent.append_child(&start)?;
                 parent.append_child(&end)?;
@@ -2483,7 +2674,11 @@ impl TypedRuntime {
                     start: start.clone(),
                     end,
                     key,
+                    path: format!("{address}/component:{index}"),
                     adoption: None,
+                    ssr_branches: HashMap::new(),
+                    ssr_loops: HashMap::new(),
+                    ssr_nested: HashMap::new(),
                 });
                 if row.is_some() {
                     local.insert(index, start.clone());
@@ -2494,8 +2689,13 @@ impl TypedRuntime {
             }
             TypedNode::Slot { .. } => {
                 let parent = parent.ok_or_else(|| JsValue::from_str("slot parent missing"))?;
-                let start: Node = doc.create_comment(&format!("plec:slot:{index}")).into();
-                let end: Node = doc.create_comment(&format!("plec:slot-end:{index}")).into();
+                let address = self.address_path(row_context)?.into_owned();
+                let start: Node = doc
+                    .create_comment(&format!("plec:slot:{address}:{index}"))
+                    .into();
+                let end: Node = doc
+                    .create_comment(&format!("plec:slot-end:{address}:{index}"))
+                    .into();
                 parent.append_child(&start)?;
                 parent.append_child(&end)?;
                 self.slot_requests.push(TypedSlotRequest {
@@ -2512,11 +2712,12 @@ impl TypedRuntime {
             TypedNode::Conditional { test, .. } => {
                 let parent =
                     parent.ok_or_else(|| JsValue::from_str("conditional parent missing"))?;
+                let address = self.address_path(row_context)?.into_owned();
                 let start: Node = doc
-                    .create_comment(&format!("plec:conditional:{index}"))
+                    .create_comment(&format!("plec:conditional:{address}:{index}"))
                     .into();
                 let end: Node = doc
-                    .create_comment(&format!("plec:conditional-end:{index}"))
+                    .create_comment(&format!("plec:conditional-end:{address}:{index}"))
                     .into();
                 parent.append_child(&start)?;
                 parent.append_child(&end)?;
@@ -3042,7 +3243,22 @@ impl TypedRuntime {
             loop_index,
             row_key: key.clone(),
         };
+        // Delta-inserted rows are CSR-created DOM and must carry the same
+        // `plec:loop:{rowPath}` boundaries the server rendered for the loop's
+        // other rows. The prefix is recorded at loop instantiation/adoption;
+        // a missing prefix means the loop was never addressed — fail closed.
+        let path_base = self
+            .loops
+            .get(&loop_index)
+            .and_then(|rows| rows.path_base.clone())
+            .ok_or_else(|| JsValue::from_str("address:loop-row-prefix-missing"))?;
+        let row_path = format!("{path_base}{}", Self::encode_address_segment(&key));
+        let start_marker: Node = doc.create_comment(&format!("plec:loop:{row_path}")).into();
+        let end_marker: Node = doc
+            .create_comment(&format!("plec:loop-end:{row_path}"))
+            .into();
         let fragment: Node = doc.create_document_fragment().into();
+        fragment.append_child(&start_marker)?;
         let root = self.instantiate_node(
             &doc,
             template,
@@ -3053,9 +3269,7 @@ impl TypedRuntime {
             &mut nodes,
             &mut conditionals,
         )?;
-        let end = matches!(self.app.nodes[template], TypedNode::Component { .. })
-            .then(|| fragment.last_child())
-            .flatten();
+        fragment.append_child(&end_marker)?;
         if let Ok(element) = root.clone().dyn_into::<Element>() {
             element.set_attribute("data-runtime-row-key", &key)?;
         }
@@ -3065,8 +3279,8 @@ impl TypedRuntime {
         self.loops.entry(loop_index).or_default().rows.insert(
             key.clone(),
             TypedRow {
-                root,
-                end,
+                root: start_marker,
+                end: Some(end_marker),
                 values: values.clone(),
                 nodes,
                 conditionals,
