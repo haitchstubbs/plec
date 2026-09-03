@@ -10,7 +10,11 @@ pub const COMPONENT_VERSION: &str = "0.10";
 /// session identifier); only an explicit PublicExport may cross the boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum ExecutionOwner { Shared, Server, Client }
+pub enum ExecutionOwner {
+    Shared,
+    Server,
+    Client,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,9 +26,15 @@ pub struct PublicExport {
 }
 
 pub fn validate_public_export(export: &PublicExport) -> Result<(), &'static str> {
-    if export.source_owner == ExecutionOwner::Client { return Err("client values cannot be server exports"); }
-    if !export.value_is_serializable { return Err("public export must be serializable"); }
-    if !export.explicitly_public { return Err("server value requires an explicit public export boundary"); }
+    if export.source_owner == ExecutionOwner::Client {
+        return Err("client values cannot be server exports");
+    }
+    if !export.value_is_serializable {
+        return Err("public export must be serializable");
+    }
+    if !export.explicitly_public {
+        return Err("server value requires an explicit public export boundary");
+    }
     Ok(())
 }
 
@@ -154,8 +164,11 @@ fn default_pending_mode() -> String {
 // ---------------------------------------------------------------------------
 
 /// Snapshot schema version, independent of `RouteManifest.version` and the
-/// artifact version.
-pub const SSR_SNAPSHOT_VERSION: u32 = 1;
+/// artifact version. Version 2 added `SsrStructure.nested`: recorded branch
+/// and loop state for nested component instances, keyed by marker path, so
+/// adoption no longer infers nested branch selections from DOM shape and no
+/// longer fails on nested component loops.
+pub const SSR_SNAPSHOT_VERSION: u32 = 2;
 
 /// The graph instance the route chain renders into. Mirrors the runtime's
 /// `graph_instance_id(None, "main", None)` convention.
@@ -201,7 +214,9 @@ pub trait SsrStructureGraph {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SsrStructureNode {
     /// A conditional node; `has_alternate` gates `SsrSelectedBranch::Alternate`.
-    Conditional { has_alternate: bool },
+    Conditional {
+        has_alternate: bool,
+    },
     Loop,
     Other,
 }
@@ -300,6 +315,13 @@ pub struct SsrStructure {
     /// map key grammar keeps snapshot keys identical to runtime instance ids.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub graphs: std::collections::BTreeMap<String, SsrGraphStructure>,
+    /// Structural ownership for nested component instances, keyed by the
+    /// component's marker path (`{instance marker path}/component:{handle}`,
+    /// row-scoped below loops). Since the 2 snapshot these records are the
+    /// ownership cause for nested component adoption; the DOM-shape inference
+    /// fallback only serves legacy producers.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub nested: std::collections::BTreeMap<String, SsrGraphStructure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -439,9 +461,7 @@ impl PlecSsrSnapshot {
             validate_public_export(&export.declaration)
                 .map_err(|error| format!("public export {name} rejected: {error}"))?;
             if ensure_value_is_finite(&export.value).is_err() {
-                return Err(format!(
-                    "public export {name} contains a non-finite number"
-                ));
+                return Err(format!("public export {name} contains a non-finite number"));
             }
         }
         Ok(())
@@ -455,8 +475,7 @@ impl PlecSsrSnapshot {
                 return Err("ssr snapshot loader graph id is required".into());
             }
             let known = manifest.routes.iter().any(|route| {
-                route.graph_id == outcome.graph_id
-                    && route.loader_action == Some(outcome.action)
+                route.graph_id == outcome.graph_id && route.loader_action == Some(outcome.action)
             });
             if !known {
                 return Err(format!("unknown ssr snapshot loader {reference}"));
@@ -510,6 +529,15 @@ impl PlecSsrSnapshot {
             validate_branch_selections(component, instance_id, &structure.branches)?;
             validate_loop_rows(component, instance_id, &structure.loops)?;
         }
+        for (path, structure) in &self.structure.nested {
+            validate_nested_component_path(path)
+                .map_err(|error| format!("unknown nested component path {path}: {error}"))?;
+            let component = application
+                .structure_graph(&structure.graph_id)
+                .ok_or_else(|| format!("unknown ssr snapshot graph {}", structure.graph_id))?;
+            validate_branch_selections(component, path, &structure.branches)?;
+            validate_loop_rows(component, path, &structure.loops)?;
+        }
         Ok(())
     }
 }
@@ -525,12 +553,8 @@ fn ensure_value_is_finite(value: &SsrSnapshotValue) -> Result<(), &'static str> 
         SsrSnapshotValue::Number(number) if !number.is_finite() => {
             Err("snapshot numbers must be finite to survive the JSON transport")
         }
-        SsrSnapshotValue::Array(values) => {
-            values.iter().try_for_each(ensure_value_is_finite)
-        }
-        SsrSnapshotValue::Record(fields) => {
-            fields.values().try_for_each(ensure_value_is_finite)
-        }
+        SsrSnapshotValue::Array(values) => values.iter().try_for_each(ensure_value_is_finite),
+        SsrSnapshotValue::Record(fields) => fields.values().try_for_each(ensure_value_is_finite),
         _ => Ok(()),
     }
 }
@@ -623,9 +647,7 @@ pub fn validate_graph_instance_path(path: &str) -> Result<(), String> {
     split_graph_instance_path(path).map(|_| ())
 }
 
-fn split_graph_instance_path(
-    path: &str,
-) -> Result<(Option<&str>, &str, Option<&str>), String> {
+fn split_graph_instance_path(path: &str) -> Result<(Option<&str>, &str, Option<&str>), String> {
     if path.is_empty() {
         return Err("graph instance path is empty".into());
     }
@@ -658,6 +680,61 @@ fn split_graph_instance_path(
     }
     let parent = if parent == "root" { None } else { Some(parent) };
     Ok((parent, outlet, key))
+}
+
+/// Validates one nested component marker path: `root` followed by
+/// `component:{handle}`, `loop:{handle}`, and escaped `key:`/`outlet:`
+/// segments, terminating at a `component:` segment. The runtime composes
+/// these paths from the same segment grammar the server renderer emits, so a
+/// snapshot key outside the grammar cannot address any component instance.
+fn validate_nested_component_path(path: &str) -> Result<(), String> {
+    let segments: Vec<&str> = path.split('/').collect();
+    if segments.first() != Some(&"root") {
+        return Err("path must start at the root marker scope".into());
+    }
+    if segments.len() < 2 {
+        return Err("path requires a component segment".into());
+    }
+    for segment in &segments[1..] {
+        if let Some(handle) = segment
+            .strip_prefix("component:")
+            .or_else(|| segment.strip_prefix("loop:"))
+        {
+            if handle.is_empty() || !handle.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(format!("segment {segment} requires a node handle"));
+            }
+        } else if let Some(value) = segment
+            .strip_prefix("key:")
+            .or_else(|| segment.strip_prefix("outlet:"))
+        {
+            if value.is_empty() {
+                return Err(format!("segment {segment} is empty"));
+            }
+            validate_escaped_segment(value)
+                .map_err(|error| format!("segment {segment} {error}"))?;
+        } else {
+            return Err(format!("unknown segment {segment}"));
+        }
+    }
+    if !segments.last().unwrap().starts_with("component:") {
+        return Err("path must end at a component segment".into());
+    }
+    Ok(())
+}
+
+/// `graph_instance_id` escapes `%` as `%25` and `/` as `%2F`; a raw escape
+/// sequence outside that grammar would decode ambiguously at claim time.
+fn validate_escaped_segment(value: &str) -> Result<(), String> {
+    let mut chars = value.chars();
+    while let Some(character) = chars.next() {
+        if character == '%' {
+            match (chars.next(), chars.next()) {
+                (Some('2'), Some('5')) | (Some('2'), Some('F')) => {}
+                _ => return Err("must escape '%' as %25 and '/' as %2F".into()),
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1252,9 +1329,20 @@ mod tests {
 
     #[test]
     fn serializable_server_values_still_require_explicit_public_exposure() {
-        let hidden = PublicExport { name: "session".into(), source_owner: ExecutionOwner::Server, value_is_serializable: true, explicitly_public: false };
-        assert_eq!(validate_public_export(&hidden), Err("server value requires an explicit public export boundary"));
-        let public = PublicExport { explicitly_public: true, ..hidden };
+        let hidden = PublicExport {
+            name: "session".into(),
+            source_owner: ExecutionOwner::Server,
+            value_is_serializable: true,
+            explicitly_public: false,
+        };
+        assert_eq!(
+            validate_public_export(&hidden),
+            Err("server value requires an explicit public export boundary")
+        );
+        let public = PublicExport {
+            explicitly_public: true,
+            ..hidden
+        };
         assert!(validate_public_export(&public).is_ok());
     }
 
@@ -1429,6 +1517,22 @@ mod tests {
                 ]
                 .into_iter()
                 .collect(),
+                nested: [(
+                    "root/outlet:main/outlet:main/key:todos/component:1".to_string(),
+                    SsrGraphStructure {
+                        graph_id: "app#Todo".into(),
+                        branches: vec![SsrBranchSelection {
+                            node: 0,
+                            selected: SsrSelectedBranch::Alternate,
+                        }],
+                        loops: vec![SsrLoopRows {
+                            node: 2,
+                            keys: vec!["t3".into()],
+                        }],
+                    },
+                )]
+                .into_iter()
+                .collect(),
             },
         }
     }
@@ -1454,9 +1558,15 @@ mod tests {
         assert_eq!(json["routes"][1]["routeId"], "app#Todo");
         assert_eq!(json["routes"][1]["params"]["todoId"], "42");
         assert_eq!(json["public"]["location"], "/todos/42");
-        assert_eq!(json["public"]["exports"]["todoCount"]["declaration"]["explicitlyPublic"], true);
+        assert_eq!(
+            json["public"]["exports"]["todoCount"]["declaration"]["explicitlyPublic"],
+            true
+        );
         assert_eq!(json["loaders"][0]["state"]["kind"], "resolved");
-        assert_eq!(json["structure"]["graphs"]["root/outlet:main"]["graphId"], "app#Index");
+        assert_eq!(
+            json["structure"]["graphs"]["root/outlet:main"]["graphId"],
+            "app#Index"
+        );
         assert_eq!(
             serde_json::from_value::<PlecSsrSnapshot>(json).unwrap(),
             snapshot
@@ -1466,7 +1576,13 @@ mod tests {
     #[test]
     fn ssr_snapshot_rejects_a_wrong_version() {
         assert_eq!(
-            snapshot_error(|snapshot| snapshot.version = 2),
+            snapshot_error(|snapshot| snapshot.version = SSR_SNAPSHOT_VERSION + 1),
+            "unsupported ssr snapshot version"
+        );
+        // The v1 snapshot predates nested component records; it must keep
+        // failing closed rather than adopting with inferred state.
+        assert_eq!(
+            snapshot_error(|snapshot| snapshot.version = 1),
             "unsupported ssr snapshot version"
         );
     }
@@ -1562,7 +1678,138 @@ mod tests {
     fn graph_instance_paths_follow_the_runtime_grammar() {
         assert!(validate_graph_instance_path(ROOT_GRAPH_INSTANCE_ID).is_ok());
         assert!(validate_graph_instance_path("root/outlet:main/outlet:main/key:todos").is_ok());
-        assert!(validate_graph_instance_path("root%2Foutlet:main/outlet:rows/key:todo%2F1").is_ok());
+        assert!(
+            validate_graph_instance_path("root%2Foutlet:main/outlet:rows/key:todo%2F1").is_ok()
+        );
+    }
+
+    #[test]
+    fn nested_component_paths_follow_the_marker_grammar() {
+        for path in [
+            "root/component:1",
+            "root/component:1/component:1",
+            "root/outlet:main/component:0",
+            "root/component:1/loop:2/key:todo%2F1/component:0",
+            "root/component:1/loop:2/key:100%25/component:0",
+        ] {
+            assert!(
+                validate_nested_component_path(path).is_ok(),
+                "expected {path} to be a valid nested component path"
+            );
+        }
+        for path in [
+            "",
+            "root",
+            "base/component:0",
+            "root/row/component:0",
+            "root/component:",
+            "root/component:x",
+            "root/loop:1",
+            "root/component:1/key:",
+            "root/component:1/key:a%2Fb/x:0/component:0",
+            "root/component:1/key:a/b/component:0",
+            "root/component:1/key:50%/component:0",
+        ] {
+            assert!(
+                validate_nested_component_path(path).is_err(),
+                "expected {path} to be malformed"
+            );
+        }
+    }
+
+    #[test]
+    fn ssr_snapshot_validates_nested_component_records() {
+        let snapshot = valid_snapshot();
+        let manifest = test_manifest();
+        let application = test_application(true);
+        assert!(snapshot
+            .validate(&SsrSnapshotReferences {
+                manifest: &manifest,
+                application: &application,
+            })
+            .is_ok());
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_malformed_nested_component_paths() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot.structure.nested.insert(
+                    "root/wrong:0".into(),
+                    SsrGraphStructure {
+                        graph_id: "app#Todo".into(),
+                        branches: vec![],
+                        loops: vec![],
+                    },
+                );
+            }),
+            "unknown nested component path root/wrong:0: unknown segment wrong:0"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_unknown_nested_component_graphs() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                let record = snapshot
+                    .structure
+                    .nested
+                    .get_mut("root/outlet:main/outlet:main/key:todos/component:1")
+                    .unwrap();
+                record.graph_id = "app#Ghost".into();
+            }),
+            "unknown ssr snapshot graph app#Ghost"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_unknown_nested_branch_handles() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                let record = snapshot
+                    .structure
+                    .nested
+                    .get_mut("root/outlet:main/outlet:main/key:todos/component:1")
+                    .unwrap();
+                record.branches = vec![SsrBranchSelection {
+                    node: 9,
+                    selected: SsrSelectedBranch::Consequent,
+                }];
+            }),
+            "branch selection for root/outlet:main/outlet:main/key:todos/component:1 references unknown node handle 9"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_duplicate_nested_loop_keys() {
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                let record = snapshot
+                    .structure
+                    .nested
+                    .get_mut("root/outlet:main/outlet:main/key:todos/component:1")
+                    .unwrap();
+                record.loops = vec![SsrLoopRows {
+                    node: 2,
+                    keys: vec!["t3".into(), "t3".into()],
+                }];
+            }),
+            "loop at root/outlet:main/outlet:main/key:todos/component:1 node 2 has duplicate key t3"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_round_trips_nested_records() {
+        let json = serde_json::to_value(valid_snapshot()).unwrap();
+        assert_eq!(
+            json["structure"]["nested"]["root/outlet:main/outlet:main/key:todos/component:1"]
+                ["graphId"],
+            "app#Todo"
+        );
+        assert_eq!(
+            serde_json::from_value::<PlecSsrSnapshot>(json).unwrap(),
+            valid_snapshot()
+        );
     }
 
     #[test]
@@ -1789,14 +2036,25 @@ mod tests {
     fn ssr_snapshot_rejects_exports_that_fail_the_public_boundary() {
         assert_eq!(
             snapshot_error(|snapshot| {
-                snapshot.public.exports.get_mut("todoCount").unwrap().declaration.source_owner =
-                    ExecutionOwner::Client;
+                snapshot
+                    .public
+                    .exports
+                    .get_mut("todoCount")
+                    .unwrap()
+                    .declaration
+                    .source_owner = ExecutionOwner::Client;
             }),
             "public export todoCount rejected: client values cannot be server exports"
         );
         assert_eq!(
             snapshot_error(|snapshot| {
-                snapshot.public.exports.get_mut("todoCount").unwrap().declaration.value_is_serializable = false;
+                snapshot
+                    .public
+                    .exports
+                    .get_mut("todoCount")
+                    .unwrap()
+                    .declaration
+                    .value_is_serializable = false;
             }),
             "public export todoCount rejected: public export must be serializable"
         );
@@ -1810,7 +2068,13 @@ mod tests {
         );
         assert_eq!(
             snapshot_error(|snapshot| {
-                snapshot.public.exports.get_mut("todoCount").unwrap().declaration.name = "other".into();
+                snapshot
+                    .public
+                    .exports
+                    .get_mut("todoCount")
+                    .unwrap()
+                    .declaration
+                    .name = "other".into();
             }),
             "public export declaration name does not match todoCount"
         );
@@ -1838,7 +2102,9 @@ mod tests {
     #[test]
     fn ssr_snapshot_rejects_unknown_fields() {
         let mut json = serde_json::to_value(valid_snapshot()).unwrap();
-        json.as_object_mut().unwrap().insert("extra".into(), 1.into());
+        json.as_object_mut()
+            .unwrap()
+            .insert("extra".into(), 1.into());
         assert!(serde_json::from_value::<PlecSsrSnapshot>(json).is_err());
     }
 

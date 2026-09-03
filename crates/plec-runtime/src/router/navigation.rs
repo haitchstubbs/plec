@@ -366,6 +366,7 @@ impl PlecRuntime {
                 None,
                 None,
                 root,
+                "root".into(),
                 true,
             )?;
         }
@@ -481,6 +482,15 @@ impl PlecRuntime {
         location: &TypedLocation,
     ) -> Result<String, JsValue> {
         let id = graph_instance_id(Some(parent_id), &route.outlet_id, None);
+        // The child's structural address extends the parent instance's own
+        // address, mirroring the server renderer's outlet descent.
+        let parent_path = self
+            .typed
+            .borrow()
+            .get(parent_id)
+            .map(|instance| instance.runtime.path.clone())
+            .ok_or_else(|| JsValue::from_str("typed parent route is not mounted"))?;
+        let path = format!("{parent_path}/outlet:{}", route.outlet_id);
         self.mount_typed_graph(
             id.clone(),
             Some(parent_id.into()),
@@ -489,6 +499,7 @@ impl PlecRuntime {
             Some(route.id.clone()),
             Some(match_key.into()),
             self.typed_outlet_element(parent_id, &route.outlet_id)?,
+            path,
             false,
         )?;
         self.typed.borrow_mut().get_mut(&id).unwrap().route_state = Some(TypedRouteState {
@@ -516,8 +527,13 @@ impl PlecRuntime {
         route_id: Option<String>,
         match_key: Option<String>,
         root: Element,
+        path: String,
         replace: bool,
     ) -> Result<(), JsValue> {
+        self.ensure_typed_instance_absent(
+            &id,
+            &format!("route mount (graph {graph_id}, outlet {outlet_id})"),
+        )?;
         let graph = self
             .typed_component_registry
             .borrow()
@@ -547,6 +563,10 @@ impl PlecRuntime {
         }
         runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
         runtime.graph_generation = self.next_typed_generation();
+        // Fresh client mounts use the exact structural address the server
+        // renderer would have given this route position, so CSR-created DOM
+        // carries canonical `data-plec-node` / boundary-marker addresses.
+        runtime.path = path;
         if replace {
             root.set_inner_html("");
         }
@@ -581,6 +601,10 @@ impl PlecRuntime {
         root: Element,
         path: String,
     ) -> Result<(), JsValue> {
+        self.ensure_typed_instance_absent(
+            &id,
+            &format!("route adoption (graph {graph_id}, outlet {outlet_id})"),
+        )?;
         let graph = self
             .typed_component_registry
             .borrow()
@@ -595,6 +619,9 @@ impl PlecRuntime {
         let mut runtime = TypedRuntime::new(app)?;
         runtime.set_component_definitions(graph.components);
         runtime.ssr_imported = *self.typed_ssr_imported.borrow();
+        // Adopted instances keep emitting addresses under the claimed path:
+        // branch flips and delta rows must match the server grammar.
+        runtime.path = path.clone();
         runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
         runtime.graph_generation = self.next_typed_generation();
         let branches = self
@@ -609,12 +636,24 @@ impl PlecRuntime {
             .get(&id)
             .cloned()
             .unwrap_or_default();
+        // Nested component records below this instance's marker path: each
+        // adopted component extracts its own entry when its request is
+        // queued, so the records follow the instance chain they describe.
+        let nested_prefix = format!("{path}/");
+        let nested = self
+            .typed_ssr_nested
+            .borrow()
+            .iter()
+            .filter(|(nested_path, _)| nested_path.starts_with(&nested_prefix))
+            .map(|(nested_path, value)| (nested_path.clone(), value.clone()))
+            .collect();
         runtime.adopt(
             root.clone(),
             TypedAdoptionScope::Element(root),
             &path,
             &branches,
             &loops,
+            &nested,
         )?;
         self.typed.borrow_mut().insert(
             id,

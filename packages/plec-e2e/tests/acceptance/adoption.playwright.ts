@@ -36,10 +36,15 @@ async function adoptedPage(
     `mismatch codes: ${JSON.stringify(adoption.mismatchCodes)}`,
   ).toEqual([]);
   // Server and client agree everywhere on an untampered page: the
-  // divergence diagnostic must stay silent.
+  // divergence diagnostic must stay silent, and the v2 snapshot's nested
+  // records must be complete (no DOM-shape branch inference anywhere).
   expect(
     adoption.textDivergences,
     `text divergences: ${JSON.stringify(adoption)}`,
+  ).toBe(0);
+  expect(
+    adoption.conditionalInferences,
+    `conditional inferences: ${JSON.stringify(adoption)}`,
   ).toBe(0);
   return { context, page, adoption };
 }
@@ -312,6 +317,35 @@ test('todo loop rows survive adoption with keys and markers', async ({
           row.marker.includes('/key:'),
       ),
       `adopted rows must keep server loop ownership markers: ${JSON.stringify(stamped)}`,
+    ).toBe(true);
+
+    // Nested component execution state: each row is a TodoRow component
+    // instance whose own conditionals carry recorded branch selections
+    // under the row's marker path — adoption consumed records, never
+    // inferred branch state from DOM shape (the helper asserts the counter,
+    // here we assert the records themselves exist and validate shape).
+    const nestedRecords = await page.evaluate(() => {
+      const bootstrap = JSON.parse(
+        (document.querySelector('#plec-bootstrap') as HTMLScriptElement)
+          .textContent!,
+      );
+      const nested: Record<
+        string,
+        { branches?: unknown[]; loops?: unknown[] }
+      > = bootstrap.snapshot.structure.nested ?? {};
+      return Object.entries(nested).filter(
+        ([, record]) =>
+          (record.branches?.length ?? 0) + (record.loops?.length ?? 0) >
+          0,
+      );
+    });
+    expect(
+      nestedRecords.length,
+      `nested component records must be present: ${JSON.stringify(nestedRecords)}`,
+    ).toBeGreaterThan(0);
+    expect(
+      nestedRecords.every(([path]) => path.includes('/component:')),
+      `nested record keys must be marker paths: ${JSON.stringify(nestedRecords.map(([path]) => path))}`,
     ).toBe(true);
   } finally {
     await context.close();

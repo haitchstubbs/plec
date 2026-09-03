@@ -237,6 +237,7 @@ interface WasmRuntimeInstance {
   abandon_adoption(): void;
   navigate(href: string, replace: boolean): void;
   ssr_text_divergences(): number;
+  ssr_conditional_inferences(): number;
 }
 interface WasmRuntimeModule {
   default(input?: unknown): Promise<unknown>;
@@ -289,6 +290,11 @@ export interface PlecAdoptionDiagnostic {
    * Divergence is allowed and reported only; present for snapshot
    * adoptions. */
   textDivergences?: number;
+  /** Nested component conditionals whose branch had to be inferred from DOM
+   * shape because the snapshot carried no record. Zero proves the v2
+   * snapshot's nested records were complete; present for snapshot
+   * adoptions. */
+  conditionalInferences?: number;
 }
 export interface PlecRouterController {
   dispose(): void;
@@ -477,12 +483,30 @@ export async function mountPlecApplication(
       disposed,
     });
     const outlet = (id = 'main') => {
-      const descriptor = ((ir as any).layout?.routeOutlets ?? []).find(
+      // Structural graph lookup through the canonical address protocol
+      // (docs/dom-address-protocol.md): the root graph instance always
+      // renders at structural path `root`, so a declared outlet resolves to
+      // the deterministic address `root/node:{node}` — never a first-match
+      // scan. Queries stay scoped to the owning root.
+      const application = ir as any;
+      const component =
+        application?.components?.[application.rootComponent ?? 0] ??
+        (application?.rootNode !== undefined ? application : undefined);
+      const descriptor = (component?.routeOutlets ?? []).find(
         (entry: any) => entry.id === id,
       );
-      return descriptor
+      if (descriptor && typeof descriptor.node === 'number')
+        return options.root.querySelector(
+          `[data-plec-node="root/node:${descriptor.node}"]`,
+        );
+      // Legacy v1 layout descriptors keep the legacy string-id scheme
+      // (root-scoped, graph-unique ids); isolated by wasm-runtime-ixk.7.
+      const legacy = ((ir as any).layout?.routeOutlets ?? []).find(
+        (entry: any) => entry.id === id,
+      );
+      return legacy
         ? options.root.querySelector(
-            `[data-runtime-node="${descriptor.elementId}"]`,
+            `[data-runtime-node="${legacy.elementId}"]`,
           )
         : null;
     };
@@ -647,7 +671,11 @@ export async function startPlecRouter(
           mismatchCodes: [],
           snapshotImported,
           ...(snapshotImported
-            ? { textDivergences: runtime.ssr_text_divergences() }
+            ? {
+                textDivergences: runtime.ssr_text_divergences(),
+                conditionalInferences:
+                  runtime.ssr_conditional_inferences(),
+              }
             : {}),
         });
       } catch (error) {
@@ -858,6 +886,10 @@ function mountIslands(
   ir: any,
   registry: NonNullable<CompiledMountOptions['islands']>,
 ) {
+  // LEGACY bridge (wasm-runtime-ixk.7): island placeholders belong to the
+  // legacy string-id renderer (`data-runtime-node` + `ir.islands`, which no
+  // current compiler emits). Not part of the structural address protocol;
+  // queries are deliberately scoped to the owning root, never document-wide.
   const disposers: Array<() => void> = [];
 
   // SVG islands (cached)

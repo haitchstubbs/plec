@@ -1301,11 +1301,11 @@ fn rust_static_conditional_fixture_replaces_branch_and_disposes_listener() {
     load_and_mount(&runtime, rust_static_conditional_artifact(), &root);
 
     let false_branch = root
-        .query_selector("[data-runtime-node='4']")
+        .query_selector("[data-plec-node='root/node:4']")
         .unwrap()
         .unwrap();
     assert!(root
-        .query_selector("[data-runtime-node='2']")
+        .query_selector("[data-plec-node='root/node:2']")
         .unwrap()
         .is_none());
     false_branch
@@ -1316,7 +1316,7 @@ fn rust_static_conditional_fixture_replaces_branch_and_disposes_listener() {
         .unwrap();
 
     let true_branch = root
-        .query_selector("[data-runtime-node='2']")
+        .query_selector("[data-plec-node='root/node:2']")
         .unwrap()
         .unwrap();
     assert!(false_branch.parent_node().is_none());
@@ -1327,11 +1327,11 @@ fn rust_static_conditional_fixture_replaces_branch_and_disposes_listener() {
         .dispatch_event(&Event::new("click").unwrap())
         .unwrap();
     assert!(root
-        .query_selector("[data-runtime-node='2']")
+        .query_selector("[data-plec-node='root/node:2']")
         .unwrap()
         .is_some());
     assert!(root
-        .query_selector("[data-runtime-node='4']")
+        .query_selector("[data-plec-node='root/node:4']")
         .unwrap()
         .is_none());
 
@@ -1342,7 +1342,7 @@ fn rust_static_conditional_fixture_replaces_branch_and_disposes_listener() {
         .dispatch_event(&Event::new("click").unwrap())
         .unwrap();
     let next_false_branch = root
-        .query_selector("[data-runtime-node='4']")
+        .query_selector("[data-plec-node='root/node:4']")
         .unwrap()
         .unwrap();
     assert!(true_branch.parent_node().is_none());
@@ -1484,7 +1484,7 @@ fn static_conditional_replaces_branch_listeners_and_supports_no_alternate() {
     let root = mount_root();
     load_and_mount(&runtime, static_conditional_artifact(true), &root);
     let false_branch = root
-        .query_selector("[data-runtime-node='3']")
+        .query_selector("[data-plec-node='root/node:3']")
         .unwrap()
         .unwrap();
     false_branch
@@ -1493,11 +1493,11 @@ fn static_conditional_replaces_branch_listeners_and_supports_no_alternate() {
         .dispatch_event(&Event::new("click").unwrap())
         .unwrap();
     assert!(root
-        .query_selector("[data-runtime-node='3']")
+        .query_selector("[data-plec-node='root/node:3']")
         .unwrap()
         .is_none());
     let true_branch = root
-        .query_selector("[data-runtime-node='2']")
+        .query_selector("[data-plec-node='root/node:2']")
         .unwrap()
         .unwrap();
     true_branch
@@ -1506,7 +1506,7 @@ fn static_conditional_replaces_branch_listeners_and_supports_no_alternate() {
         .dispatch_event(&Event::new("click").unwrap())
         .unwrap();
     assert!(root
-        .query_selector("[data-runtime-node='2']")
+        .query_selector("[data-plec-node='root/node:2']")
         .unwrap()
         .is_none());
 
@@ -2093,6 +2093,233 @@ fn start_adopt_fixture(runtime: &PlecRuntime, root: &Element, html: &str) -> Res
     runtime.start_adopt(root.clone(), manifest)
 }
 
+/// CSR-created DOM must emit exactly the server-rendered address grammar for
+/// every element and structural boundary (wasm-runtime-ixk.2): path-qualified
+/// `data-plec-node` attributes and `plec:{kind}:{path}:{index}` boundary
+/// comments, with no `data-runtime-node` competitors anywhere.
+#[wasm_bindgen_test]
+fn csr_mount_emits_canonical_structural_addresses() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, rust_nested_component_artifact(), &root);
+
+    assert!(
+        root.query_selector("[data-runtime-node]")
+            .unwrap()
+            .is_none(),
+        "data-runtime-node must be retired from the typed runtime surface"
+    );
+    // The nested-component graph visits component:1 -> component:1 again, so
+    // the canonical addresses chain exactly like the server's renderNode.
+    for address in [
+        "root/node:0",
+        "root/component:1/node:0",
+        "root/component:1/component:1/node:0",
+        "root/component:1/component:1/node:1",
+        "root/component:1/component:1/node:3",
+        "root/node:2",
+    ] {
+        assert!(
+            root.query_selector(&format!("[data-plec-node='{address}']"))
+                .unwrap()
+                .is_some(),
+            "missing canonical element address {address}"
+        );
+    }
+    assert_eq!(
+        root.query_selector_all("main > button[data-plec-node='root/node:2']")
+            .unwrap()
+            .length(),
+        1
+    );
+    let comments = collect_comment_markers(&root);
+    for marker in [
+        "plec:component:root:1",
+        "plec:component-end:root:1",
+        "plec:component:root/component:1:1",
+        "plec:component-end:root/component:1:1",
+    ] {
+        assert!(
+            comments.iter().any(|candidate| candidate == marker),
+            "missing canonical boundary marker {marker} in {comments:?}"
+        );
+    }
+    assert!(
+        comments
+            .iter()
+            .all(|candidate| !candidate.starts_with("plec:loop:") || candidate.contains("/key:")),
+        "loop comments must be row markers in canonical grammar: {comments:?}"
+    );
+}
+
+fn collect_comment_markers(root: &Element) -> Vec<String> {
+    fn walk(node: &web_sys::Node, out: &mut Vec<String>) {
+        let children = node.child_nodes();
+        for index in 0..children.length() {
+            let Some(child) = children.get(index) else {
+                continue;
+            };
+            if child.node_type() == 8 {
+                // COMMENT_NODE
+                if let Some(value) = child.node_value() {
+                    if value.starts_with("plec:") {
+                        out.push(value);
+                    }
+                }
+            }
+            walk(&child, out);
+        }
+    }
+    let mut markers = Vec::new();
+    walk(&root.clone().into(), &mut markers);
+    markers
+}
+
+/// Keyed loop rows are structural regions: each row is wrapped in
+/// `plec:loop:{rowPath}` / `-end` markers and every row element carries the
+/// row-scoped `data-plec-node` address. Delta-inserted rows must emit the
+/// identical grammar.
+#[wasm_bindgen_test]
+fn csr_loop_rows_carry_canonical_boundaries_and_delta_rows_match() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, keyed_row_artifact(), &root);
+    initialize_rows(
+        &runtime,
+        serde_json::json!([
+            {"id":"first", "title":"first title"},
+            {"id":"second", "title":"second title"}
+        ]),
+    );
+
+    let comments = collect_comment_markers(&root);
+    for marker in [
+        "plec:loop:root/loop:2/key:first",
+        "plec:loop-end:root/loop:2/key:first",
+        "plec:loop:root/loop:2/key:second",
+        "plec:loop-end:root/loop:2/key:second",
+    ] {
+        assert!(
+            comments.iter().any(|candidate| candidate == marker),
+            "missing canonical row marker {marker} in {comments:?}"
+        );
+    }
+    let first_button = root
+        .query_selector("[data-runtime-row-key='first'] button")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first_button.get_attribute("data-plec-node").as_deref(),
+        Some("root/loop:2/key:first/node:5")
+    );
+    first_button
+        .clone()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    // The button's action copies the row title into graph state, rendered by
+    // the text node outside the loop: the row must stay live and wired after
+    // canonical addressing.
+    assert_eq!(static_output(&root), "first title");
+
+    apply_delta(
+        &runtime,
+        serde_json::json!({
+            "type":"insert","input_id":"items","row_key":"third",
+            "row":{"id":"third","title":"third title"},
+            "before_row_key":null
+        }),
+    );
+    let comments = collect_comment_markers(&root);
+    for marker in [
+        "plec:loop:root/loop:2/key:third",
+        "plec:loop-end:root/loop:2/key:third",
+    ] {
+        assert!(
+            comments.iter().any(|candidate| candidate == marker),
+            "delta-inserted row must carry canonical markers: {comments:?}"
+        );
+    }
+    assert!(root
+        .query_selector("[data-runtime-node]")
+        .unwrap()
+        .is_none());
+}
+
+/// Adoption lifecycle invariant: once a typed runtime has materialized CSR
+/// DOM, adoption must fail closed with a dedicated diagnostic instead of
+/// blending server-created and client-created nodes — even when the supplied
+/// SSR markup is otherwise well-formed (wasm-runtime-ixk.2).
+#[wasm_bindgen_test]
+fn adoption_fails_closed_after_csr_materialization() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    // Materialize CSR DOM first (mount + user interaction).
+    load_and_mount(&runtime, rust_nested_component_artifact(), &root);
+    root.query_selector("div button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+
+    // Now inject well-formed server markup into the same live scope — the
+    // exact mixed-DOM hazard of streamed/partial adoption. The injected
+    // fragment even repeats the CSR root address `root/node:0`, so a
+    // document-global first-match claim would be ambiguous.
+    let mixed = root
+        .owner_document()
+        .unwrap()
+        .create_element("div")
+        .unwrap();
+    mixed.set_inner_html(&nested_adoption_html(false));
+    while let Some(child) = mixed.first_child() {
+        root.append_child(&child).unwrap();
+    }
+    assert_eq!(
+        root.query_selector_all("main[data-plec-node='root/node:0']")
+            .unwrap()
+            .length(),
+        2,
+        "test setup: both the CSR root and the injected SSR root must coexist"
+    );
+
+    // Adoption must refuse the mix with the dedicated lifecycle diagnostic,
+    // and claim nothing.
+    runtime
+        .register_graph(
+            "rust-nested-component.tsx#App".into(),
+            serde_wasm_bindgen::to_value(&rust_nested_component_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        r#"{"version":3,"rootGraphId":"rust-nested-component.tsx#App","routes":[]}"#,
+    )
+    .unwrap();
+    let error = runtime.start_adopt(root.clone(), manifest).unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "invariant:adoption-once"
+    );
+    assert_eq!(
+        root.query_selector("div button")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "1",
+        "live CSR state must be untouched by the failed adoption"
+    );
+    assert!(
+        root.query_selector("[data-runtime-node]")
+            .unwrap()
+            .is_none(),
+        "nothing may introduce retired markers"
+    );
+}
+
 #[wasm_bindgen_test]
 fn adopted_nested_components_claim_scoped_indexes_and_stay_live() {
     let runtime = PlecRuntime::new();
@@ -2136,12 +2363,62 @@ fn adopted_nested_components_claim_scoped_indexes_and_stay_live() {
     // The visit counter is process-global, so reset it to measure only this
     // fixture's walks instead of inheriting earlier tests' adoptions.
     runtime.reset_adoption_index_walks();
-    start_adopt_fixture(&runtime, &mount_root(), &nested_adoption_html(false)).unwrap();
+    start_adopt_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &nested_adoption_html(false),
+    )
+    .unwrap();
     let walks = runtime.adoption_index_walks();
     assert!(
         walks < 45,
         "nested adoption must not re-walk the adoption root (walked {walks})"
     );
+}
+
+#[wasm_bindgen_test]
+fn adopted_replay_rejects_duplicate_root_instance_and_keeps_original_live() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    start_adopt_fixture(&runtime, &root, &nested_adoption_html(false)).unwrap();
+
+    // The adopted instance is live: its listener owns the click action.
+    let button = || root.query_selector("div button").unwrap().unwrap();
+    button()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(button().text_content().unwrap(), "1");
+
+    // A second adoption on the same runtime must not silently overwrite the
+    // live root instance. The adoption lifecycle invariant fires first with
+    // a dedicated code (one-shot adoption), before any claim is made.
+    let error = start_adopt_fixture(&runtime, &mount_root(), &nested_adoption_html(false))
+        .expect_err("duplicate adoption must be rejected");
+    let message = error.as_string().unwrap_or_default();
+    assert!(
+        message == "invariant:adoption-once",
+        "unexpected adoption error: {message}"
+    );
+
+    // The original instance survives the rejected duplicate: same DOM, same
+    // listener, state carried over (the counter continues at 2).
+    assert_eq!(
+        root.query_selector("section")
+            .unwrap()
+            .unwrap()
+            .get_attribute("data-plec-node")
+            .as_deref(),
+        Some("root/component:1/node:0"),
+        "adopted DOM must be untouched by the rejected replay"
+    );
+    button()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert_eq!(button().text_content().unwrap(), "2");
 }
 
 #[wasm_bindgen_test]
@@ -2296,7 +2573,7 @@ fn snapshot_chain_fixture(
     params: serde_json::Value,
 ) -> serde_json::Value {
     serde_json::json!({
-        "version": 1,
+        "version": 2,
         "revision": revision,
         "routes": [{"routeId": "ssr-snapshot.tsx#Home", "params": params, "phase": "active"}],
         "public": {"location": location, "exports": {
@@ -2731,12 +3008,12 @@ fn ssr_conditional_adopts_recorded_branch_and_flips_through_reconcile() {
     // The recomputed initial test value (false) agrees with the recorded
     // side, so the first toggle flips the region through the normal
     // reconcile path: the span is replaced by a freshly instantiated
-    // consequent p (client nodes carry data-runtime-node markers).
+    // consequent p (client nodes carry canonical data-plec-node markers).
     conditional_toggle(&root)
         .dispatch_event(&Event::new("click").unwrap())
         .unwrap();
     let flip_one = root
-        .query_selector("[data-runtime-node='2']")
+        .query_selector("[data-plec-node='root/outlet:main/node:2']")
         .unwrap()
         .unwrap();
     assert!(adopted_span.parent_node().is_none());
@@ -2750,7 +3027,7 @@ fn ssr_conditional_adopts_recorded_branch_and_flips_through_reconcile() {
         .unwrap();
     assert!(flip_one.parent_node().is_none());
     assert!(root
-        .query_selector("[data-runtime-node='3']")
+        .query_selector("[data-plec-node='root/outlet:main/node:3']")
         .unwrap()
         .is_some());
 }
@@ -2784,7 +3061,7 @@ fn ssr_conditional_divergence_keeps_recorded_side_until_first_reconcile() {
         .unwrap();
     assert!(adopted_p.parent_node().is_none());
     assert!(root
-        .query_selector("[data-runtime-node='3']")
+        .query_selector("[data-plec-node='root/outlet:main/node:3']")
         .unwrap()
         .is_some());
 }
@@ -2892,7 +3169,7 @@ fn ssr_conditional_none_branch_adopts_empty_region_and_flips() {
         .dispatch_event(&Event::new("click").unwrap())
         .unwrap();
     assert!(root
-        .query_selector("[data-runtime-node='2']")
+        .query_selector("[data-plec-node='root/outlet:main/node:2']")
         .unwrap()
         .is_some());
 }
@@ -3203,6 +3480,481 @@ fn ssr_keyed_loop_duplicate_dom_row_markers_fail_closed() {
     assert_eq!(
         error.as_string().unwrap_or_default(),
         "duplicate:ssr-marker:plec:loop:root/outlet:main/loop:2/key:one"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Nested component SSR execution state
+//
+// The route page calls one nested component that renders a conditional plus a
+// keyed loop. Snapshot v2 records their execution state under the component's
+// marker path (`structure.nested`), so the adopter claims the server-selected
+// branch and rows from records instead of inferring them from DOM shape, and
+// nested loops no longer force a CSR remount.
+// ---------------------------------------------------------------------------
+
+/// The route page graph: one section element that calls the nested panel
+/// (component index 1 of the same application). The `with_loop` variant adds
+/// the keyed loop; the loop-free variant models a legacy snapshot's world,
+/// where adoption of a nested loop fails closed.
+fn nested_state_route_artifact(with_loop: bool) -> serde_json::Value {
+    let mut panel = serde_json::json!({
+        "id": "nested-ssr.tsx#Panel",
+        "rootNode": 0,
+        "strings": ["div", "p", "span", "button", "click"],
+        "constants": [""],
+        "nodes": [
+            {"op": "element", "tag": 0, "parent": null, "children": [1, 4]},
+            {"op": "conditional", "test": 3, "parent": 0, "consequent": 2, "alternate": 3},
+            {"op": "element", "tag": 1, "parent": 0, "children": []},
+            {"op": "element", "tag": 2, "parent": 0, "children": []},
+            {"op": "element", "tag": 3, "parent": 0, "children": []}
+        ],
+        "texts": [],
+        "bindings": [],
+        "propPrograms": [],
+        "events": [{"target": 4, "type": 4, "action": 0, "fields": []}],
+        "inputs": [],
+        "hostSlots": [],
+        "stateSlots": [{"initialExpression": 0, "frameSlot": 0}],
+        "parameters": [],
+        "expressions": [
+            {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+            {"instructions": [{"op": "loadState", "state": 0}, {"op": "return"}]},
+            {"instructions": [{"op": "loadState", "state": 0}, {"op": "unary", "kind": "not"}, {"op": "return"}]}
+        ],
+        "actions": [{"frameSlots": 0, "instructions": [
+            {"op": "evaluate", "expression": 2},
+            {"op": "storeState", "state": 0},
+            {"op": "return"}
+        ]}],
+        "loops": [],
+        "dependencyEdges": [
+            {"source": {"kind": "state", "handle": 0}, "target": {"kind": "conditional", "handle": 1}}
+        ],
+        "routeOutlets": []
+    });
+    if with_loop {
+        panel["strings"] =
+            serde_json::json!(["div", "p", "span", "button", "click", "ul", "li", "title", "id"]);
+        panel["nodes"] = serde_json::json!([
+            {"op": "element", "tag": 0, "parent": null, "children": [1, 4, 5]},
+            {"op": "conditional", "test": 3, "parent": 0, "consequent": 2, "alternate": 3},
+            {"op": "element", "tag": 1, "parent": 0, "children": []},
+            {"op": "element", "tag": 2, "parent": 0, "children": []},
+            {"op": "element", "tag": 3, "parent": 0, "children": []},
+            {"op": "element", "tag": 5, "parent": 0, "children": [6]},
+            {"op": "loop", "loop": 0, "parent": 5},
+            {"op": "element", "tag": 6, "parent": null, "children": [8]},
+            {"op": "text", "text": 0, "parent": 7}
+        ]);
+        panel["texts"] = serde_json::json!([{"binding": 0}]);
+        panel["bindings"] = serde_json::json!([{"target": 8, "sink": "text", "expression": 1}]);
+        panel["hostSlots"] = serde_json::json!([{"kind": "loaderData"}]);
+        // State 0 drives the conditional and its toggle; the loop reads the
+        // imported `loaderData` directly so the truthy row array never
+        // influences the branch test.
+        panel["stateSlots"] = serde_json::json!([
+            {"initialExpression": 2, "frameSlot": 0}
+        ]);
+        panel["expressions"] = serde_json::json!([
+            {"instructions": [{"op": "loadHost", "host": 0}, {"op": "return"}]},
+            {"instructions": [{"op": "loadRowField", "field": 7}, {"op": "return"}]},
+            {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+            {"instructions": [{"op": "loadState", "state": 0}, {"op": "return"}]},
+            {"instructions": [{"op": "loadRowField", "field": 8}, {"op": "return"}]},
+            {"instructions": [{"op": "loadState", "state": 0}, {"op": "unary", "kind": "not"}, {"op": "return"}]}
+        ]);
+        panel["actions"] = serde_json::json!([{"frameSlots": 0, "instructions": [
+            {"op": "evaluate", "expression": 5},
+            {"op": "storeState", "state": 0},
+            {"op": "return"}
+        ]}]);
+        panel["loops"] = serde_json::json!([
+            {"sourceExpression": 0, "keyExpression": 4, "itemSlot": 0, "rowTemplate": 7, "input": null}
+        ]);
+        panel["dependencyEdges"] = serde_json::json!([
+            {"source": {"kind": "state", "handle": 0}, "target": {"kind": "conditional", "handle": 1}},
+            {"source": {"kind": "rowField", "handle": 7, "loop": 0}, "target": {"kind": "binding", "handle": 0}}
+        ]);
+    }
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [
+            {
+                "id": "nested-ssr.tsx#Home",
+                "rootNode": 0,
+                "strings": ["section"],
+                "constants": [],
+                "nodes": [
+                    {"op": "element", "tag": 0, "parent": null, "children": [1]},
+                    {"op": "component", "component": 1, "parent": 0}
+                ],
+                "texts": [],
+                "bindings": [],
+                "propPrograms": [],
+                "events": [],
+                "inputs": [],
+                "hostSlots": [],
+                "stateSlots": [],
+                "parameters": [],
+                "expressions": [],
+                "actions": [],
+                "loops": [],
+                "dependencyEdges": [],
+                "routeOutlets": []
+            },
+            panel
+        ]
+    })
+}
+
+/// The server markup the nested panel renders for one recorded branch side
+/// and one row set. Marker paths chain through the component call path.
+fn nested_state_server_dom(selected: &str, rows: &[(&str, &str)]) -> String {
+    let branch = match selected {
+        "consequent" => "<p data-plec-node=\"root/outlet:main/component:1/node:2\"></p>",
+        "alternate" => "<span data-plec-node=\"root/outlet:main/component:1/node:3\"></span>",
+        _ => "",
+    };
+    let list = rows
+        .iter()
+        .map(|(key, title)| {
+            let rp = format!("root/outlet:main/component:1/loop:6/key:{key}");
+            format!(
+                "<!--plec:loop:{rp}-->\
+                 <li data-runtime-row-key=\"{key}\" data-plec-node=\"{rp}/node:7\">\
+                 <!--plec:text:{rp}:8-->{title}</li>\
+                 <!--plec:loop-end:{rp}-->"
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<!--plec:component:root/outlet:main:1-->\
+         <div data-plec-node=\"root/outlet:main/component:1/node:0\">\
+         <!--plec:conditional:root/outlet:main/component:1:1-->{branch}\
+         <!--plec:conditional-end:root/outlet:main/component:1:1-->\
+         <button data-plec-node=\"root/outlet:main/component:1/node:4\"></button>\
+         <ul data-plec-node=\"root/outlet:main/component:1/node:5\">{list}</ul></div>\
+         <!--plec:component-end:root/outlet:main:1-->"
+    )
+}
+
+/// Snapshot whose nested record carries exactly the caller's branch/loop
+/// state for the panel instance; `nested` may be omitted entirely to model a
+/// legacy producer.
+fn nested_state_snapshot(
+    nested: Option<serde_json::Value>,
+    rows: serde_json::Value,
+) -> serde_json::Value {
+    let mut snapshot = snapshot_chain_fixture(
+        "rev-1",
+        "x",
+        "/",
+        "ssr-snapshot.tsx#App",
+        serde_json::json!({}),
+    );
+    snapshot["routes"][0]["routeId"] = serde_json::json!("nested-ssr.tsx#Home");
+    snapshot["public"]["exports"]["loaderData"]["value"] = rows;
+    snapshot["structure"]["graphs"]["root%2Foutlet:main/outlet:main"] =
+        serde_json::json!({"graphId": "nested-ssr.tsx#Home"});
+    if let Some(nested) = nested {
+        snapshot["structure"]["nested"] = nested;
+    }
+    snapshot
+}
+
+fn start_nested_state_fixture(
+    runtime: &PlecRuntime,
+    root: &Element,
+    server_dom: &str,
+    snapshot: serde_json::Value,
+    with_loop: bool,
+) -> Result<(), JsValue> {
+    root.set_inner_html(&format!(
+        "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
+         <!--plec:text:root:2-->ignored</p>\
+         <section data-plec-node=\"root/outlet:main/node:0\">{server_dom}</section></main>"
+    ));
+    runtime
+        .register_graph(
+            "nested-ssr.tsx#Home".into(),
+            serde_wasm_bindgen::to_value(&nested_state_route_artifact(with_loop)).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "ssr-snapshot.tsx#App".into(),
+            serde_wasm_bindgen::to_value(&snapshot_fixture_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        r#"{"version":3,"revision":"rev-1","rootGraphId":"ssr-snapshot.tsx#App",
+            "routes":[{"id":"nested-ssr.tsx#Home","path":"",
+            "graphId":"nested-ssr.tsx#Home","outletId":"main"}]}"#,
+    )
+    .unwrap();
+    runtime.start_adopt_snapshot(
+        root.clone(),
+        manifest,
+        serde_wasm_bindgen::to_value(&snapshot).unwrap(),
+    )
+}
+
+fn nested_panel_toggle(root: &Element) -> web_sys::EventTarget {
+    root.query_selector("[data-plec-node='root/outlet:main/component:1/node:4']")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+}
+
+#[wasm_bindgen_test]
+fn nested_component_conditional_adopts_recorded_branch_without_inference() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    runtime.reset_ssr_conditional_inferences();
+    start_nested_state_fixture(
+        &runtime,
+        &root,
+        &nested_state_server_dom("alternate", &[("one", "One")]),
+        nested_state_snapshot(
+            Some(serde_json::json!({
+                "root/outlet:main/component:1": {
+                    "graphId": "nested-ssr.tsx#Panel",
+                    "branches": [{"node": 1, "selected": "alternate"}],
+                    "loops": [{"node": 6, "keys": ["one"]}]
+                }
+            })),
+            loop_rows_json(&[("one", "One")]),
+        ),
+        true,
+    )
+    .unwrap();
+    // The recorded alternate branch was claimed from the record: the
+    // inference fallback never fired.
+    assert!(root
+        .query_selector("[data-plec-node='root/outlet:main/component:1/node:3']")
+        .unwrap()
+        .is_some());
+    assert_eq!(runtime.ssr_conditional_inferences(), 0);
+    // The adopted region stays live: the toggle flips it through the normal
+    // reconcile path and back.
+    nested_panel_toggle(&root)
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert!(root
+        .query_selector("[data-plec-node='root/outlet:main/component:1/node:2']")
+        .unwrap()
+        .is_some());
+    nested_panel_toggle(&root)
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert!(root
+        .query_selector("[data-plec-node='root/outlet:main/component:1/node:3']")
+        .unwrap()
+        .is_some());
+}
+
+#[wasm_bindgen_test]
+fn nested_component_conditional_without_record_still_infers_and_counts() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    runtime.reset_ssr_conditional_inferences();
+    // A legacy producer sends no nested records: adoption falls back to
+    // DOM-shape inference for the branch and reports the fallback. (The
+    // loop-free panel keeps the legacy path adoptable; a nested loop without
+    // a record fails closed, as the dedicated test below proves.)
+    start_nested_state_fixture(
+        &runtime,
+        &root,
+        &nested_state_server_dom("alternate", &[]),
+        nested_state_snapshot(None, loop_rows_json(&[])),
+        false,
+    )
+    .unwrap();
+    assert!(root
+        .query_selector("[data-plec-node='root/outlet:main/component:1/node:3']")
+        .unwrap()
+        .is_some());
+    assert_eq!(runtime.ssr_conditional_inferences(), 1);
+}
+
+#[wasm_bindgen_test]
+fn nested_component_branch_record_contradicting_dom_fails_closed() {
+    let _location = reset_browser_location();
+    // The record claims the consequent while the markers enclose the
+    // alternate span: the ownership cause contradicts the markup.
+    let error = start_nested_state_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &nested_state_server_dom("alternate", &[("one", "One")]),
+        nested_state_snapshot(
+            Some(serde_json::json!({
+                "root/outlet:main/component:1": {
+                    "graphId": "nested-ssr.tsx#Panel",
+                    "branches": [{"node": 1, "selected": "consequent"}],
+                    "loops": [{"node": 6, "keys": ["one"]}]
+                }
+            })),
+            loop_rows_json(&[("one", "One")]),
+        ),
+        true,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "mismatch:ssr-branch:root/outlet:main/component:1:1"
+    );
+}
+
+#[wasm_bindgen_test]
+fn nested_component_loop_adopts_recorded_rows_without_remount() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    runtime.reset_ssr_conditional_inferences();
+    start_nested_state_fixture(
+        &runtime,
+        &root,
+        &nested_state_server_dom("none", &[("one", "One"), ("two", "Two")]),
+        nested_state_snapshot(
+            Some(serde_json::json!({
+                "root/outlet:main/component:1": {
+                    "graphId": "nested-ssr.tsx#Panel",
+                    "branches": [{"node": 1, "selected": "none"}],
+                    "loops": [{"node": 6, "keys": ["one", "two"]}]
+                }
+            })),
+            loop_rows_json(&[("one", "One"), ("two", "Two")]),
+        ),
+        true,
+    )
+    .unwrap();
+    // Server rows survive with their identity and order, and the row text
+    // binding was claimed (not re-created): no missing:ssr-loop, no remount.
+    let one = loop_row(&root, "one");
+    assert_eq!(one.text_content().unwrap(), "One");
+    assert_eq!(loop_row(&root, "two").text_content().unwrap(), "Two");
+    assert_eq!(
+        one.get_attribute("data-plec-node").as_deref(),
+        Some("root/outlet:main/component:1/loop:6/key:one/node:7")
+    );
+    assert_eq!(runtime.ssr_conditional_inferences(), 0);
+    // The adopted loop stays live: the recorded `none` branch flips through
+    // the normal reconcile path without disturbing the rows.
+    nested_panel_toggle(&root)
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    assert!(root
+        .query_selector("[data-plec-node='root/outlet:main/component:1/node:2']")
+        .unwrap()
+        .is_some());
+    assert!(root
+        .query_selector("[data-runtime-row-key='one']")
+        .unwrap()
+        .is_some());
+}
+
+#[wasm_bindgen_test]
+fn nested_component_loop_projection_mismatches_fail_closed() {
+    let _location = reset_browser_location();
+    // The record's row order contradicts the imported state's projection:
+    // identity ordering is the record, so the claim refuses.
+    let error = start_nested_state_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &nested_state_server_dom("none", &[("one", "One"), ("two", "Two")]),
+        nested_state_snapshot(
+            Some(serde_json::json!({
+                "root/outlet:main/component:1": {
+                    "graphId": "nested-ssr.tsx#Panel",
+                    "loops": [{"node": 6, "keys": ["two", "one"]}]
+                }
+            })),
+            loop_rows_json(&[("one", "One"), ("two", "Two")]),
+        ),
+        true,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "mismatch:ssr-row-order:root/outlet:main/component:1:6"
+    );
+}
+
+#[wasm_bindgen_test]
+fn nested_component_loop_without_record_fails_closed() {
+    let _location = reset_browser_location();
+    // Legacy snapshot, nested loop: there is no record to claim rows from,
+    // so adoption fails with the dedicated code instead of guessing.
+    let error = start_nested_state_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &nested_state_server_dom("none", &[("one", "One")]),
+        nested_state_snapshot(None, loop_rows_json(&[("one", "One")])),
+        true,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "missing:ssr-loop:root/outlet:main/component:1:6"
+    );
+}
+
+#[wasm_bindgen_test]
+fn nested_component_record_with_unknown_path_fails_closed_before_adoption() {
+    let _location = reset_browser_location();
+    // The record addresses a component instance no marker path can name:
+    // snapshot validation rejects it before any DOM is claimed.
+    let error = start_nested_state_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &nested_state_server_dom("none", &[]),
+        nested_state_snapshot(
+            Some(serde_json::json!({
+                "root/whoops:1": {
+                    "graphId": "nested-ssr.tsx#Panel",
+                    "loops": [{"node": 6, "keys": []}]
+                }
+            })),
+            loop_rows_json(&[]),
+        ),
+        false,
+    )
+    .unwrap_err();
+    assert!(error
+        .as_string()
+        .unwrap_or_default()
+        .starts_with("mismatch:ssr-snapshot:unknown nested component path root/whoops:1"));
+}
+
+#[wasm_bindgen_test]
+fn legacy_v1_snapshot_still_fails_closed_as_unsupported() {
+    let _location = reset_browser_location();
+    let mut snapshot = nested_state_snapshot(
+        Some(serde_json::json!({
+            "root/outlet:main/component:1": {
+                "graphId": "nested-ssr.tsx#Panel"
+            }
+        })),
+        loop_rows_json(&[("one", "One")]),
+    );
+    snapshot["version"] = serde_json::json!(1);
+    let error = start_nested_state_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
+        &nested_state_server_dom("none", &[]),
+        snapshot,
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "unsupported:ssr-snapshot-version"
     );
 }
 
@@ -3559,7 +4311,7 @@ fn ssr_row_conditional_adopts_region_and_flips_through_reconcile() {
         .dispatch_event(&Event::new("click").unwrap())
         .unwrap();
     assert!(loop_row(&root, "one")
-        .query_selector("[data-runtime-node='6']")
+        .query_selector("[data-plec-node='root/outlet:main/loop:2/key:one/node:6']")
         .unwrap()
         .is_some());
 }
@@ -3974,7 +4726,7 @@ fn start_loader_transfer(
     root.set_inner_html(html);
     register_loader_graphs(runtime);
     let snapshot = serde_wasm_bindgen::to_value(&serde_json::json!({
-        "version": 1,
+        "version": 2,
         "revision": "rev-1",
         "routes": [{"routeId": "page", "params": {}, "phase": phase}],
         "public": {"location": "/todos", "exports": {}},

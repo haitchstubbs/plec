@@ -110,6 +110,10 @@ pub struct PlecRuntime {
     /// Keyed SSR loop rows per graph instance. Values are identity/order only;
     /// row values are recomputed from imported runtime state during claim.
     pub(crate) typed_ssr_loops: Rc<RefCell<HashMap<String, HashMap<usize, Vec<String>>>>>,
+    /// Recorded execution state for nested component instances, keyed by the
+    /// component's marker path. The adopter hands each instance its subtree's
+    /// records so nested branch/loop state is claimed, never inferred.
+    pub(crate) typed_ssr_nested: Rc<RefCell<SsrNestedRecords>>,
     /// Immutable component definitions for the currently loaded IR 0.10 application.
     pub(crate) typed_components: Rc<RefCell<Option<TypedComponentApplication>>>,
     pub(crate) snapshot_inputs: Rc<RefCell<HashMap<String, SnapshotInput>>>,
@@ -136,6 +140,7 @@ impl Clone for PlecRuntime {
             typed_ssr_loaders: Rc::clone(&self.typed_ssr_loaders),
             typed_ssr_branches: Rc::clone(&self.typed_ssr_branches),
             typed_ssr_loops: Rc::clone(&self.typed_ssr_loops),
+            typed_ssr_nested: Rc::clone(&self.typed_ssr_nested),
             typed_components: Rc::clone(&self.typed_components),
             snapshot_inputs: Rc::clone(&self.snapshot_inputs),
             cookie_policy: Rc::clone(&self.cookie_policy),
@@ -357,8 +362,9 @@ impl PlecRuntime {
     }
 
     /// Starts a typed route tree from server-rendered DOM.  This is separate
-    /// from `start` so normal client mounts retain their small, marker-free
-    /// output contract.
+    /// from `start` so normal client mounts never *read* markers: both paths
+    /// emit the same canonical structural addresses, but only adoption
+    /// resolves them (see docs/dom-address-protocol.md).
     pub fn start_adopt(&self, root: Element, manifest: JsValue) -> Result<(), JsValue> {
         self.start_adopt_snapshot(root, manifest, JsValue::UNDEFINED)
     }
@@ -376,6 +382,16 @@ impl PlecRuntime {
         manifest: JsValue,
         snapshot: JsValue,
     ) -> Result<(), JsValue> {
+        // Adoption lifecycle invariant (one-shot): adoption claims server
+        // DOM exactly once, before any client-rendered DOM exists in the
+        // scope. A live typed instance forest means the application already
+        // materialized DOM (a mount, navigation, or a prior adoption), and
+        // claiming into it would blend server- and client-created nodes.
+        // This must be an explicit fail-closed precondition, never implied
+        // by call order (see docs/dom-address-protocol.md).
+        if !self.typed.borrow().is_empty() {
+            return Err(JsValue::from_str("invariant:adoption-once"));
+        }
         let manifest_value: Value = serde_wasm_bindgen::from_value(manifest).map_err(error)?;
         if manifest_value.get("version").and_then(Value::as_u64) != Some(3) {
             return Err(JsValue::from_str("unsupported:ssr-manifest"));
@@ -438,6 +454,7 @@ impl PlecRuntime {
             self.typed_ssr_loaders.borrow_mut().clear();
             self.typed_ssr_branches.borrow_mut().clear();
             self.typed_ssr_loops.borrow_mut().clear();
+            self.typed_ssr_nested.borrow_mut().clear();
             return Ok(());
         }
         self.reset_ssr_text_divergences();
@@ -512,6 +529,31 @@ impl PlecRuntime {
                 )
             })
             .collect();
+        // Nested component records address component instances below the
+        // graph root by marker path; validation has already proven every
+        // record against the compiled node tables.
+        *self.typed_ssr_nested.borrow_mut() = parsed
+            .structure
+            .nested
+            .iter()
+            .map(|(path, structure)| {
+                (
+                    path.clone(),
+                    SsrNestedComponentRecords {
+                        branches: structure
+                            .branches
+                            .iter()
+                            .map(|branch| (branch.node, branch.selected))
+                            .collect(),
+                        loops: structure
+                            .loops
+                            .iter()
+                            .map(|loop_rows| (loop_rows.node, loop_rows.keys.clone()))
+                            .collect(),
+                    },
+                )
+            })
+            .collect();
         *self.typed_ssr_imported.borrow_mut() = true;
         Ok(())
     }
@@ -561,6 +603,7 @@ impl PlecRuntime {
         self.typed_ssr_loaders.borrow_mut().clear();
         self.typed_ssr_branches.borrow_mut().clear();
         self.typed_ssr_loops.borrow_mut().clear();
+        self.typed_ssr_nested.borrow_mut().clear();
         self.dispose_router_listeners();
     }
 }
@@ -579,9 +622,19 @@ impl plec_ir::SsrStructureApplication for RegisteredStructureApplication {
         if let Some(found) = self.primary.structure_graph(graph_id) {
             return Some(found);
         }
-        self.registry
+        if let Some(found) = self
+            .registry
             .get(graph_id)
             .and_then(|application| application.structure_graph(graph_id))
+        {
+            return Some(found);
+        }
+        // Nested component records reference compiled component ids, which
+        // live inside a registered application's component table rather
+        // than being registry entries of their own.
+        self.registry
+            .values()
+            .find_map(|application| application.structure_graph(graph_id))
     }
 }
 

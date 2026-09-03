@@ -79,16 +79,20 @@ function replaceBootstrapBody(html: string, body: string): string {
 }
 
 async function fallbackRemounted(page: Page): Promise<void> {
-  // Fail-closed means the destructive fallback actually ran: the server's
-  // ownership markers are gone and the client mount owns the DOM instead.
+  // Fail-closed means the destructive fallback actually ran. With one
+  // canonical address grammar (docs/dom-address-protocol.md) both SSR and
+  // CSR DOM carry `data-plec-node`, so provenance is instead visible in the
+  // text-marker contract: only server rendering emits `plec:text` comment
+  // markers, and the fallback remount wipes them. Their absence plus live
+  // canonical addresses proves the client mount owns the DOM.
   await page.waitForFunction(
-    () =>
-      document
-        .querySelector('#app')!
-        .querySelectorAll('[data-plec-node]').length === 0 &&
-      document
-        .querySelector('#app')!
-        .querySelectorAll('[data-runtime-node]').length > 0,
+    () => {
+      const app = document.querySelector('#app')!;
+      return (
+        app.querySelectorAll('[data-plec-node]').length > 0 &&
+        !app.innerHTML.includes('<!--plec:text:')
+      );
+    },
     undefined,
     { timeout: 15_000 },
   );

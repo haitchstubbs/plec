@@ -1749,6 +1749,17 @@ fn lower_jsx_element_with_consumed_key(
     Ok(node_id)
 }
 
+/// Attribute names reserved by the structural DOM address protocol
+/// (docs/dom-address-protocol.md). `data-plec-*` and `plec:*` are permanently
+/// runtime-owned; `data-runtime-*` stays reserved while the legacy string-id
+/// scheme exists (wasm-runtime-ixk.7). Authored JSX must never collide with
+/// them: a user-written `data-plec-node` reaches adoption as a duplicate
+/// marker and fails the whole page closed at runtime, so the rejection has to
+/// happen here instead.
+fn is_reserved_dom_attribute(name: &str) -> bool {
+    name.starts_with("data-plec-") || name.starts_with("data-runtime-") || name.starts_with("plec:")
+}
+
 /// Lower JSX attributes to HIR props.
 fn lower_jsx_attr(
     attr: &JSXAttr,
@@ -1759,6 +1770,11 @@ fn lower_jsx_attr(
 ) -> Result<(), String> {
     let name = jsx_attr_name(attr).expect("JSX attribute has a name");
 
+    if is_reserved_dom_attribute(&name) {
+        return Err(format!(
+            "Reserved Plec DOM attribute '{name}' is owned by the runtime and cannot be authored in JSX (docs/dom-address-protocol.md)"
+        ));
+    }
     if name == "key" {
         return Err(
             "JSX key is only supported on the direct root of a .map() callback".to_string(),
@@ -3231,6 +3247,87 @@ mod tests {
         assert!(build_and_lower(source)
             .unwrap_err()
             .contains("Callable values"));
+    }
+
+    #[test]
+    fn rejects_reserved_runtime_attribute() {
+        let source = r#"
+            export function App() {
+                return <div data-plec-node="x" />;
+            }
+        "#;
+
+        let error = build_and_lower(source).unwrap_err();
+        assert!(
+            error.contains("Reserved Plec DOM attribute 'data-plec-node'"),
+            "unexpected diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_reserved_row_key_attribute() {
+        let source = r#"
+            export function App() {
+                return <li data-runtime-row-key="y" />;
+            }
+        "#;
+
+        let error = build_and_lower(source).unwrap_err();
+        assert!(
+            error.contains("Reserved Plec DOM attribute 'data-runtime-row-key'"),
+            "unexpected diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_reserved_marker_grammar_attribute() {
+        let source = r#"
+            export function App() {
+                return <div plec:text="z" />;
+            }
+        "#;
+
+        let error = build_and_lower(source).unwrap_err();
+        assert!(
+            error.contains("Reserved Plec DOM attribute 'plec:text'"),
+            "unexpected diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_reserved_attribute_on_component_call() {
+        let source = r#"
+            export function App() {
+                return <Child data-runtime-node="w" />;
+            }
+
+            function Child({ value }: { value: string }) {
+                return <div>{value}</div>;
+            }
+        "#;
+
+        let error = build_and_lower(source).unwrap_err();
+        assert!(
+            error.contains("Reserved Plec DOM attribute 'data-runtime-node'"),
+            "unexpected diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn allows_unreserved_data_attribute_and_spread() {
+        let source = r#"
+            export function App({ bag }: { bag: Record<string, string> }) {
+                return <div data-variant="ok" {...bag} />;
+            }
+        "#;
+
+        let hir = build_and_lower(source).expect("lowering should succeed");
+        let node_id = hir.root_nodes[0];
+        let HirNode::Element(el) = &hir.nodes[node_id.0 as usize] else {
+            panic!("expected element root");
+        };
+        assert!(matches!(&el.props[0], HirProp::Static { name, .. } if name == "data-variant"));
+        assert!(matches!(&el.props[1], HirProp::Spread { .. }));
     }
 
     #[test]
