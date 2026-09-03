@@ -195,6 +195,30 @@ yarn install:plec-cli:dev
 
 Every `dev` command accepts `--json` for machine-readable output.
 
+## `plec dev compile`
+
+Compile the Plec-owned runtime WASM artifact. The WASM runtime is a Plec
+asset, not a consumer asset: applications stage whatever
+`packages/plec-runtime/dist/runtime` contains and never compile it
+themselves, so the build entry point lives in the dev frontend rather than
+in `plec build`. The pipeline itself stays in `scripts/build-wasm.mjs`
+(wasm-pack → wasm-tools strip → protocol stamp → brotli sidecars →
+provenance); this command runs it and reads the result back so the summary
+reports what the fresh binary actually implements.
+
+```bash
+plec dev compile                    # full profile, optimized
+plec dev compile --profile fetch    # toolchain profile: full|core|router|fetch
+plec dev compile --features fetch   # extra cargo features
+plec dev compile --no-optimize      # skip wasm-tools strip
+plec dev compile --json             # machine-readable summary
+```
+
+`plec build` deliberately does not invoke this: producer and verifier stay
+separate layers, so `plec dev artifact stale` audits a build it did not
+perform. `plec build` stages the artifact this command produced and fails
+loudly (with a pointer here) when it is missing.
+
 ## `plec dev test wasm` / `plec dev test last`
 
 Run the WASM browser suite once, capture the output, and query it without

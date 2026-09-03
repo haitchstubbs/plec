@@ -14,7 +14,12 @@ pub fn stage(repo_root: &Path, out_dir: &Path) -> Result<(), Box<dyn std::error:
         let source = source_dir.join(file);
 
         if !source.exists() {
-            return Err(format!("Plec runtime artifact not found: {}", source.display()).into());
+            return Err(format!(
+                "Plec runtime artifact not found: {} — compile it with `plec dev compile` (dev \
+                 frontend) or `yarn workspace plec-runtime build`",
+                source.display()
+            )
+            .into());
         }
 
         fs::copy(&source, destination_dir.join(file))?;
