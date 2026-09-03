@@ -431,6 +431,7 @@ yarn install:plec-cli:dev
 Commands (all accept `--json`; see `crates/plec-cli/README.md` for details):
 
 ```text
+plec dev compile [--profile p] [--features f] [--no-optimize]   # build the Plec-owned runtime WASM artifact
 plec dev test wasm [filters] [--failures]   # run the WASM suite once, capture it
 plec dev test last [--failure <substr>]     # query the captured run — never re-run to re-read failures
 plec dev contract ssr [--check]             # SSR protocol versions across Rust/TS/e2e/docs

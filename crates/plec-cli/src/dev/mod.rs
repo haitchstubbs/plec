@@ -12,6 +12,7 @@
 
 pub mod artifact;
 pub mod cli;
+pub mod compile;
 pub mod contract;
 pub mod doctor;
 pub mod repo;
@@ -25,6 +26,25 @@ use std::path::PathBuf;
 
 #[derive(Subcommand)]
 pub enum DevCommand {
+    /// Compile the Plec-owned runtime WASM artifact (wasm-pack pipeline).
+    Compile {
+        /// Toolchain profile compiled into the artifact.
+        #[arg(long, value_enum, default_value_t = compile::CompileProfile::Full)]
+        profile: compile::CompileProfile,
+
+        /// Extra cargo features, comma-separated.
+        #[arg(long)]
+        features: Option<String>,
+
+        /// Skip wasm-tools optimization.
+        #[arg(long)]
+        no_optimize: bool,
+
+        /// Print the build summary as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Run and query the WASM browser test suite.
     Test {
         #[command(subcommand)]
@@ -153,6 +173,31 @@ pub fn dispatch(command: DevCommand) -> Result<(), String> {
     let repo = Repo::discover()?;
 
     match command {
+        DevCommand::Compile {
+            profile,
+            features,
+            no_optimize,
+            json,
+        } => {
+            let report = compile::compile(
+                &repo,
+                &compile::CompileOptions {
+                    profile,
+                    features,
+                    no_optimize,
+                },
+            )?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report)
+                        .map_err(|error| format!("serialize: {error}"))?
+                );
+            } else {
+                compile::print_report(&report);
+            }
+            Ok(())
+        }
         DevCommand::Test { command } => dispatch_test(&repo, command),
         DevCommand::Artifact { command } => dispatch_artifact(&repo, command),
         DevCommand::Contract { command } => dispatch_contract(&repo, command),
