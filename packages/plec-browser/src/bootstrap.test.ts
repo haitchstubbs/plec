@@ -53,19 +53,14 @@ describe('ssr bootstrap reader', () => {
     });
   });
 
-  it('treats legacy v1 bootstraps as non-snapshot SSR', () => {
+  it('treats non-v2 payloads as absent so the page mounts fresh', () => {
     setBootstrap({
       textContent: JSON.stringify({
-        version: 1,
         revision: 'rev-1',
         routeId: 'routes.tsx#Home',
         public: { location: { pathname: '/', search: '' } },
       }),
     });
-    expect(readSsrBootstrap()).toEqual({
-      kind: 'legacy',
-      revision: 'rev-1',
-      routeId: 'routes.tsx#Home',
-    });
+    expect(readSsrBootstrap()).toBeNull();
   });
 });

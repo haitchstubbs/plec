@@ -4,7 +4,7 @@ use super::repo::Repo;
 use super::wasmtest;
 use plec_compiler::{lower_route_artifacts, lower_routes, read_source_graph};
 use plec_ir::{ComponentApplication, Node, RouteManifest};
-use plec_sema::build_semantic_graph;
+use plec_model::build_semantic_graph;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
@@ -93,7 +93,7 @@ pub fn run(repo: &Repo, options: &DoctorOptions) -> Result<DoctorReport, String>
 
     let mut hints = Vec::new();
     if !contract_report.conflicts().is_empty() {
-        hints.push("protocol conflict — inspect with: plec dev contract ssr".into());
+        hints.push("protocol conflict — inspect with: plec workspace contract ssr".into());
     }
     if !artifacts.ok {
         hints.push(
@@ -112,7 +112,7 @@ pub fn run(repo: &Repo, options: &DoctorOptions) -> Result<DoctorReport, String>
         .unwrap_or(false)
     {
         hints.push(
-            "last WASM run had failures — inspect with: plec dev test last --failures".into(),
+            "last WASM run had failures — inspect with: plec workspace test last --failures".into(),
         );
     }
 

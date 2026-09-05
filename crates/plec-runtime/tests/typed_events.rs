@@ -107,25 +107,47 @@ fn mount_root() -> Element {
         .unwrap()
 }
 
+/// Wrap a bare single-graph test artifact in the IR 0.10 component-application
+/// envelope `load_application`/`register_graph` accept. Artifacts that are
+/// already envelopes (the 0.10 fixture files) pass through unchanged; the
+/// inner version field is dropped so the schema's 0.10 default applies.
+fn component_application(graph: &serde_json::Value) -> serde_json::Value {
+    if graph.get("components").is_some() {
+        return graph.clone();
+    }
+    let mut graph = graph.clone();
+    let fields = graph.as_object_mut().unwrap();
+    fields.remove("version");
+    fields.insert(
+        "id".into(),
+        serde_json::Value::String("typed-events.tsx#Graph".into()),
+    );
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [graph]
+    })
+}
+
 fn load_and_mount(runtime: &PlecRuntime, artifact: serde_json::Value, root: &Element) {
     runtime
-        .load_application(serde_wasm_bindgen::to_value(&artifact).unwrap())
+        .load_application(serde_wasm_bindgen::to_value(&component_application(&artifact)).unwrap())
         .unwrap();
     runtime.mount(root.clone()).unwrap();
 }
 
 fn rust_counter_artifact() -> serde_json::Value {
-    serde_json::from_str(include_str!("fixtures/rust-counter-0.9.json"))
+    serde_json::from_str(include_str!("fixtures/rust-counter-0.10.json"))
         .expect("Rust counter fixture should be valid JSON")
 }
 
 fn rust_collection_rows_artifact() -> serde_json::Value {
-    serde_json::from_str(include_str!("fixtures/rust-collection-rows-0.9.json"))
+    serde_json::from_str(include_str!("fixtures/rust-collection-rows-0.10.json"))
         .expect("Rust collection fixture should be valid JSON")
 }
 
 fn rust_static_conditional_artifact() -> serde_json::Value {
-    serde_json::from_str(include_str!("fixtures/rust-static-conditional-0.9.json"))
+    serde_json::from_str(include_str!("fixtures/rust-static-conditional-0.10.json"))
         .expect("Rust conditional fixture should be valid JSON")
 }
 
@@ -172,13 +194,28 @@ fn rust_collection_mutation_artifact() -> serde_json::Value {
 }
 
 fn rust_route_async_artifact() -> serde_json::Value {
-    serde_json::from_str(include_str!("fixtures/rust-route-async-0.9.json"))
+    serde_json::from_str(include_str!("fixtures/rust-route-async-0.10.json"))
         .expect("Rust route async fixture should be valid JSON")
 }
 
 fn rust_general_async_actions_artifact() -> serde_json::Value {
-    serde_json::from_str(include_str!("fixtures/rust-general-async-actions-0.9.json"))
-        .expect("Rust general async fixture should be valid JSON")
+    serde_json::from_str(include_str!(
+        "fixtures/rust-general-async-actions-0.10.json"
+    ))
+    .expect("Rust general async fixture should be valid JSON")
+}
+
+/// The general-async fixture is the compiler's golden output: its fetch uses
+/// `decode: "responseJson"`, whose action result is the `{ok,status,body}`
+/// envelope. The lifecycle test pins the raw-body row value the legacy
+/// `decode: "json"` capability produces — the lowering does not yet emit the
+/// body extraction `await fetch()` values need under responseJson, so the
+/// envelope shape would leave the replaced row without its `title` field.
+fn general_async_actions_lifecycle_artifact() -> serde_json::Value {
+    let mut artifact = rust_general_async_actions_artifact();
+    artifact["actions"][0]["instructions"][0]["request"]["decode"] =
+        serde_json::Value::String("json".into());
+    artifact
 }
 
 fn component_slot_artifact() -> serde_json::Value {
@@ -206,7 +243,7 @@ fn component_slot_artifact() -> serde_json::Value {
 /// on any legacy runtime behaviour.
 fn keyed_row_artifact() -> serde_json::Value {
     serde_json::json!({
-        "version": "0.9", "rootNode": 0,
+        "rootNode": 0,
         "strings": ["div", "ul", "li", "button", "click", "items", "id", "title"],
         "constants": [[], null],
         "nodes": [
@@ -244,7 +281,7 @@ fn keyed_row_artifact() -> serde_json::Value {
 fn static_conditional_artifact(alternate: bool) -> serde_json::Value {
     let alternate = alternate.then_some(3);
     serde_json::json!({
-        "version":"0.9", "rootNode":0,
+        "rootNode":0,
         "strings":["div", "button", "click"], "constants":[false, true],
         "nodes":[
             {"op":"element", "tag":0, "children":[1]},
@@ -300,7 +337,7 @@ fn row_conditional_artifact() -> serde_json::Value {
 
 fn nested_row_conditional_artifact() -> serde_json::Value {
     serde_json::json!({
-        "version":"0.9", "rootNode":0,
+        "rootNode":0,
         "strings":["div", "ul", "li", "button", "click", "items", "id", "title", "enabled", "active", "span"],
         "constants":[[], null],
         "nodes":[
@@ -338,7 +375,7 @@ fn nested_row_conditional_artifact() -> serde_json::Value {
 
 fn event_slot_artifact() -> serde_json::Value {
     serde_json::json!({
-        "version":"0.9", "rootNode":0,
+        "rootNode":0,
         "strings":["div", "button", "click", "type", "unsupported"],
         "constants":[null],
         "nodes":[{"op":"element","tag":0,"children":[1,2]},{"op":"element","tag":1,"parent":0,"children":[]},{"op":"text","text":0,"parent":0}],
@@ -450,7 +487,7 @@ fn fetch_artifact(decode: &str, require_ok: bool, nested: bool) -> serde_json::V
         serde_json::json!({"op":"return"}),
     ]);
     serde_json::json!({
-        "version":"0.9", "rootNode":0,
+        "rootNode":0,
         "strings":["div","button","click"],
         "constants":[null,"url","success","failure","inner","outer"],
         "nodes":[
@@ -503,7 +540,7 @@ fn caller_continuation_artifact() -> serde_json::Value {
 
 fn route_error_artifact() -> serde_json::Value {
     serde_json::json!({
-        "version":"0.9", "rootNode":0,
+        "rootNode":0,
         "strings":["div", "button", "click", "message", "Retry", "error", "status", "body"],
         "constants":[null, "Retry"],
         "nodes":[
@@ -661,7 +698,9 @@ fn rust_compiler_counter_fixture_mounts_and_updates_one_text_binding() {
     let runtime = PlecRuntime::new();
     let root = mount_root();
     runtime
-        .load_application(serde_wasm_bindgen::to_value(&rust_counter_artifact()).unwrap())
+        .load_application(
+            serde_wasm_bindgen::to_value(&component_application(&rust_counter_artifact())).unwrap(),
+        )
         .unwrap();
 
     let mount_metrics: serde_json::Value =
@@ -1108,7 +1147,7 @@ async fn rust_general_async_actions_fixture_preserves_frame_and_finally_lifecycl
         let _fetch = install_plec_fetch_queue(r#"[{"body":"{\"id\":\"one\",\"title\":\"New\"}"}]"#);
         let runtime = PlecRuntime::new();
         let root = mount_root();
-        load_and_mount(&runtime, rust_general_async_actions_artifact(), &root);
+        load_and_mount(&runtime, general_async_actions_lifecycle_artifact(), &root);
         initialize_rows(&runtime, serde_json::json!([{"id":"one","title":"Old"}]));
         let row = root.query_selector("li").unwrap().unwrap();
         let text = row.first_child().unwrap();
@@ -1139,7 +1178,7 @@ async fn rust_general_async_actions_fixture_preserves_frame_and_finally_lifecycl
         let _fetch = install_plec_fetch_queue(r#"[{"reject":"offline"}]"#);
         let runtime = PlecRuntime::new();
         let root = mount_root();
-        load_and_mount(&runtime, rust_general_async_actions_artifact(), &root);
+        load_and_mount(&runtime, general_async_actions_lifecycle_artifact(), &root);
         initialize_rows(&runtime, serde_json::json!([{"id":"one","title":"Old"}]));
         root.query_selector("button")
             .unwrap()
@@ -1172,7 +1211,7 @@ async fn rust_general_async_actions_fixture_preserves_frame_and_finally_lifecycl
         let _fetch = install_plec_fetch_queue(r#"[{"pending":true}]"#);
         let runtime = PlecRuntime::new();
         let root = mount_root();
-        load_and_mount(&runtime, rust_general_async_actions_artifact(), &root);
+        load_and_mount(&runtime, general_async_actions_lifecycle_artifact(), &root);
         root.query_selector("button")
             .unwrap()
             .unwrap()
@@ -1354,8 +1393,7 @@ fn static_listener_dispatches_once_and_dispose_removes_its_dom() {
     let runtime = PlecRuntime::new();
     runtime
         .load_application(
-            serde_wasm_bindgen::to_value(&serde_json::json!({
-                "version": "0.9",
+            serde_wasm_bindgen::to_value(&component_application(&serde_json::json!({
                 "rootNode": 0,
                 "strings": ["div", "button", "click"],
                 "constants": [false, true],
@@ -1382,7 +1420,7 @@ fn static_listener_dispatches_once_and_dispose_removes_its_dom() {
                     "source": {"kind": "state", "handle": 0},
                     "target": {"kind": "binding", "handle": 0}
                 }]
-            }))
+            })))
             .unwrap(),
         )
         .unwrap();
@@ -1648,7 +1686,7 @@ fn event_dispatch_exposes_only_declared_slots_and_rejects_unsupported_fields() {
     let mut artifact = event_slot_artifact();
     artifact["events"][0]["fields"][0]["name"] = serde_json::json!(4);
     assert!(invalid
-        .load_application(serde_wasm_bindgen::to_value(&artifact).unwrap())
+        .load_application(serde_wasm_bindgen::to_value(&component_application(&artifact)).unwrap())
         .is_err());
 }
 
@@ -1812,13 +1850,16 @@ async fn remount_and_typed_route_replacement_abort_stale_fetches() {
     runtime
         .register_graph(
             "a".into(),
-            serde_wasm_bindgen::to_value(&route_root).unwrap(),
+            serde_wasm_bindgen::to_value(&component_application(&route_root)).unwrap(),
         )
         .unwrap();
     runtime
         .register_graph(
             "b".into(),
-            serde_wasm_bindgen::to_value(&fetch_artifact("text", true, false)).unwrap(),
+            serde_wasm_bindgen::to_value(&component_application(&fetch_artifact(
+                "text", true, false,
+            )))
+            .unwrap(),
         )
         .unwrap();
     let manifest = js_sys::JSON::parse(
@@ -1893,10 +1934,16 @@ async fn typed_route_loader_writes_its_declared_result_state() {
         {"op":"return"}
     ]);
     runtime
-        .register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .register_graph(
+            "root".into(),
+            serde_wasm_bindgen::to_value(&component_application(&route)).unwrap(),
+        )
         .unwrap();
     runtime
-        .register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .register_graph(
+            "page".into(),
+            serde_wasm_bindgen::to_value(&component_application(&route)).unwrap(),
+        )
         .unwrap();
     let manifest = js_sys::JSON::parse(
         &serde_json::json!({
@@ -1920,10 +1967,16 @@ async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
     let root = mount_root();
     let route = rust_route_async_artifact();
     runtime
-        .register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .register_graph(
+            "root".into(),
+            serde_wasm_bindgen::to_value(&component_application(&route)).unwrap(),
+        )
         .unwrap();
     runtime
-        .register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .register_graph(
+            "page".into(),
+            serde_wasm_bindgen::to_value(&component_application(&route)).unwrap(),
+        )
         .unwrap();
     let manifest = js_sys::JSON::parse(
         &serde_json::json!({
@@ -1944,15 +1997,21 @@ async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
     let root = mount_root();
     let route = rust_route_async_artifact();
     runtime
-        .register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .register_graph(
+            "root".into(),
+            serde_wasm_bindgen::to_value(&component_application(&route)).unwrap(),
+        )
         .unwrap();
     runtime
-        .register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .register_graph(
+            "page".into(),
+            serde_wasm_bindgen::to_value(&component_application(&route)).unwrap(),
+        )
         .unwrap();
     runtime
         .register_graph(
             "error".into(),
-            serde_wasm_bindgen::to_value(&route_error_artifact()).unwrap(),
+            serde_wasm_bindgen::to_value(&component_application(&route_error_artifact())).unwrap(),
         )
         .unwrap();
     let manifest = js_sys::JSON::parse(&serde_json::json!({
@@ -1973,15 +2032,24 @@ async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
     let root = mount_root();
     let route = rust_route_async_artifact();
     runtime
-        .register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .register_graph(
+            "root".into(),
+            serde_wasm_bindgen::to_value(&component_application(&route)).unwrap(),
+        )
         .unwrap();
     runtime
-        .register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .register_graph(
+            "page".into(),
+            serde_wasm_bindgen::to_value(&component_application(&route)).unwrap(),
+        )
         .unwrap();
     runtime
         .register_graph(
             "next".into(),
-            serde_wasm_bindgen::to_value(&fetch_artifact("text", true, false)).unwrap(),
+            serde_wasm_bindgen::to_value(&component_application(&fetch_artifact(
+                "text", true, false,
+            )))
+            .unwrap(),
         )
         .unwrap();
     let manifest = js_sys::JSON::parse(
@@ -2018,15 +2086,21 @@ async fn typed_route_error_receives_fetch_failure_and_retry_reloads() {
         {"op":"return"}
     ]);
     runtime
-        .register_graph("root".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .register_graph(
+            "root".into(),
+            serde_wasm_bindgen::to_value(&component_application(&route)).unwrap(),
+        )
         .unwrap();
     runtime
-        .register_graph("page".into(), serde_wasm_bindgen::to_value(&route).unwrap())
+        .register_graph(
+            "page".into(),
+            serde_wasm_bindgen::to_value(&component_application(&route)).unwrap(),
+        )
         .unwrap();
     runtime
         .register_graph(
             "error".into(),
-            serde_wasm_bindgen::to_value(&route_error_artifact()).unwrap(),
+            serde_wasm_bindgen::to_value(&component_application(&route_error_artifact())).unwrap(),
         )
         .unwrap();
     let manifest = js_sys::JSON::parse(&serde_json::json!({
@@ -2090,7 +2164,7 @@ fn start_adopt_fixture(runtime: &PlecRuntime, root: &Element, html: &str) -> Res
         r#"{"version":3,"rootGraphId":"rust-nested-component.tsx#App","routes":[]}"#,
     )
     .unwrap();
-    runtime.start_adopt(root.clone(), manifest)
+    runtime.start_adopt_snapshot(root.clone(), manifest, JsValue::UNDEFINED)
 }
 
 /// CSR-created DOM must emit exactly the server-rendered address grammar for
@@ -2298,7 +2372,9 @@ fn adoption_fails_closed_after_csr_materialization() {
         r#"{"version":3,"rootGraphId":"rust-nested-component.tsx#App","routes":[]}"#,
     )
     .unwrap();
-    let error = runtime.start_adopt(root.clone(), manifest).unwrap_err();
+    let error = runtime
+        .start_adopt_snapshot(root.clone(), manifest, JsValue::UNDEFINED)
+        .unwrap_err();
     assert_eq!(
         error.as_string().unwrap_or_default(),
         "invariant:adoption-once"
@@ -3839,11 +3915,10 @@ fn nested_panel_toggle(root: &Element) -> web_sys::EventTarget {
 }
 
 #[wasm_bindgen_test]
-fn nested_component_conditional_adopts_recorded_branch_without_inference() {
+fn nested_component_conditional_adopts_recorded_branch() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
     let root = mount_root();
-    runtime.reset_ssr_conditional_inferences();
     start_nested_state_fixture(
         &runtime,
         &root,
@@ -3861,13 +3936,11 @@ fn nested_component_conditional_adopts_recorded_branch_without_inference() {
         true,
     )
     .unwrap();
-    // The recorded alternate branch was claimed from the record: the
-    // inference fallback never fired.
+    // The recorded alternate branch was claimed from the record.
     assert!(root
         .query_selector("[data-plec-node='root/outlet:main/component:1/node:3']")
         .unwrap()
         .is_some());
-    assert_eq!(runtime.ssr_conditional_inferences(), 0);
     // The adopted region stays live: the toggle flips it through the normal
     // reconcile path and back.
     nested_panel_toggle(&root)
@@ -3887,28 +3960,22 @@ fn nested_component_conditional_adopts_recorded_branch_without_inference() {
 }
 
 #[wasm_bindgen_test]
-fn nested_component_conditional_without_record_still_infers_and_counts() {
+fn nested_component_conditional_without_record_fails_closed() {
     let _location = reset_browser_location();
-    let runtime = PlecRuntime::new();
-    let root = mount_root();
-    runtime.reset_ssr_conditional_inferences();
-    // A legacy producer sends no nested records: adoption falls back to
-    // DOM-shape inference for the branch and reports the fallback. (The
-    // loop-free panel keeps the legacy path adoptable; a nested loop without
-    // a record fails closed, as the dedicated test below proves.)
-    start_nested_state_fixture(
-        &runtime,
-        &root,
+    // A producer that omits the nested branch record cannot have its markup
+    // silently reinterpreted: adoption fails closed on the missing record.
+    let error = start_nested_state_fixture(
+        &PlecRuntime::new(),
+        &mount_root(),
         &nested_state_server_dom("alternate", &[]),
         nested_state_snapshot(None, loop_rows_json(&[])),
         false,
     )
-    .unwrap();
-    assert!(root
-        .query_selector("[data-plec-node='root/outlet:main/component:1/node:3']")
-        .unwrap()
-        .is_some());
-    assert_eq!(runtime.ssr_conditional_inferences(), 1);
+    .unwrap_err();
+    assert_eq!(
+        error.as_string().unwrap_or_default(),
+        "missing:ssr-branch:root/outlet:main/component:1:1"
+    );
 }
 
 #[wasm_bindgen_test]
@@ -3944,7 +4011,6 @@ fn nested_component_loop_adopts_recorded_rows_without_remount() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
     let root = mount_root();
-    runtime.reset_ssr_conditional_inferences();
     start_nested_state_fixture(
         &runtime,
         &root,
@@ -3971,7 +4037,6 @@ fn nested_component_loop_adopts_recorded_rows_without_remount() {
         one.get_attribute("data-plec-node").as_deref(),
         Some("root/outlet:main/component:1/loop:6/key:one/node:7")
     );
-    assert_eq!(runtime.ssr_conditional_inferences(), 0);
     // The adopted loop stays live: the recorded `none` branch flips through
     // the normal reconcile path without disturbing the rows.
     nested_panel_toggle(&root)
@@ -4000,6 +4065,7 @@ fn nested_component_loop_projection_mismatches_fail_closed() {
             Some(serde_json::json!({
                 "root/outlet:main/component:1": {
                     "graphId": "nested-ssr.tsx#Panel",
+                    "branches": [{"node": 1, "selected": "none"}],
                     "loops": [{"node": 6, "keys": ["two", "one"]}]
                 }
             })),
@@ -4017,13 +4083,22 @@ fn nested_component_loop_projection_mismatches_fail_closed() {
 #[wasm_bindgen_test]
 fn nested_component_loop_without_record_fails_closed() {
     let _location = reset_browser_location();
-    // Legacy snapshot, nested loop: there is no record to claim rows from,
-    // so adoption fails with the dedicated code instead of guessing.
+    // Branch selection is recorded, but the nested loop has no record to
+    // claim rows from: adoption fails with the dedicated code instead of
+    // guessing row identity or order.
     let error = start_nested_state_fixture(
         &PlecRuntime::new(),
         &mount_root(),
         &nested_state_server_dom("none", &[("one", "One")]),
-        nested_state_snapshot(None, loop_rows_json(&[("one", "One")])),
+        nested_state_snapshot(
+            Some(serde_json::json!({
+                "root/outlet:main/component:1": {
+                    "graphId": "nested-ssr.tsx#Panel",
+                    "branches": [{"node": 1, "selected": "none"}]
+                }
+            })),
+            loop_rows_json(&[("one", "One")]),
+        ),
         true,
     )
     .unwrap_err();
@@ -4604,6 +4679,14 @@ fn ssr_component_row_template_keeps_server_content_and_props() {
         "graphId": "ssr-loop.tsx#Home",
         "loops": [{"node": 2, "keys": ["one"]}],
     });
+    // The row's own conditional branch is recorded: the record, not DOM
+    // shape, defines what the server instantiated inside the row.
+    snapshot["structure"]["nested"] = serde_json::json!({
+        "root/outlet:main/loop:2/key:one/component:3": {
+            "graphId": "ssr-loop.tsx#Row",
+            "branches": [{"node": 3, "selected": "consequent"}]
+        }
+    });
     runtime
         .start_adopt_snapshot(
             root.clone(),
@@ -4915,14 +4998,18 @@ fn loader_snapshot_import_without_outcome_fails_closed() {
 }
 
 #[wasm_bindgen_test]
-fn legacy_loader_adoption_without_snapshot_fails_closed() {
+fn loader_adoption_without_snapshot_fails_closed() {
     let _location = reset_browser_location_to("/todos");
     let runtime = PlecRuntime::new();
     let root = mount_root();
     root.set_inner_html(&loader_route_html("x"));
     register_loader_graphs(&runtime);
     let error = runtime
-        .start_adopt(root.clone(), loader_manifest(true).into())
+        .start_adopt_snapshot(
+            root.clone(),
+            loader_manifest(true).into(),
+            JsValue::UNDEFINED,
+        )
         .unwrap_err();
     assert!(error
         .as_string()

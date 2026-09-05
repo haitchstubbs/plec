@@ -1,0 +1,12 @@
+[package]
+name = "plec-build"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+brotli = { workspace = true }
+plec-compiler = { path = "../plec-compiler" }
+plec-model = { path = "../plec-model" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }

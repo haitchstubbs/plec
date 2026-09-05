@@ -1,5 +1,4 @@
 mod app;
-mod com;
 mod dev;
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {

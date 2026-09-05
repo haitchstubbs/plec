@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = ["router", "fetch"]
 router = []
-fetch = ["dep:wasm-bindgen-futures", "web-sys/AbortController", "web-sys/AbortSignal", "web-sys/Headers", "web-sys/Request", "web-sys/RequestInit", "web-sys/Response"]
+fetch = ["plec-client/fetch"]
 
 # The benchmark already instruments unoptimised runtime behaviour. Avoid the
 # external wasm-opt binary so builds remain reproducible on locked-down hosts.
@@ -17,14 +17,20 @@ fetch = ["dep:wasm-bindgen-futures", "web-sys/AbortController", "web-sys/AbortSi
 wasm-opt = false
 
 [dependencies]
+plec-client = { path = "../plec-client" }
+plec-dom = { path = "../plec-dom" }
+plec-eval = { path = "../plec-eval" }
 plec-ir = { path = "../plec-ir" }
+plec-router = { path = "../plec-router" }
+plec-schema = { path = "../plec-schema" }
 js-sys = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde-wasm-bindgen = { workspace = true }
 wasm-bindgen = { workspace = true }
-wasm-bindgen-futures = { workspace = true, optional = true }
 web-sys = { workspace = true }
 
 [dev-dependencies]
+serde-wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
 wasm-bindgen-test = { workspace = true }

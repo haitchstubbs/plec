@@ -36,15 +36,10 @@ async function adoptedPage(
     `mismatch codes: ${JSON.stringify(adoption.mismatchCodes)}`,
   ).toEqual([]);
   // Server and client agree everywhere on an untampered page: the
-  // divergence diagnostic must stay silent, and the v2 snapshot's nested
-  // records must be complete (no DOM-shape branch inference anywhere).
+  // divergence diagnostic must stay silent.
   expect(
     adoption.textDivergences,
     `text divergences: ${JSON.stringify(adoption)}`,
-  ).toBe(0);
-  expect(
-    adoption.conditionalInferences,
-    `conditional inferences: ${JSON.stringify(adoption)}`,
   ).toBe(0);
   return { context, page, adoption };
 }

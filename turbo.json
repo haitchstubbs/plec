@@ -21,6 +21,14 @@
       ],
       "outputs": ["dist/**"]
     },
+    "plec#build": {
+      "dependsOn": [
+        "plec-server#build",
+        "plec-browser#build",
+        "plec-runtime#build"
+      ],
+      "outputs": ["dist/**"]
+    },
     "@wasm-runtime/fullstack#build": {
       "cache": false,
       "dependsOn": ["plec-runtime#build"],

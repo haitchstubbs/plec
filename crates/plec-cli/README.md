@@ -34,7 +34,7 @@ inspect   Query the compiled application
 raw       Print the compiled executable application
 routes    Print the application's route manifest
 build     Compile a routed application into deployable artifacts
-dev       Developer workflow helpers (dev frontend only)
+workspace Developer workflow helpers (dev frontend only)
 ```
 
 ## `raw`
@@ -173,18 +173,19 @@ This makes the CLI useful as a thin debugging surface over the canonical compile
 | `plec raw`     | Source entry         | Executable IR JSON  | Inspect complete compiler output   |
 | `plec inspect` | Source entry + query | Query result JSON   | Targeted inspection of compiled IR |
 | `plec routes`  | Source entry         | Route manifest JSON | Inspect router compilation         |
-| `plec dev …`   | Workspace state      | Reports/captures    | Developer workflow helpers (below) |
+| `plec workspace …`   | Workspace state      | Reports/captures    | Developer workflow helpers (below) |
 
 ---
 
-# `plec dev` — developer workflow helpers
+# `plec workspace` — developer workflow helpers
 
-The `dev` group encodes the validation and investigation workflows of the
-Plec workspace itself. Each command exists because agents and developers
+The `workspace` group encodes the validation and investigation workflows of
+the Plec workspace itself. Each command exists because agents and developers
 kept rebuilding the same context by hand: repo topology, protocol
 invariants, test-failure details, and artifact provenance.
 
-`dev` belongs to the **dev CLI frontend only** — the release (app) frontend
+`workspace` belongs to the **dev CLI frontend only** — the release (app)
+frontend
 never exposes it. Which frontend is built is selected at compile time (see
 [Dev CLI vs app CLI](#dev-cli-vs-app-cli)). For workspace work install the
 dev frontend:
@@ -193,9 +194,9 @@ dev frontend:
 yarn install:plec-cli:dev
 ```
 
-Every `dev` command accepts `--json` for machine-readable output.
+Every `workspace` command accepts `--json` for machine-readable output.
 
-## `plec dev compile`
+## `plec workspace compile`
 
 Compile the Plec-owned runtime WASM artifact. The WASM runtime is a Plec
 asset, not a consumer asset: applications stage whatever
@@ -207,30 +208,30 @@ provenance); this command runs it and reads the result back so the summary
 reports what the fresh binary actually implements.
 
 ```bash
-plec dev compile                    # full profile, optimized
-plec dev compile --profile fetch    # toolchain profile: full|core|router|fetch
-plec dev compile --features fetch   # extra cargo features
-plec dev compile --no-optimize      # skip wasm-tools strip
-plec dev compile --json             # machine-readable summary
+plec workspace compile                    # full profile, optimized
+plec workspace compile --profile fetch    # toolchain profile: full|core|router|fetch
+plec workspace compile --features fetch   # extra cargo features
+plec workspace compile --no-optimize      # skip wasm-tools strip
+plec workspace compile --json             # machine-readable summary
 ```
 
 `plec build` deliberately does not invoke this: producer and verifier stay
-separate layers, so `plec dev artifact stale` audits a build it did not
+separate layers, so `plec workspace artifact stale` audits a build it did not
 perform. `plec build` stages the artifact this command produced and fails
 loudly (with a pointer here) when it is missing.
 
-## `plec dev test wasm` / `plec dev test last`
+## `plec workspace test wasm` / `plec workspace test last`
 
 Run the WASM browser suite once, capture the output, and query it without
 re-running.
 
 ```bash
-plec dev test wasm                        # full suite, live output + capture
-plec dev test wasm nested_component       # filters forwarded to wasm-pack
-plec dev test wasm --failures             # print only the parsed failures
-plec dev test last                        # summary of the last run
-plec dev test last --failure nested_loop  # failures matching a substring
-plec dev test last --json                 # the captured report as JSON
+plec workspace test wasm                        # full suite, live output + capture
+plec workspace test wasm nested_component       # filters forwarded to wasm-pack
+plec workspace test wasm --failures             # print only the parsed failures
+plec workspace test last                        # summary of the last run
+plec workspace test last --failure nested_loop  # failures matching a substring
+plec workspace test last --json                 # the captured report as JSON
 ```
 
 The runner spawns `scripts/browser-harness.mjs` (which single-sources
@@ -253,7 +254,7 @@ failure — query the capture instead.
 > Playwright ownership, only the spawn step changes; the capture/parse layer
 > is invocation-independent.
 
-## `plec dev artifact provenance` / `plec dev artifact stale`
+## `plec workspace artifact provenance` / `plec workspace artifact stale`
 
 The runtime flows through a pipeline — source crate → wasm-pack →
 `packages/plec-runtime/dist/runtime` → staged copy in
@@ -269,8 +270,8 @@ are checked:
   `scripts/build-wasm.mjs` guarantees it survives optimization).
 
 ```bash
-plec dev artifact provenance runtime   # full report
-plec dev artifact stale                # terse gate; non-zero on staleness
+plec workspace artifact provenance runtime   # full report
+plec workspace artifact stale                # terse gate; non-zero on staleness
 ```
 
 ```text
@@ -281,7 +282,7 @@ app staged                 STALE
 
 Both commands exit non-zero on problems, so they gate scripts.
 
-## `plec dev contract ssr`
+## `plec workspace contract ssr`
 
 The SSR protocol has three versioned boundaries — snapshot
 (`SSR_SNAPSHOT_VERSION`), bootstrap wrapper, route manifest — that must
@@ -291,8 +292,8 @@ hard-coding the old version) historically surfaced only as a confusing
 runtime failure.
 
 ```bash
-plec dev contract ssr            # report every site's version
-plec dev contract ssr --check    # exit non-zero on any conflict
+plec workspace contract ssr            # report every site's version
+plec workspace contract ssr --check    # exit non-zero on any conflict
 ```
 
 ```text
@@ -312,14 +313,14 @@ Snapshot
 Intentional legacy literals (fixtures exercising the fail-closed gates) are
 allowlisted per site and reported with `~` rather than treated as conflicts.
 
-## `plec dev trace <symbol-or-error-code>`
+## `plec workspace trace <symbol-or-error-code>`
 
 Categorized search: where a symbol or adoption error code is defined,
 produced, asserted, and documented.
 
 ```bash
-plec dev trace unsupported:ssr-snapshot-version
-plec dev trace SSR_SNAPSHOT_VERSION
+plec workspace trace unsupported:ssr-snapshot-version
+plec workspace trace SSR_SNAPSHOT_VERSION
 ```
 
 ```text
@@ -338,7 +339,7 @@ DOCUMENTED BY
   docs/ssr-architecture.md:81  > **Contract evolution:** …
 ```
 
-## `plec dev doctor adoption`
+## `plec workspace doctor adoption`
 
 Health check for the SSR adoption pipeline, composing the checks above plus
 graph resolution:
@@ -357,11 +358,11 @@ graph resolution:
    protocol-consistent?
 
 ```bash
-plec dev doctor adoption
-plec dev doctor adoption --route /
-plec dev doctor adoption --html page.html
-plec dev doctor adoption --snapshot captured-snapshot.json
-plec dev doctor adoption --json
+plec workspace doctor adoption
+plec workspace doctor adoption --route /
+plec workspace doctor adoption --html page.html
+plec workspace doctor adoption --snapshot captured-snapshot.json
+plec workspace doctor adoption --json
 ```
 
 Exits non-zero when any section finds problems, and prints hints pointing at
@@ -369,12 +370,12 @@ the specific follow-up command.
 
 ## Running from the workspace
 
-During development, the CLI can be run directly through Cargo (note: with
-the workspace default `.env.plec`, plain `cargo run` builds the **release**
-frontend — override the variant for dev commands):
+During development, the CLI can be run directly through Cargo (note: the
+workspace default `.env.plec` bakes in the **dev** frontend, which carries
+`plec workspace`; the release variant stays app-commands-only):
 
 ```bash
-PLEC_CLI_VERSION=dev cargo run -p plec-cli -- dev doctor adoption
+cargo run -p plec-cli -- workspace doctor adoption
 ```
 
 ## Status

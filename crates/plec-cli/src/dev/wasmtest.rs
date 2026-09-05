@@ -127,7 +127,7 @@ pub fn load_last_report(repo: &Repo) -> Result<WasmTestReport, String> {
     let path = repo.cache_dir().join(CAPTURE_DIR).join("last.json");
     let raw = fs::read_to_string(&path).map_err(|_| {
         format!(
-            "no captured WASM run found at {} — run `plec dev test wasm` first",
+            "no captured WASM run found at {} — run `plec workspace test wasm` first",
             path.display()
         )
     })?;

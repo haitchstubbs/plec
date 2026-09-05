@@ -214,7 +214,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Exported runtime surface, read from the generated `runtime.d.ts`: module
 /// functions plus the methods of the runtime class (where the SSR
-/// diagnostics like `ssr_conditional_inferences` live).
+/// diagnostics like `ssr_text_divergences` live).
 fn dist_exports(dist_dir: &std::path::Path) -> Vec<String> {
     let Ok(content) = fs::read_to_string(dist_dir.join("runtime.d.ts")) else {
         return Vec::new();

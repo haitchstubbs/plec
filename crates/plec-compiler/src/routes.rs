@@ -7,7 +7,7 @@ use plec_ir::{
     Value, RouteMetadata,
 };
 use plec_parser::ParsedModule;
-use plec_sema::{resolve_local_symbol, SemanticGraph};
+use plec_model::{resolve_local_symbol, SemanticGraph};
 use serde::Serialize;
 use swc_ecma_ast::{
     ArrowFunctionBody, Callee, Decl, Expr, KeyValueProp, ModuleItem, Pat, Prop, PropName,
@@ -649,7 +649,7 @@ fn parent_option(
 mod tests {
     use super::*;
     use plec_parser::parse_module;
-    use plec_sema::build_semantic_graph;
+    use plec_model::build_semantic_graph;
 
     #[test]
     fn lowers_static_route_tree_to_a_deterministic_manifest() {

@@ -19,7 +19,6 @@ export interface AdoptionDetail {
   mismatchCodes: string[];
   snapshotImported?: boolean;
   textDivergences?: number;
-  conditionalInferences?: number;
   [key: string]: unknown;
 }
 

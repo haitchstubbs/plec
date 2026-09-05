@@ -9,7 +9,7 @@
 //! because shipping a release app must not require the WASM toolchain — the
 //! app build (`plec build`) stages the prebuilt artifact and fails loudly when
 //! it is missing. Producer and verifier remain separate layers:
-//! `plec dev artifact stale` audits whatever this command produced.
+//! `plec workspace artifact stale` audits whatever this command produced.
 
 use serde::Serialize;
 use std::process::Command;
@@ -183,7 +183,7 @@ pub fn print_report(report: &CompileReport) {
     }
     println!("  output     {}", report.out_dir);
     println!(
-        "next: plec build stages this artifact; plec dev artifact stale verifies the pipeline"
+        "next: plec build stages this artifact; plec workspace artifact stale verifies the pipeline"
     );
 }
 

@@ -7,14 +7,15 @@ edition.workspace = true
 plec-inspect = { path = "../plec-inspect" }
 plec-ir = { path = "../plec-ir" }
 plec-parser = { path = "../plec-parser" }
-plec-sema = { path = "../plec-sema" }
+plec-model = { path = "../plec-model" }
 plec-compiler = { path = "../plec-compiler" }
+plec-build = { path = "../plec-build" }
 clap = { workspace = true }
 pollster = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
-brotli = "8"
-sha2 = "0.10"
+brotli = { workspace = true }
+sha2 = { workspace = true }
 [[bin]]
 name = "plec"
 path = "src/main.rs"

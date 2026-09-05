@@ -1,0 +1,119 @@
+{
+  "version": "0.10",
+  "rootNode": 0,
+  "strings": ["button", "click"],
+  "constants": [0.0, 1.0],
+  "nodes": [
+    {
+      "op": "element",
+      "tag": 0,
+      "parent": null,
+      "children": [1]
+    },
+    {
+      "op": "text",
+      "text": 0,
+      "parent": 0
+    }
+  ],
+  "texts": [
+    {
+      "binding": 0
+    }
+  ],
+  "bindings": [
+    {
+      "target": 1,
+      "sink": "text",
+      "expression": 1
+    }
+  ],
+  "propPrograms": [],
+  "events": [
+    {
+      "target": 0,
+      "type": 1,
+      "action": 0
+    }
+  ],
+  "inputs": [],
+  "stateSlots": [
+    {
+      "initialExpression": 0,
+      "frameSlot": 0
+    }
+  ],
+  "expressions": [
+    {
+      "instructions": [
+        {
+          "op": "constant",
+          "constant": 0
+        },
+        {
+          "op": "return"
+        }
+      ]
+    },
+    {
+      "instructions": [
+        {
+          "op": "loadState",
+          "state": 0
+        },
+        {
+          "op": "return"
+        }
+      ]
+    },
+    {
+      "instructions": [
+        {
+          "op": "loadState",
+          "state": 0
+        },
+        {
+          "op": "constant",
+          "constant": 1
+        },
+        {
+          "op": "binary",
+          "kind": "add"
+        },
+        {
+          "op": "return"
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "instructions": [
+        {
+          "op": "evaluate",
+          "expression": 2
+        },
+        {
+          "op": "storeState",
+          "state": 0
+        },
+        {
+          "op": "return"
+        }
+      ]
+    }
+  ],
+  "loops": [],
+  "dependencyEdges": [
+    {
+      "source": {
+        "kind": "state",
+        "handle": 0
+      },
+      "target": {
+        "kind": "binding",
+        "handle": 0
+      }
+    }
+  ]
+}

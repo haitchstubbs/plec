@@ -1,5 +1,6 @@
-//! End-to-end tests for the shared `com::build` application pipeline,
-//! exercised through the `plec` CLI build subcommand.
+//! End-to-end tests for the shared application build pipeline
+//! (`plec_build::modules::build`), exercised through the `plec` CLI build
+//! subcommand that delegates to it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -198,6 +199,150 @@ fn forbidden_browser_dependency_fails_the_build() {
     assert!(
         stderr.contains("node_modules/zod"),
         "failure must include import path information: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Out-of-repo builds: the `plec` package arrives as an installed dependency
+// and the runtime assets stage from `node_modules/plec/dist/runtime`.
+// ---------------------------------------------------------------------------
+
+/// The workspace root, for reaching the real node_modules install.
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("plec-cli sits three levels below the workspace root")
+        .to_path_buf()
+}
+
+/// A project directory outside the workspace. Must not live under
+/// `CARGO_TARGET_TMPDIR`: the target tree is inside the workspace, and the
+/// repo-root heuristic would then resolve the monorepo runtime instead of
+/// exercising the installed-package path.
+fn out_of_repo_project(tag: &str) -> PathBuf {
+    let project = std::env::temp_dir()
+        .join("plec-build-out-of-repo")
+        .join(tag);
+    let _ = fs::remove_dir_all(&project);
+    fs::create_dir_all(project.join("node_modules")).expect("project dir should be creatable");
+    project
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).expect("destination dir should be creatable");
+    for entry in fs::read_dir(src).expect("source dir should be readable") {
+        let entry = entry.expect("source entry should be readable");
+        let file_type = entry.file_type().expect("entry type should be readable");
+        let target = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).expect("file copy should succeed");
+        }
+    }
+}
+
+/// Copy the real esbuild install so the browser/server bundles can run from
+/// the isolated project directory.
+fn install_esbuild(project: &Path) {
+    let node_modules = workspace_root().join("node_modules");
+    copy_dir_all(
+        &node_modules.join("esbuild"),
+        &project.join("node_modules/esbuild"),
+    );
+    let platform_packages = node_modules.join("@esbuild");
+    if platform_packages.is_dir() {
+        copy_dir_all(&platform_packages, &project.join("node_modules/@esbuild"));
+    }
+}
+
+/// Install a minimal stand-in for the release `plec` package: the exports the
+/// fixture apps import plus the staged runtime assets, with `runtime.js`
+/// carrying a marker so the test can prove which source staged them.
+fn install_plec_package(project: &Path, runtime_marker: &str) {
+    let plec = project.join("node_modules/plec");
+    fs::create_dir_all(plec.join("dist/runtime")).expect("plec package dirs should be creatable");
+    fs::write(
+        plec.join("package.json"),
+        r#"{"name":"plec","type":"module","exports":{".":"./dist/browser.js"}}"#,
+    )
+    .expect("plec package.json should be writable");
+    fs::write(
+        plec.join("dist/browser.js"),
+        "export function createRouter() { return {}; }\n\
+         export function createRootRoute() { return {}; }\n",
+    )
+    .expect("plec browser stub should be writable");
+    fs::write(plec.join("dist/runtime/runtime.js"), runtime_marker)
+        .expect("runtime.js stub should be writable");
+    // Minimal valid WASM binary header; the Rust tests never execute it.
+    fs::write(
+        plec.join("dist/runtime/runtime_bg.wasm"),
+        b"\0asm\x01\x00\x00\x00",
+    )
+    .expect("runtime_bg.wasm stub should be writable");
+}
+
+#[test]
+fn builds_out_of_repo_app_from_installed_plec_package() {
+    let project = out_of_repo_project("installed-package");
+    let app = project.join("mini-app");
+    copy_dir_all(&fixture_app("mini-app"), &app);
+    install_esbuild(&project);
+    install_plec_package(&project, "installed-package-runtime");
+
+    let out_dir = project.join("dist");
+    let output = run_build(&app, &out_dir, &[]);
+    assert_success(&output);
+
+    // The staged runtime must be the installed package's, not some
+    // workspace-ancestor copy: no workspace exists above this directory.
+    let staged = read(out_dir.join("public/runtime/runtime.js"));
+    assert_eq!(
+        staged, "installed-package-runtime",
+        "runtime assets must stage from node_modules/plec/dist/runtime"
+    );
+
+    // Same minimum artifact structure as the in-workspace build.
+    for artifact in [
+        "server.mjs",
+        "client.meta.json",
+        "public/index.html",
+        "public/route-manifest.json",
+        "public/runtime/runtime_bg.wasm",
+    ] {
+        assert!(
+            out_dir.join(artifact).is_file(),
+            "out-of-repo build should emit {artifact}"
+        );
+    }
+}
+
+#[test]
+fn staging_failure_names_both_resolution_paths() {
+    let project = out_of_repo_project("missing-runtime");
+    let app = project.join("mini-app");
+    copy_dir_all(&fixture_app("mini-app"), &app);
+    // No node_modules/plec installed: runtime staging has nowhere to resolve.
+
+    // Runtime staging runs before any bundling, so esbuild is not needed.
+    let out_dir = project.join("dist");
+    let output = run_build(&app, &out_dir, &[]);
+
+    assert!(
+        !output.status.success(),
+        "build must fail without any runtime artifact source"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("packages/plec-runtime/dist/runtime"),
+        "failure must name the workspace runtime path: {stderr}"
+    );
+    assert!(
+        stderr.contains("node_modules/plec/dist/runtime"),
+        "failure must name the installed-package runtime path: {stderr}"
     );
 }
 
