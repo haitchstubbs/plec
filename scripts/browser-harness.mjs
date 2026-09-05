@@ -1,8 +1,9 @@
 // scripts/browser-harness.mjs
 
-import { accessSync, constants } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { accessSync, constants, existsSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdir as mkdirAsync, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 import { findPlaywrightChromium } from './utils.js';
 
@@ -68,6 +69,40 @@ function resolveBrowserExecutable() {
   return findPlaywrightChromium();
 }
 
+function wasmPackCacheRoot() {
+  // Mirrors wasm-pack's cache_dir() lookup (dirs crate) for the platforms
+  // this harness supports.
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Caches', '.wasm-pack');
+  }
+
+  return path.join(os.homedir(), '.cache', '.wasm-pack');
+}
+
+/// wasm-pack resolves its own downloaded chromedriver cache ahead of
+/// CHROMEDRIVER/PATH, so a stale cache entry can silently mismatch the
+/// pinned browser (wasm-pack refreshed its cache mid-session here and
+/// downgraded the suite to a hanging driver/browser pair). Point every
+/// cached chromedriver entry at the pinned repo driver instead.
+function pinWasmPackChromedriver(chromeDriver) {
+  const cacheRoot = wasmPackCacheRoot();
+
+  if (!existsSync(cacheRoot)) {
+    return;
+  }
+
+  for (const entry of readdirSync(cacheRoot)) {
+    if (!entry.startsWith('chromedriver-')) {
+      continue;
+    }
+
+    const entryDir = path.join(cacheRoot, entry);
+    rmSync(entryDir, { recursive: true, force: true });
+    mkdirSync(entryDir, { recursive: true });
+    symlinkSync(chromeDriver, path.join(entryDir, path.basename(chromeDriver)));
+  }
+}
+
 function majorVersion(binary, versionFlag) {
   const result = spawnSync(binary, [versionFlag], { encoding: 'utf8' });
   return /(\d+)\./.exec(result.stdout ?? '')?.[1];
@@ -113,6 +148,8 @@ if (!process.exitCode) {
 if (!process.exitCode) {
   const driverDir = path.dirname(chromeDriver);
 
+  pinWasmPackChromedriver(chromeDriver);
+
   console.log(`Using ChromeDriver: ${chromeDriver}`);
   if (browserExecutable) {
     console.log(`Using Chrome browser: ${browserExecutable}`);
@@ -125,7 +162,7 @@ if (!process.exitCode) {
   let webdriverJson;
   if (browserExecutable) {
     webdriverJson = path.join(repoRoot, 'target', 'webdriver.json');
-    await mkdir(path.dirname(webdriverJson), { recursive: true });
+    await mkdirAsync(path.dirname(webdriverJson), { recursive: true });
     await writeFile(
       webdriverJson,
       JSON.stringify({

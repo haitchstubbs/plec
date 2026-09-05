@@ -1,7 +1,11 @@
-//! Browser listener wiring for client-side navigation. Closures hold a raw
-//! pointer to the shared `RuntimeState` (kept alive by the wasm facade) to
-//! avoid an `Rc` cycle between the state and its own listeners; disposal
-//! drains the listeners before the state can be released.
+//! Browser listener wiring for client-side navigation. Closures hold a
+//! `Weak` handle to the shared `RuntimeState`: the `Weak` never forms an
+//! `Rc` cycle with the state's own listener list, and once the wasm facade
+//! (the only strong owner) is released without `dispose`, `upgrade`
+//! returns `None` so a surviving browser callback can never reach freed
+//! state.
+
+use std::rc::Weak;
 
 use plec_client::prelude::*;
 use plec_client::state::RuntimeState;
@@ -9,10 +13,10 @@ use plec_dom::platform::{document, window};
 
 use crate::navigation::navigate_typed_route;
 
-pub fn install_router_listeners(state: &RuntimeState) -> Result<(), JsValue> {
+pub fn install_router_listeners(state: &Rc<RuntimeState>) -> Result<(), JsValue> {
     let document = document()?;
     let document_target: EventTarget = document.clone().into();
-    let runtime: *const RuntimeState = state;
+    let runtime: Weak<RuntimeState> = Rc::downgrade(state);
     let click = Closure::wrap(Box::new(move |event: Event| {
         let Ok(mouse) = event.clone().dyn_into::<MouseEvent>() else {
             return;
@@ -55,11 +59,9 @@ pub fn install_router_listeners(state: &RuntimeState) -> Result<(), JsValue> {
             return;
         };
         event.prevent_default();
-        unsafe {
-            if let Some(runtime) = runtime.as_ref() {
-                if let Some(root) = runtime.typed_root.borrow().clone() {
-                    let _ = navigate_typed_route(runtime, &href, root, false, true);
-                }
+        if let Some(runtime) = runtime.upgrade() {
+            if let Some(root) = runtime.typed_root.borrow().clone() {
+                let _ = navigate_typed_route(&runtime, &href, root, false, true);
             }
         }
     }) as Box<dyn FnMut(Event)>);
@@ -70,9 +72,9 @@ pub fn install_router_listeners(state: &RuntimeState) -> Result<(), JsValue> {
         callback: click,
     });
     let window_target: EventTarget = window()?.into();
-    let runtime: *const RuntimeState = state;
-    let popstate = Closure::wrap(Box::new(move |_event: Event| unsafe {
-        if let Some(runtime) = runtime.as_ref() {
+    let runtime: Weak<RuntimeState> = Rc::downgrade(state);
+    let popstate = Closure::wrap(Box::new(move |_event: Event| {
+        if let Some(runtime) = runtime.upgrade() {
             if let Ok(location) = window().and_then(|window| {
                 let location = window.location();
                 Ok(format!(
@@ -83,7 +85,7 @@ pub fn install_router_listeners(state: &RuntimeState) -> Result<(), JsValue> {
                 ))
             }) {
                 if let Some(root) = runtime.typed_root.borrow().clone() {
-                    let _ = navigate_typed_route(runtime, &location, root, false, false);
+                    let _ = navigate_typed_route(&runtime, &location, root, false, false);
                 }
             }
         }

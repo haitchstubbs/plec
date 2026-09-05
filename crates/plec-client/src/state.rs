@@ -94,6 +94,22 @@ impl RuntimeState {
     }
 }
 
+/// Releasing the state must unregister the browser listeners it owns: the
+/// registered callbacks otherwise outlive the facade and a later browser
+/// event would invoke a dropped wasm closure. Explicit `dispose` drains the
+/// same list first, so this is the idempotent backstop for a runtime that
+/// was released without a prior dispose.
+impl Drop for RuntimeState {
+    fn drop(&mut self) {
+        for listener in self.router_listeners.borrow_mut().drain(..) {
+            let _ = listener.target.remove_event_listener_with_callback(
+                &listener.event_type,
+                listener.callback.as_ref().unchecked_ref(),
+            );
+        }
+    }
+}
+
 pub fn graph_instance_id(parent: Option<&str>, outlet: &str, key: Option<&str>) -> String {
     let segment = |value: &str| value.replace('%', "%25").replace('/', "%2F");
     let parent = parent.map(segment).unwrap_or_else(|| "root".into());

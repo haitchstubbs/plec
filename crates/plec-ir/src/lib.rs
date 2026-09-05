@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub mod sink;
+
 pub const VERSION: &str = "0.10";
 // The component graph schema is still in its 0.10 development window.  Keep
 // additions in this contract until it is deliberately released.

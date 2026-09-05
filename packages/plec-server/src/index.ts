@@ -980,23 +980,54 @@ function renderNode(
   // later writes overwrite earlier attribute names (same-key overwrites keep
   // their original position), mirroring the runtime's sequential application.
   const attributes = new Map<string, string | null>();
-  // Backstop for the reserved DOM metadata namespace
-  // (docs/dom-address-protocol.md): literal JSX collisions already fail at
-  // compile time, but spread bags are evaluated at render time, so the only
-  // cheap enforcement left is here. Fail the render closed — a reserved name
-  // that reached markup would collide with adoption markers.
+  // Backstop for the DOM-sink policy (crates/plec-ir/src/sink.rs) and the
+  // reserved DOM metadata namespace (docs/dom-address-protocol.md): literal
+  // JSX collisions already fail at compile time, but spread bags are
+  // evaluated at render time, so the only cheap enforcement left is here.
+  // Fail the render closed — a reserved name that reached markup would
+  // collide with adoption markers, and HTML attribute lookup is
+  // case-insensitive, so `ONCLICK` is as much a script sink as `onclick`.
+  const URL_SCHEME_ATTRIBUTES = new Set([
+    'href', 'src', 'action', 'formaction', 'xlink:href',
+    'poster', 'background', 'cite', 'data', 'longdesc', 'ping',
+  ]);
+  const isUnsafeUrlValue = (value: string): boolean => {
+    // ASCII whitespace/control characters are stripped before scheme parsing
+    // by browsers; drop them exactly like the Rust sink policy.
+    const normalized = Array.from(value)
+      .filter((c) => {
+        const code = c.charCodeAt(0);
+        const asciiWhitespace =
+          code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d || code === 0x20;
+        return !asciiWhitespace && !(code <= 0x1f || code === 0x7f);
+      })
+      .join('')
+      .toLowerCase();
+    if (normalized.startsWith('javascript:') || normalized.startsWith('vbscript:')) return true;
+    if (normalized.startsWith('data:')) {
+      return !['data:image/png', 'data:image/jpeg', 'data:image/gif', 'data:image/webp']
+        .some((prefix) => normalized.startsWith(prefix));
+    }
+    return false;
+  };
   const writeAttribute = (name: string, value: unknown) => {
+    const lower = name.toLowerCase();
     if (
-      name.startsWith('data-plec-') ||
-      name.startsWith('data-runtime-') ||
-      name.startsWith('plec:')
+      lower.startsWith('data-plec-') ||
+      lower.startsWith('data-runtime-') ||
+      lower.startsWith('plec:')
     )
       throw new Error(`RESERVED_ATTRIBUTE:${name}`);
-    if (name.startsWith('on')) return;
+    if (lower === 'srcdoc')
+      throw new Error(`UNSAFE_ATTRIBUTE:${name}`);
+    if (lower.startsWith('on')) return;
     if (value === false || value === null || value === undefined)
       return;
     const attr = name === 'className' ? 'class' : name;
-    attributes.set(attr, value === true ? null : String(value));
+    const text = value === true ? '' : String(value);
+    if (URL_SCHEME_ATTRIBUTES.has(attr) && isUnsafeUrlValue(text))
+      throw new Error(`UNSAFE_URL_ATTRIBUTE:${attr}`);
+    attributes.set(attr, value === true ? null : text);
   };
   component.propPrograms
     .filter((program) => program.target === index)

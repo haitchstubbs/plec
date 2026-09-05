@@ -1217,6 +1217,61 @@ impl TypedApplication {
                 return Err("ref input handle out of range");
             }
         }
+        // DOM-sink policy (plec_ir::sink): bindings and prop programs are the
+        // only element mutation channels, so their sinks are validated here
+        // before any substituted artifact reaches the runtime applier.
+        for binding in &self.bindings {
+            if binding.target >= self.nodes.len() {
+                return Err("binding target handle out of range");
+            }
+            match binding.sink.as_str() {
+                "text" => {}
+                "attribute" | "property" => {
+                    let name = binding
+                        .name
+                        .and_then(|handle| self.strings.get(handle))
+                        .ok_or("binding name handle out of range")?;
+                    let safe = if binding.sink == "attribute" {
+                        plec_ir::sink::is_safe_attribute_name(name)
+                    } else {
+                        plec_ir::sink::is_safe_property_name(name)
+                    };
+                    if !safe {
+                        return Err("unsafe typed binding sink");
+                    }
+                }
+                _ => return Err("unsupported typed binding sink"),
+            }
+        }
+        for program in &self.prop_programs {
+            if program.target >= self.nodes.len() {
+                return Err("prop program target handle out of range");
+            }
+            for write in &program.writes {
+                match write.kind.as_str() {
+                    "attribute" | "property" => {}
+                    _ => return Err("unsupported typed prop write kind"),
+                }
+                if write.spread {
+                    if write.name.is_some() {
+                        return Err("spread prop write cannot carry a name handle");
+                    }
+                    continue;
+                }
+                let name = write
+                    .name
+                    .and_then(|handle| self.strings.get(handle))
+                    .ok_or("prop write name handle out of range")?;
+                let safe = if write.kind == "attribute" {
+                    plec_ir::sink::is_safe_attribute_name(name)
+                } else {
+                    plec_ir::sink::is_safe_property_name(name)
+                };
+                if !safe {
+                    return Err("unsafe typed prop write sink");
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -1493,5 +1548,129 @@ mod tests {
             loop_def,
         );
         assert!(missing_loop.validate_contract().is_err());
+    }
+
+    fn sink_application(bindings: Value, prop_programs: Value, strings: Value) -> TypedApplication {
+        serde_json::from_value(serde_json::json!({
+            "version": "0.10",
+            "rootNode": 0,
+            "strings": strings,
+            "nodes": [{"op": "element", "tag": 0, "children": []}],
+            "expressions": [{"instructions": []}],
+            "bindings": bindings,
+            "propPrograms": prop_programs
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn typed_application_validation_rejects_hostile_binding_sinks() {
+        let strings = serde_json::json!(["div", "innerHTML", "ONCLICK", "srcdoc", "data-plec-node", "value", "href"]);
+        // Property sink is allowlisted: innerHTML must never be a sink.
+        assert_eq!(
+            sink_application(
+                serde_json::json!([{"target":0,"sink":"property","name":1,"expression":0}]),
+                serde_json::json!([]),
+                strings
+            )
+            .validate_contract(),
+            Err("unsafe typed binding sink")
+        );
+        let strings = serde_json::json!(["div", "innerHTML", "ONCLICK", "srcdoc", "data-plec-node", "value", "href"]);
+        // Attribute sink rejects event-handler casing, srcdoc, and the
+        // reserved runtime namespace.
+        for name in [2, 3, 4] {
+            assert_eq!(
+                sink_application(
+                    serde_json::json!([{"target":0,"sink":"attribute","name":name,"expression":0}]),
+                    serde_json::json!([]),
+                    strings.clone()
+                )
+                .validate_contract(),
+                Err("unsafe typed binding sink")
+            );
+        }
+        // Unknown sinks and dangling name handles fail closed.
+        assert_eq!(
+            sink_application(
+                serde_json::json!([{"target":0,"sink":"innerHTML","name":1,"expression":0}]),
+                serde_json::json!([]),
+                strings.clone()
+            )
+            .validate_contract(),
+            Err("unsupported typed binding sink")
+        );
+        assert_eq!(
+            sink_application(
+                serde_json::json!([{"target":0,"sink":"attribute","name":99,"expression":0}]),
+                serde_json::json!([]),
+                strings
+            )
+            .validate_contract(),
+            Err("binding name handle out of range")
+        );
+    }
+
+    #[test]
+    fn typed_application_validation_accepts_supported_binding_sinks() {
+        let app = sink_application(
+            serde_json::json!([
+                {"target":0,"sink":"text","expression":0},
+                {"target":0,"sink":"attribute","name":0,"expression":0},
+                {"target":0,"sink":"property","name":1,"expression":0},
+                {"target":0,"sink":"attribute","name":2,"expression":0}
+            ]),
+            serde_json::json!([{"target":0,"writes":[
+                {"name":0,"kind":"attribute","constant":0},
+                {"kind":"attribute","expression":0,"spread":true},
+                {"name":1,"kind":"property","expression":0}
+            ]}]),
+            serde_json::json!(["div", "value", "href"])
+        );
+        assert!(app.validate_contract().is_ok());
+    }
+
+    #[test]
+    fn typed_application_validation_rejects_hostile_prop_write_sinks() {
+        let strings = serde_json::json!(["div", "innerHTML", "ONCLICK", "checked"]);
+        // Crafted property-sink IR selecting innerHTML must be rejected
+        // before it reaches the runtime applier.
+        assert_eq!(
+            sink_application(
+                serde_json::json!([]),
+                serde_json::json!([{"target":0,"writes":[{"name":1,"kind":"property","expression":0}]}]),
+                strings.clone()
+            )
+            .validate_contract(),
+            Err("unsafe typed prop write sink")
+        );
+        assert_eq!(
+            sink_application(
+                serde_json::json!([]),
+                serde_json::json!([{"target":0,"writes":[{"name":2,"kind":"attribute","expression":0}]}]),
+                strings.clone()
+            )
+            .validate_contract(),
+            Err("unsafe typed prop write sink")
+        );
+        assert_eq!(
+            sink_application(
+                serde_json::json!([]),
+                serde_json::json!([{"target":0,"writes":[{"name":3,"kind":"style","expression":0}]}]),
+                strings.clone()
+            )
+            .validate_contract(),
+            Err("unsupported typed prop write kind")
+        );
+        // Spread writes stay anonymous; a named spread is malformed.
+        assert_eq!(
+            sink_application(
+                serde_json::json!([]),
+                serde_json::json!([{"target":0,"writes":[{"name":3,"kind":"attribute","expression":0,"spread":true}]}]),
+                strings
+            )
+            .validate_contract(),
+            Err("spread prop write cannot carry a name handle")
+        );
     }
 }

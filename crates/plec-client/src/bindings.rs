@@ -6,6 +6,9 @@ use plec_eval::eval::*;
 use std::collections::HashMap;
 use wasm_bindgen::{prelude::*, JsCast};
 
+use plec_ir::sink::{
+    is_safe_attribute_name, is_safe_attribute_value, is_safe_property_name,
+};
 use plec_schema::delta::RuntimeValue;
 use plec_schema::typed::{TypedApplication, TypedBinding};
 use web_sys::{Element, Node};
@@ -46,7 +49,12 @@ pub fn typed_apply_value(
         .and_then(|handle| app.strings.get(handle))
         .map(String::as_str)
         .unwrap_or("");
+    // DOM-sink policy (plec_ir::sink). Names came from the validated artifact,
+    // so a rejection here means substituted or tampered IR: fail closed.
     if sink == "property" {
+        if !is_safe_property_name(name) {
+            return Err(JsValue::from_str("unsafe property binding sink"));
+        }
         if let Ok(input) = element.clone().dyn_into::<web_sys::HtmlInputElement>() {
             if name == "checked" {
                 let checked = matches!(value, RuntimeValue::Bool(true));
@@ -71,7 +79,15 @@ pub fn typed_apply_value(
             &serde_wasm_bindgen::to_value(&value)?,
         )
         .map_err(|_| JsValue::from_str("property write failed"))?;
-    } else if name == "checked" || name == "disabled" {
+        return Ok(());
+    }
+    if sink != "attribute" {
+        return Err(JsValue::from_str("unsupported binding sink"));
+    }
+    if !is_safe_attribute_name(name) {
+        return Err(JsValue::from_str("unsafe attribute binding sink"));
+    }
+    if name == "checked" || name == "disabled" {
         let enabled = matches!(value, RuntimeValue::Bool(true));
         if let Ok(input) = element.clone().dyn_into::<web_sys::HtmlInputElement>() {
             if name == "checked" {
@@ -86,9 +102,13 @@ pub fn typed_apply_value(
             element.remove_attribute(name)?;
         }
     } else {
+        let value = typed_value_string(&value);
+        if !is_safe_attribute_value(name, &value) {
+            return Err(JsValue::from_str("unsafe attribute binding value"));
+        }
         element.set_attribute(
             if name == "className" { "class" } else { name },
-            &typed_value_string(&value),
+            &value,
         )?;
     }
     Ok(())
@@ -130,16 +150,37 @@ pub fn typed_apply_spread(
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .collect::<std::collections::HashSet<_>>();
-    let current = values
-        .keys()
-        .cloned()
-        .collect::<std::collections::HashSet<_>>();
-    for stale in previous.difference(&current) {
+    // DOM-sink policy (plec_ir::sink). Spread keys come from evaluated app
+    // data, so hostile keys (event-handler casing, srcdoc, script URL
+    // schemes) are skipped instead of applied, mirroring the SSR serializer.
+    // Only policy-approved keys join the bookkeeping set so stale removal
+    // never resurrects a sink the policy rejected.
+    let mut applied = std::collections::HashSet::new();
+    for (name, value) in &values {
+        if !is_safe_attribute_name(name) {
+            continue;
+        }
+        if !matches!(value, RuntimeValue::Bool(false) | RuntimeValue::Null)
+            && !is_safe_attribute_value(name, &typed_value_string(value))
+        {
+            continue;
+        }
+        applied.insert(name.clone());
+    }
+    for stale in previous.difference(&applied) {
         let name = if stale == "className" { "class" } else { stale };
+        if !is_safe_attribute_name(stale) {
+            continue;
+        }
         element.remove_attribute(name)?;
-        let _ = js_sys::Reflect::set(&element, &JsValue::from_str(stale), &JsValue::UNDEFINED);
+        if is_safe_property_name(stale) {
+            let _ = js_sys::Reflect::set(&element, &JsValue::from_str(stale), &JsValue::UNDEFINED);
+        }
     }
     for (name, value) in values {
+        if !applied.contains(&name) {
+            continue;
+        }
         if name == "checked" {
             if let Ok(input) = element.clone().dyn_into::<web_sys::HtmlInputElement>() {
                 input.set_checked(matches!(value, RuntimeValue::Bool(true)));
@@ -166,7 +207,7 @@ pub fn typed_apply_spread(
     }
     element.set_attribute(
         "data-plec-spread-keys",
-        &current.into_iter().collect::<Vec<_>>().join("\u{1f}"),
+        &applied.into_iter().collect::<Vec<_>>().join("\u{1f}"),
     )?;
     Ok(())
 }
