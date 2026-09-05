@@ -10,6 +10,7 @@ use plec_hir::{
     HirTemplatePart, HirText, HirUnaryOp, HirValue, NodeId, SourceSpan,
 };
 use plec_model::{resolve_component, ComponentPropKind, SemanticGraph};
+use plec_ir::sink::is_safe_attribute_value;
 use swc_common::{Span, Spanned};
 use swc_ecma_ast::{
     ArrowFunctionBody, BinaryOp, Callee, Decl, Expr, Function, JSXAttr, JSXAttrName,
@@ -2055,6 +2056,35 @@ fn is_reserved_dom_attribute(name: &str) -> bool {
     name.starts_with("data-plec-") || name.starts_with("data-runtime-") || name.starts_with("plec:")
 }
 
+/// DOM-sink policy for authored intrinsic-element props
+/// (crates/plec-ir/src/sink.rs). HTML attribute lookup is case-insensitive,
+/// so any non-canonical `on*` spelling (`onclick`, `ONCLICK`) would reach the
+/// runtime as a live event handler; canonical `onClick` routes through the
+/// declared event contract instead. `srcdoc` is an inline document sink and
+/// is never a supported prop.
+fn reject_hostile_intrinsic_attr(name: &str) -> Result<(), String> {
+    let lower = name.to_ascii_lowercase();
+    if lower == "srcdoc" {
+        return Err(format!(
+            "JSX attribute '{name}' is a document sink and is not supported by Plec (docs/dom-address-protocol.md)"
+        ));
+    }
+    if lower.starts_with("on") {
+        let canonical = name.len() > 2
+            && name[2..]
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_uppercase())
+                .unwrap_or(false);
+        if !canonical {
+            return Err(format!(
+                "JSX event attribute '{name}' must use the canonical camelCase form (onClick) and a function expression; string handlers are not supported"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Lower JSX attributes to HIR props.
 fn lower_jsx_attr(
     attr: &JSXAttr,
@@ -2070,6 +2100,9 @@ fn lower_jsx_attr(
             "Reserved Plec DOM attribute '{name}' is owned by the runtime and cannot be authored in JSX (docs/dom-address-protocol.md)"
         ));
     }
+    if component_target.is_none() {
+        reject_hostile_intrinsic_attr(&name)?;
+    }
     if name == "key" {
         return Err(
             "JSX key is only supported on the direct root of a .map() callback".to_string(),
@@ -2079,6 +2112,7 @@ fn lower_jsx_attr(
         return Err("component children must use JSX child syntax".to_string());
     }
 
+    let events_before = events.len();
     match &attr.value {
         Some(JSXAttrValue::Str(str_lit)) => {
             let value = str_lit
@@ -2086,7 +2120,15 @@ fn lower_jsx_attr(
                 .as_str()
                 .map(|s| s.to_string())
                 .unwrap_or_default();
-            props.push(HirProp::Static { name, value });
+            if component_target.is_none() && !is_safe_attribute_value(&name, &value) {
+                return Err(format!(
+                    "JSX attribute '{name}' value uses an unsafe URL scheme and cannot be authored in Plec (crates/plec-ir/src/sink.rs)"
+                ));
+            }
+            props.push(HirProp::Static {
+                name: name.clone(),
+                value,
+            });
         }
         Some(JSXAttrValue::JSXExprContainer(container)) => match &container.expr {
             JSXExpr::Expr(expr) => {
@@ -2121,7 +2163,10 @@ fn lower_jsx_attr(
                     _ => lower_callable(expr, CallablePolicy::InlineOnly, ctx)?,
                 };
                 if let Some(callable) = callable {
-                    props.push(HirProp::Callable { name, callable });
+                    props.push(HirProp::Callable {
+                        name: name.clone(),
+                        callable,
+                    });
                 } else {
                     // Components travel in a dedicated graph-handle channel,
                     // never through the serializable expression VM.
@@ -2131,7 +2176,7 @@ fn lower_jsx_attr(
                                 resolve_component(ctx.semantic_graph, ctx.module_id, &ident.sym)
                             {
                                 props.push(HirProp::Component {
-                                    name,
+                                    name: name.clone(),
                                     target: ComponentId::new(symbol.module_id, symbol.local_name),
                                 });
                                 return Ok(());
@@ -2141,14 +2186,14 @@ fn lower_jsx_attr(
                     // Not a callable - regular expression prop
                     let expr_id = lower_expression(expr, ctx)?;
                     props.push(HirProp::Expression {
-                        name,
+                        name: name.clone(),
                         value: expr_id,
                     });
                 }
             }
             JSXExpr::JSXEmptyExpr(_) => {
                 props.push(HirProp::Static {
-                    name,
+                    name: name.clone(),
                     value: String::new(),
                 });
             }
@@ -2159,6 +2204,17 @@ fn lower_jsx_attr(
             ))
         }
         Some(_) => return Err(format!("Unsupported JSX attribute value for '{name}'")),
+    }
+    // An intrinsic `on*` prop that survived the value match never became a
+    // declared event (string handlers, non-callable expressions), so it would
+    // reach the runtime as a script-sink attribute. Fail the compile closed.
+    if component_target.is_none()
+        && name.to_ascii_lowercase().starts_with("on")
+        && events.len() == events_before
+    {
+        return Err(format!(
+            "JSX event attribute '{name}' must be a canonical camelCase handler (onClick={{fn}}); string handlers are not supported"
+        ));
     }
     Ok(())
 }
@@ -3727,6 +3783,87 @@ mod tests {
         };
         assert!(matches!(&el.props[0], HirProp::Static { name, .. } if name == "data-variant"));
         assert!(matches!(&el.props[1], HirProp::Spread { .. }));
+    }
+
+    #[test]
+    fn rejects_lowercase_string_event_handler_attribute() {
+        let source = r#"
+            export function App() {
+                return <div onclick="alert(1)" />;
+            }
+        "#;
+
+        let error = build_and_lower(source).unwrap_err();
+        assert!(
+            error.contains("canonical camelCase form (onClick)"),
+            "unexpected diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_uppercase_string_event_handler_attribute() {
+        let source = r#"
+            export function App() {
+                return <div ONCLICK="alert(1)" />;
+            }
+        "#;
+
+        let error = build_and_lower(source).unwrap_err();
+        assert!(
+            error.contains("'ONCLICK' must be a canonical camelCase handler"),
+            "unexpected diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_srcdoc_attribute() {
+        let source = r#"
+            export function App() {
+                return <iframe srcdoc="<script>alert(1)</script>" />;
+            }
+        "#;
+
+        let error = build_and_lower(source).unwrap_err();
+        assert!(
+            error.contains("'srcdoc' is a document sink"),
+            "unexpected diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_javascript_url_literal() {
+        for scheme in ["javascript:alert(1)", "JAVASCRIPT:alert(1)", "vbscript:msgbox(1)"] {
+            let source = format!(
+                r#"
+                    export function App() {{
+                        return <a href="{scheme}">x</a>;
+                    }}
+                "#
+            );
+            let error = build_and_lower(&source).unwrap_err();
+            assert!(
+                error.contains("unsafe URL scheme"),
+                "unexpected diagnostic for {scheme}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_canonical_event_handler_and_safe_url() {
+        let source = r#"
+            export function App() {
+                return <a href="https://plec.dev" onClick={() => {}}>x</a>;
+            }
+        "#;
+
+        let hir = build_and_lower(source).expect("lowering should succeed");
+        let node_id = hir.root_nodes[0];
+        let HirNode::Element(el) = &hir.nodes[node_id.0 as usize] else {
+            panic!("expected element root");
+        };
+        assert!(matches!(&el.props[0], HirProp::Static { name, .. } if name == "href"));
+        assert_eq!(el.events.len(), 1);
+        assert_eq!(el.events[0].event, "click");
     }
 
     #[test]

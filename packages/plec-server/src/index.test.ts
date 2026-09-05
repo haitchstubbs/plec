@@ -1614,6 +1614,161 @@ it('fails the render closed when a spread bag carries a reserved attribute', asy
   );
 });
 
+// DOM-sink policy backstop (crates/plec-ir/src/sink.rs): hostile writes that
+// the compiler already rejects statically must also fail the serializer
+// closed when crafted or substituted artifacts reach the server.
+async function writeSinkPolicyArtifact(
+  publicDir: string,
+  component: Record<string, unknown>,
+): Promise<void> {
+  await writeFile(
+    path.join(publicDir, 'route-artifact.json'),
+    JSON.stringify({
+      manifest: {
+        revision: 'test-revision',
+        rootGraphId: 'root',
+        routes: [
+          { id: 'home', path: '', graphId: 'home', outletId: 'main' },
+        ],
+      },
+      graphs: [
+        {
+          graphId: 'root',
+          graph: {
+            rootComponent: 0,
+            components: [
+              {
+                rootNode: 0,
+                strings: ['main'],
+                constants: [],
+                nodes: [{ op: 'element', tag: 0, children: [] }],
+                texts: [],
+                bindings: [],
+                propPrograms: [],
+                stateSlots: [],
+                parameters: [],
+                expressions: [],
+                loops: [],
+                routeOutlets: [{ id: 'main', node: 0 }],
+              },
+            ],
+          },
+        },
+        {
+          graphId: 'home',
+          graph: { rootComponent: 0, components: [component] },
+        },
+      ],
+    }),
+  );
+}
+
+async function renderSinkPolicyPage(
+  component: Record<string, unknown>,
+): Promise<{ status: number; text: string }> {
+  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
+  await writeSinkPolicyArtifact(publicDir, component);
+  const server = createPlecServer({
+    publicDir,
+    artifactPath: path.join(publicDir, 'route-artifact.json'),
+    development: true,
+  });
+  servers.push(server);
+  server.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('missing test address');
+  const response = await fetch(`http://127.0.0.1:${address.port}/`);
+  return { status: response.status, text: await response.text() };
+}
+
+it('fails the render closed on srcdoc and script-URL attribute writes', async () => {
+  const srcdocPage = {
+    rootNode: 0,
+    strings: ['iframe', 'srcdoc'],
+    constants: ['<script>alert(1)</script>'],
+    nodes: [{ op: 'element', tag: 0, children: [] }],
+    texts: [],
+    bindings: [],
+    propPrograms: [
+      {
+        target: 0,
+        writes: [{ name: 1, kind: 'attribute', constant: 0 }],
+      },
+    ],
+    stateSlots: [],
+    parameters: [],
+    expressions: [],
+    loops: [],
+    routeOutlets: [],
+  };
+  const srcdoc = await renderSinkPolicyPage(srcdocPage);
+  expect(srcdoc.status).toBe(500);
+  expect(srcdoc.text).toContain('UNSAFE_ATTRIBUTE:srcdoc');
+
+  const javascriptPage = {
+    rootNode: 0,
+    strings: ['a', 'href'],
+    constants: ['  \tjava\nscript:alert(1)'],
+    nodes: [{ op: 'element', tag: 0, children: [] }],
+    texts: [],
+    bindings: [],
+    propPrograms: [
+      {
+        target: 0,
+        writes: [{ name: 1, kind: 'attribute', constant: 0 }],
+      },
+    ],
+    stateSlots: [],
+    parameters: [],
+    expressions: [],
+    loops: [],
+    routeOutlets: [],
+  };
+  const javascript = await renderSinkPolicyPage(javascriptPage);
+  expect(javascript.status).toBe(500);
+  expect(javascript.text).toContain('UNSAFE_URL_ATTRIBUTE:href');
+});
+
+it('drops hostile event-handler keys from spread bags in markup', async () => {
+  const hostileSpreadPage = {
+    rootNode: 0,
+    strings: ['div', 'ONCLICK', 'data-ok'],
+    constants: ['alert(1)', 'ok'],
+    nodes: [{ op: 'element', tag: 0, children: [] }],
+    texts: [],
+    bindings: [],
+    propPrograms: [
+      {
+        target: 0,
+        writes: [
+          { kind: 'attribute', expression: 0, spread: true },
+        ],
+      },
+    ],
+    stateSlots: [],
+    parameters: [],
+    expressions: [
+      {
+        instructions: [
+          { op: 'constant', constant: 0 },
+          { op: 'constant', constant: 1 },
+          { op: 'makeRecord', fields: [1, 2] },
+          { op: 'return' },
+        ],
+      },
+    ],
+    loops: [],
+    routeOutlets: [],
+  };
+  const page = await renderSinkPolicyPage(hostileSpreadPage);
+  expect(page.status).toBe(200);
+  const html = page.text.toLowerCase();
+  expect(html).not.toContain('onclick');
+  expect(html).toContain('data-ok="ok"');
+});
+
 it('passes named props to a dynamic island component and serializes its spread', async () => {
   const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
   // NavLink-style call: `<Icon className="size-4 shrink-0" />` where `Icon`

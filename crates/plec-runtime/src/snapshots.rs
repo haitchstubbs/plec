@@ -25,6 +25,7 @@ fn default_order_sensitive() -> bool {
 }
 
 pub(crate) enum SnapshotProjection {
+    #[allow(dead_code)]
     Value(Vec<Value>),
     Collection {
         keys: Vec<String>,

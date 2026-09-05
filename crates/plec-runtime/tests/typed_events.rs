@@ -1,10 +1,10 @@
 #![cfg(target_arch = "wasm32")]
 
 use plec_runtime::PlecRuntime;
-use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::*;
-use web_sys::{Element, Event};
+use web_sys::{Element, Event, MouseEvent, MouseEventInit};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -79,6 +79,80 @@ impl Drop for BrowserLocationGuard {
 
 fn reset_browser_location() -> BrowserLocationGuard {
     reset_browser_location_to("/")
+}
+
+/// Document-level router listeners only observe clicks that propagate
+/// through the document, so router-listener tests attach their root and
+/// always detach it again, even on failure.
+struct AttachedRootGuard(Element);
+
+impl AttachedRootGuard {
+    fn attach(root: &Element) -> Self {
+        let guard = AttachedRootGuard(root.clone());
+        web_sys::window()
+            .unwrap()
+            .document()
+            .unwrap()
+            .body()
+            .unwrap()
+            .append_child(&guard.0)
+            .unwrap();
+        guard
+    }
+}
+
+impl Drop for AttachedRootGuard {
+    fn drop(&mut self) {
+        self.0.remove();
+    }
+}
+
+/// Clicks an `<a href>` and lets the event propagate to the document-level
+/// router listener. `cancel_default` exists for the released/disposed
+/// runtime cases: no runtime listener cancels the click then, and Chrome
+/// would otherwise perform the anchor's default navigation away from the
+/// harness page. The alive case passes `false` so the assertion proves the
+/// runtime itself cancels the default.
+fn click_anchor(root: &Element, href: &str, cancel_default: bool) {
+    let document = web_sys::window().unwrap().document().unwrap();
+    let anchor = document.create_element("a").unwrap();
+    anchor.set_attribute("href", href).unwrap();
+    root.append_child(&anchor).unwrap();
+    let cancel = if cancel_default {
+        let cancel_default = Closure::wrap(Box::new(|event: Event| {
+            event.prevent_default();
+        }) as Box<dyn FnMut(Event)>);
+        anchor
+            .add_event_listener_with_callback("click", cancel_default.as_ref().unchecked_ref())
+            .unwrap();
+        Some(cancel_default)
+    } else {
+        None
+    };
+    let init = MouseEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    let target: web_sys::EventTarget = anchor.into();
+    target
+        .dispatch_event(&MouseEvent::new_with_mouse_event_init_dict("click", &init).unwrap())
+        .unwrap();
+    if let Some(cancel_default) = cancel {
+        target
+            .remove_event_listener_with_callback("click", cancel_default.as_ref().unchecked_ref())
+            .unwrap();
+    }
+}
+
+fn dispatch_window_popstate() {
+    let window = web_sys::window().unwrap();
+    let target: web_sys::EventTarget = window.into();
+    target
+        .dispatch_event(&Event::new("popstate").unwrap())
+        .unwrap();
+}
+
+fn window_pathname() -> String {
+    web_sys::window().unwrap().location().pathname().unwrap()
 }
 
 fn reset_browser_location_to(path: &str) -> BrowserLocationGuard {
@@ -1913,6 +1987,117 @@ fn navigation_refreshes_location_props_in_child_components() {
     let link = root.query_selector("a").unwrap().unwrap();
     assert_eq!(link.text_content().as_deref(), Some("/next"));
     assert_eq!(link.get_attribute("aria-current").as_deref(), Some("page"));
+}
+
+fn router_release_graph() -> serde_json::Value {
+    let mut graph = navigation_route_artifact()["components"][0].clone();
+    graph["routeOutlets"] = serde_json::json!([{"id":"main","node":0}]);
+    component_application(&graph)
+}
+
+fn router_release_manifest() -> JsValue {
+    js_sys::JSON::parse(
+        &serde_json::json!({
+            "version":3,"rootGraphId":"app","routes":[
+                {"id":"index","path":"/","graphId":"page","outletId":"main"},
+                {"id":"next","path":"/next","graphId":"page","outletId":"main"}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap()
+}
+
+/// Router-listener contract while the facade is alive: an anchor click
+/// intercepts and navigates.
+#[wasm_bindgen_test]
+fn alive_router_anchor_click_navigates() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    let _attached = AttachedRootGuard::attach(&root);
+    runtime
+        .register_graph(
+            "app".into(),
+            serde_wasm_bindgen::to_value(&router_release_graph()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "page".into(),
+            serde_wasm_bindgen::to_value(&router_release_graph()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .start(root.clone(), router_release_manifest())
+        .unwrap();
+    assert_eq!(root.text_content().unwrap(), "Route body");
+    click_anchor(&root, "/next", false);
+    assert_eq!(window_pathname(), "/next");
+    assert_eq!(root.text_content().unwrap(), "Route body");
+}
+
+/// Router-listener lifetime contract: after the facade is released without
+/// `dispose`, the surviving document/window callbacks must be inert instead
+/// of touching freed runtime state.
+#[wasm_bindgen_test]
+fn released_router_leaves_anchor_click_and_popstate_inert() {
+    let _location = reset_browser_location();
+    let manifest = router_release_manifest();
+    {
+        let runtime = PlecRuntime::new();
+        let root = mount_root();
+        let _attached = AttachedRootGuard::attach(&root);
+        runtime
+            .register_graph(
+                "app".into(),
+                serde_wasm_bindgen::to_value(&router_release_graph()).unwrap(),
+            )
+            .unwrap();
+        runtime
+            .register_graph(
+                "page".into(),
+                serde_wasm_bindgen::to_value(&router_release_graph()).unwrap(),
+            )
+            .unwrap();
+        runtime.start(root.clone(), manifest).unwrap();
+    }
+
+    // The facade is released without dispose: the browser callbacks remain
+    // registered, and both event kinds must be observed without touching
+    // the released runtime state.
+    let _location_reset = reset_browser_location_to("/");
+    let root = mount_root();
+    let _attached = AttachedRootGuard::attach(&root);
+    root.set_text_content(Some("outside"));
+    click_anchor(&root, "/next", true);
+    dispatch_window_popstate();
+    assert_eq!(window_pathname(), "/");
+    assert_eq!(root.text_content().unwrap(), "outside");
+}
+
+/// Disposal remains the explicit cleanup path: listeners are removed and a
+/// later click/popstate cannot navigate.
+#[wasm_bindgen_test]
+fn disposed_router_ignores_anchor_click_and_popstate() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    let _attached = AttachedRootGuard::attach(&root);
+    runtime
+        .register_graph("app".into(), serde_wasm_bindgen::to_value(&router_release_graph()).unwrap())
+        .unwrap();
+    runtime
+        .register_graph("page".into(), serde_wasm_bindgen::to_value(&router_release_graph()).unwrap())
+        .unwrap();
+    runtime
+        .start(root.clone(), router_release_manifest())
+        .unwrap();
+    runtime.dispose().unwrap();
+    assert_eq!(root.text_content().unwrap_or_default(), "");
+    click_anchor(&root, "/next", true);
+    dispatch_window_popstate();
+    assert_eq!(window_pathname(), "/");
 }
 
 #[wasm_bindgen_test(async)]
@@ -5292,4 +5477,124 @@ fn keyed_reorder_mixed_insert_remove_move_preserves_identity_and_actions() {
         .dispatch_event(&Event::new("click").unwrap())
         .unwrap();
     assert_eq!(static_output(&root), "A2");
+}
+
+// ---------------------------------------------------------------------------
+// DOM-sink policy regression coverage (wasm-runtime-omk.1,
+// crates/plec-ir/src/sink.rs). Substituted or crafted executable IR must be
+// rejected before it can select script-sink attributes or properties.
+// ---------------------------------------------------------------------------
+
+fn hostile_sink_application() -> serde_json::Value {
+    serde_json::json!({
+        "rootNode": 0,
+        "strings": ["div", "innerHTML", "ONCLICK", "SRCDOC", "data-plec-node"],
+        "constants": ["<img src=x onerror=alert(1)>"],
+        "nodes": [{"op":"element","tag":0,"children":[]}],
+        "texts": [],
+        "bindings": [{"target":0,"sink":"property","name":1,"expression":0}],
+        "propPrograms": [],
+        "events": [],
+        "inputs": [],
+        "stateSlots": [],
+        "parameters": [],
+        "expressions": [{"instructions":[{"op":"constant","constant":0},{"op":"return"}]}],
+        "actions": [],
+        "loops": [],
+        "dependencyEdges": []
+    })
+}
+
+#[wasm_bindgen_test]
+fn load_application_rejects_crafted_hostile_binding_sinks() {
+    let runtime = PlecRuntime::new();
+    let hostile = hostile_sink_application();
+    let error = runtime
+        .load_application(
+            serde_wasm_bindgen::to_value(&component_application(&hostile)).unwrap(),
+        )
+        .expect_err("crafted innerHTML property-sink IR must be rejected at load");
+    assert!(
+        error.as_string().unwrap().contains("unsafe typed binding sink"),
+        "unexpected rejection: {error:?}"
+    );
+
+    // The same graph with case-insensitive event-handler, srcdoc, and
+    // reserved-namespace attribute sinks must fail identically.
+    for (name_handle, sink) in [(2usize, "attribute"), (3, "attribute"), (4, "attribute")] {
+        let mut hostile = hostile_sink_application();
+        hostile["bindings"] = serde_json::json!([
+            {"target":0,"sink":sink,"name":name_handle,"expression":0}
+        ]);
+        let error = runtime
+            .load_application(
+                serde_wasm_bindgen::to_value(&component_application(&hostile)).unwrap(),
+            )
+            .expect_err("hostile attribute-sink IR must be rejected at load");
+        assert!(
+            error.as_string().unwrap().contains("unsafe typed binding sink"),
+            "unexpected rejection for handle {name_handle}: {error:?}"
+        );
+    }
+
+    // Crafted prop-program writes selecting script sinks fail closed too.
+    for (name_handle, kind) in [(1usize, "property"), (2, "attribute"), (3, "attribute")] {
+        let mut hostile = hostile_sink_application();
+        hostile["bindings"] = serde_json::json!([]);
+        hostile["propPrograms"] = serde_json::json!([
+            {"target":0,"writes":[{"name":name_handle,"kind":kind,"expression":0}]}
+        ]);
+        let error = runtime
+            .load_application(
+                serde_wasm_bindgen::to_value(&component_application(&hostile)).unwrap(),
+            )
+            .expect_err("hostile prop-write sink IR must be rejected at load");
+        assert!(
+            error.as_string().unwrap().contains("unsafe typed prop write sink"),
+            "unexpected rejection for handle {name_handle}: {error:?}"
+        );
+    }
+}
+
+/// A legitimate spread that also carries hostile keys must paint only the
+/// policy-approved attributes. Spread contents are dynamic app data, so the
+/// runtime applier is the enforcement point (it mirrors the SSR serializer:
+/// hostile keys are skipped, supported keys still apply).
+#[wasm_bindgen_test]
+fn hostile_spread_keys_never_reach_the_dom() {
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    let artifact = serde_json::json!({
+        "rootNode": 0,
+        "strings": ["div", "ONCLICK", "SRCDOC", "data-ok"],
+        "constants": ["alert(1)", "<script>x</script>", "ok"],
+        "nodes": [{"op":"element","tag":0,"children":[]}],
+        "texts": [],
+        "bindings": [],
+        "propPrograms": [{"target":0,"writes":[{"kind":"attribute","expression":0,"spread":true}]}],
+        "events": [],
+        "inputs": [],
+        "stateSlots": [],
+        "parameters": [],
+        "expressions": [{"instructions":[
+            {"op":"constant","constant":0},
+            {"op":"constant","constant":1},
+            {"op":"constant","constant":2},
+            {"op":"makeRecord","fields":[1,2,3]},
+            {"op":"return"}
+        ]}],
+        "actions": [],
+        "loops": [],
+        "dependencyEdges": []
+    });
+    load_and_mount(&runtime, artifact, &root);
+    let div = root.query_selector("div").unwrap().unwrap();
+    assert_eq!(div.get_attribute("data-ok").as_deref(), Some("ok"));
+    assert_eq!(div.get_attribute("onclick"), None);
+    assert_eq!(div.get_attribute("ONCLICK"), None);
+    assert_eq!(div.get_attribute("SRCDOC"), None);
+    assert_eq!(div.get_attribute("srcdoc"), None);
+    let markup = div.outer_html().to_ascii_lowercase();
+    assert!(!markup.contains("onclick"), "hostile markup: {markup}");
+    assert!(!markup.contains("srcdoc"), "hostile markup: {markup}");
 }
