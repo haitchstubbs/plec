@@ -24,6 +24,27 @@ pub fn typed_eval_frame(
     frame: &[RuntimeValue],
     event: &[RuntimeValue],
 ) -> Result<RuntimeValue, JsValue> {
+    let mut fuel = plec_ir::limits::MAX_EXPRESSION_STEPS;
+    typed_eval_bounded(app, program, states, row, frame, event, &mut fuel, 0)
+}
+
+/// Execution-budget wrapper: the interpreter shares one fuel counter across
+/// every nested Filter/Map evaluation, so crafted loops or self-referential
+/// predicates exhaust a documented budget instead of pinning the tab or
+/// overflowing the stack.
+fn typed_eval_bounded(
+    app: &TypedApplication,
+    program: usize,
+    states: &[RuntimeValue],
+    row: Option<&HashMap<String, RuntimeValue>>,
+    frame: &[RuntimeValue],
+    event: &[RuntimeValue],
+    fuel: &mut usize,
+    nesting: usize,
+) -> Result<RuntimeValue, JsValue> {
+    if nesting > plec_ir::limits::MAX_EVAL_NESTING {
+        return Err(JsValue::from_str("expression nesting exceeds limit"));
+    }
     let instructions = &app
         .expressions
         .get(program)
@@ -32,6 +53,10 @@ pub fn typed_eval_frame(
     let mut stack = Vec::<RuntimeValue>::new();
     let mut pc = 0usize;
     while pc < instructions.len() {
+        if *fuel == 0 {
+            return Err(JsValue::from_str("expression execution budget exceeded"));
+        }
+        *fuel -= 1;
         let instruction = &instructions[pc];
         match instruction {
             TypedExpressionInstruction::Constant { constant } => stack.push(
@@ -210,16 +235,17 @@ pub fn typed_eval_frame(
                     .pop()
                     .ok_or_else(|| JsValue::from_str("expression stack underflow: collection"))?;
                 let mut output = Vec::new();
-                for (index, item) in source.array().unwrap_or(&[]).iter().cloned().enumerate() {
+                for (_index, item) in source.array().unwrap_or(&[]).iter().cloned().enumerate() {
                     let object = item.record().cloned().unwrap_or_default();
-                    let value = typed_eval_frame(
+                    let value = typed_eval_bounded(
                         app,
                         *predicate,
                         states,
                         Some(&object),
-                        index,
                         frame,
                         event,
+                        fuel,
+                        nesting + 1,
                     )?;
                     if matches!(instruction, TypedExpressionInstruction::Map { .. }) {
                         output.push(value);
@@ -507,6 +533,41 @@ mod tests {
         assert_eq!(
             typed_eval(&app, 0, &[], Some(&row), 0).unwrap(),
             RuntimeValue::Bool(true)
+        );
+    }
+
+    // Host test binaries cannot exercise error paths: wasm-bindgen's
+    // non-wasm stubs panic on any JsValue operation. Backward-jump and
+    // self-referential budget tests live in
+    // crates/plec-runtime/tests/untrusted_input_limits.rs (browser suite).
+
+    #[test]
+    fn nested_filter_within_nesting_limit_evaluates() {
+        let app = serde_json::from_value(serde_json::json!({
+            "version": "0.10", "rootNode": 0, "strings": [],
+            "constants": [[1, 2, 3]],
+            "nodes": [{"op": "element", "tag": 0}],
+            "expressions": [
+                {"instructions": [
+                    {"op": "constant", "constant": 0},
+                    {"op": "filter", "predicate": 1, "itemSlot": 0},
+                    {"op": "return"}
+                ]},
+                {"instructions": [
+                    {"op": "loadRowRecord"},
+                    {"op": "return"}
+                ]}
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            typed_eval(&app, 0, &[], None, 0).unwrap(),
+            RuntimeValue::Array(vec![
+                RuntimeValue::Record(HashMap::new()),
+                RuntimeValue::Record(HashMap::new()),
+                RuntimeValue::Record(HashMap::new()),
+            ])
         );
     }
 }

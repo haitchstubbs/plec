@@ -113,6 +113,10 @@ impl TypedRuntime {
         native_event: Option<&Event>,
         metrics: &mut UpdateMetrics,
     ) -> Result<(), JsValue> {
+        // One shared step budget across every frame of this run: crafted
+        // backward jumps or mutually recursive actions exhaust a documented
+        // budget instead of pinning the event loop.
+        let mut fuel = plec_ir::limits::MAX_ACTION_STEPS;
         'run: loop {
             let action = continuation.current.action;
             let mut pc = continuation.current.pc;
@@ -127,6 +131,10 @@ impl TypedRuntime {
                 .ok_or_else(|| JsValue::from_str("action handle out of range"))?;
             let mut stack = continuation.current.stack.clone();
             while let Some(instruction) = program.instructions.get(pc).cloned() {
+                if fuel == 0 {
+                    return Err(JsValue::from_str("action execution budget exceeded"));
+                }
+                fuel -= 1;
                 match instruction {
                     TypedActionInstruction::Evaluate { expression } => {
                         stack.push(typed_eval_frame(
@@ -308,6 +316,11 @@ impl TypedRuntime {
                                 Some(result_slot),
                                 Some(error_slot),
                             ) => {
+                                if continuation.callers.len() >= plec_ir::limits::MAX_CALL_DEPTH {
+                                    return Err(JsValue::from_str(
+                                        "action call depth exceeds limit",
+                                    ));
+                                }
                                 continuation.callers.push(TypedCallerContinuation {
                                     frame: TypedActionFrame {
                                         action,
@@ -388,6 +401,11 @@ impl TypedRuntime {
                                 Some(result_slot),
                                 Some(error_slot),
                             ) => {
+                                if continuation.callers.len() >= plec_ir::limits::MAX_CALL_DEPTH {
+                                    return Err(JsValue::from_str(
+                                        "action call depth exceeds limit",
+                                    ));
+                                }
                                 continuation.callers.push(TypedCallerContinuation {
                                     frame: TypedActionFrame {
                                         action,
@@ -803,6 +821,10 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].body.as_deref(), Some(r#"{"title":"Plec"}"#));
     }
+
+    // Error-path budget tests (action loop, self-requeuing reaction) live in
+    // crates/plec-runtime/tests/untrusted_input_limits.rs: host binaries
+    // cannot touch JsValue without tripping wasm-bindgen's non-wasm stubs.
 }
 
 impl TypedRuntime {
@@ -1019,7 +1041,26 @@ impl TypedRuntime {
     }
 
     fn drain_reactions(&mut self, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
+        // A reaction that (transitively) re-queues itself would otherwise
+        // drain forever. The step budget bounds total work per drain and the
+        // depth bound rejects the recursive drain chains a refresh_state
+        // triggers from inside a reaction.
+        if self.reaction_drain_depth >= plec_ir::limits::MAX_REACTION_DRAIN_DEPTH {
+            return Err(JsValue::from_str("reaction drain depth exceeds limit"));
+        }
+        self.reaction_drain_depth += 1;
+        let result = self.drain_reactions_bounded(metrics);
+        self.reaction_drain_depth -= 1;
+        result
+    }
+
+    fn drain_reactions_bounded(&mut self, metrics: &mut UpdateMetrics) -> Result<(), JsValue> {
+        let mut budget = plec_ir::limits::MAX_REACTION_STEPS;
         while let Some(reaction) = self.pending_reactions.first().copied() {
+            if budget == 0 {
+                return Err(JsValue::from_str("reaction execution budget exceeded"));
+            }
+            budget -= 1;
             self.pending_reactions.remove(0);
             let reaction_def = self
                 .app

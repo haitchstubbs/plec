@@ -12,9 +12,7 @@
 /// collide with them: a duplicate `data-plec-node` fails adoption for the
 /// whole page.
 pub fn is_reserved_attribute_name(name: &str) -> bool {
-    name.starts_with("data-plec-")
-        || name.starts_with("data-runtime-")
-        || name.starts_with("plec:")
+    name.starts_with("data-plec-") || name.starts_with("data-runtime-") || name.starts_with("plec:")
 }
 
 /// Attribute names the executable runtime may ever write.
@@ -80,9 +78,14 @@ pub fn is_safe_attribute_value(name: &str, value: &str) -> bool {
     // `data:` documents execute in navigation and framing contexts; only
     // raster image payloads stay allowed.
     if normalized.starts_with("data:") {
-        return ["data:image/png", "data:image/jpeg", "data:image/gif", "data:image/webp"]
-            .iter()
-            .any(|prefix| normalized.starts_with(prefix));
+        return [
+            "data:image/png",
+            "data:image/jpeg",
+            "data:image/gif",
+            "data:image/webp",
+        ]
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix));
     }
     true
 }
@@ -93,7 +96,14 @@ mod tests {
 
     #[test]
     fn rejects_event_handler_attributes_regardless_of_case() {
-        for name in ["onclick", "ONCLICK", "OnClick", "onerror", "onmouseover", "onfocusin"] {
+        for name in [
+            "onclick",
+            "ONCLICK",
+            "OnClick",
+            "onerror",
+            "onmouseover",
+            "onfocusin",
+        ] {
             assert!(!is_safe_attribute_name(name), "{name} must be rejected");
         }
     }
@@ -115,7 +125,14 @@ mod tests {
 
     #[test]
     fn allows_supported_attribute_names() {
-        for name in ["class", "className", "href", "value", "data-id", "aria-label"] {
+        for name in [
+            "class",
+            "className",
+            "href",
+            "value",
+            "data-id",
+            "aria-label",
+        ] {
             assert!(is_safe_attribute_name(name), "{name} must be allowed");
         }
     }
@@ -125,7 +142,14 @@ mod tests {
         assert!(is_safe_property_name("checked"));
         assert!(is_safe_property_name("disabled"));
         assert!(is_safe_property_name("value"));
-        for name in ["innerHTML", "outerHTML", "srcdoc", "src", "href", "formAction"] {
+        for name in [
+            "innerHTML",
+            "outerHTML",
+            "srcdoc",
+            "src",
+            "href",
+            "formAction",
+        ] {
             assert!(!is_safe_property_name(name), "{name} must be rejected");
         }
     }

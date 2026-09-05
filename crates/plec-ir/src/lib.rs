@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+pub mod limits;
 pub mod sink;
 
 pub const VERSION: &str = "0.10";
@@ -97,11 +98,15 @@ pub struct RouteMetadata {
 
 impl RouteManifest {
     pub fn validate(&self) -> Result<(), String> {
+        use crate::limits::MAX_MANIFEST_ROUTES;
         if self.version != 3 {
             return Err("unsupported route manifest version".into());
         }
         if self.root_graph_id.is_empty() {
             return Err("route manifest root graph id is required".into());
+        }
+        if self.routes.len() > MAX_MANIFEST_ROUTES {
+            return Err("route manifest exceeds the route count limit".into());
         }
         Ok(())
     }
@@ -391,6 +396,7 @@ impl PlecSsrSnapshot {
     /// Every check fails closed; a snapshot that cannot be fully validated
     /// must send the browser to a client remount, never to a guess.
     pub fn validate(&self, references: &SsrSnapshotReferences<'_>) -> Result<(), String> {
+        use crate::limits::{MAX_SNAPSHOT_ENTRIES, MAX_SNAPSHOT_LOOP_KEYS};
         if self.version != SSR_SNAPSHOT_VERSION {
             return Err("unsupported ssr snapshot version".into());
         }
@@ -399,6 +405,34 @@ impl PlecSsrSnapshot {
         }
         if self.revision != references.manifest.revision {
             return Err("ssr snapshot revision does not match the route manifest".into());
+        }
+        if self.routes.len() > MAX_SNAPSHOT_ENTRIES
+            || self.loaders.len() > MAX_SNAPSHOT_ENTRIES
+            || self.structure.graphs.len() > MAX_SNAPSHOT_ENTRIES
+            || self.structure.nested.len() > MAX_SNAPSHOT_ENTRIES
+            || self.public.exports.len() > MAX_SNAPSHOT_ENTRIES
+        {
+            return Err("ssr snapshot entry count exceeds limit".into());
+        }
+        for graph in self.structure.graphs.values() {
+            if graph.branches.len() > MAX_SNAPSHOT_ENTRIES {
+                return Err("ssr snapshot branch count exceeds limit".into());
+            }
+            for loop_rows in &graph.loops {
+                if loop_rows.keys.len() > MAX_SNAPSHOT_LOOP_KEYS {
+                    return Err("ssr snapshot loop key count exceeds limit".into());
+                }
+            }
+        }
+        for graph in self.structure.nested.values() {
+            if graph.branches.len() > MAX_SNAPSHOT_ENTRIES {
+                return Err("ssr snapshot branch count exceeds limit".into());
+            }
+            for loop_rows in &graph.loops {
+                if loop_rows.keys.len() > MAX_SNAPSHOT_LOOP_KEYS {
+                    return Err("ssr snapshot loop key count exceeds limit".into());
+                }
+            }
         }
         self.validate_route_chain(references.manifest)?;
         self.validate_public_state()?;
@@ -465,6 +499,9 @@ impl PlecSsrSnapshot {
             if ensure_value_is_finite(&export.value).is_err() {
                 return Err(format!("public export {name} contains a non-finite number"));
             }
+            if let Err(error) = ensure_value_is_bounded(&export.value) {
+                return Err(format!("public export {name} {error}"));
+            }
         }
         Ok(())
     }
@@ -489,6 +526,9 @@ impl PlecSsrSnapshot {
                 SsrLoaderState::Resolved { value } => {
                     if ensure_value_is_finite(value).is_err() {
                         return Err(format!("loader {reference} resolved a non-finite number"));
+                    }
+                    if let Err(error) = ensure_value_is_bounded(value) {
+                        return Err(format!("loader {reference} {error}"));
                     }
                 }
                 SsrLoaderState::Rejected { message } => {
@@ -559,6 +599,39 @@ fn ensure_value_is_finite(value: &SsrSnapshotValue) -> Result<(), &'static str> 
         SsrSnapshotValue::Record(fields) => fields.values().try_for_each(ensure_value_is_finite),
         _ => Ok(()),
     }
+}
+
+/// Bounds an untrusted snapshot value tree before adoption seeds it into
+/// host inputs. The parser's depth guard already limits recursion during
+/// decode; this rejects shapes beyond the documented runtime-value limits
+/// before they drive further allocation.
+fn ensure_value_is_bounded(value: &SsrSnapshotValue) -> Result<(), &'static str> {
+    use crate::limits::{MAX_VALUE_DEPTH, MAX_VALUE_NODES};
+    let mut stack: Vec<(&SsrSnapshotValue, usize)> = vec![(value, 0)];
+    let mut nodes = 0usize;
+    while let Some((value, depth)) = stack.pop() {
+        if depth > MAX_VALUE_DEPTH {
+            return Err("exceeds the snapshot value depth limit");
+        }
+        nodes += 1;
+        if nodes > MAX_VALUE_NODES {
+            return Err("exceeds the snapshot value size limit");
+        }
+        match value {
+            SsrSnapshotValue::Array(values) => {
+                stack.extend(values.iter().map(|value| (value, depth + 1)));
+            }
+            SsrSnapshotValue::Record(fields) => {
+                nodes += fields.len();
+                if nodes > MAX_VALUE_NODES {
+                    return Err("exceeds the snapshot value size limit");
+                }
+                stack.extend(fields.values().map(|value| (value, depth + 1)));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn validate_branch_selections(
@@ -1610,6 +1683,74 @@ mod tests {
         assert_eq!(
             snapshot_error(|snapshot| snapshot.revision = "rev-2".into()),
             "ssr snapshot revision does not match the route manifest"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_loop_keys_beyond_limit() {
+        let keys = vec!["k".to_string(); limits::MAX_SNAPSHOT_LOOP_KEYS + 1];
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot
+                    .structure
+                    .graphs
+                    .get_mut("root/outlet:main/outlet:main/key:todos")
+                    .unwrap()
+                    .loops[0]
+                    .keys = keys
+            }),
+            "ssr snapshot loop key count exceeds limit"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_deep_public_export_values() {
+        let mut value = SsrSnapshotValue::Null;
+        for _ in 0..(limits::MAX_VALUE_DEPTH + 8) {
+            value = SsrSnapshotValue::Array(vec![value]);
+        }
+        assert_eq!(
+            snapshot_error(|snapshot| {
+                snapshot.public.exports.get_mut("todoCount").unwrap().value = value
+            }),
+            "public export todoCount exceeds the snapshot value depth limit"
+        );
+    }
+
+    #[test]
+    fn ssr_snapshot_rejects_oversized_loader_values() {
+        let mut value = SsrSnapshotValue::Null;
+        for _ in 0..(limits::MAX_VALUE_DEPTH + 4) {
+            value = SsrSnapshotValue::Array(vec![value]);
+        }
+        assert_eq!(
+            snapshot_error(
+                |snapshot| snapshot.loaders[0].state = SsrLoaderState::Resolved { value }
+            ),
+            "loader app#Todo#action:0 exceeds the snapshot value depth limit"
+        );
+    }
+
+    #[test]
+    fn route_manifest_rejects_routes_beyond_limit() {
+        let mut manifest = test_manifest();
+        manifest.routes = (0..limits::MAX_MANIFEST_ROUTES + 1)
+            .map(|index| RouteManifestEntry {
+                id: format!("app#Route{index}"),
+                parent_id: None,
+                path: format!("route-{index}"),
+                graph_id: format!("app#Graph{index}"),
+                pending_graph_id: None,
+                pending_mode: "replace".into(),
+                error_graph_id: None,
+                loader_action: None,
+                outlet_id: "main".into(),
+                meta: None,
+            })
+            .collect();
+        assert_eq!(
+            manifest.validate().unwrap_err(),
+            "route manifest exceeds the route count limit"
         );
     }
 

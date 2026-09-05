@@ -8,17 +8,26 @@ pub fn lower_application_to_executable(
 ) -> Result<ComponentApplication, LoweringError> {
     let mut targets = ComponentTargets::new();
     for (index, component) in application.components.iter().enumerate() {
-        let direct_props = component.parameters.iter().any(|parameter| matches!(parameter.source, HirParameterSource::Direct));
+        let direct_props = component
+            .parameters
+            .iter()
+            .any(|parameter| matches!(parameter.source, HirParameterSource::Direct));
         if direct_props && component.parameters.len() != 1 {
-            return Err(LoweringError("a direct component props bag must be the only parameter".into()));
+            return Err(LoweringError(
+                "a direct component props bag must be the only parameter".into(),
+            ));
         }
-        let component_props = component.nodes.iter().filter_map(|node| match node {
-            plec_hir::HirNode::Component(call) => match call.target {
-                plec_hir::HirComponentTarget::Prop(binding) => Some(binding),
+        let component_props = component
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                plec_hir::HirNode::Component(call) => match call.target {
+                    plec_hir::HirComponentTarget::Prop(binding) => Some(binding),
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        }).collect::<std::collections::HashSet<_>>();
+            })
+            .collect::<std::collections::HashSet<_>>();
         let props = component
             .parameters
             .iter()
@@ -35,7 +44,7 @@ pub fn lower_application_to_executable(
             })
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
-        .filter(|(name, _, _)| name != "children")
+            .filter(|(name, _, _)| name != "children")
             .collect::<Vec<_>>();
         let has_slot = component
             .nodes
@@ -45,7 +54,10 @@ pub fn lower_application_to_executable(
         if has_slot > 1 {
             return Err(LoweringError("components support one children slot".into()));
         }
-        targets.insert(component.id.clone(), (index, props, has_slot == 1, direct_props));
+        targets.insert(
+            component.id.clone(),
+            (index, props, has_slot == 1, direct_props),
+        );
     }
     let root_component = *targets
         .get(&application.root)

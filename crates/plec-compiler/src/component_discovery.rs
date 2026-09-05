@@ -1,5 +1,5 @@
-use plec_parser::ParsedModule;
 use plec_model::{resolve_export, resolve_local_symbol, SemanticGraph, SymbolKind};
+use plec_parser::ParsedModule;
 use std::collections::HashMap;
 use swc_common::Span;
 use swc_ecma_ast::{
@@ -636,8 +636,8 @@ fn contains_jsx(expr: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plec_parser::parse_module;
     use plec_model::build_semantic_graph;
+    use plec_parser::parse_module;
     use std::collections::HashMap;
 
     fn build_test_graph(

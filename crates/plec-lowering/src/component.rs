@@ -1,7 +1,7 @@
 use plec_hir::{HirBindingKind, HirComponent, HirNode};
 use plec_ir::{
-    ActionInstruction, ActionProgram, ComponentParameter, ExecutableApplication, Input,
-    RouteOutlet, StateSlot, RefSlot, HostRef, Reaction, Listener,
+    ActionInstruction, ActionProgram, ComponentParameter, ExecutableApplication, HostRef, Input,
+    Listener, Reaction, RefSlot, RouteOutlet, StateSlot,
 };
 
 use crate::{ComponentTargets, Ctx, LoweringError};
@@ -115,9 +115,11 @@ pub(crate) fn lower_component(
         let component_prop = component.nodes.iter().any(|node| matches!(node,
             HirNode::Component(call) if matches!(call.target, plec_hir::HirComponentTarget::Prop(binding) if binding == parameter.binding)
         ));
-        ctx.app
-            .parameters
-            .push(ComponentParameter { name, callable, component: component_prop });
+        ctx.app.parameters.push(ComponentParameter {
+            name,
+            callable,
+            component: component_prop,
+        });
     }
     for state in &component.states {
         let initial_expression = ctx.expression(state.initializer, false)?.0;
@@ -167,30 +169,52 @@ pub(crate) fn lower_component(
         let mut has_prop_dependency = false;
         for dependency in &reaction.dependencies {
             let (expression, deps) = ctx.expression(*dependency, false)?;
-            has_prop_dependency |= ctx.app.expressions[expression]
-                .instructions
-                .iter()
-                .any(|instruction| matches!(instruction, plec_ir::ExpressionInstruction::LoadProp { .. }));
+            has_prop_dependency |=
+                ctx.app.expressions[expression]
+                    .instructions
+                    .iter()
+                    .any(|instruction| {
+                        matches!(instruction, plec_ir::ExpressionInstruction::LoadProp { .. })
+                    });
             dependencies.push(expression);
             sources.extend(deps);
         }
         if sources.is_empty() && !has_prop_dependency {
-            return Err(ctx.err(&format!("useReaction dependencies must reference reactive state or props in {}", component.id.local_name)));
+            return Err(ctx.err(&format!(
+                "useReaction dependencies must reference reactive state or props in {}",
+                component.id.local_name
+            )));
         }
         let action = ctx.action(&reaction.body, &[], false)?;
-        let cleanup_action = reaction.cleanup.as_ref().map(|cleanup| ctx.action(cleanup, &[], false)).transpose()?;
+        let cleanup_action = reaction
+            .cleanup
+            .as_ref()
+            .map(|cleanup| ctx.action(cleanup, &[], false))
+            .transpose()?;
         let handle = ctx.app.reactions.len();
         ctx.edges(sources, "reaction", handle);
         for expression in &dependencies {
             ctx.prop_edges(*expression, "reaction", handle);
         }
-        ctx.app.reactions.push(Reaction { dependencies, action, cleanup_action });
+        ctx.app.reactions.push(Reaction {
+            dependencies,
+            action,
+            cleanup_action,
+        });
     }
     for listener in &component.listeners {
         let action = ctx.callable(&listener.callable)?;
-        let source = match listener.source.as_str() { "window" => "window", "document" => "document", _ => return Err(ctx.err("unsupported listener source")) };
+        let source = match listener.source.as_str() {
+            "window" => "window",
+            "document" => "document",
+            _ => return Err(ctx.err("unsupported listener source")),
+        };
         let event = ctx.string(&listener.event);
-        ctx.app.listeners.push(Listener { source, event, action });
+        ctx.app.listeners.push(Listener {
+            source,
+            event,
+            action,
+        });
     }
     if component.root_nodes.len() != 1 {
         return Err(ctx.err("executable roots require exactly one node"));

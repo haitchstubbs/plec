@@ -26,6 +26,87 @@ thread_local! {
     static SSR_TEXT_DIVERGENCES: Cell<u32> = const { Cell::new(0) };
 }
 
+/// Converts a host-supplied payload into a JSON-plain JS value. The
+/// serde-wasm-bindgen serializer emits serde maps as JS `Map` instances,
+/// which `JSON.stringify` silently renders as `{}` — every map, array, and
+/// plain object is rebuilt as a plain object/array first. Recursion is
+/// depth-capped so a hostile JS graph fails predictably instead of
+/// overflowing the WASM stack.
+pub fn normalize_json_value(value: &JsValue, depth: usize) -> Result<JsValue, JsValue> {
+    use plec_ir::limits::MAX_DECODE_JS_DEPTH;
+    if depth > MAX_DECODE_JS_DEPTH {
+        return Err(JsValue::from_str(
+            "payload nesting exceeds the decode depth limit",
+        ));
+    }
+    if value.is_undefined() {
+        // serde-wasm-bindgen represents Option::None as undefined. Preserve
+        // the old decoder's JSON-compatible null semantics before stringify.
+        return Ok(JsValue::NULL);
+    }
+    if value.is_instance_of::<js_sys::Map>() {
+        let map = value.unchecked_ref::<js_sys::Map>();
+        let out = js_sys::Object::new();
+        let entries = map.entries();
+        loop {
+            let next = entries.next()?;
+            if next.done() {
+                break;
+            }
+            let pair = js_sys::Array::from(&next.value());
+            let key = pair
+                .get(0)
+                .as_string()
+                .ok_or_else(|| JsValue::from_str("map keys must be strings"))?;
+            let normalized = normalize_json_value(&pair.get(1), depth + 1)?;
+            js_sys::Reflect::set(&out, &key.into(), &normalized)?;
+        }
+        Ok(out.into())
+    } else if value.is_instance_of::<js_sys::Array>() {
+        let array = js_sys::Array::from(value);
+        let out = js_sys::Array::new();
+        for item in array.iter() {
+            out.push(&normalize_json_value(&item, depth + 1)?);
+        }
+        Ok(out.into())
+    } else if value.is_object() {
+        let object = value.unchecked_ref::<js_sys::Object>();
+        let out = js_sys::Object::new();
+        for key in js_sys::Object::keys(object).iter() {
+            let field = js_sys::Reflect::get(object, &key)?;
+            let normalized = normalize_json_value(&field, depth + 1)?;
+            js_sys::Reflect::set(&out, &key, &normalized)?;
+        }
+        Ok(out.into())
+    } else {
+        Ok(value.clone())
+    }
+}
+
+/// Decodes a host-supplied JSON payload with a byte ceiling before
+/// recursion: the payload round-trips through the JS engine's own
+/// `JSON.stringify` (native stack) and `serde_json`'s depth-guarded
+/// parser, so hostile shapes fail predictably instead of overflowing the
+/// WASM stack during `serde_wasm_bindgen`'s recursive walk.
+pub(crate) fn decode_bounded_json<T: serde::de::DeserializeOwned>(
+    value: &JsValue,
+    max_bytes: usize,
+    label: &str,
+) -> Result<T, JsValue> {
+    if value.is_undefined() || value.is_null() {
+        return Err(JsValue::from_str(&format!("{label} is not valid JSON")));
+    }
+    let normalized = normalize_json_value(value, 0)?;
+    let text = js_sys::JSON::stringify(&normalized)
+        .map_err(|_| JsValue::from_str(&format!("{label} is not valid JSON")))?;
+    let text: String = text.into();
+    if text.len() > max_bytes {
+        return Err(JsValue::from_str(&format!("{label} exceeds byte limit")));
+    }
+    serde_json::from_str(&text)
+        .map_err(|error| JsValue::from_str(&format!("{label} is not valid JSON: {error}")))
+}
+
 /// Recorded execution state for one nested component instance
 /// (`PlecSsrSnapshot.structure.nested`), keyed by the component's marker
 /// path. Branch records are the ownership cause for the component's own
@@ -185,6 +266,11 @@ pub struct TypedRuntime {
     /// DOM objects live only in these opaque focus slots, never RuntimeValue.
     pub focus_refs: Vec<Option<Element>>,
     pub pending_reactions: Vec<usize>,
+    /// Current nested reaction-drain depth (see
+    /// `limits::MAX_REACTION_DRAIN_DEPTH`): reaction actions re-enter
+    /// refresh_state and drain again, so depth must be tracked across
+    /// nested drains to keep recursion bounded.
+    pub reaction_drain_depth: usize,
     pub reaction_cleanups: Vec<Option<usize>>,
     pub collections: HashMap<usize, TypedCollection>,
     pub loops: HashMap<usize, TypedLoopRows>,
@@ -319,7 +405,11 @@ impl RuntimeState {
     /// wasm-runtime-ixk.7) used to dispatch here only when a typed instance
     /// forest was live; typed instances are now the only execution state.
     pub fn apply_deltas(&self, deltas: JsValue) -> Result<JsValue, JsValue> {
-        let deltas: Vec<Delta> = serde_wasm_bindgen::from_value(deltas).map_err(error)?;
+        let deltas: Vec<Delta> = decode_bounded_json(
+            &deltas,
+            plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
+            "deltas",
+        )?;
         let deltas = coalesce_deltas(deltas);
         self.apply_typed_deltas(deltas)
     }
@@ -621,7 +711,11 @@ impl RuntimeState {
         rows: JsValue,
     ) -> Result<JsValue, JsValue> {
         if self.typed_components.borrow().is_some() {
-            let rows: Vec<Value> = serde_wasm_bindgen::from_value(rows).map_err(error)?;
+            let rows: Vec<Value> = decode_bounded_json(
+                &rows,
+                plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
+                "input rows",
+            )?;
             let ids = self
                 .typed
                 .borrow()
@@ -669,7 +763,11 @@ impl RuntimeState {
         input_id: &str,
         rows: JsValue,
     ) -> Result<JsValue, JsValue> {
-        let rows: Vec<Value> = serde_wasm_bindgen::from_value(rows).map_err(error)?;
+        let rows: Vec<Value> = decode_bounded_json(
+            &rows,
+            plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
+            "input rows",
+        )?;
         let metrics = {
             let mut typed = self.typed.borrow_mut();
             let typed = typed
@@ -689,7 +787,11 @@ impl RuntimeState {
 
 impl RuntimeState {
     pub fn apply_typed_delta(&self, delta: JsValue) -> Result<JsValue, JsValue> {
-        let delta: Delta = serde_wasm_bindgen::from_value(delta).map_err(error)?;
+        let delta: Delta = decode_bounded_json(
+            &delta,
+            plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
+            "delta",
+        )?;
         self.apply_typed_deltas(vec![delta])
     }
 
@@ -791,6 +893,7 @@ impl TypedRuntime {
             host_ref_nodes,
             focus_refs,
             pending_reactions: Vec::new(),
+            reaction_drain_depth: 0,
             reaction_cleanups,
             loops: HashMap::new(),
             conditionals: HashMap::new(),

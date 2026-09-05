@@ -95,9 +95,13 @@ pub enum HirExpr {
     },
     Binding(BindingId),
     /// Reading non-reactive component storage.
-    RefCurrent { reference: BindingId },
+    RefCurrent {
+        reference: BindingId,
+    },
     /// Opaque host handle; ordinary expressions may not consume this.
-    HostRefCurrent { reference: BindingId },
+    HostRefCurrent {
+        reference: BindingId,
+    },
     Member {
         object: ExprId,
         property: String,
@@ -143,8 +147,14 @@ pub enum HirExpr {
     /// Pure collection transforms. Their callback body runs with the current
     /// serializable item as the row record; no JavaScript function escapes
     /// into the executable graph.
-    Map { source: ExprId, mapper: ExprId },
-    Filter { source: ExprId, predicate: ExprId },
+    Map {
+        source: ExprId,
+        mapper: ExprId,
+    },
+    Filter {
+        source: ExprId,
+        predicate: ExprId,
+    },
     /// A finite pure value operation implemented by the executable VM.
     Builtin {
         kind: String,
