@@ -1,8 +1,6 @@
 use std::{env, path::PathBuf};
 
-use plec_compiler::{
-    lower_route_artifacts, lower_route_manifest, lower_routes, read_source_graph,
-};
+use plec_compiler::{lower_route_artifacts, lower_route_manifest, lower_routes, read_source_graph};
 use plec_model::build_semantic_graph;
 
 fn main() -> Result<(), String> {

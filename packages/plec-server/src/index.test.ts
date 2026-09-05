@@ -1742,9 +1742,7 @@ it('drops hostile event-handler keys from spread bags in markup', async () => {
     propPrograms: [
       {
         target: 0,
-        writes: [
-          { kind: 'attribute', expression: 0, spread: true },
-        ],
+        writes: [{ kind: 'attribute', expression: 0, spread: true }],
       },
     ],
     stateSlots: [],
@@ -1909,4 +1907,50 @@ it('passes named props to a dynamic island component and serializes its spread',
     await fetch(`http://127.0.0.1:${address.port}/`)
   ).text();
   expect(html).toContain('<svg width="24" class="size-4 shrink-0"');
+});
+
+it('rejects inbound request bodies beyond the documented limit', async () => {
+  // Untrusted inbound bytes are bounded while streaming (see
+  // docs/security-limits.md); oversized bodies must fail with 413 before any
+  // app dispatch observes them.
+  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
+  const server = createPlecServer({
+    publicDir,
+    artifactPath: path.join(publicDir, 'missing-artifact.json'),
+  });
+  servers.push(server);
+  server.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('missing test address');
+  const response = await fetch(
+    `http://127.0.0.1:${address.port}/api/example`,
+    {
+      method: 'POST',
+      body: 'x'.repeat(1024 * 1024 + 1024),
+      headers: { 'content-type': 'text/plain' },
+    },
+  );
+  expect(response.status).toBe(413);
+});
+
+it('rejects oversized application artifacts with a 500 JSON error', async () => {
+  const publicDir = await mkdtemp(path.join(tmpdir(), 'plec-server-'));
+  const artifactPath = path.join(publicDir, 'route-artifact.json');
+  await writeFile(
+    artifactPath,
+    JSON.stringify({ pad: 'x'.repeat(16 * 1024 * 1024 + 1024) }),
+  );
+  const server = createPlecServer({ publicDir, artifactPath });
+  servers.push(server);
+  server.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('missing test address');
+  const response = await fetch(`http://127.0.0.1:${address.port}/`);
+  expect(response.status).toBe(500);
+  const body = (await response.json()) as { error?: string };
+  expect(body.error).toContain('exceeds byte limit');
 });

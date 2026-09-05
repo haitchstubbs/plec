@@ -9,8 +9,8 @@ use plec_hir::{
     HirParameter, HirParameterSource, HirProp, HirReaction, HirRefSlot, HirSlot, HirState, HirStmt,
     HirTemplatePart, HirText, HirUnaryOp, HirValue, NodeId, SourceSpan,
 };
-use plec_model::{resolve_component, ComponentPropKind, SemanticGraph};
 use plec_ir::sink::is_safe_attribute_value;
+use plec_model::{resolve_component, ComponentPropKind, SemanticGraph};
 use swc_common::{Span, Spanned};
 use swc_ecma_ast::{
     ArrowFunctionBody, BinaryOp, Callee, Decl, Expr, Function, JSXAttr, JSXAttrName,
@@ -1227,7 +1227,9 @@ fn lower_awaited_fetch(
 
 fn lower_component_primitive(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<(), String> {
     let Expr::Call(call) = expr else {
-        return Err("Only useReaction and useListener calls are valid component expressions".into());
+        return Err(
+            "Only useReaction and useListener calls are valid component expressions".into(),
+        );
     };
     let Callee::Expr(callee) = &call.callee else {
         return Err("Unsupported component call".into());
@@ -3832,7 +3834,11 @@ mod tests {
 
     #[test]
     fn rejects_javascript_url_literal() {
-        for scheme in ["javascript:alert(1)", "JAVASCRIPT:alert(1)", "vbscript:msgbox(1)"] {
+        for scheme in [
+            "javascript:alert(1)",
+            "JAVASCRIPT:alert(1)",
+            "vbscript:msgbox(1)",
+        ] {
             let source = format!(
                 r#"
                     export function App() {{

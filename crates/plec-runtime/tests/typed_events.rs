@@ -2085,10 +2085,16 @@ fn disposed_router_ignores_anchor_click_and_popstate() {
     let root = mount_root();
     let _attached = AttachedRootGuard::attach(&root);
     runtime
-        .register_graph("app".into(), serde_wasm_bindgen::to_value(&router_release_graph()).unwrap())
+        .register_graph(
+            "app".into(),
+            serde_wasm_bindgen::to_value(&router_release_graph()).unwrap(),
+        )
         .unwrap();
     runtime
-        .register_graph("page".into(), serde_wasm_bindgen::to_value(&router_release_graph()).unwrap())
+        .register_graph(
+            "page".into(),
+            serde_wasm_bindgen::to_value(&router_release_graph()).unwrap(),
+        )
         .unwrap();
     runtime
         .start(root.clone(), router_release_manifest())
@@ -5510,12 +5516,13 @@ fn load_application_rejects_crafted_hostile_binding_sinks() {
     let runtime = PlecRuntime::new();
     let hostile = hostile_sink_application();
     let error = runtime
-        .load_application(
-            serde_wasm_bindgen::to_value(&component_application(&hostile)).unwrap(),
-        )
+        .load_application(serde_wasm_bindgen::to_value(&component_application(&hostile)).unwrap())
         .expect_err("crafted innerHTML property-sink IR must be rejected at load");
     assert!(
-        error.as_string().unwrap().contains("unsafe typed binding sink"),
+        error
+            .as_string()
+            .unwrap()
+            .contains("unsafe typed binding sink"),
         "unexpected rejection: {error:?}"
     );
 
@@ -5532,7 +5539,10 @@ fn load_application_rejects_crafted_hostile_binding_sinks() {
             )
             .expect_err("hostile attribute-sink IR must be rejected at load");
         assert!(
-            error.as_string().unwrap().contains("unsafe typed binding sink"),
+            error
+                .as_string()
+                .unwrap()
+                .contains("unsafe typed binding sink"),
             "unexpected rejection for handle {name_handle}: {error:?}"
         );
     }
@@ -5550,7 +5560,10 @@ fn load_application_rejects_crafted_hostile_binding_sinks() {
             )
             .expect_err("hostile prop-write sink IR must be rejected at load");
         assert!(
-            error.as_string().unwrap().contains("unsafe typed prop write sink"),
+            error
+                .as_string()
+                .unwrap()
+                .contains("unsafe typed prop write sink"),
             "unexpected rejection for handle {name_handle}: {error:?}"
         );
     }

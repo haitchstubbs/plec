@@ -155,6 +155,43 @@ impl Default for RuntimeValue {
 }
 
 impl RuntimeValue {
+    /// Bounds a decoded untrusted value tree before it can drive further
+    /// allocation. Fails closed on nesting depth, total tree size, and
+    /// oversized strings (see `limits`).
+    pub fn check_limits(&self) -> Result<(), &'static str> {
+        use crate::limits::{MAX_VALUE_DEPTH, MAX_VALUE_NODES, MAX_VALUE_STRING_BYTES};
+        let mut stack: Vec<(&RuntimeValue, usize)> = vec![(self, 0)];
+        let mut nodes = 0usize;
+        while let Some((value, depth)) = stack.pop() {
+            if depth > MAX_VALUE_DEPTH {
+                return Err("runtime value nesting exceeds limit");
+            }
+            nodes += 1;
+            if nodes > MAX_VALUE_NODES {
+                return Err("runtime value size exceeds limit");
+            }
+            match value {
+                RuntimeValue::String(value) => {
+                    if value.len() > MAX_VALUE_STRING_BYTES {
+                        return Err("runtime value string exceeds limit");
+                    }
+                }
+                RuntimeValue::Array(values) => {
+                    stack.extend(values.iter().map(|value| (value, depth + 1)));
+                }
+                RuntimeValue::Record(values) => {
+                    nodes += values.len();
+                    if nodes > MAX_VALUE_NODES {
+                        return Err("runtime value size exceeds limit");
+                    }
+                    stack.extend(values.values().map(|value| (value, depth + 1)));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     pub fn record(&self) -> Option<&HashMap<String, RuntimeValue>> {
         if let Self::Record(value) = self {
             Some(value)
@@ -245,8 +282,12 @@ impl RuntimeValue {
 }
 
 pub fn runtime_from_json(value: Value) -> Result<RuntimeValue, wasm_bindgen::JsValue> {
-    serde_json::from_value(value)
-        .map_err(|error| wasm_bindgen::JsValue::from_str(&error.to_string()))
+    let runtime: RuntimeValue = serde_json::from_value(value)
+        .map_err(|error| wasm_bindgen::JsValue::from_str(&error.to_string()))?;
+    runtime
+        .check_limits()
+        .map_err(wasm_bindgen::JsValue::from_str)?;
+    Ok(runtime)
 }
 
 #[cfg(test)]

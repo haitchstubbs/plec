@@ -1,13 +1,15 @@
 use plec_parser::{module_dependencies, parse_module, ParsedModule};
+use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
-use serde_json::Value;
 
 #[derive(Debug)]
-struct WorkspaceIndex { packages: HashMap<String, PathBuf> }
+struct WorkspaceIndex {
+    packages: HashMap<String, PathBuf>,
+}
 
 #[derive(Debug)]
 pub struct SourceGraph {
@@ -64,6 +66,7 @@ pub fn read_source_graph(
         &mut seen,
         &mut modules,
         &mut resolved_imports,
+        0,
     )?;
 
     Ok(SourceGraph {
@@ -81,7 +84,17 @@ fn visit_module(
     seen: &mut HashSet<PathBuf>,
     modules: &mut Vec<ParsedModule>,
     resolved_imports: &mut HashMap<(String, String), String>,
+    depth: usize,
 ) -> Result<(), String> {
+    use plec_ir::limits::{MAX_IMPORT_DEPTH, MAX_MODULE_COUNT, MAX_SOURCE_FILE_BYTES};
+
+    if depth > MAX_IMPORT_DEPTH {
+        return Err(format!(
+            "Import graph exceeds the maximum depth of {MAX_IMPORT_DEPTH} at {}",
+            file_path.display()
+        ));
+    }
+
     let absolute = fs::canonicalize(file_path)
         .map_err(|error| format!("Failed to resolve {}: {error}", file_path.display()))?;
 
@@ -89,10 +102,27 @@ fn visit_module(
         return Ok(());
     }
 
-    let source = fs::read_to_string(&absolute)
-        .map_err(|error| format!("Failed to read {}: {error}", absolute.display()))?;
+    if modules.len() >= MAX_MODULE_COUNT {
+        return Err(format!(
+            "Source graph exceeds the maximum module count of {MAX_MODULE_COUNT}"
+        ));
+    }
 
-    let module_id = canonical_id.unwrap_or_else(|| module_id_from_path(&absolute, root_dir, repo_root_dir));
+    let source = {
+        let metadata = fs::metadata(&absolute)
+            .map_err(|error| format!("Failed to read {}: {error}", absolute.display()))?;
+        if metadata.len() > MAX_SOURCE_FILE_BYTES {
+            return Err(format!(
+                "Source file {} exceeds the maximum size of {MAX_SOURCE_FILE_BYTES} bytes",
+                absolute.display()
+            ));
+        }
+        fs::read_to_string(&absolute)
+            .map_err(|error| format!("Failed to read {}: {error}", absolute.display()))?
+    };
+
+    let module_id =
+        canonical_id.unwrap_or_else(|| module_id_from_path(&absolute, root_dir, repo_root_dir));
 
     let parsed = parse_module(module_id.clone(), source)
         .map_err(|error| format!("Failed to parse {module_id}: {error}"))?;
@@ -127,6 +157,7 @@ fn visit_module(
             seen,
             modules,
             resolved_imports,
+            depth + 1,
         )?;
     }
 
@@ -228,13 +259,21 @@ impl WorkspaceIndex {
     fn load(repo_root_dir: &Path) -> Result<Self, String> {
         let mut packages = HashMap::new();
         let root = repo_root_dir.join("packages");
-        let Ok(entries) = fs::read_dir(&root) else { return Ok(Self { packages }) };
+        let Ok(entries) = fs::read_dir(&root) else {
+            return Ok(Self { packages });
+        };
         for entry in entries {
-            let entry = entry.map_err(|error| format!("Failed to read workspace package: {error}"))?;
+            let entry =
+                entry.map_err(|error| format!("Failed to read workspace package: {error}"))?;
             let manifest = entry.path().join("package.json");
-            let Ok(source) = fs::read_to_string(&manifest) else { continue };
-            let value: Value = serde_json::from_str(&source).map_err(|error| format!("Invalid {}: {error}", manifest.display()))?;
-            if let Some(name) = value.get("name").and_then(Value::as_str) { packages.insert(name.into(), entry.path()); }
+            let Ok(source) = fs::read_to_string(&manifest) else {
+                continue;
+            };
+            let value: Value = serde_json::from_str(&source)
+                .map_err(|error| format!("Invalid {}: {error}", manifest.display()))?;
+            if let Some(name) = value.get("name").and_then(Value::as_str) {
+                packages.insert(name.into(), entry.path());
+            }
         }
         Ok(Self { packages })
     }
@@ -245,30 +284,57 @@ fn resolve_workspace_module(
     workspace: &WorkspaceIndex,
 ) -> Result<Option<PathBuf>, String> {
     let (name, subpath) = split_package_specifier(specifier);
-    let Some(package_dir) = workspace.packages.get(name) else { return Ok(None) };
+    let Some(package_dir) = workspace.packages.get(name) else {
+        return Ok(None);
+    };
     let manifest_path = package_dir.join("package.json");
-    let manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path).map_err(|error| format!("Failed to read {}: {error}", manifest_path.display()))?).map_err(|error| format!("Invalid {}: {error}", manifest_path.display()))?;
-    let requested = if subpath.is_empty() { ".".to_string() } else { format!("./{subpath}") };
-    let target = manifest.get("exports").and_then(|exports| resolve_export(exports, &requested));
-        
-    if let Some(target) = target { return Ok(resolve_workspace_source(package_dir, &target)); }
-    if subpath.is_empty() { return Ok(resolve_source_candidate(&package_dir.join("src/index"))); }
+    let manifest: Value = serde_json::from_str(
+        &fs::read_to_string(&manifest_path)
+            .map_err(|error| format!("Failed to read {}: {error}", manifest_path.display()))?,
+    )
+    .map_err(|error| format!("Invalid {}: {error}", manifest_path.display()))?;
+    let requested = if subpath.is_empty() {
+        ".".to_string()
+    } else {
+        format!("./{subpath}")
+    };
+    let target = manifest
+        .get("exports")
+        .and_then(|exports| resolve_export(exports, &requested));
+
+    if let Some(target) = target {
+        return Ok(resolve_workspace_source(package_dir, &target));
+    }
+    if subpath.is_empty() {
+        return Ok(resolve_source_candidate(&package_dir.join("src/index")));
+    }
     Ok(None)
 }
 
 fn split_package_specifier(specifier: &str) -> (&str, &str) {
     if specifier.starts_with('@') {
-        let mut parts = specifier.splitn(3, '/'); let scope = parts.next().unwrap(); let package = parts.next().unwrap_or(""); let rest = parts.next().unwrap_or("");
+        let mut parts = specifier.splitn(3, '/');
+        let scope = parts.next().unwrap();
+        let package = parts.next().unwrap_or("");
+        let rest = parts.next().unwrap_or("");
         let length = scope.len() + package.len() + 1;
         (&specifier[..length], rest)
-    } else { let mut parts = specifier.splitn(2, '/'); let name = parts.next().unwrap(); (name, parts.next().unwrap_or("")) }
+    } else {
+        let mut parts = specifier.splitn(2, '/');
+        let name = parts.next().unwrap();
+        (name, parts.next().unwrap_or(""))
+    }
 }
 
 fn resolve_export(exports: &Value, requested: &str) -> Option<String> {
-    if let Some(value) = exports.get(requested) { return resolve_export_target(value); }
+    if let Some(value) = exports.get(requested) {
+        return resolve_export_target(value);
+    }
     let object = exports.as_object()?;
     for (pattern, value) in object {
-        let Some(star) = pattern.find('*') else { continue };
+        let Some(star) = pattern.find('*') else {
+            continue;
+        };
         let (prefix, suffix) = (&pattern[..star], &pattern[star + 1..]);
         if requested.starts_with(prefix) && requested.ends_with(suffix) {
             let capture = &requested[prefix.len()..requested.len() - suffix.len()];
@@ -279,16 +345,28 @@ fn resolve_export(exports: &Value, requested: &str) -> Option<String> {
 }
 
 fn resolve_export_target(value: &Value) -> Option<String> {
-    if let Some(value) = value.as_str() { return Some(value.into()); }
+    if let Some(value) = value.as_str() {
+        return Some(value.into());
+    }
     let object = value.as_object()?;
-    for condition in ["source", "import", "default", "types"] { if let Some(value) = object.get(condition) { if let Some(target) = resolve_export_target(value) { return Some(target) } } }
+    for condition in ["source", "import", "default", "types"] {
+        if let Some(value) = object.get(condition) {
+            if let Some(target) = resolve_export_target(value) {
+                return Some(target);
+            }
+        }
+    }
     None
 }
 
 fn resolve_workspace_source(package_dir: &Path, target: &str) -> Option<PathBuf> {
     let published = package_dir.join(target);
-    let source = target.replace("./dist/", "./src/").replace(".d.ts", "").replace(".js", "");
-    resolve_source_candidate(&package_dir.join(source)).or_else(|| published.is_file().then_some(published))
+    let source = target
+        .replace("./dist/", "./src/")
+        .replace(".d.ts", "")
+        .replace(".js", "");
+    resolve_source_candidate(&package_dir.join(source))
+        .or_else(|| published.is_file().then_some(published))
 }
 
 /// Resolve a normal external package import.
@@ -329,13 +407,40 @@ mod tests {
         let repo = tempdir().expect("repo");
         let app = repo.path().join("apps/demo");
         write_file(&app.join("src/App.tsx"), "import { Mark } from '@scope/icons/icons/mark'; export function App(){ return <Mark />; }");
-        write_file(&repo.path().join("packages/icons/package.json"), r#"{"name":"@scope/icons","exports":{"./icons/*":{"default":"./dist/icons/*.js"}}}"#);
-        write_file(&repo.path().join("packages/icons/src/icons/mark.tsx"), "export const Mark = () => <svg><path d=\"M0 0\" /></svg>;");
+        write_file(
+            &repo.path().join("packages/icons/package.json"),
+            r#"{"name":"@scope/icons","exports":{"./icons/*":{"default":"./dist/icons/*.js"}}}"#,
+        );
+        write_file(
+            &repo.path().join("packages/icons/src/icons/mark.tsx"),
+            "export const Mark = () => <svg><path d=\"M0 0\" /></svg>;",
+        );
         let index = WorkspaceIndex::load(repo.path()).unwrap();
-        assert_eq!(resolve_workspace_module("@scope/icons/icons/mark", &index).unwrap(), Some(repo.path().join("packages/icons/src/icons/mark.tsx")));
-        let graph = read_source_graph(app.join("src/App.tsx"), &app, repo.path()).expect("workspace source graph");
-        assert!(graph.modules.iter().any(|module| module.id == "packages/icons/src/icons/mark.tsx"), "{:?}", graph.modules.iter().map(|module| &module.id).collect::<Vec<_>>());
-        assert_eq!(graph.resolved_imports.get(&(String::from("src/App.tsx"), String::from("@scope/icons/icons/mark"))), Some(&String::from("packages/icons/src/icons/mark.tsx")));
+        assert_eq!(
+            resolve_workspace_module("@scope/icons/icons/mark", &index).unwrap(),
+            Some(repo.path().join("packages/icons/src/icons/mark.tsx"))
+        );
+        let graph = read_source_graph(app.join("src/App.tsx"), &app, repo.path())
+            .expect("workspace source graph");
+        assert!(
+            graph
+                .modules
+                .iter()
+                .any(|module| module.id == "packages/icons/src/icons/mark.tsx"),
+            "{:?}",
+            graph
+                .modules
+                .iter()
+                .map(|module| &module.id)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            graph.resolved_imports.get(&(
+                String::from("src/App.tsx"),
+                String::from("@scope/icons/icons/mark")
+            )),
+            Some(&String::from("packages/icons/src/icons/mark.tsx"))
+        );
     }
 
     #[test]
@@ -700,6 +805,81 @@ mod tests {
         let graph = read_source_graph(&a, root, root).expect("source graph should compile");
 
         assert_eq!(graph.modules.len(), 2);
+    }
+
+    #[test]
+    fn rejects_source_files_beyond_size_limit() {
+        let temp = tempdir().expect("temporary directory should be created");
+        let root = temp.path();
+
+        let entry = root.join("src/App.tsx");
+        let oversized = format!(
+            "export function App() {{ return <div>{}</div>; }}",
+            "x".repeat(3 * 1024 * 1024)
+        );
+        std::fs::create_dir_all(entry.parent().unwrap()).expect("src directory should be created");
+        std::fs::write(&entry, oversized).expect("oversized source should be written");
+
+        let error = read_source_graph(&entry, root, root)
+            .expect_err("oversized source file should be rejected");
+
+        assert!(error.contains("exceeds the maximum size"), "{error}");
+    }
+
+    #[test]
+    fn rejects_import_chains_beyond_depth_limit() {
+        let temp = tempdir().expect("temporary directory should be created");
+        let root = temp.path();
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("src directory should be created");
+
+        const CHAIN_LENGTH: usize = plec_ir::limits::MAX_IMPORT_DEPTH + 8;
+        for index in 0..CHAIN_LENGTH {
+            let module = src.join(format!("Module{index}.tsx"));
+            let source = if index + 1 < CHAIN_LENGTH {
+                format!(
+                    "import {{ Next }} from \"./Module{}\";\nexport const Next = {{}};\n",
+                    index + 1
+                )
+            } else {
+                "export const Next = {};\n".to_string()
+            };
+            std::fs::write(&module, source).expect("chain module should be written");
+        }
+
+        let entry = src.join("Module0.tsx");
+        let error = read_source_graph(&entry, root, root)
+            .expect_err("over-deep import chain should be rejected");
+
+        assert!(error.contains("maximum depth"), "{error}");
+    }
+
+    #[test]
+    fn accepts_import_chains_within_depth_limit() {
+        let temp = tempdir().expect("temporary directory should be created");
+        let root = temp.path();
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("src directory should be created");
+
+        const CHAIN_LENGTH: usize = plec_ir::limits::MAX_IMPORT_DEPTH - 1;
+        for index in 0..CHAIN_LENGTH {
+            let module = src.join(format!("Module{index}.tsx"));
+            let source = if index + 1 < CHAIN_LENGTH {
+                format!(
+                    "import {{ Next }} from \"./Module{}\";\nexport const Next = {{}};\n",
+                    index + 1
+                )
+            } else {
+                "export const Next = {};\n".to_string()
+            };
+            std::fs::write(&module, source).expect("chain module should be written");
+        }
+
+        let entry = src.join("Module0.tsx");
+        let graph = read_source_graph(&entry, root, root)
+            .expect("chain within the depth limit should compile");
+
+        assert_eq!(graph.modules.len(), CHAIN_LENGTH);
     }
 
     #[test]

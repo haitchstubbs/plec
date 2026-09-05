@@ -6,21 +6,23 @@ pub use span::SourceSpan;
 
 // Expressions
 pub use expr::{
-    HirArrayItem, HirBinaryOp, HirCallable, HirExpr, HirExprNode, HirLogicalOp, HirObjectItem, HirTemplatePart, HirUnaryOp,
-    HirValue,
+    HirArrayItem, HirBinaryOp, HirCallable, HirExpr, HirExprNode, HirLogicalOp, HirObjectItem,
+    HirTemplatePart, HirUnaryOp, HirValue,
 };
 
 // Nodes
 pub use node::{
-    HirComponentCall, HirComponentTarget, HirConditional, HirElement, HirEventBinding, HirForEach, HirFragment,
-    HirNode, HirProp, HirSlot, HirText,
+    HirComponentCall, HirComponentTarget, HirConditional, HirElement, HirEventBinding, HirForEach,
+    HirFragment, HirNode, HirProp, HirSlot, HirText,
 };
 
 // Component
-pub use component::{HirApplication, HirComponent, HirRoute, HirRouteApplication, HirRouteMetadata};
 pub use component::{
-    HirBinding, HirBindingKind, HirCallableBody, HirCallableDecl, HirInput, HirLocal, HirParameter,
-    HirParameterSource, HirReaction, HirListener, HirRefSlot, HirState, HirStmt,
+    HirApplication, HirComponent, HirRoute, HirRouteApplication, HirRouteMetadata,
+};
+pub use component::{
+    HirBinding, HirBindingKind, HirCallableBody, HirCallableDecl, HirInput, HirListener, HirLocal,
+    HirParameter, HirParameterSource, HirReaction, HirRefSlot, HirState, HirStmt,
 };
 
 mod component;

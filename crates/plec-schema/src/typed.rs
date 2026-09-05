@@ -99,7 +99,11 @@ impl plec_ir::SsrStructureGraph for TypedApplication {
 
 impl TypedComponentApplication {
     pub fn validate(&self) -> Result<(), JsValue> {
-        if self.version != "0.10" || self.root_component >= self.components.len() {
+        use crate::limits::MAX_COMPONENT_COUNT;
+        if self.version != "0.10"
+            || self.root_component >= self.components.len()
+            || self.components.len() > MAX_COMPONENT_COUNT
+        {
             return Err(JsValue::from_str("invalid component application"));
         }
         for component in &self.components {
@@ -902,8 +906,61 @@ impl TypedApplication {
     }
 
     fn validate_contract(&self) -> Result<(), &'static str> {
+        use crate::limits::{
+            MAX_ACTION_INSTRUCTIONS, MAX_COMPONENT_COLLECTION_LEN, MAX_COMPONENT_STRING_BYTES,
+            MAX_EXPRESSION_INSTRUCTIONS,
+        };
+        fn collection_ok(len: usize) -> Result<(), &'static str> {
+            if len > MAX_COMPONENT_COLLECTION_LEN {
+                return Err("component collection exceeds limit");
+            }
+            Ok(())
+        }
         if self.version != "0.10" {
             return Err("unsupported executable application version");
+        }
+        collection_ok(self.strings.len())?;
+        collection_ok(self.constants.len())?;
+        collection_ok(self.nodes.len())?;
+        collection_ok(self.texts.len())?;
+        collection_ok(self.bindings.len())?;
+        collection_ok(self.prop_programs.len())?;
+        collection_ok(self.events.len())?;
+        collection_ok(self.inputs.len())?;
+        collection_ok(self.state_slots.len())?;
+        collection_ok(self.ref_slots.len())?;
+        collection_ok(self.host_refs.len())?;
+        collection_ok(self.reactions.len())?;
+        collection_ok(self.listeners.len())?;
+        collection_ok(self.parameters.len())?;
+        collection_ok(self.expressions.len())?;
+        collection_ok(self.actions.len())?;
+        collection_ok(self.loops.len())?;
+        collection_ok(self.dependency_edges.len())?;
+        collection_ok(self.route_outlets.len())?;
+        collection_ok(self.host_slots.len())?;
+        collection_ok(self.capabilities.len())?;
+        for string in &self.strings {
+            if string.len() > MAX_COMPONENT_STRING_BYTES {
+                return Err("component string pool entry exceeds limit");
+            }
+        }
+        for constant in &self.constants {
+            constant.check_limits()?;
+        }
+        if self
+            .expressions
+            .iter()
+            .any(|program| program.instructions.len() > MAX_EXPRESSION_INSTRUCTIONS)
+        {
+            return Err("expression program exceeds instruction limit");
+        }
+        if self
+            .actions
+            .iter()
+            .any(|action| action.instructions.len() > MAX_ACTION_INSTRUCTIONS)
+        {
+            return Err("action program exceeds instruction limit");
         }
         if self.root_node >= self.nodes.len() {
             return Err("root node handle out of range");
@@ -1565,7 +1622,15 @@ mod tests {
 
     #[test]
     fn typed_application_validation_rejects_hostile_binding_sinks() {
-        let strings = serde_json::json!(["div", "innerHTML", "ONCLICK", "srcdoc", "data-plec-node", "value", "href"]);
+        let strings = serde_json::json!([
+            "div",
+            "innerHTML",
+            "ONCLICK",
+            "srcdoc",
+            "data-plec-node",
+            "value",
+            "href"
+        ]);
         // Property sink is allowlisted: innerHTML must never be a sink.
         assert_eq!(
             sink_application(
@@ -1576,7 +1641,15 @@ mod tests {
             .validate_contract(),
             Err("unsafe typed binding sink")
         );
-        let strings = serde_json::json!(["div", "innerHTML", "ONCLICK", "srcdoc", "data-plec-node", "value", "href"]);
+        let strings = serde_json::json!([
+            "div",
+            "innerHTML",
+            "ONCLICK",
+            "srcdoc",
+            "data-plec-node",
+            "value",
+            "href"
+        ]);
         // Attribute sink rejects event-handler casing, srcdoc, and the
         // reserved runtime namespace.
         for name in [2, 3, 4] {
@@ -1625,7 +1698,7 @@ mod tests {
                 {"kind":"attribute","expression":0,"spread":true},
                 {"name":1,"kind":"property","expression":0}
             ]}]),
-            serde_json::json!(["div", "value", "href"])
+            serde_json::json!(["div", "value", "href"]),
         );
         assert!(app.validate_contract().is_ok());
     }
@@ -1671,6 +1744,90 @@ mod tests {
             )
             .validate_contract(),
             Err("spread prop write cannot carry a name handle")
+        );
+    }
+
+    #[test]
+    fn typed_application_validation_rejects_oversized_collections() {
+        let app: TypedApplication = serde_json::from_value(serde_json::json!({
+            "version": "0.10",
+            "rootNode": 0,
+            "strings": ["div"],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "expressions": [],
+            "actions": []
+        }))
+        .unwrap();
+        let mut bloated = app.clone();
+        bloated.nodes = (0..=crate::limits::MAX_COMPONENT_COLLECTION_LEN)
+            .map(|_| app.nodes[0].clone())
+            .collect();
+        assert_eq!(
+            bloated.validate_contract(),
+            Err("component collection exceeds limit")
+        );
+    }
+
+    #[test]
+    fn typed_application_validation_rejects_deep_constants() {
+        fn nested(depth: usize) -> Value {
+            let mut value = serde_json::json!(null);
+            for _ in 0..depth {
+                value = serde_json::json!([value]);
+            }
+            value
+        }
+        let app: TypedApplication = serde_json::from_value(serde_json::json!({
+            "version": "0.10",
+            "rootNode": 0,
+            "strings": ["div"],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "constants": [nested(crate::limits::MAX_VALUE_DEPTH + 8)],
+            "expressions": [],
+            "actions": []
+        }))
+        .unwrap();
+        assert_eq!(
+            app.validate_contract(),
+            Err("runtime value nesting exceeds limit")
+        );
+    }
+
+    #[test]
+    fn typed_application_validation_rejects_oversized_expression_programs() {
+        let instructions = vec![
+            serde_json::json!({"op": "jump", "target": 0});
+            crate::limits::MAX_EXPRESSION_INSTRUCTIONS + 1
+        ];
+        let app: TypedApplication = serde_json::from_value(serde_json::json!({
+            "version": "0.10",
+            "rootNode": 0,
+            "strings": ["div"],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "expressions": [{"instructions": instructions}],
+            "actions": []
+        }))
+        .unwrap();
+        assert_eq!(
+            app.validate_contract(),
+            Err("expression program exceeds instruction limit")
+        );
+    }
+
+    #[test]
+    fn typed_application_validation_rejects_oversized_string_pool_entries() {
+        let app: TypedApplication = serde_json::from_value(serde_json::json!({
+            "version": "0.10",
+            "rootNode": 0,
+            "strings": ["x".repeat(crate::limits::MAX_COMPONENT_STRING_BYTES + 1)],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "expressions": [],
+            "actions": []
+        }))
+        .unwrap();
+        assert_eq!(
+            app.validate_contract(),
+            Err("component string pool entry exceeds limit")
         );
     }
 }

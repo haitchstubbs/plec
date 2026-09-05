@@ -1,4 +1,6 @@
-use crate::{BindingId, ComponentId, ExprId, HirCallable, HirExprNode, HirNode, NodeId, SourceSpan};
+use crate::{
+    BindingId, ComponentId, ExprId, HirCallable, HirExprNode, HirNode, NodeId, SourceSpan,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirBinding {
@@ -108,10 +110,23 @@ pub enum HirCallableBody {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirStmt {
-    CaptureActiveElement { reference: BindingId, span: SourceSpan },
-    FocusHostRef { reference: BindingId, optional: bool, span: SourceSpan },
-    FocusRef { reference: BindingId, optional: bool, span: SourceSpan },
-    PreventDefault { span: SourceSpan },
+    CaptureActiveElement {
+        reference: BindingId,
+        span: SourceSpan,
+    },
+    FocusHostRef {
+        reference: BindingId,
+        optional: bool,
+        span: SourceSpan,
+    },
+    FocusRef {
+        reference: BindingId,
+        optional: bool,
+        span: SourceSpan,
+    },
+    PreventDefault {
+        span: SourceSpan,
+    },
     /// Browser-owned cookie access. Names and options are intentionally static
     /// so a graph declares its complete capability surface before execution.
     AwaitCookie {
@@ -189,7 +204,6 @@ pub enum HirStmt {
         span: SourceSpan,
     },
 }
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirComponent {

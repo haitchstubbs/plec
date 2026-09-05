@@ -20,10 +20,38 @@ pub struct PlecRuntime {
     pub(crate) snapshot_inputs: Rc<RefCell<HashMap<String, SnapshotInput>>>,
 }
 
+/// Decodes an untrusted JSON payload from the host with a hard byte
+/// ceiling. The payload is stringified through the JS engine (native
+/// stack, no WASM recursion), size-checked, then parsed by `serde_json`
+/// whose own depth guard bounds recursion — so a hostile payload fails
+/// predictably instead of exhausting the WASM stack.
+pub(crate) fn decode_untrusted_json(
+    ir: &JsValue,
+    max_bytes: usize,
+    label: &str,
+) -> Result<Value, JsValue> {
+    if ir.is_undefined() || ir.is_null() {
+        return Err(JsValue::from_str(&format!("{label} is not valid JSON")));
+    }
+    let normalized = plec_client::runtime::normalize_json_value(ir, 0)?;
+    let text = js_sys::JSON::stringify(&normalized)
+        .map_err(|_| JsValue::from_str(&format!("{label} is not valid JSON")))?;
+    let text: String = text.into();
+    if text.len() > max_bytes {
+        return Err(JsValue::from_str(&format!("{label} exceeds byte limit")));
+    }
+    serde_json::from_str(&text)
+        .map_err(|error| JsValue::from_str(&format!("{label} is not valid JSON: {error}")))
+}
+
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn load_application(&self, ir: JsValue) -> Result<(), JsValue> {
-        let value: Value = serde_wasm_bindgen::from_value(ir.clone()).map_err(error)?;
+        let value = decode_untrusted_json(
+            &ir,
+            plec_schema::limits::MAX_ARTIFACT_JSON_BYTES,
+            "application artifact",
+        )?;
 
         if value.get("version").and_then(Value::as_str) == Some("0.10") {
             let application: TypedComponentApplication =
@@ -72,8 +100,18 @@ impl PlecRuntime {
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn set_host_inputs(&self, values: JsValue) -> Result<(), JsValue> {
-        let values: HashMap<String, RuntimeValue> =
-            serde_wasm_bindgen::from_value(values).map_err(error)?;
+        let normalized = plec_client::runtime::normalize_json_value(&values, 0)?;
+        let text = js_sys::JSON::stringify(&normalized)
+            .map_err(|_| JsValue::from_str("host inputs are not valid JSON"))?;
+        let text: String = text.into();
+        if text.len() > plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES {
+            return Err(JsValue::from_str("host inputs exceeds byte limit"));
+        }
+        let values: HashMap<String, RuntimeValue> = serde_json::from_str(&text)
+            .map_err(|error| JsValue::from_str(&format!("host inputs: {error}")))?;
+        for value in values.values() {
+            value.check_limits().map_err(JsValue::from_str)?;
+        }
         *self.state.typed_host_inputs.borrow_mut() = values;
         Ok(())
     }
@@ -82,7 +120,11 @@ impl PlecRuntime {
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn register_graph(&self, graph_id: String, ir: JsValue) -> Result<(), JsValue> {
-        let value: Value = serde_wasm_bindgen::from_value(ir.clone()).map_err(error)?;
+        let value = decode_untrusted_json(
+            &ir,
+            plec_schema::limits::MAX_ARTIFACT_JSON_BYTES,
+            "graph artifact",
+        )?;
         if value.get("version").and_then(Value::as_str) == Some("0.10") {
             let application: TypedComponentApplication =
                 serde_json::from_value(value).map_err(error)?;
@@ -103,7 +145,11 @@ impl PlecRuntime {
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn start(&self, root: Element, manifest: JsValue) -> Result<(), JsValue> {
-        let manifest_value: Value = serde_wasm_bindgen::from_value(manifest).map_err(error)?;
+        let manifest_value = decode_untrusted_json(
+            &manifest,
+            plec_schema::limits::MAX_MANIFEST_JSON_BYTES,
+            "route manifest",
+        )?;
         let manifest: RouteManifest = if manifest_value.get("version").and_then(Value::as_u64)
             == Some(3)
             && manifest_value
@@ -168,7 +214,11 @@ impl PlecRuntime {
         if !self.state.typed.borrow().is_empty() {
             return Err(JsValue::from_str("invariant:adoption-once"));
         }
-        let manifest_value: Value = serde_wasm_bindgen::from_value(manifest).map_err(error)?;
+        let manifest_value = decode_untrusted_json(
+            &manifest,
+            plec_schema::limits::MAX_MANIFEST_JSON_BYTES,
+            "route manifest",
+        )?;
         if manifest_value.get("version").and_then(Value::as_u64) != Some(3) {
             return Err(JsValue::from_str("unsupported:ssr-manifest"));
         }
@@ -214,8 +264,12 @@ impl PlecRuntime {
             return Ok(());
         }
         self.state.reset_ssr_text_divergences();
-        let value: Value = serde_wasm_bindgen::from_value(snapshot.clone())
-            .map_err(|_| JsValue::from_str("mismatch:ssr-snapshot-payload"))?;
+        let value = decode_untrusted_json(
+            snapshot,
+            plec_schema::limits::MAX_SNAPSHOT_JSON_BYTES,
+            "ssr snapshot",
+        )
+        .map_err(|_| JsValue::from_str("mismatch:ssr-snapshot-payload"))?;
         let parsed: plec_ir::PlecSsrSnapshot = serde_json::from_value(value)
             .map_err(|_| JsValue::from_str("mismatch:ssr-snapshot-payload"))?;
         if parsed.version != plec_ir::SSR_SNAPSHOT_VERSION {
@@ -333,7 +387,9 @@ impl PlecRuntime {
             ("location.hash".into(), RuntimeValue::String(hash)),
         ]);
         for (name, export) in &snapshot.public.exports {
-            seeded.insert(name.clone(), ssr_snapshot_value(&export.value));
+            let value = ssr_snapshot_value(&export.value);
+            value.check_limits().map_err(JsValue::from_str)?;
+            seeded.insert(name.clone(), value);
         }
         *self.state.typed_ssr_host_inputs.borrow_mut() = seeded.keys().cloned().collect();
         self.state.typed_host_inputs.borrow_mut().extend(seeded);

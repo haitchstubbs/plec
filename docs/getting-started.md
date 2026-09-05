@@ -6,21 +6,30 @@ version lives in the root [README](../README.md).
 
 ## Prerequisites
 
-- **Node.js** with **yarn 4** (`corepack enable` picks up the version pinned
-  in the root `package.json`).
-- **Rust** (stable) with the `wasm32-unknown-unknown` target:
-  `rustup target add wasm32-unknown-unknown`
-- **wasm-pack**: `cargo install wasm-pack`
-- **wasm-tools** (optional): the WASM build strips debug info with it when it
-  is on `PATH`, and prints a warning and skips optimization when it is not
-  (`scripts/build-wasm.mjs`).
-- **Chrome + a matching ChromeDriver** for the WASM browser tests. Run
-  `yarn install:build-tools`: it reads the Chromium version Playwright
-  manages and provisions an exactly matching ChromeDriver into
-  `.tools/chromedriver-<platform>/` (git-ignored), so the driver
-  can never drift from the browser. The browser harness resolves the driver
-  automatically; override with `CHROMEDRIVER` and `PLEC_CHROME_EXECUTABLE`
-  if needed.
+- **Node.js 24.20.0** and **Yarn 4.17.1**. `.node-version` and the root
+  `packageManager` are authoritative.
+- **Rust 1.98.0** with the `wasm32-unknown-unknown` target. `rust-toolchain.toml`
+  installs the target for rustup-managed toolchains.
+- **Pinned WASM/browser tools**. `cli-tools.json` is the authority for
+  wasm-pack, wasm-tools, Playwright Chromium, and ChromeDriver.
+
+Install the pinned dependencies and local browser tools before building:
+
+```sh
+yarn install --immutable
+yarn install:build-tools
+```
+
+`install:build-tools` installs the exact Rust tools, Playwright Chromium into
+`.cache/ms-playwright/`, and its exact ChromeDriver into `.tools/`. It fails
+instead of falling back to a stable browser or driver. Every browser runner
+verifies this toolchain before executing.
+
+The WASM crates pin `serde-wasm-bindgen` with the compatible `wasm-bindgen`,
+`js-sys`, `web-sys`, and test family in the workspace manifest and lockfile.
+`install:build-tools` preinstalls that exact wasm-bindgen CLI and test runner
+under `.tools/`; test runs use `wasm-pack --mode no-install` and never install
+either binary themselves.
 
 ## First build
 
@@ -29,7 +38,8 @@ invokes the Rust route compiler, so the runtime and toolchain must exist
 first. Source of truth: `apps/fullstack/scripts/build.mjs`.
 
 ```sh
-yarn install
+yarn install --immutable
+yarn install:build-tools
 yarn workspace plec-runtime build   # cargo check + wasm-pack into packages/plec-runtime/dist/runtime
 yarn build                          # turbo: compile routes via plec-route-manifest, esbuild client/server, copy wasm, brotli
 ```

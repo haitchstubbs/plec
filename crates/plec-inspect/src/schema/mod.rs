@@ -203,7 +203,11 @@ impl From<&ExecutableComponent> for ComponentInfo {
                 .collect(),
             events: component.events.iter().map(EventInfo::from).collect(),
             inputs: component.inputs.iter().map(InputInfo::from).collect(),
-            host_slots: component.host_slots.iter().map(HostSlotInfo::from).collect(),
+            host_slots: component
+                .host_slots
+                .iter()
+                .map(HostSlotInfo::from)
+                .collect(),
             capabilities: component
                 .capabilities
                 .iter()

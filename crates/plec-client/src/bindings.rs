@@ -6,9 +6,7 @@ use plec_eval::eval::*;
 use std::collections::HashMap;
 use wasm_bindgen::{prelude::*, JsCast};
 
-use plec_ir::sink::{
-    is_safe_attribute_name, is_safe_attribute_value, is_safe_property_name,
-};
+use plec_ir::sink::{is_safe_attribute_name, is_safe_attribute_value, is_safe_property_name};
 use plec_schema::delta::RuntimeValue;
 use plec_schema::typed::{TypedApplication, TypedBinding};
 use web_sys::{Element, Node};
@@ -106,10 +104,7 @@ pub fn typed_apply_value(
         if !is_safe_attribute_value(name, &value) {
             return Err(JsValue::from_str("unsafe attribute binding value"));
         }
-        element.set_attribute(
-            if name == "className" { "class" } else { name },
-            &value,
-        )?;
+        element.set_attribute(if name == "className" { "class" } else { name }, &value)?;
     }
     Ok(())
 }

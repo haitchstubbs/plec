@@ -10,6 +10,7 @@ import {
   type ServerResponse,
 } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 export type RequestContext = {
@@ -173,7 +174,15 @@ const contentTypes: Record<string, string> = {
 
 export function createPlecServer(options: PlecServerOptions): Server {
   return createServer(async (incoming, outgoing) => {
-    const request = await toRequest(incoming);
+    let request;
+    try {
+      request = await toRequest(incoming);
+    } catch (error) {
+      // Oversized or malformed request bodies fail before any app dispatch.
+      return sendJson(outgoing, 413, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     const context = requestContext(request);
     if (context.pathname.startsWith('/api/')) {
       const response = await options.handleAppRequest?.(
@@ -186,9 +195,7 @@ export function createPlecServer(options: PlecServerOptions): Server {
     }
     if (isDocumentRequest(context.pathname)) {
       try {
-        const artifact = JSON.parse(
-          await readFile(options.artifactPath, 'utf8'),
-        ) as ArtifactBundle;
+        const artifact = readBoundedArtifact(options.artifactPath);
         const match = matchRoute(artifact.manifest, context.pathname);
         // SSR markup and app handlers must observe the same matched params the
         // browser snapshot carries, so the request context stops dropping them.
@@ -282,10 +289,34 @@ async function toRequest(incoming: IncomingMessage): Promise<Request> {
 }
 
 async function readBody(request: IncomingMessage): Promise<Buffer> {
+  // Inbound request bytes are untrusted: enforce the documented body limit
+  // while streaming instead of buffering attacker-controlled input.
+  const declared = Number(request.headers['content-length'] ?? 0);
+  if (declared > MAX_REQUEST_BODY_BYTES)
+    throw new Error('request body exceeds byte limit');
   const chunks: Buffer[] = [];
-  for await (const chunk of request)
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  let received = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    received += buffer.length;
+    if (received > MAX_REQUEST_BODY_BYTES)
+      throw new Error('request body exceeds byte limit');
+    chunks.push(buffer);
+  }
   return Buffer.concat(chunks);
+}
+
+/** Byte ceilings for untrusted inputs (must mirror the Rust decode limits
+ * in crates/plec-ir/src/limits.rs; see docs/security-limits.md). */
+const MAX_ARTIFACT_JSON_BYTES = 16 * 1024 * 1024;
+const MAX_LOADER_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+
+function readBoundedArtifact(artifactPath: string): ArtifactBundle {
+  const text = readFileSync(artifactPath, 'utf8');
+  if (text.length > MAX_ARTIFACT_JSON_BYTES)
+    throw new Error('application artifact exceeds byte limit');
+  return JSON.parse(text) as ArtifactBundle;
 }
 
 function requestContext(request: Request): RequestContext {
@@ -506,10 +537,18 @@ async function executeRouteLoader(
         `unsupported route loader decode ${String(fetchRequest.decode)}`,
       );
     }
+    const declared = Number(
+      response.headers.get('content-length') ?? 0,
+    );
+    if (declared > MAX_LOADER_RESPONSE_BYTES)
+      throw new Error('loader response exceeds byte limit');
+    const loaderText = await response.text();
+    if (loaderText.length > MAX_LOADER_RESPONSE_BYTES)
+      throw new Error('loader response exceeds byte limit');
     return {
       graphId: route.graphId,
       action,
-      state: { kind: 'resolved', value: await response.json() },
+      state: { kind: 'resolved', value: JSON.parse(loaderText) },
     };
   } catch (error) {
     return rejected(
@@ -988,8 +1027,17 @@ function renderNode(
   // collide with adoption markers, and HTML attribute lookup is
   // case-insensitive, so `ONCLICK` is as much a script sink as `onclick`.
   const URL_SCHEME_ATTRIBUTES = new Set([
-    'href', 'src', 'action', 'formaction', 'xlink:href',
-    'poster', 'background', 'cite', 'data', 'longdesc', 'ping',
+    'href',
+    'src',
+    'action',
+    'formaction',
+    'xlink:href',
+    'poster',
+    'background',
+    'cite',
+    'data',
+    'longdesc',
+    'ping',
   ]);
   const isUnsafeUrlValue = (value: string): boolean => {
     // ASCII whitespace/control characters are stripped before scheme parsing
@@ -998,15 +1046,27 @@ function renderNode(
       .filter((c) => {
         const code = c.charCodeAt(0);
         const asciiWhitespace =
-          code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d || code === 0x20;
+          code === 0x09 ||
+          code === 0x0a ||
+          code === 0x0c ||
+          code === 0x0d ||
+          code === 0x20;
         return !asciiWhitespace && !(code <= 0x1f || code === 0x7f);
       })
       .join('')
       .toLowerCase();
-    if (normalized.startsWith('javascript:') || normalized.startsWith('vbscript:')) return true;
+    if (
+      normalized.startsWith('javascript:') ||
+      normalized.startsWith('vbscript:')
+    )
+      return true;
     if (normalized.startsWith('data:')) {
-      return !['data:image/png', 'data:image/jpeg', 'data:image/gif', 'data:image/webp']
-        .some((prefix) => normalized.startsWith(prefix));
+      return ![
+        'data:image/png',
+        'data:image/jpeg',
+        'data:image/gif',
+        'data:image/webp',
+      ].some((prefix) => normalized.startsWith(prefix));
     }
     return false;
   };
@@ -1018,8 +1078,7 @@ function renderNode(
       lower.startsWith('plec:')
     )
       throw new Error(`RESERVED_ATTRIBUTE:${name}`);
-    if (lower === 'srcdoc')
-      throw new Error(`UNSAFE_ATTRIBUTE:${name}`);
+    if (lower === 'srcdoc') throw new Error(`UNSAFE_ATTRIBUTE:${name}`);
     if (lower.startsWith('on')) return;
     if (value === false || value === null || value === undefined)
       return;

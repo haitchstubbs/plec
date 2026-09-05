@@ -260,6 +260,30 @@ export function markPlecTiming(name: PlecTimingMark): void {
 
 /** Transport-only router bootstrap. It fetches immutable artifacts and hands
  * them to WASM; route matching, history and outlet ownership stay in Rust. */
+
+/** Byte ceilings for untrusted JSON payloads (must mirror the Rust decode
+ * limits in crates/plec-ir/src/limits.rs; see docs/security-limits.md). */
+const MAX_ARTIFACT_JSON_BYTES = 16 * 1024 * 1024;
+const MAX_SNAPSHOT_JSON_BYTES = 4 * 1024 * 1024;
+const MAX_RUNTIME_JS_BYTES = 16 * 1024 * 1024;
+
+/** Fetches and parses a JSON response under a hard byte ceiling: the
+ * declared content-length is rejected before reading, and the actual body
+ * length is verified before parsing so hostile payloads fail predictably. */
+async function boundedResponseJson(
+  response: Response,
+  maxBytes: number,
+  label: string,
+): Promise<unknown> {
+  const declared = response.headers.get('content-length');
+  if (declared !== null && Number(declared) > maxBytes)
+    throw new Error(`${label} exceeds byte limit`);
+  const text = await response.text();
+  if (text.length > maxBytes)
+    throw new Error(`${label} exceeds byte limit`);
+  return JSON.parse(text);
+}
+
 export async function startPlecRouter(
   options: PlecRouterMountOptions,
 ): Promise<PlecRouterController> {
@@ -274,7 +298,11 @@ export async function startPlecRouter(
     throw new Error(
       `Failed to load route manifest: ${manifestResponse.status}`,
     );
-  const artifact = await manifestResponse.json();
+  const artifact = await boundedResponseJson(
+    manifestResponse,
+    MAX_ARTIFACT_JSON_BYTES,
+    'route manifest',
+  );
   const compiled = options.applicationUrl
     ? (artifact as { manifest: PlecRouteManifest; application: any })
     : undefined;
@@ -305,7 +333,11 @@ export async function startPlecRouter(
       throw new Error(
         `Failed to load graph ${graphId}: ${response.status}`,
       );
-    const graph = await response.json();
+    const graph = await boundedResponseJson(
+      response,
+      MAX_ARTIFACT_JSON_BYTES,
+      `graph ${graphId}`,
+    );
     loadedGraphs.set(graphId, graph);
     runtime.register_graph(graphId, graph);
     return graph;
@@ -486,6 +518,8 @@ export function readSsrBootstrap(): SsrBootstrap {
     '#plec-bootstrap[type="application/json"]',
   );
   if (!element?.textContent) return null;
+  if (element.textContent.length > MAX_SNAPSHOT_JSON_BYTES)
+    return { kind: 'invalid' };
   let parsed: any;
   try {
     parsed = JSON.parse(element.textContent);
@@ -734,8 +768,11 @@ async function loadRuntimeModule(
     throw new Error(
       `Failed to load WASM runtime module: ${response.status}`,
     );
+  const text = await response.text();
+  if (text.length > MAX_RUNTIME_JS_BYTES)
+    throw new Error('WASM runtime module exceeds byte limit');
   const moduleUrl = URL.createObjectURL(
-    new Blob([await response.text()], { type: 'text/javascript' }),
+    new Blob([text], { type: 'text/javascript' }),
   );
   try {
     return (await import(

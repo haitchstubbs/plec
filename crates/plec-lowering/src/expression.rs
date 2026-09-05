@@ -43,11 +43,17 @@ impl Ctx<'_> {
             .collect::<Vec<_>>();
         code.push(ExpressionInstruction::MakeRecord {
             fields,
-            spreads: spreads.iter().any(|spread| *spread).then_some(spreads).unwrap_or_default(),
+            spreads: spreads
+                .iter()
+                .any(|spread| *spread)
+                .then_some(spreads)
+                .unwrap_or_default(),
         });
         code.push(ExpressionInstruction::Return);
         let index = self.app.expressions.len();
-        self.app.expressions.push(ExpressionProgram { instructions: code });
+        self.app
+            .expressions
+            .push(ExpressionProgram { instructions: code });
         Ok((index, deps))
     }
 
@@ -114,7 +120,10 @@ impl Ctx<'_> {
                     code.push(ExpressionInstruction::LoadHost { host });
                 }
                 Some(HirBindingKind::Input { kind }) if kind == "loaderData" => {
-                    let host = *self.hosts.get(&binding).ok_or_else(|| self.err("loader data used before lowering"))?;
+                    let host = *self
+                        .hosts
+                        .get(&binding)
+                        .ok_or_else(|| self.err("loader data used before lowering"))?;
                     code.push(ExpressionInstruction::LoadHost { host });
                 }
                 Some(HirBindingKind::Parameter { callable: false })
@@ -132,29 +141,30 @@ impl Ctx<'_> {
                     });
                 }
                 Some(HirBindingKind::Callable) => {
-                    let action = *self.callables.get(&binding).ok_or_else(|| self.err("callable used before lowering"))?;
+                    let action = *self
+                        .callables
+                        .get(&binding)
+                        .ok_or_else(|| self.err("callable used before lowering"))?;
                     code.push(ExpressionInstruction::Constant {
                         constant: self.constant(plec_ir::Value::Number(action as f64)),
                     });
                 }
                 Some(HirBindingKind::AsyncValue) => {
-                    let slot = *self
-                        .async_slots
-                        .get(&binding)
-                        .ok_or_else(|| self.err(&format!(
+                    let slot = *self.async_slots.get(&binding).ok_or_else(|| {
+                        self.err(&format!(
                             "async value '{}' used outside its action",
                             self.component.bindings[binding.0 as usize].name,
-                        )))?;
+                        ))
+                    })?;
                     code.push(ExpressionInstruction::LoadFrame { slot });
                 }
                 Some(HirBindingKind::Parameter { callable: false }) => {
-                    let prop = *self
-                        .props
-                        .get(&binding)
-                        .ok_or_else(|| self.err(&format!(
+                    let prop = *self.props.get(&binding).ok_or_else(|| {
+                        self.err(&format!(
                             "component prop '{}' used before lowering",
                             self.component.bindings[binding.0 as usize].name,
-                        )))?;
+                        ))
+                    })?;
                     code.push(ExpressionInstruction::LoadProp { prop });
                 }
                 Some(HirBindingKind::Local) => {
@@ -175,10 +185,15 @@ impl Ctx<'_> {
                 _ => return Err(self.err("binding is not executable in this expression")),
             },
             HirExpr::RefCurrent { reference } => {
-                let reference = *self.refs.get(&reference).ok_or_else(|| self.err("ref used before lowering"))?;
+                let reference = *self
+                    .refs
+                    .get(&reference)
+                    .ok_or_else(|| self.err("ref used before lowering"))?;
                 code.push(ExpressionInstruction::LoadRef { reference });
             }
-            HirExpr::HostRefCurrent { .. } => return Err(self.err("hostRef.current requires a host capability primitive")),
+            HirExpr::HostRefCurrent { .. } => {
+                return Err(self.err("hostRef.current requires a host capability primitive"))
+            }
             HirExpr::Member { object, property } => {
                 if matches!(self.expr(object)?, HirExpr::Binding(binding) if matches!(self.component.bindings[binding.0 as usize].kind, HirBindingKind::LoopItem))
                 {
@@ -195,8 +210,11 @@ impl Ctx<'_> {
                     });
                 }
             }
-            HirExpr::ComputedMember { object, property, .. } => {
-                if matches!(self.expr(object)?, HirExpr::Binding(binding) if matches!(self.component.bindings[binding.0 as usize].kind, HirBindingKind::LoopItem)) {
+            HirExpr::ComputedMember {
+                object, property, ..
+            } => {
+                if matches!(self.expr(object)?, HirExpr::Binding(binding) if matches!(self.component.bindings[binding.0 as usize].kind, HirBindingKind::LoopItem))
+                {
                     if !row {
                         return Err(self.err("row item used outside a loop"));
                     }
@@ -251,7 +269,11 @@ impl Ctx<'_> {
                     },
                 });
             }
-            HirExpr::Conditional { test, consequent, alternate } => {
+            HirExpr::Conditional {
+                test,
+                consequent,
+                alternate,
+            } => {
                 self.emit(test, row, code, deps)?;
                 let jump_false = code.len();
                 code.push(ExpressionInstruction::JumpIfFalse { target: usize::MAX });
@@ -261,7 +283,9 @@ impl Ctx<'_> {
                 let alternate_start = code.len();
                 self.emit(alternate, row, code, deps)?;
                 let end = code.len();
-                code[jump_false] = ExpressionInstruction::JumpIfFalse { target: alternate_start };
+                code[jump_false] = ExpressionInstruction::JumpIfFalse {
+                    target: alternate_start,
+                };
                 code[jump_end] = ExpressionInstruction::Jump { target: end };
             }
             HirExpr::Template { parts } => {
@@ -315,8 +339,15 @@ impl Ctx<'_> {
                         }
                     }
                 }
-                let spreads = spreads.iter().any(|spread| *spread).then_some(spreads).unwrap_or_default();
-                code.push(ExpressionInstruction::MakeRecord { fields: names, spreads });
+                let spreads = spreads
+                    .iter()
+                    .any(|spread| *spread)
+                    .then_some(spreads)
+                    .unwrap_or_default();
+                code.push(ExpressionInstruction::MakeRecord {
+                    fields: names,
+                    spreads,
+                });
             }
             HirExpr::ObjectWithout { object, excluded } => {
                 self.emit(object, row, code, deps)?;
@@ -357,9 +388,14 @@ impl Ctx<'_> {
                     "includes" => "includes",
                     _ => return Err(self.err("builtin is not executable")),
                 };
-                code.push(ExpressionInstruction::String { kind, count: args.len() });
+                code.push(ExpressionInstruction::String {
+                    kind,
+                    count: args.len(),
+                });
             }
-            expression => return Err(self.err(&format!("expression is not executable: {expression:?}"))),
+            expression => {
+                return Err(self.err(&format!("expression is not executable: {expression:?}")))
+            }
         };
         Ok(())
     }
