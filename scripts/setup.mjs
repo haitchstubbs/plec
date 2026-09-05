@@ -10,7 +10,17 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import cliToolsConfig from '../cli-tools.json' with { type: 'json' };
-import { findPlaywrightChromium } from './utils.js';
+import {
+  chromeDriverPath,
+  chromeDriverTarget,
+  chromiumExecutable,
+  expectedChromiumFromPlaywright,
+  playwrightBrowsersPath,
+  toolchain,
+  versionFromOutput,
+  wasmBindgenToolPath,
+  wasmBindgenToolRoot,
+} from './toolchain.mjs';
 
 const { 'build-tools': buildTools } = cliToolsConfig;
 
@@ -31,12 +41,16 @@ function ensureTool({ name, version }) {
     shell: false,
   });
 
-  if (!check.error && check.status === 0) {
+  if (
+    !check.error &&
+    check.status === 0 &&
+    versionFromOutput(check.stdout ?? '') === version
+  ) {
     console.log(`${name} found: ${check.stdout.trim()}`);
     return;
   }
 
-  console.log(`${name} not found; installing ${name} ${version}...`);
+  console.log(`Installing pinned ${name} ${version}...`);
 
   const install = run('cargo', [
     'install',
@@ -44,6 +58,7 @@ function ensureTool({ name, version }) {
     '--locked',
     '--version',
     version,
+    '--force',
   ]);
 
   if (install.error) {
@@ -62,22 +77,39 @@ function ensureTool({ name, version }) {
   console.log(`${name} ${version} installed.`);
 }
 
-function chromeDriverPlatform() {
-  if (process.platform === 'win32') {
-    return 'win64';
+function ensureWasmBindgenCli() {
+  const version = buildTools['wasm-bindgen-cli'];
+  const bindgen = wasmBindgenToolPath('wasm-bindgen');
+  const testRunner = wasmBindgenToolPath('wasm-bindgen-test-runner');
+
+  if (
+    existsSync(bindgen) &&
+    existsSync(testRunner) &&
+    versionOf(bindgen) === version &&
+    versionOf(testRunner) === version
+  ) {
+    console.log(`wasm-bindgen-cli found: ${version}`);
+    return;
   }
 
-  if (process.platform === 'linux') {
-    return process.arch === 'arm64' ? 'linux-arm64' : 'linux64';
-  }
-
-  if (process.platform === 'darwin') {
-    return process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64';
-  }
-
-  throw new Error(
-    `Unsupported ChromeDriver platform: ${process.platform}/${process.arch}`,
+  console.log(
+    `Installing pinned wasm-bindgen-cli ${version} locally...`,
   );
+  const install = run('cargo', [
+    'install',
+    'wasm-bindgen-cli',
+    '--locked',
+    '--version',
+    version,
+    '--root',
+    wasmBindgenToolRoot(),
+    '--force',
+  ]);
+
+  if (install.error || install.status !== 0) {
+    process.exitCode = install.status ?? 1;
+    return;
+  }
 }
 
 function findFile(root, filename) {
@@ -142,36 +174,46 @@ function versionOf(binary) {
     encoding: 'utf8',
     shell: false,
   });
-  return /(\d+\.\d+\.\d+\.\d+)/.exec(result.stdout ?? '')?.[1];
+  return versionFromOutput(result.stdout ?? '');
 }
 
 function ensureChromiumInstalled() {
-  if (findPlaywrightChromium()) {
+  if (chromiumExecutable()) {
     return;
   }
 
   if (
     !existsSync(path.join(repoRoot, 'node_modules', 'playwright-core'))
   ) {
-    console.log(
-      'playwright is not installed yet; skipping Chromium check.',
+    throw new Error(
+      'Playwright is not installed. Run `yarn install --immutable` before provisioning browser tools.',
     );
-    return;
   }
 
-  const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const command = process.platform === 'win32' ? 'yarn.cmd' : 'yarn';
   console.log('Installing Playwright Chromium...');
-  const install = run(command, [
-    '--yes',
-    'playwright',
-    'install',
-    'chromium',
-  ]);
+  const install = run(
+    command,
+    [
+      'workspace',
+      'plec-e2e',
+      'exec',
+      'playwright',
+      'install',
+      'chromium',
+    ],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsersPath,
+      },
+    },
+  );
 
   if (install.error || install.status !== 0) {
-    // Not fatal: ChromeDriver provisioning falls back to the stable channel.
-    console.error(
-      'Failed to install Playwright Chromium; ChromeDriver will fall back to the stable channel.',
+    throw new Error(
+      'Failed to install the pinned Playwright Chromium.',
     );
   }
 }
@@ -188,54 +230,48 @@ function ensureChromeDriver() {
     process.exitCode = 1;
     return;
   }
-  const platform = chromeDriverPlatform();
-  const executable =
-    process.platform === 'win32' ? 'chromedriver.exe' : 'chromedriver';
-
-  const installDir = path.join(
-    repoRoot,
-    '.tools',
-    `chromedriver-${platform}`,
-  );
-
-  const target = path.join(installDir, executable);
-
   ensureChromiumInstalled();
 
-  // The driver must match the browser it drives. Derive the version from
-  // the Playwright-managed Chromium so the two can never drift apart.
-  const chromium = findPlaywrightChromium();
+  const chromium = chromiumExecutable();
   const chromiumVersion = chromium ? versionOf(chromium) : undefined;
+  const expectedChromium = expectedChromiumFromPlaywright();
+  const expectedDriver = toolchain['browser-tools'].chromedriver;
+  if (
+    expectedChromium.revision !==
+      toolchain['browser-tools'].chromium.revision ||
+    expectedChromium.version !==
+      toolchain['browser-tools'].chromium.version ||
+    chromiumVersion !== expectedChromium.version
+  ) {
+    throw new Error(
+      `Pinned Chromium mismatch: expected ${expectedChromium.version} (revision ${expectedChromium.revision}), found ${chromiumVersion ?? 'missing'}.`,
+    );
+  }
+
+  const target = chromeDriverPath();
+  const { directory, executable } = chromeDriverTarget();
+  const platform = directory.replace('chromedriver-', '');
+  const installDir = path.dirname(target);
   const driverVersion = existsSync(target)
     ? versionOf(target)
     : undefined;
 
-  if (
-    driverVersion &&
-    (!chromiumVersion || driverVersion === chromiumVersion)
-  ) {
+  if (driverVersion === expectedDriver) {
     console.log(
-      `chromedriver found: ChromeDriver ${driverVersion}` +
-        (chromiumVersion
-          ? ` (matches Chromium ${chromiumVersion})`
-          : ''),
+      `chromedriver found: ChromeDriver ${driverVersion} (matches Chromium ${chromiumVersion})`,
     );
     return;
   }
 
-  if (driverVersion && chromiumVersion) {
+  if (driverVersion) {
     console.log(
-      `ChromeDriver ${driverVersion} does not match Chromium ${chromiumVersion}; reinstalling...`,
+      `ChromeDriver ${driverVersion} does not match pinned ${expectedDriver}; reinstalling...`,
     );
   } else {
     console.log(
       `chromedriver-${platform} not found; installing ChromeDriver...`,
     );
   }
-
-  const requested = chromiumVersion
-    ? `chromedriver@${chromiumVersion}`
-    : 'chromedriver@stable';
 
   const cacheDir = path.join(repoRoot, '.cache', 'chromedriver');
 
@@ -248,30 +284,20 @@ function ensureChromeDriver() {
     recursive: true,
   });
 
-  const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const command = process.platform === 'win32' ? 'yarn.cmd' : 'yarn';
 
-  let install = run(command, [
-    '--yes',
-    '@puppeteer/browsers',
-    'install',
-    requested,
-    '--path',
-    cacheDir,
-  ]);
-
-  if (chromiumVersion && (install.error || install.status !== 0)) {
-    console.error(
-      `ChromeDriver ${chromiumVersion} is not available; falling back to the stable channel.`,
-    );
-    install = run(command, [
-      '--yes',
-      '@puppeteer/browsers',
+  const install = run(
+    command,
+    [
+      'exec',
+      'browsers',
       'install',
-      'chromedriver@stable',
+      `chromedriver@${expectedDriver}`,
       '--path',
       cacheDir,
-    ]);
-  }
+    ],
+    { cwd: repoRoot },
+  );
 
   if (install.error || install.status !== 0) {
     console.error(`Failed to install ChromeDriver for ${platform}.`);
@@ -326,7 +352,11 @@ function ensureChromeDriver() {
 // Ensure required Rust build tools are installed
 
 for (const [name, version] of Object.entries(buildTools)) {
-  ensureTool({ name, version });
+  if (name === 'wasm-bindgen-cli') {
+    ensureWasmBindgenCli();
+  } else {
+    ensureTool({ name, version });
+  }
 
   if (process.exitCode) {
     break;
@@ -340,6 +370,8 @@ if (!process.exitCode) {
     'target',
     'add',
     'wasm32-unknown-unknown',
+    '--toolchain',
+    toolchain.runtime.rust,
   ]);
 
   if (target.error || target.status !== 0) {
@@ -351,6 +383,19 @@ if (!process.exitCode) {
 
 if (!process.exitCode) {
   ensureChromeDriver();
+}
+
+if (!process.exitCode) {
+  const verify = run(
+    process.execPath,
+    ['scripts/verify-toolchain.mjs', '--browser'],
+    {
+      cwd: repoRoot,
+    },
+  );
+  if (verify.error || verify.status !== 0) {
+    process.exitCode = verify.status ?? 1;
+  }
 }
 
 if (!process.exitCode) {

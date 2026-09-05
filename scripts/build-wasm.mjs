@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findInPath, isWindows } from './utils.js';
+import { wasmBindgenBinPath, wasmPackCachePath } from './toolchain.mjs';
 
 const brotliCompressAsync = promisify(brotliCompress);
 /**
@@ -104,6 +105,9 @@ export async function buildWasm({
       outName,
     ];
 
+    // Cargo must use the workspace lockfile when wasm-pack builds the crate.
+    args.push('--', '--locked');
+
     // Add feature flags if specified
     if (selectedFeatures) {
       const noDefaultFlags =
@@ -113,7 +117,6 @@ export async function buildWasm({
           ? ['--no-default-features']
           : [];
       args.push(
-        '--',
         ...noDefaultFlags,
         ...(selectedFeatures.length
           ? ['--features', selectedFeatures.join(',')]
@@ -129,6 +132,10 @@ export async function buildWasm({
         ...process.env,
         TMP: temporaryDirectory,
         TEMP: temporaryDirectory,
+        WASM_PACK_CACHE: wasmPackCachePath,
+        PATH: [wasmBindgenBinPath(), process.env.PATH]
+          .filter(Boolean)
+          .join(path.delimiter),
       },
     });
 
@@ -168,10 +175,7 @@ async function optimizeWasm(outDir, outName) {
   const wasmTools = await findWasmTools();
 
   if (!wasmTools) {
-    console.warn(
-      'wasm-tools not found in PATH, skipping WASM optimization',
-    );
-    return;
+    throw new Error('wasm-tools is required by the pinned toolchain');
   }
 
   const wasmPath = path.join(outDir, `${outName}_bg.wasm`);
@@ -235,7 +239,8 @@ async function renameFile(oldPath, newPath) {
  */
 async function writeBrotliSidecars(outDir, outName) {
   const params = {
-    [zlibConstants.BROTLI_PARAM_QUALITY]: zlibConstants.BROTLI_MAX_QUALITY,
+    [zlibConstants.BROTLI_PARAM_QUALITY]:
+      zlibConstants.BROTLI_MAX_QUALITY,
   };
   for (const name of [`${outName}.js`, `${outName}_bg.wasm`]) {
     const filePath = path.join(outDir, name);

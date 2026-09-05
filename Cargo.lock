@@ -1308,6 +1308,7 @@ version = "0.1.0"
 dependencies = [
  "js-sys",
  "plec-dom",
+ "plec-ir",
  "plec-schema",
  "serde_json",
  "wasm-bindgen",
