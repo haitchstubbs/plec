@@ -24,4 +24,7 @@ afterwards. Never spawn the server manually.
   `E2E_PORT=3311 yarn test:e2e`.
 - `reuseExistingServer: false` is intentional: a stale server on the port
   fails the run loudly instead of being silently adopted.
-- One-time setup: `yarn playwright install chromium`.
+- One-time setup: `yarn install --immutable && yarn install:build-tools` from
+  the repository root. This installs the Playwright-pinned Chromium and
+  matching ChromeDriver into repository-local caches; the runner rejects
+  mismatched browser tooling before starting tests.

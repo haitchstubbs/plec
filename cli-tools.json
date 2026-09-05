@@ -1,6 +1,21 @@
 {
   "build-tools": {
     "wasm-pack": "0.13.1",
-    "wasm-tools": "1.258.0"
+    "wasm-tools": "1.258.0",
+    "wasm-bindgen-cli": "0.2.128"
+  },
+  "runtime": {
+    "node": "24.20.0",
+    "rust": "1.98.0",
+    "yarn": "4.17.1"
+  },
+  "browser-tools": {
+    "playwright": "1.62.1",
+    "chromium": {
+      "revision": "1234",
+      "version": "151.0.7922.34"
+    },
+    "chromedriver": "151.0.7922.34",
+    "puppeteer-browsers": "3.2.2"
   }
 }
