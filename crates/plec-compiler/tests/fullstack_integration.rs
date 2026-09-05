@@ -7,7 +7,7 @@ use plec_compiler::{
     read_source_graph,
 };
 use plec_hir::{ComponentId, HirNode};
-use plec_sema::build_semantic_graph;
+use plec_model::build_semantic_graph;
 
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -54,7 +54,10 @@ fn resolves_fullstack_imported_component_calls_to_canonical_targets() {
         .find_map(|node| match node {
             HirNode::Component(call)
                 if call.target
-                    == plec_hir::HirComponentTarget::Static(ComponentId::new("src/components/page-primitives.tsx", "PageFrame")) =>
+                    == plec_hir::HirComponentTarget::Static(ComponentId::new(
+                        "src/components/page-primitives.tsx",
+                        "PageFrame",
+                    )) =>
             {
                 Some(call)
             }

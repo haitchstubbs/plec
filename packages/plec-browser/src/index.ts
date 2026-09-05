@@ -92,44 +92,6 @@ export function createCompiledInputChannel<T>(
   };
 }
 
-export interface CompiledMountOptions {
-  root: Element;
-  /** Set false when this mount intentionally replaces an existing runtime
-   * subtree, such as a Plec route outlet. */
-  adopt?: boolean;
-  /** Package-neutral producer boundary. Prefer this for new integrations. */
-  inputs?: Record<string, CompiledInputProducer<any>>;
-  /** @deprecated Use inputs. Retained while existing applications migrate. */
-  queries?: Record<string, LiveCollection<any>>;
-  irUrl?: string;
-  runtimeJsUrl?: string;
-  runtimeWasmUrl?: string;
-  onQueryUpdate?: (update: CompiledQueryUpdate) => void;
-  onMount?: (metrics: MountMetrics) => void;
-  hostValues?: {
-    currentYear?: number | string;
-    location?: { pathname: string };
-  };
-  onNavigate?: (navigation: {
-    href: string;
-    replace?: boolean;
-  }) => void;
-}
-export interface CompiledEventContext {
-  type: string;
-  target: Element;
-  currentTarget: Element;
-  rowKey?: string;
-  value?: string;
-  checked?: boolean;
-  button?: number;
-  metaKey: boolean;
-  ctrlKey: boolean;
-  shiftKey: boolean;
-  altKey: boolean;
-  nativeEvent: Event;
-}
-
 export interface CompiledUpdateMetrics {
   reconciliationUs?: number;
   domOperations: number;
@@ -161,61 +123,22 @@ export interface RuntimeMountMetrics {
   bindings: number;
   domOperations: number;
 }
-export interface MountMetrics extends RuntimeMountMetrics {
-  irFetchMs: number;
-  irParseMs: number;
-  wasmInitMs: number;
-  runtimeLoadMs: number;
-  renderMode: 'adopt' | 'mount';
-}
 export interface CompiledQueryUpdate extends CompiledUpdateMetrics {
   adapterMs: number;
   reconciliationMs?: number;
   deltaCount?: number;
 }
-export interface CompiledControllerDiagnostics {
-  activeQuerySubscriptions: number;
-  activeInputSubscriptions: number;
-  activeActionListeners: number;
-  activeIslands: number;
-  queryIds: string[];
-  inputIds: string[];
-  disposed: boolean;
-}
-export interface CompiledRuntimeController {
-  readonly mountMetrics: MountMetrics;
-  diagnostics(): CompiledControllerDiagnostics;
-  dispose(): void;
-  applyDelta(delta: RuntimeDelta): CompiledUpdateMetrics;
-  applyHostValues(
-    values: NonNullable<CompiledMountOptions['hostValues']>,
-  ): void;
-  outlet(id?: string): Element | null;
-}
-
 interface WasmRuntimeInstance {
   set_host_inputs(values: Record<string, unknown>): void;
   set_cookie_policy(
     policy: PlecRouterMountOptions['cookiePolicy'] | null,
   ): void;
-  load_application(ir: unknown): void;
-  mount(root: Element): RuntimeMountMetrics;
   initialize_input(inputId: string, rows: unknown): RuntimeMountMetrics;
-  initialize_snapshot_input(
-    inputId: string,
-    snapshot: unknown,
-    shape: unknown,
-  ): RuntimeMountMetrics;
-  apply_input_snapshot(
-    inputId: string,
-    snapshot: unknown,
-  ): CompiledUpdateMetrics;
   apply_delta(delta: unknown): CompiledUpdateMetrics;
   apply_deltas(deltas: unknown): CompiledUpdateMetrics;
   dispose(): void;
   register_graph(graphId: string, ir: unknown): void;
   start(root: Element, manifest: unknown): void;
-  start_adopt(root: Element, manifest: unknown): void;
   start_adopt_snapshot(
     root: Element,
     manifest: unknown,
@@ -224,13 +147,11 @@ interface WasmRuntimeInstance {
   abandon_adoption(): void;
   navigate(href: string, replace: boolean): void;
   ssr_text_divergences(): number;
-  ssr_conditional_inferences(): number;
 }
 interface WasmRuntimeModule {
   default(input?: unknown): Promise<unknown>;
   PlecRuntime: new () => WasmRuntimeInstance;
 }
-const DEFAULT_IR_URL = '/application.ir.json';
 const DEFAULT_RUNTIME_JS_URL = '/runtime/runtime.js';
 const DEFAULT_RUNTIME_WASM_URL = '/runtime/runtime_bg.wasm';
 
@@ -250,8 +171,7 @@ export interface PlecRouterMountOptions {
       path?: string;
     }
   >;
-  /** Host-owned reactive inputs for routed compiled graphs. This is
-   * the same producer boundary accepted by `mountPlecApplication`. */
+  /** Host-owned reactive inputs for routed compiled graphs. */
   inputs?: Record<string, CompiledInputProducer<any>>;
   onQueryUpdate?: (update: CompiledQueryUpdate) => void;
   /** Development/test visibility for SSR adoption decisions. Production hosts
@@ -270,11 +190,6 @@ export interface PlecAdoptionDiagnostic {
    * Divergence is allowed and reported only; present for snapshot
    * adoptions. */
   textDivergences?: number;
-  /** Nested component conditionals whose branch had to be inferred from DOM
-   * shape because the snapshot carried no record. Zero proves the v2
-   * snapshot's nested records were complete; present for snapshot
-   * adoptions. */
-  conditionalInferences?: number;
 }
 export interface PlecRouterController {
   dispose(): void;
@@ -341,157 +256,6 @@ export function markPlecTiming(name: PlecTimingMark): void {
     typeof performance.mark === 'function'
   )
     performance.mark(name);
-}
-
-export async function mountPlecApplication(  options: CompiledMountOptions,
-): Promise<CompiledRuntimeController> {
-  try {
-    const fetchStart = performance.now();
-    markPlecTiming('plec:artifact-fetch-start');
-    const runtimeModulePromise = loadRuntimeModule(
-      options.runtimeJsUrl ?? DEFAULT_RUNTIME_JS_URL,
-    );
-    const response = await fetch(options.irUrl ?? DEFAULT_IR_URL);
-    const irFetchMs = performance.now() - fetchStart;
-    if (!response.ok)
-      throw new Error(`Failed to load IR: ${response.status}`);
-    markPlecTiming('plec:ir-parse-start');
-    const parseStart = performance.now();
-    //const ir = validateExecutableApplication(await response.json());
-    const ir = await response.json();
-    const irParseMs = performance.now() - parseStart;
-    markPlecTiming('plec:ir-parse-end');
-    markPlecTiming('plec:artifact-ready');
-    const runtimeModule = await runtimeModulePromise;
-    markPlecTiming('plec:runtime-init-start');
-    const wasmStart = performance.now();
-    await runtimeModule.default({
-      module_or_path:
-        options.runtimeWasmUrl ?? DEFAULT_RUNTIME_WASM_URL,
-    });
-    const wasmInitMs = performance.now() - wasmStart;
-    markPlecTiming('plec:runtime-ready');
-    const runtime = new runtimeModule.PlecRuntime();
-    markPlecTiming('plec:runtime-load-start');
-    markPlecTiming('plec:mount-start');
-    const loadStart = performance.now();
-    runtime.load_application(ir);
-    // Executable graphs deliberately own their DOM from the start; adoption
-    // belonged to the removed string-ID renderer.
-    const staticMetrics = runtime.mount(options.root);
-    const renderMode = 'mount' as const;
-    const runtimeLoadMs = performance.now() - loadStart;
-    markPlecTiming('plec:runtime-load-end');
-    const applyHostValues = (
-      values: NonNullable<CompiledMountOptions['hostValues']>,
-    ) => {
-      void values;
-    };
-    applyHostValues(
-      options.hostValues ?? {
-        location: { pathname: window.location.pathname },
-      },
-    );
-    const inputSchemas = new Map<string, any>(
-      (ir.inputs ?? []).map((input: any): [string, any] => [
-        ir.strings[input.name]!,
-        input,
-      ]),
-    );
-    const inputs: Record<string, CompiledInputProducer<any>> = {
-      ...Object.fromEntries(
-        Object.entries(options.queries ?? {}).map(
-          ([id, collection]) => {
-            const inputId =
-              (ir.inputs ?? []).length === 1
-                ? ir.strings[ir.inputs[0]!.name]!
-                : id;
-            return [inputId, adaptLiveCollection(inputId, collection)];
-          },
-        ),
-      ),
-      ...(options.inputs ?? {}),
-    };
-    const initialMetrics = Object.entries(inputs).flatMap(
-      ([inputId, producer]) => {
-        const shape = inputSchemas.get(inputId);
-        if (shape?.kind !== 'collection') return [];
-        return [
-          isDeltaInput(producer)
-            ? runtime.initialize_input(inputId, producer.getSnapshot())
-            : runtime.initialize_snapshot_input(
-                inputId,
-                producer.getSnapshot(),
-                shape,
-              ),
-        ];
-      },
-    );
-    const mountMetrics = mergeMountMetrics(
-      staticMetrics,
-      initialMetrics,
-      { irFetchMs, irParseMs, wasmInitMs, runtimeLoadMs, renderMode },
-    );
-    options.onMount?.(mountMetrics);
-    const subscriptions = Object.entries(inputs).flatMap(
-      ([inputId, producer]) =>
-        subscribeInput(
-          runtime,
-          inputId,
-          producer,
-          inputSchemas.get(inputId),
-          options.onQueryUpdate,
-        ),
-    );
-    markPlecTiming('plec:mount-end');
-    let disposed = false;
-    const diagnostics = (): CompiledControllerDiagnostics => ({
-      activeQuerySubscriptions: 0,
-      activeInputSubscriptions: disposed ? 0 : subscriptions.length,
-      // DOM listeners are registered by the WASM renderer. TypeScript has no
-      // normal event-execution role.
-      activeActionListeners: 0,
-      activeIslands: 0,
-      queryIds: Object.keys(options.queries ?? {}),
-      inputIds: Object.keys(inputs),
-      disposed,
-    });
-    const outlet = (id = 'main') => {
-      // Structural graph lookup through the canonical address protocol
-      // (docs/dom-address-protocol.md): the root graph instance always
-      // renders at structural path `root`, so a declared outlet resolves to
-      // the deterministic address `root/node:{node}` — never a first-match
-      // scan. Queries stay scoped to the owning root.
-      const application = ir as any;
-      const component =
-        application?.components?.[application.rootComponent ?? 0] ??
-        (application?.rootNode !== undefined ? application : undefined);
-      const descriptor = (component?.routeOutlets ?? []).find(
-        (entry: any) => entry.id === id,
-      );
-      if (descriptor && typeof descriptor.node === 'number')
-        return options.root.querySelector(
-          `[data-plec-node="root/node:${descriptor.node}"]`,
-        );
-      return null;
-    };
-    return {
-      mountMetrics,
-      diagnostics,
-      applyDelta: (delta) => apply(runtime, delta),
-      applyHostValues,
-      outlet,
-      dispose: () => {
-        if (disposed) return;
-        disposed = true;
-        runtime.dispose();
-        subscriptions.forEach((dispose) => dispose());
-      },
-    };
-  } catch (error) {
-    markPlecTiming('plec:mount-error');
-    throw error;
-  }
 }
 
 /** Transport-only router bootstrap. It fetches immutable artifacts and hands
@@ -566,16 +330,10 @@ export async function startPlecRouter(
   } else if (bootstrap) {
     const expectedRevision = (manifest as any).revision as
       string | undefined;
-    // The server-published route chain is the adoption cause. A legacy v1
-    // bootstrap degrades to the single route id it carries. The gate only
+    // The server-published route chain is the adoption cause. The gate only
     // checks chain shape; whether the chain matches the current URL is the
     // WASM runtime's cross-validation decision.
-    const chain: unknown =
-      bootstrap.kind === 'snapshot'
-        ? (bootstrap.snapshot as any).routes
-        : bootstrap.routeId
-          ? [{ routeId: bootstrap.routeId }]
-          : [];
+    const chain: unknown = (bootstrap.snapshot as any).routes;
     const chainDetail = validateSsrRouteChain(
       (manifest as any).routes ?? [],
       chain,
@@ -615,16 +373,12 @@ export async function startPlecRouter(
               await loadGraph(route.errorGraphId);
           }
         }
-        const snapshotImported = bootstrap.kind === 'snapshot';
-        if (snapshotImported) {
-          runtime.start_adopt_snapshot(
-            options.root,
-            manifest,
-            bootstrap.snapshot,
-          );
-        } else {
-          runtime.start_adopt(options.root, manifest);
-        }
+        const snapshotImported = true;
+        runtime.start_adopt_snapshot(
+          options.root,
+          manifest,
+          bootstrap.snapshot,
+        );
         adopted = true;
         emitAdoptionDiagnostic(options, {
           outcome: 'adopted',
@@ -636,8 +390,6 @@ export async function startPlecRouter(
           ...(snapshotImported
             ? {
                 textDivergences: runtime.ssr_text_divergences(),
-                conditionalInferences:
-                  runtime.ssr_conditional_inferences(),
               }
             : {}),
         });
@@ -711,7 +463,10 @@ export async function startPlecRouter(
   };
 }
 
-/** The `#plec-bootstrap` payload shapes the adoption gate understands. */
+/** The `#plec-bootstrap` payload shapes the adoption gate understands. A
+ * page without a v2 snapshot (no script, or any non-v2 payload) mounts
+ * fresh; only `kind: 'invalid'` — a present-but-unparseable script — is an
+ * SSR contract failure. */
 type SsrBootstrap =
   | null
   | { kind: 'invalid' }
@@ -721,9 +476,7 @@ type SsrBootstrap =
       revision?: string;
       routeId?: string | null;
       snapshot: unknown;
-    }
-  /** Legacy v1: adoption may proceed without imported execution state. */
-  | { kind: 'legacy'; revision?: string; routeId?: string | null };
+    };
 
 /** Exported for adapter tests. */
 export type { SsrBootstrap };
@@ -763,14 +516,10 @@ export function readSsrBootstrap(): SsrBootstrap {
       snapshot,
     };
   }
-  return {
-    kind: 'legacy',
-    revision:
-      typeof parsed?.revision === 'string'
-        ? parsed.revision
-        : undefined,
-    routeId: parsed?.routeId ?? null,
-  };
+  // Anything that is not the v2 snapshot shape means there is no execution
+  // state to resume (including the removed v1 non-snapshot shape), so the
+  // page mounts fresh exactly as if no bootstrap were present.
+  return null;
 }
 
 function adoptionMismatchCode(error: unknown): string {
@@ -832,44 +581,6 @@ function emitAdoptionDiagnostic(
     );
 }
 
-function mergeMountMetrics(
-  staticMetrics: RuntimeMountMetrics,
-  initial: RuntimeMountMetrics[],
-  browser: Pick<
-    MountMetrics,
-    | 'irFetchMs'
-    | 'irParseMs'
-    | 'wasmInitMs'
-    | 'runtimeLoadMs'
-    | 'renderMode'
-  >,
-): MountMetrics {
-  const total = { ...staticMetrics };
-  let totalRowProgramExecuteUs = 0;
-  for (const metrics of initial) {
-    for (const key of [
-      'decodeUs',
-      'staticMountUs',
-      'rowProgramExecuteUs',
-      'rowStateRegistrationUs',
-      'fragmentAppendUs',
-      'programCompileUs',
-      'rowCount',
-      'createdElements',
-      'createdTexts',
-      'bindings',
-      'domOperations',
-    ] as const)
-      total[key] += metrics[key];
-    totalRowProgramExecuteUs += metrics.rowProgramExecuteUs;
-  }
-  total.averageRowProgramExecuteUs =
-    total.rowCount === 0
-      ? 0
-      : totalRowProgramExecuteUs / total.rowCount;
-  return { ...total, ...browser };
-}
-
 /** Adapt a host collection into the runtime's stable keyed-delta protocol. */
 export function adaptLiveCollection<Row extends object>(
   inputId: string,
@@ -886,40 +597,6 @@ export function adaptLiveCollection<Row extends object>(
       return () => subscription.unsubscribe();
     },
   };
-}
-
-function subscribeInput(
-  runtime: WasmRuntimeInstance,
-  inputId: string,
-  producer: CompiledInputProducer<any>,
-  input: any,
-  onQueryUpdate?: (update: CompiledQueryUpdate) => void,
-): Array<() => void> {
-  if (isDeltaInput(producer)) {
-    return [
-      producer.subscribeDeltas((deltas) =>
-        publishDeltas(runtime, deltas, onQueryUpdate),
-      ),
-    ];
-  }
-  if (!producer.subscribe) return [];
-  if (!input?.shape) return [];
-  return [
-    producer.subscribe(() => {
-      const start = performance.now();
-      const metrics = runtime.apply_input_snapshot(
-        inputId,
-        producer.getSnapshot(),
-      );
-      const update: CompiledQueryUpdate = {
-        ...metrics,
-        adapterMs: performance.now() - start,
-        reconciliationMs: (metrics.reconciliationUs ?? 0) / 1000,
-      };
-      onQueryUpdate?.(update);
-      return update;
-    }),
-  ];
 }
 
 function isDeltaInput(
@@ -1039,12 +716,6 @@ function addMetrics(
   total.wasmDomUs += next.wasmDomUs;
 }
 
-function apply(
-  runtime: WasmRuntimeInstance,
-  delta: RuntimeDelta,
-): CompiledUpdateMetrics {
-  return runtime.apply_delta(delta);
-}
 function applyBatch(
   runtime: Pick<WasmRuntimeInstance, 'apply_deltas'>,
   deltas: RuntimeDelta[],

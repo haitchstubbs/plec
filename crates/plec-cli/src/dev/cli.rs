@@ -1,8 +1,8 @@
-use crate::com;
 use crate::dev;
 
 use clap::{Parser, Subcommand};
-use plec_compiler::{lower_route_manifest, lower_routes};
+use plec_build::{build, BuildOptions};
+use plec_compiler::{compile, load, lower_route_manifest, lower_routes};
 use plec_inspect::Inspector;
 use std::path::PathBuf;
 
@@ -53,10 +53,13 @@ enum Command {
         no_optimize: bool,
     },
 
-    /// Developer workflow helpers for working on Plec itself.
-    Dev {
+    /// Developer workflow helpers for working on the Plec workspace itself.
+    // Hidden `dev` alias: transition shim until the consumer-facing `plec dev`
+    // watch + serve loop lands (wasm-runtime-1wj.6), then remove it.
+    #[command(alias = "dev")]
+    Workspace {
         #[command(subcommand)]
-        command: dev::DevCommand,
+        command: dev::WorkspaceCommand,
     },
 }
 
@@ -65,7 +68,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Command::Inspect { source, query } => {
-            let application = com::compile::compile(&source)?;
+            let application = compile(&source)?;
             let inspector = Inspector::new(&application);
             let result = pollster::block_on(inspector.query(&query));
             for error in &result.errors {
@@ -75,12 +78,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Command::Raw { source } => {
-            let application = com::compile::compile(&source)?;
+            let application = compile(&source)?;
             println!("{}", serde_json::to_string_pretty(&application)?);
         }
 
         Command::Routes { source } => {
-            let (modules, semantic_graph) = com::load::load(&source)?;
+            let (modules, semantic_graph) = load(&source)?;
             let routes = lower_routes(&modules, &semantic_graph)?;
             println!(
                 "{}",
@@ -96,7 +99,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             title,
             no_optimize,
         } => {
-            let result = com::build::build(com::build::BuildOptions {
+            let result = build(BuildOptions {
                 source,
                 client_entry,
                 server_entry,
@@ -111,7 +114,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
-        Command::Dev { command } => {
+        Command::Workspace { command } => {
             return dev::dispatch(command).map_err(std::convert::Into::into);
         }
     }

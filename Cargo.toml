@@ -1,15 +1,18 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/plec-parser",
+  "crates/plec-cli",
   "crates/plec-compiler",
-  "crates/plec-sema",
+  "crates/plec-eval",
   "crates/plec-hir",
+  "crates/plec-inspect",
   "crates/plec-ir",
   "crates/plec-lowering",
-  "crates/plec-inspect",
-  "crates/plec-cli",
-  "crates/plec-runtime",
+  "crates/plec-parser",
+  "crates/plec-runtime", 
+  "crates/plec-client",
+  "crates/plec-model",
+  "crates/plec-schema", "crates/plec-dom", "crates/plec-build",
 ]
 
 [workspace.package]
@@ -23,8 +26,11 @@ swc_ecma_parser = "45.0.0"
 swc_ecma_visit = "29.0.0"
 tempfile = "3.3.0"
 async-graphql = "7"
+brotli = "8"
 clap = { version = "4.6.6", features = ["derive"] }
+plec-compiler = { path = "crates/plec-compiler" }
 pollster = "0.4"
+sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde-wasm-bindgen = "0.6"

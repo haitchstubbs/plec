@@ -4361,6 +4361,8 @@ __metadata:
 "plec@workspace:*, plec@workspace:packages/plec":
   version: 0.0.0-use.local
   resolution: "plec@workspace:packages/plec"
+  bin:
+    plec: ./bin/plec.js
   languageName: unknown
   linkType: soft
 

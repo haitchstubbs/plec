@@ -100,7 +100,7 @@ const SITES: &[SiteSpec] = &[
         path: "packages/plec-server/src/index.ts",
         mixed: true,
         force: None,
-        allow: &[(1, "legacy non-snapshot fallback")],
+        allow: &[],
         exclude: &[],
     },
     SiteSpec {
@@ -116,7 +116,7 @@ const SITES: &[SiteSpec] = &[
         path: "packages/plec-browser/src/bootstrap.test.ts",
         mixed: true,
         force: None,
-        allow: &[(1, "legacy bootstrap fixture")],
+        allow: &[],
         exclude: &[],
     },
     SiteSpec {

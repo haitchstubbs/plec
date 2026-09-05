@@ -1,0 +1,15 @@
+[package]
+name = "plec-schema"
+version.workspace = true
+edition.workspace = true
+
+[features]
+# Mirrors the runtime `fetch` feature: when disabled, application validation
+# rejects fetch capability requests instead of compiling them into graphs.
+fetch = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen = { workspace = true }
+plec-ir = { path = "../plec-ir" }

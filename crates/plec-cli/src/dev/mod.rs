@@ -8,7 +8,7 @@
 //! invariants, and test-failure context by hand.
 //!
 //! This module belongs to the **dev** CLI frontend only — the release (app)
-//! frontend never exposes `plec dev`.
+//! frontend never exposes `plec workspace`.
 
 pub mod artifact;
 pub mod cli;
@@ -25,7 +25,7 @@ use repo::Repo;
 use std::path::PathBuf;
 
 #[derive(Subcommand)]
-pub enum DevCommand {
+pub enum WorkspaceCommand {
     /// Compile the Plec-owned runtime WASM artifact (wasm-pack pipeline).
     Compile {
         /// Toolchain profile compiled into the artifact.
@@ -169,11 +169,11 @@ pub enum DoctorCommand {
     },
 }
 
-pub fn dispatch(command: DevCommand) -> Result<(), String> {
+pub fn dispatch(command: WorkspaceCommand) -> Result<(), String> {
     let repo = Repo::discover()?;
 
     match command {
-        DevCommand::Compile {
+        WorkspaceCommand::Compile {
             profile,
             features,
             no_optimize,
@@ -198,10 +198,10 @@ pub fn dispatch(command: DevCommand) -> Result<(), String> {
             }
             Ok(())
         }
-        DevCommand::Test { command } => dispatch_test(&repo, command),
-        DevCommand::Artifact { command } => dispatch_artifact(&repo, command),
-        DevCommand::Contract { command } => dispatch_contract(&repo, command),
-        DevCommand::Trace { query, json } => {
+        WorkspaceCommand::Test { command } => dispatch_test(&repo, command),
+        WorkspaceCommand::Artifact { command } => dispatch_artifact(&repo, command),
+        WorkspaceCommand::Contract { command } => dispatch_contract(&repo, command),
+        WorkspaceCommand::Trace { query, json } => {
             let report = trace::trace(&repo, &query);
             if json {
                 println!(
@@ -214,7 +214,7 @@ pub fn dispatch(command: DevCommand) -> Result<(), String> {
             }
             Ok(())
         }
-        DevCommand::Doctor { command } => dispatch_doctor(&repo, command),
+        WorkspaceCommand::Doctor { command } => dispatch_doctor(&repo, command),
     }
 }
 
@@ -240,7 +240,7 @@ fn dispatch_test(repo: &Repo, command: TestCommand) -> Result<(), String> {
                 Ok(())
             } else {
                 Err(format!(
-                    "{} of {} WASM tests failed (captured: plec dev test last)",
+                    "{} of {} WASM tests failed (captured: plec workspace test last)",
                     report.failed,
                     report.passed + report.failed
                 ))

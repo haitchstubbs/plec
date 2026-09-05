@@ -48,7 +48,7 @@ impl Repo {
     }
 
     /// Runtime artifacts staged into the fullstack application build
-    /// (`com::stage` emits them under the document root).
+    /// (the plec-build pipeline emits them under the document root).
     pub fn staged_runtime_dir(&self) -> PathBuf {
         self.root.join("apps/fullstack/dist/public/runtime")
     }

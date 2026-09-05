@@ -65,7 +65,7 @@ yarn workspace @wasm-runtime/fullstack build   # copies wasm into the app and re
 Verify what you just built (and what the app stages) before testing:
 
 ```sh
-plec dev artifact stale   # non-zero when dist/staged WASM is stale or protocol-drifted
+plec workspace artifact stale   # non-zero when dist/staged WASM is stale or protocol-drifted
 ```
 
 **Stale `.br` trap:** the dev server serves `.br` brotli variants when the
@@ -90,6 +90,12 @@ versions, tracing symbols and error codes, artifact provenance, and an SSR
 adoption doctor. Install it with `yarn install:plec-cli:dev`; the command
 reference lives in [crates/plec-cli/README.md](../crates/plec-cli/README.md)
 and the agent-facing rules in `AGENTS.md` ("Dev CLI").
+
+Two `plec` variants exist. `yarn` scripts resolve the shim in
+[`packages/plec/bin/plec.js`](../packages/plec/README.md#cli), which prefers
+the packaged release binary (app commands only). The dev `workspace` group
+lives in the cargo-installed binary, so run those as bare `plec …` on the
+shell `PATH`, or set `PLEC_BIN` to force a binary.
 
 ## Tests
 

@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 plec-parser = { path = "../plec-parser" }
-plec-sema = { path = "../plec-sema" }
+plec-model = { path = "../plec-model" }
 plec-hir = { path = "../plec-hir" }
 plec-ir = { path = "../plec-ir" }
 plec-lowering = { path = "../plec-lowering" }

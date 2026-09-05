@@ -2,7 +2,7 @@
 
 Plec is a compiler/runtime project for authoring full-stack applications in TS/TSX and executing their compiled semantics through a Rust/WASM runtime.
 
-This file defines repository-wide agent invariants. Prefer current code, tests, protocol checks, and `plec dev` output over historical assumptions or speculative architecture.
+This file defines repository-wide agent invariants. Prefer current code, tests, protocol checks, and `plec workspace` output over historical assumptions or speculative architecture.
 
 ## Instruction priority
 
@@ -82,14 +82,14 @@ packages/
 
 crates/
   plec-parser/            TS/TSX parsing
-  plec-sema/              Semantic graph / analysis
+  plec-model/              Semantic graph / analysis
   plec-hir/               High-level IR
   plec-lowering/          Lowering
   plec-ir/                Executable IR authority
   plec-compiler/          Compiler driver
   plec-diagnostics/       Compiler diagnostics
   plec-runtime/           Rust/WASM runtime
-  plec-cli/               Plec CLI and `plec dev` workflows
+  plec-cli/               Plec CLI and `plec workspace` workflows
 ```
 
 Do not infer ownership from an old package path. Inspect the current workspace before introducing a new package or crate.
@@ -126,7 +126,7 @@ Before changing a semantic path, identify at minimum:
 4. where the runtime consumes it,
 5. which tests assert the contract.
 
-Use `plec dev trace` before reconstructing this manually with repeated grep pipelines.
+Use `plec workspace trace` before reconstructing this manually with repeated grep pipelines.
 
 ## Runtime rules
 
@@ -152,13 +152,13 @@ SSR is implemented and compatibility-sensitive.
 - After touching an SSR protocol constant or contract, run:
 
 ```bash
-plec dev contract ssr --check
+plec workspace contract ssr --check
 ```
 
 - After rebuilding runtime WASM, verify the staged artifact is current before trusting browser/E2E failures:
 
 ```bash
-plec dev artifact stale
+plec workspace artifact stale
 ```
 
 ## Browser and server glue
@@ -182,7 +182,7 @@ Avoid:
 
 ## Dev CLI: prefer encoded workflows
 
-The dev-only `plec dev` commands encode recurring repository investigation and validation workflows. **Use them before hand-rolled shell reconstruction.**
+The dev-only `plec workspace` commands encode recurring repository investigation and validation workflows. **Use them before hand-rolled shell reconstruction.**
 
 Install/refresh the dev CLI frontend when needed:
 
@@ -193,22 +193,22 @@ yarn install:plec-cli:dev
 Important commands:
 
 ```text
-plec dev compile [--profile p] [--features f] [--no-optimize]
-plec dev test wasm [filters] [--failures]
-plec dev test last [--failure <substr>]
-plec dev contract ssr [--check]
-plec dev trace <symbol|error-code>
-plec dev artifact provenance runtime
-plec dev artifact stale
-plec dev doctor adoption [--html f] [--snapshot f] [--route p]
+plec workspace compile [--profile p] [--features f] [--no-optimize]
+plec workspace test wasm [filters] [--failures]
+plec workspace test last [--failure <substr>]
+plec workspace contract ssr [--check]
+plec workspace trace <symbol|error-code>
+plec workspace artifact provenance runtime
+plec workspace artifact stale
+plec workspace doctor adoption [--html f] [--snapshot f] [--route p]
 ```
 
 Conventions:
 
-- `plec dev test wasm` captures a run. Use `plec dev test last` to inspect it instead of rerunning merely to reread output.
-- Run `plec dev artifact stale` after runtime/WASM rebuilds before trusting browser or E2E results.
-- Use `plec dev contract ssr --check` after changing protocol/version constants.
-- If the same investigation is repeatedly reconstructed by hand, consider extending `plec dev` rather than creating another ad hoc script.
+- `plec workspace test wasm` captures a run. Use `plec workspace test last` to inspect it instead of rerunning merely to reread output.
+- Run `plec workspace artifact stale` after runtime/WASM rebuilds before trusting browser or E2E results.
+- Use `plec workspace contract ssr --check` after changing protocol/version constants.
+- If the same investigation is repeatedly reconstructed by hand, consider extending `plec workspace` rather than creating another ad hoc script.
 
 Do not forbid ordinary tools entirely: `rg`, compiler search, and direct file inspection are appropriate for local code reading. The rule is to prefer an existing purpose-built Plec command when it already answers the question.
 

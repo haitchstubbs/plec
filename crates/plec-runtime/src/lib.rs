@@ -1,19 +1,15 @@
-mod dom;
-mod eval;
-mod router;
-mod runtime;
-mod schema;
-mod typed;
-
-pub use runtime::PlecRuntime;
+pub mod lifecycle;
+pub mod snapshots;
+pub use lifecycle::PlecRuntime;
 
 /// Protocol versions implemented by this binary, emitted as a WASM custom
 /// section (`plec-protocol`) so built and staged artifacts can report which
 /// serialized protocol they actually implement — a stale binary compiled
 /// against snapshot v1 is detectable after the source bumps to v2.
 ///
-/// `plec dev artifact provenance` / `plec dev artifact stale` read this
-/// section out of `packages/plec-runtime/dist/runtime/runtime_bg.wasm` and
+/// `plec workspace artifact provenance` / `plec workspace artifact stale`
+/// read this section out of
+/// `packages/plec-runtime/dist/runtime/runtime_bg.wasm` and
 /// its staged copy under `apps/fullstack/dist/runtime`. The value derives
 /// from the plec-ir constant at compile time, so it cannot drift from the
 /// snapshot schema itself.

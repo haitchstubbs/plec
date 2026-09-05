@@ -1,0 +1,187 @@
+{
+  "version": "0.10",
+  "rootNode": 0,
+  "strings": [
+    "items",
+    "message",
+    "main",
+    "button",
+    "click",
+    "p",
+    "ul",
+    "id",
+    "li",
+    "title"
+  ],
+  "constants": ["", false, "/todo", "one", true],
+  "nodes": [
+    {
+      "op": "element",
+      "tag": 2,
+      "parent": null,
+      "children": [1, 3, 5, 7]
+    },
+    { "op": "element", "tag": 3, "parent": 0, "children": [2] },
+    { "op": "text", "text": 0, "parent": 1 },
+    { "op": "element", "tag": 5, "parent": 0, "children": [4] },
+    { "op": "text", "text": 1, "parent": 3 },
+    { "op": "element", "tag": 5, "parent": 0, "children": [6] },
+    { "op": "text", "text": 2, "parent": 5 },
+    { "op": "element", "tag": 6, "parent": 0, "children": [10] },
+    { "op": "element", "tag": 8, "parent": null, "children": [9] },
+    { "op": "text", "text": 3, "parent": 8 },
+    { "op": "loop", "loop": 0, "parent": 7 }
+  ],
+  "texts": [
+    { "value": "Refresh" },
+    { "binding": 0 },
+    { "binding": 1 },
+    { "binding": 2 }
+  ],
+  "bindings": [
+    { "target": 4, "sink": "text", "expression": 7 },
+    { "target": 6, "sink": "text", "expression": 8 },
+    { "target": 9, "sink": "text", "expression": 11 }
+  ],
+  "propPrograms": [],
+  "events": [{ "target": 1, "type": 4, "action": 0 }],
+  "inputs": [{ "name": 0, "kind": "collection" }],
+  "stateSlots": [
+    { "initialExpression": 0, "frameSlot": 0 },
+    { "initialExpression": 1, "frameSlot": 1 }
+  ],
+  "expressions": [
+    {
+      "instructions": [
+        { "op": "constant", "constant": 0 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "constant", "constant": 1 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "constant", "constant": 2 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "constant", "constant": 3 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadFrame", "slot": 0 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadFrame", "slot": 1 },
+        { "op": "field", "field": 1 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "constant", "constant": 4 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadState", "state": 0 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadState", "state": 1 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "makeArray", "count": 0 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadRowField", "field": 7 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadRowField", "field": 9 },
+        { "op": "return" }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "frameSlots": 3,
+      "instructions": [
+        {
+          "op": "capabilityRequest",
+          "capability": "fetch",
+          "request": {
+            "url": 2,
+            "method": "GET",
+            "decode": "responseJson",
+            "requireOk": false
+          },
+          "successPc": 1,
+          "failurePc": 3,
+          "finallyPc": 6,
+          "resultSlot": 0,
+          "errorSlot": 1
+        },
+        {
+          "op": "collectionMutation",
+          "input": 0,
+          "kind": "keyedReplace",
+          "key": 3,
+          "value": 4
+        },
+        { "op": "jump", "target": 8 },
+        { "op": "evaluate", "expression": 5 },
+        { "op": "storeState", "state": 0 },
+        { "op": "jump", "target": 8 },
+        { "op": "evaluate", "expression": 6 },
+        { "op": "storeState", "state": 1 },
+        { "op": "return" }
+      ]
+    }
+  ],
+  "loops": [
+    {
+      "sourceExpression": 9,
+      "keyExpression": 10,
+      "itemSlot": 8,
+      "rowTemplate": 8,
+      "input": 0
+    }
+  ],
+  "dependencyEdges": [
+    {
+      "source": { "kind": "state", "handle": 0 },
+      "target": { "kind": "binding", "handle": 0 }
+    },
+    {
+      "source": { "kind": "state", "handle": 1 },
+      "target": { "kind": "binding", "handle": 1 }
+    },
+    {
+      "source": { "kind": "rowField", "handle": 9, "loop": 0 },
+      "target": { "kind": "binding", "handle": 2 }
+    }
+  ]
+}

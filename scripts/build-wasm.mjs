@@ -139,7 +139,7 @@ export async function buildWasm({
 
     // Stamp the implemented protocol versions into the binary and record
     // build identity, so staleness is detectable downstream
-    // (`plec dev artifact provenance` / `plec dev artifact stale`).
+    // (`plec workspace artifact provenance` / `plec workspace artifact stale`).
     await stampProtocolSection(
       path.join(absoluteOutDir, `${outName}_bg.wasm`),
     );
@@ -266,7 +266,7 @@ async function findWasmTools() {
 // which emits the section from the plec-ir constants at compile time). The
 // Rust static can be dropped by toolchain stripping, so this step guarantees
 // the section exists in the final artifact: verify first, append if missing.
-// `provenance.json` records build identity so `plec dev artifact provenance`
+// `provenance.json` records build identity so `plec workspace artifact provenance`
 // can distinguish source, package dist, and staged app artifacts.
 // ---------------------------------------------------------------------------
 

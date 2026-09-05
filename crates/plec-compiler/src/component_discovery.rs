@@ -1,5 +1,5 @@
 use plec_parser::ParsedModule;
-use plec_sema::{resolve_export, resolve_local_symbol, SemanticGraph, SymbolKind};
+use plec_model::{resolve_export, resolve_local_symbol, SemanticGraph, SymbolKind};
 use std::collections::HashMap;
 use swc_common::Span;
 use swc_ecma_ast::{
@@ -112,7 +112,7 @@ pub enum ReturnedComponentExpression<'a> {
 
 #[derive(Debug, Clone)]
 pub struct RootComponent<'a> {
-    pub symbol: plec_sema::ResolvedSymbol,
+    pub symbol: plec_model::ResolvedSymbol,
     pub declaration: ComponentDeclaration<'a>,
     pub returned: ReturnedComponentExpression<'a>,
 }
@@ -153,7 +153,7 @@ fn resolve_entry_root(
     semantic_graph: &SemanticGraph,
     entry_module_id: &str,
     name: &str,
-) -> Result<plec_sema::ResolvedSymbol, ComponentDiscoveryError> {
+) -> Result<plec_model::ResolvedSymbol, ComponentDiscoveryError> {
     if let Some(symbol) = resolve_local_symbol(semantic_graph, entry_module_id, name) {
         if matches!(symbol.kind, SymbolKind::Function) {
             return Ok(symbol);
@@ -185,7 +185,7 @@ fn resolve_entry_root(
 fn discover_default_root(
     parsed_modules: &[ParsedModule],
     entry_module_id: &str,
-) -> Result<plec_sema::ResolvedSymbol, ComponentDiscoveryError> {
+) -> Result<plec_model::ResolvedSymbol, ComponentDiscoveryError> {
     let entry_module = parsed_modules
         .iter()
         .find(|m| m.id == entry_module_id)
@@ -214,7 +214,7 @@ fn discover_default_root(
                     .as_ref()
                     .is_some_and(function_body_returns_jsx)
                 {
-                    return Ok(plec_sema::ResolvedSymbol {
+                    return Ok(plec_model::ResolvedSymbol {
                         module_id: entry_module_id.to_string(),
                         local_name: fn_decl.ident.sym.to_string(),
                         exported_name: exported.then(|| fn_decl.ident.sym.to_string()),
@@ -242,7 +242,7 @@ fn discover_default_root(
                         continue;
                     }
 
-                    return Ok(plec_sema::ResolvedSymbol {
+                    return Ok(plec_model::ResolvedSymbol {
                         module_id: entry_module_id.to_string(),
                         local_name: ident.id.sym.to_string(),
                         exported_name: exported.then(|| ident.id.sym.to_string()),
@@ -336,7 +336,7 @@ fn returned_from_function_like<'a>(
 /// matching the module body directly is both safer and more precise.
 fn locate_declaration<'a>(
     module: &'a ParsedModule,
-    symbol: &plec_sema::ResolvedSymbol,
+    symbol: &plec_model::ResolvedSymbol,
 ) -> Result<ComponentDeclaration<'a>, ComponentDiscoveryError> {
     let target = symbol.local_name.as_str();
 
@@ -637,7 +637,7 @@ fn contains_jsx(expr: &Expr) -> bool {
 mod tests {
     use super::*;
     use plec_parser::parse_module;
-    use plec_sema::build_semantic_graph;
+    use plec_model::build_semantic_graph;
     use std::collections::HashMap;
 
     fn build_test_graph(

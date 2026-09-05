@@ -208,18 +208,19 @@ export function createPlecServer(options: PlecServerOptions): Server {
           gate,
           loader,
         );
-        const bootstrap = JSON.stringify(
-          bootstrapPayload(
-            artifact,
-            match,
-            context,
-            loader,
-            rendered.branches,
-            rendered.loops,
-            rendered.nested,
-            rendered.childGraph,
-          ),
-        ).replace(/</g, '\\u003c');
+        const payload = bootstrapPayload(
+          artifact,
+          match,
+          context,
+          loader,
+          rendered.branches,
+          rendered.loops,
+          rendered.nested,
+          rendered.childGraph,
+        );
+        const bootstrap = payload
+          ? JSON.stringify(payload).replace(/</g, '\\u003c')
+          : null;
         return sendHtml(
           outgoing,
           document,
@@ -403,7 +404,7 @@ function sendHtml(
   response: ServerResponse,
   metadata: DocumentMetadata,
   body: string,
-  bootstrap: string,
+  bootstrap: string | null,
   options: PlecServerOptions,
   gating: string[] = [],
 ) {
@@ -421,6 +422,10 @@ function sendHtml(
   const script = options.clientScript
     ? `<script type="module" src="${escapeAttribute(options.clientScript)}"></script>`
     : '';
+  // No bootstrap means nothing to resume: the browser mounts fresh.
+  const bootstrapScript = bootstrap
+    ? `<script id="plec-bootstrap" type="application/json">${bootstrap}</script>`
+    : '';
   // x-plec-ssr-fallback-style observability: development hosts learn which
   // server-only host loads were gated out of the public artifacts.
   response.writeHead(200, {
@@ -429,7 +434,7 @@ function sendHtml(
     ...(gating.length ? { 'x-plec-ssr-gating': gating.join(',') } : {}),
   });
   response.end(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>${description ? `<meta name="description" content="${escapeAttribute(description)}">` : ''}${preloads}${styles}</head><body><div id="app">${body}</div><script id="plec-bootstrap" type="application/json">${bootstrap}</script>${script}</body></html>`,
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>${description ? `<meta name="description" content="${escapeAttribute(description)}">` : ''}${preloads}${styles}</head><body><div id="app">${body}</div>${bootstrapScript}${script}</body></html>`,
   );
 }
 
@@ -515,8 +520,8 @@ async function executeRouteLoader(
 
 /** The v2 bootstrap carries the typed SSR execution snapshot (see the
  * `PlecSsrSnapshot` contract in crates/plec-ir). Without a matched route there
- * is nothing to resume, so the legacy v1 shape is emitted and the browser
- * treats the page as non-snapshot SSR. */
+ * is nothing to resume, so no bootstrap is emitted and the browser mounts
+ * fresh. Returns the payload to embed, or null when there is none. */
 function bootstrapPayload(
   bundle: ArtifactBundle,
   match: ReturnType<typeof matchRoute> | undefined,
@@ -526,19 +531,9 @@ function bootstrapPayload(
   loops: SsrLoopGraph,
   nested: SsrNestedGraph,
   childGraph: { instance: string; graphId: string } | undefined,
-) {
+): Record<string, unknown> | null {
   if (!match?.route) {
-    return {
-      version: 1,
-      revision: bundle.manifest.revision,
-      routeId: null,
-      public: {
-        location: {
-          pathname: context.pathname,
-          search: new URL(context.url).search,
-        },
-      },
-    };
+    return null;
   }
   // Branch records are the structural ownership cause for conditional
   // adoption: `branches[nodeHandle] = which side the server instantiated`,

@@ -14,7 +14,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 /// structural address emission cost is amortized over.
 fn list_artifact() -> serde_json::Value {
     serde_json::json!({
-        "version": "0.9", "rootNode": 0,
+        "rootNode": 0,
         "strings": ["div", "ul", "li", "span", "em", "items", "id", "title", "done"],
         "constants": [[]],
         "nodes": [
@@ -81,11 +81,28 @@ fn mount_root() -> Element {
         .expect("div")
 }
 
+/// Wrap the bare single-graph artifact in the IR 0.10 component-application
+/// envelope `load_application` accepts.
+fn component_application(graph: &serde_json::Value) -> serde_json::Value {
+    let mut graph = graph.clone();
+    let fields = graph.as_object_mut().unwrap();
+    fields.remove("version");
+    fields.insert(
+        "id".into(),
+        serde_json::Value::String("instantiate-cost.tsx#List".into()),
+    );
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [graph]
+    })
+}
+
 #[wasm_bindgen_test]
 fn measures_list_instantiation_cost_with_structural_addresses() {
     const ROWS: usize = 200;
     const RUNS: usize = 15;
-    let artifact = list_artifact();
+    let artifact = component_application(&list_artifact());
     let payload = rows(ROWS);
     let mut mount_samples = Vec::new();
     let mut one_row_samples = Vec::new();

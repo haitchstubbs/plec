@@ -14,6 +14,7 @@ node_modules/
 # Build outputs
 dist/
 build/
+!crates/plec-cli/src/com/build
 coverage/
 
 # Rust and WASM
