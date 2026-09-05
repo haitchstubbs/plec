@@ -1,804 +1,396 @@
 # AGENTS.md
 
-You are scaffolding an experimental browser application runtime that compiles a constrained React + TanStack DB application into a declarative application graph, then renders that graph through a WASM runtime.
+Plec is a compiler/runtime project for authoring full-stack applications in TS/TSX and executing their compiled semantics through a Rust/WASM runtime.
 
-## Core architecture
+This file defines repository-wide agent invariants. Prefer current code, tests, protocol checks, and `plec dev` output over historical assumptions or speculative architecture.
 
-Target this conceptual pipeline:
+## Instruction priority
+
+When instructions conflict, use this order:
+
+1. The current user/orchestrator request.
+2. Repository-local instructions closest to the files being changed.
+3. This file.
+4. Issue text, old plans, comments, and historical documentation.
+
+Never use a stale plan or Beads description to override code/tests that establish the current contract.
+
+## Core invariants
+
+- `apps/fullstack` is a Plec application and **must remain React-free**.
+  - Do not add `react` or `react-dom` dependencies.
+  - Do not import either package there.
+  - `check:no-react` enforces this during development, build, test, and typecheck.
+- The production compiler authority is Rust under `crates/*`.
+- The browser runtime is Rust compiled to WASM (`crates/plec-runtime`).
+- Preserve compiler/runtime ownership boundaries. Do not move semantic authority into TypeScript merely because it is easier locally.
+- Prefer deterministic, inspectable IR and explicit diagnostics over hidden fallback behavior.
+- Preserve targeted updates and DOM identity. Do not solve a local problem by re-rendering broad subtrees unless the architecture explicitly requires it.
+- SSR/CSR adoption and their protocol/version contracts are part of the current system. Treat them as compatibility surfaces, not disposable implementation detail.
+- Do not add React compatibility, arbitrary JS execution, persistence/sync infrastructure, or a new bundler unless the task explicitly requires it.
+
+## Current architecture
+
+Conceptually:
 
 ```text
-React / TanStack source
-        │
-        ├── TanStack DB queries / collections
-        └── JSX view structure
-        │
+TS / TSX Plec source
         ↓
-Application compiler
-        │
-        ├── data graph
-        ├── view graph
-        └── bindings between them
-        │
+Rust parser + semantic analysis
         ↓
-Application IR
-        │
+HIR
         ↓
-WASM runtime
-        │
-        ├── reactive update handling
-        ├── UI instruction execution
-        └── scheduler
-        │
+Executable Plec IR
+        ↓
+serialized application artifact
+        ↓
+Rust/WASM runtime
         ↓
 DOM
 ```
 
-Do NOT make SQLite/OPFS, replication, streaming, offline sync, service workers, or a custom binary format foundational to the first implementation.
+Supporting host/browser/server layers may load artifacts, provide capabilities, route requests, or perform SSR, but they do not own Plec language semantics.
 
-The application IR may initially be JSON.
+The central architectural property is:
 
-Persistence can be added later once the compiler/runtime model is proven.
+```text
+source dependency
+        ↓
+known IR dependency edge
+        ↓
+owned runtime region / binding
+        ↓
+minimal required mutation
+```
 
-## Repository structure
+A change to one value should update only the runtime state, bindings, regions, and DOM nodes that depend on it.
 
-`apps/fullstack` is a Plec application and must remain React-free. Do not add
-`react` or `react-dom` dependencies, or import either package there. Its
-`check:no-react` script enforces this at development, build, test, and
-typecheck time.
+## Repository map
 
-The monorepo is organized roughly like:
+Use the repository itself as the authority if this map drifts.
 
 ```text
 apps/
-  fullstack/            Demo full-stack Plec application (React-free)
+  fullstack/              Demo full-stack Plec application; React-free
 
 packages/
-  plec/                 Framework runtime: jsx-runtime, state hooks, router
-  plec-ir/              Shared IR schema (Zod)
-  plec-browser/         Browser glue: startPlecRouter, graph loading
-  plec-runtime/         Rust -> WASM runtime (crate at crates/plec-runtime)
-  ui/                   React/shadcn UI kit
-  lucide-plec/          Generated Lucide icon components for Plec
+  plec/                   Plec authoring/runtime-facing TS APIs
+  plec-browser/           Browser glue and graph/artifact loading
+  plec-e2e/               Canonical Playwright E2E runner
+  ui/                     React/shadcn UI package; do not leak into fullstack
+  lucide-plec/            Generated Plec icon components
 
-crates/                 Rust compiler workspace (the compiler authority)
-  plec-parser/ plec-sema/ plec-hir/ plec-lowering/ plec-ir/
-  plec-compiler/        Driver + plec-route-manifest binary
-  plec-diagnostics/
+crates/
+  plec-parser/            TS/TSX parsing
+  plec-sema/              Semantic graph / analysis
+  plec-hir/               High-level IR
+  plec-lowering/          Lowering
+  plec-ir/                Executable IR authority
+  plec-compiler/          Compiler driver
+  plec-diagnostics/       Compiler diagnostics
+  plec-runtime/           Rust/WASM runtime
+  plec-cli/               Plec CLI and `plec dev` workflows
 ```
 
-The build integration described below for `packages/vite-plugin` is
-currently realized by `apps/fullstack/scripts/build.mjs` (esbuild + the
-`plec-route-manifest` binary); no vite plugin exists. The runtime crate is `crates/plec-runtime`, a member of the root Cargo
-workspace alongside `crates/*`.
+Do not infer ownership from an old package path. Inspect the current workspace before introducing a new package or crate.
 
-Responsibilities:
+## Compiler rules
 
-### Compiler (`crates/*` — Rust)
+Compiler changes should preserve a clear pipeline rather than bypassing layers for convenience.
 
-This is one of the two important experimental components.
-
-Responsibilities:
-
-- parse TS/TSX
-- identify supported JSX structures
-- identify supported TanStack DB query usage
-- construct a view graph
-- construct bindings from query results/state into the view graph
-- emit application IR
-- explicitly identify unsupported constructs
-
-Start syntax-first.
-
-Use SWC rather than the TypeScript compiler unless type information is genuinely required.
-
-Initial supported constructs should be deliberately narrow:
-
-- JSX intrinsic elements
-- simple function components
-- props
-- text bindings
-- property bindings
-- simple conditionals
-- `.map()` list rendering
-- `useLiveQuery`
-- straightforward event handlers
-- simple local scalar state if inexpensive
-
-Unsupported or dynamic constructs should fail clearly or be marked as future JS-island candidates.
-
-Do NOT attempt general React compilation.
-
-Do NOT support arbitrary effects, refs, dynamic imports, runtime component lookup, or arbitrary imperative DOM manipulation.
-
-### `packages/plec-runtime`
-
-This is the second important experimental component.
-
-Implement it in Rust and compile it to WASM.
-
-Responsibilities:
-
-- load application IR
-- instantiate a view graph
-- create DOM elements
-- maintain node/binding IDs
-- apply targeted DOM mutations
-- accept data/query deltas
-- update only bindings affected by those deltas
-
-Use:
-
-- `wasm-bindgen`
-- `serde`
-- `serde-wasm-bindgen`
-- `web-sys`
-- `js-sys`
-
-The runtime should initially expose a very small API, conceptually similar to:
-
-```ts
-loadApplication(ir);
-mount(root);
-applyDelta(delta);
-```
-
-Avoid inventing a broad runtime API.
-
-The key experiment is whether:
+Prefer:
 
 ```text
-one changed tuple
-    ↓
-known dependency edge
-    ↓
-one/few DOM mutations
+parse → semantic representation → HIR → executable IR → runtime
 ```
 
-can occur without re-rendering an entire component subtree.
+Rules:
 
-### `packages/plec-ir`
+- Keep source syntax and runtime representation separate.
+- Represent semantics structurally when the runtime needs to reason about them.
+- Prefer stable IDs/handles and deterministic lowering.
+- Unsupported constructs should produce precise diagnostics at the earliest layer that can identify the semantic problem.
+- Do not silently reinterpret unsupported source as a different semantic construct.
+- Do not add TypeScript-side production lowering that duplicates Rust compiler authority.
+- Reuse existing HIR/IR concepts before adding parallel representations.
+- When changing IR, trace all producers, consumers, snapshots, protocol versions, and fixtures.
+- Do not generalize a narrow semantic feature into “general JavaScript support” unless explicitly requested.
 
-Define the shared IR schema.
+### Compiler investigation
 
-Use Zod on the TypeScript side.
+Before changing a semantic path, identify at minimum:
 
-Keep the IR readable and intentionally boring.
+1. where the source form is parsed,
+2. where its semantic/HIR form is produced,
+3. where executable IR is lowered,
+4. where the runtime consumes it,
+5. which tests assert the contract.
 
-A rough conceptual schema may include:
+Use `plec dev trace` before reconstructing this manually with repeated grep pipelines.
 
-```text
-Application
-  components
-  elements
-  queries
-  bindings
-  events
-  loops
-  conditions
-  dependencyEdges
+## Runtime rules
+
+The runtime owns execution, identity, lifecycle, and targeted mutation of compiled application semantics.
+
+- Preserve stable identity for reused DOM nodes, component instances, keyed rows, conditions, outlets, effects, and other owned regions.
+- Disposal must only remove resources owned by the disposed runtime region.
+- Prefer direct node/handle ownership over document-wide queries or scans.
+- Do not introduce a VDOM or subtree rerender as a shortcut around ownership/reconciliation problems.
+- Reject stale callbacks/events using the runtime's ownership/generation model where applicable.
+- Keep host-specific capabilities behind explicit host/runtime boundaries.
+- Avoid broad runtime APIs. Add the minimum operation required by executable semantics.
+
+If a runtime change affects SSR adoption, markers, snapshots, or protocol constants, treat it as a cross-layer contract change and validate it accordingly.
+
+## SSR and adoption
+
+SSR is implemented and compatibility-sensitive.
+
+- Do not treat SSR as optional cleanup or remove adoption paths while fixing CSR behavior.
+- Preserve DOM identity when adopting server-rendered output.
+- Protocol/marker/version changes must be deliberate and tested across Rust, browser/server integration, fixtures, and E2E coverage.
+- After touching an SSR protocol constant or contract, run:
+
+```bash
+plec dev contract ssr --check
 ```
 
-Possible operations:
+- After rebuilding runtime WASM, verify the staged artifact is current before trusting browser/E2E failures:
 
-```text
-CREATE_ELEMENT
-CREATE_TEXT
-SET_ATTRIBUTE
-BIND_TEXT
-BIND_ATTRIBUTE
-IF
-FOR_EACH
-CALL_COMPONENT
-EVENT
+```bash
+plec dev artifact stale
 ```
 
-Do not prematurely optimize the representation.
+## Browser and server glue
 
-JSON is acceptable for the MVP.
+Browser/server TypeScript should adapt the compiled runtime to its host environment, not become a second runtime.
 
-### Build integration (currently `apps/fullstack/scripts`)
+Good responsibilities include:
 
-Provide the integration point.
+- artifact loading/staging,
+- host capability adapters,
+- router/server integration,
+- SSR orchestration,
+- development diagnostics and tooling.
 
-Use Vite rather than building a custom bundler.
+Avoid:
 
-Responsibilities:
+- duplicating compiler semantics,
+- maintaining a parallel DOM ownership model,
+- scanning the entire rendered graph to recover information the runtime can own directly,
+- creating a second canonical representation of executable application state.
 
-- inspect/transform relevant source modules
-- invoke the compiler
-- emit the application IR
-- expose compiler diagnostics during development
-- integrate the WASM runtime
-- preserve normal Vite development ergonomics as much as possible
+## Dev CLI: prefer encoded workflows
 
-Use:
+The dev-only `plec dev` commands encode recurring repository investigation and validation workflows. **Use them before hand-rolled shell reconstruction.**
 
-- `vite`
-- `@vitejs/plugin-react`
-- `@swc/core`
-- `magic-string`
-
-The plugin should eventually make enabling the experiment feel approximately like:
-
-```ts
-plugins: [react(), experimentalRuntime()];
-```
-
-Do not attempt sophisticated HMR initially unless it falls out naturally.
-
-### `packages/plec-browser`
-
-Keep browser-specific glue here.
-
-Use existing packages rather than inventing protocols.
-
-Use `comlink` if Worker RPC is useful.
-
-Workers are optional for the first milestone. A main-thread runtime is acceptable if that produces a faster path to proving the compiler/runtime model.
-
-Do not optimize concurrency prematurely.
-
-## Dependencies
-
-Prefer the following existing packages.
-
-Application:
-
-```text
-react
-react-dom
-@tanstack/react-start
-@tanstack/react-router
-@tanstack/react-db
-@tanstack/db
-@tanstack/query-db-collection
-```
-
-Compiler/build:
-
-```text
-vite
-@vitejs/plugin-react
-@swc/core
-magic-string
-zod
-```
-
-Optional serialization:
-
-```text
-@msgpack/msgpack
-```
-
-Do not use MessagePack until JSON size becomes a meaningful problem.
-
-Browser glue:
-
-```text
-comlink
-idb-keyval
-```
-
-`idb-keyval` is optional and should only be used for trivial experiment metadata or caching.
-
-Do not introduce SQLite/OPFS yet unless needed for a clearly defined later milestone.
-
-Testing:
-
-```text
-vitest
-@vitest/browser
-playwright
-happy-dom
-tinybench
-```
-
-Rust testing/benchmarking:
-
-```text
-wasm-bindgen-test
-insta
-criterion
-```
-
-## Important architectural principle
-
-TanStack DB already provides a declarative/reactive data model.
-
-Do not reimplement its data semantics prematurely.
-
-The compiler's main job is initially to connect:
-
-```text
-TanStack data graph
-        ↓
-query result
-        ↓
-view dependency
-        ↓
-specific DOM binding
-```
-
-Think of DOM nodes as sinks in a reactive dependency graph.
-
-For example:
-
-```text
-todosCollection
-    ↓
-filter(done = false)
-    ↓
-openTodos
-    ↓
-TodoList loop
-    ↓
-TodoRow
-    ↓
-todo.title
-    ↓
-specific DOM text node
-```
-
-If a single todo title changes, the ideal runtime behaviour is to update the corresponding text node directly rather than rerender `TodoList`.
-
-## Compatibility philosophy
-
-The developer-facing source should remain ordinary React/TanStack code.
-
-Do not introduce a new JSX dialect.
-
-Do not require a Rust frontend.
-
-Do not require users to write explicit IR.
-
-The long-term compatibility model may eventually look like:
-
-```text
-supported declarative source
-    → compiled IR
-
-unsupported dynamic source
-    → JS island / compatibility fallback
-```
-
-Do not implement JS islands unless needed to keep the demo working.
-
-For this MVP, unsupported constructs may simply produce clear compiler diagnostics.
-
-## Explicit non-goals
-
-Do NOT build any of the following unless necessary to complete the core experiment:
-
-- custom router
-- custom bundler
-- custom sync engine
-- SQLite abstraction
-- OPFS abstraction
-- replication protocol
-- service worker framework
-- offline-first framework
-- custom binary format
-- JS-to-WASM compiler
-- full React compatibility
-- custom state-management library
-- visual devtools
-- complex worker scheduler
-- production security model
-- SSR implementation
-- component library
-
-Do not turn this into a general framework project.
-
-## Development/debugging requirements
-
-Compiler output should be inspectable.
-
-Emit something like:
-
-```text
-dist/
-  application.ir.json
-  runtime.wasm
-```
-
-The IR should be readable enough to inspect manually.
-
-Add compiler snapshot tests such as:
-
-```ts
-expect(compile(source)).toMatchSnapshot();
-```
-
-Use `insta` where useful for Rust runtime representations.
-
-Prefer explicit IDs and deterministic output so snapshots remain stable.
-
-## Dev CLI (workflow helpers)
-
-The `plec` binary has a dev-only `plec dev` group that encodes this
-workspace's validation and investigation workflows. Agents MUST prefer these
-commands over hand-rolled `grep`/`tail`/`grep -A`/`grep -B` pipelines and
-manual reconstruction of repo topology, protocol invariants, or test
-failures — that reconstruction is exactly the context churn they eliminate.
-
-Install/refresh the dev frontend (the workspace default `.env.plec` builds
-the release frontend, which has no `dev` group):
+Install/refresh the dev CLI frontend when needed:
 
 ```bash
 yarn install:plec-cli:dev
 ```
 
-Commands (all accept `--json`; see `crates/plec-cli/README.md` for details):
+Important commands:
 
 ```text
-plec dev compile [--profile p] [--features f] [--no-optimize]   # build the Plec-owned runtime WASM artifact
-plec dev test wasm [filters] [--failures]   # run the WASM suite once, capture it
-plec dev test last [--failure <substr>]     # query the captured run — never re-run to re-read failures
-plec dev contract ssr [--check]             # SSR protocol versions across Rust/TS/e2e/docs
-plec dev trace <symbol|error-code>          # categorized: DEFINED/PRODUCED/ASSERTED/DOCUMENTED
-plec dev artifact provenance runtime        # built/staged WASM identity + protocol
-plec dev artifact stale                     # terse staleness gate (non-zero on problems)
-plec dev doctor adoption [--html f] [--snapshot f] [--route p]   # adoption health end to end
+plec dev compile [--profile p] [--features f] [--no-optimize]
+plec dev test wasm [filters] [--failures]
+plec dev test last [--failure <substr>]
+plec dev contract ssr [--check]
+plec dev trace <symbol|error-code>
+plec dev artifact provenance runtime
+plec dev artifact stale
+plec dev doctor adoption [--html f] [--snapshot f] [--route p]
 ```
 
 Conventions:
 
-- `plec dev test wasm` captures to `.cache/plec/test-wasm/`; query it with
-  `plec dev test last` instead of re-running the suite.
-- `plec dev artifact stale` must pass after any runtime/WASM rebuild before
-  trusting browser or e2e results — a stale staged binary reports
-  `STALE: implements snapshot protocol N, source is M`.
-- `plec dev contract ssr --check` must pass after touching any
-  `*_VERSION`-style protocol constant; intentional legacy fixtures are
-  reported with `~`, real conflicts with `CONFLICT`.
-- When an investigation reveals a recurring question that none of these
-  commands answer, extend the dev CLI rather than solving it ad hoc again.
+- `plec dev test wasm` captures a run. Use `plec dev test last` to inspect it instead of rerunning merely to reread output.
+- Run `plec dev artifact stale` after runtime/WASM rebuilds before trusting browser or E2E results.
+- Use `plec dev contract ssr --check` after changing protocol/version constants.
+- If the same investigation is repeatedly reconstructed by hand, consider extending `plec dev` rather than creating another ad hoc script.
 
-## E2E testing
+Do not forbid ordinary tools entirely: `rg`, compiler search, and direct file inspection are appropriate for local code reading. The rule is to prefer an existing purpose-built Plec command when it already answers the question.
 
-`packages/plec-e2e` is the canonical Playwright runner. Playwright owns the
-fullstack server: turbo builds `@wasm-runtime/fullstack`, the `webServer`
-config starts `dist/server.mjs`, waits for HTTP readiness, and kills the
-process group afterwards.
+## Testing
 
-Never spawn `dist/server.mjs` manually, and never leave a dev server
-running for tests. Playwright starts, watches, and stops the server.
+Run the narrowest relevant validation first, then expand when the change crosses boundaries.
 
-Tiers (run from the repo root):
+### Rust/compiler/runtime
 
-```text
-yarn test:e2e          # smoke gate — fast; run this while spiking
-yarn test:acceptance   # full behavioral suites — opt-in
-yarn bench             # navigation benchmark into benchmarks/results/ — opt-in
+Use package/crate-specific tests while iterating. Add or update deterministic snapshots when changing compiler/HIR/IR output.
+
+Prefer tests that assert semantics and identity, not implementation trivia.
+
+### E2E
+
+`packages/plec-e2e` is the canonical Playwright runner. Playwright owns the fullstack server lifecycle.
+
+Never manually spawn `dist/server.mjs` for E2E tests and do not leave a test server running.
+
+From the repository root:
+
+```bash
+yarn test:e2e          # fast smoke gate
+yarn test:acceptance   # deeper behavioral suites
+yarn bench             # benchmark suite
 ```
 
 Rules:
 
-- Specs live in `packages/plec-e2e/tests/{smoke,acceptance,bench}` and are
-  named `*.playwright.ts`. New deep suites go under `acceptance/`; keep the
-  smoke tier fast.
-- The port comes from `E2E_PORT` in `.env.devports` — the canonical port
-  registry. For parallel spikes override it instead of editing the file:
-  `E2E_PORT=3311 yarn test:e2e`.
-- `reuseExistingServer: false` is intentional: a stale server on the port
-  must fail the run loudly instead of being silently adopted.
+- Smoke tests stay fast.
+- Deep suites belong under acceptance.
+- E2E ports come from `.env.devports`; override `E2E_PORT` for parallel work instead of editing shared configuration.
+- `reuseExistingServer: false` is intentional. A stale server should fail loudly.
 
-## Benchmark requirements
+### What to test for runtime changes
 
-Create a small benchmark harness comparing the normal implementation and compiled runtime where practical.
+Where relevant, assert:
 
-Measure at minimum:
+- rendered result,
+- DOM/node identity preservation,
+- keyed ordering/identity,
+- lifecycle/disposal behavior,
+- stale event rejection,
+- SSR adoption identity,
+- protocol compatibility,
+- mutation/operation counts when performance semantics are part of the contract.
 
-- initial mount time
-- update of one list row
-- addition/removal of one row
-- generated JS size
-- WASM + IR size
+## Performance and benchmarks
 
-Do not optimize based on synthetic benchmarks before the architecture works.
+Optimize architecture only after correctness and ownership are proven.
 
-The most important benchmark is conceptually:
+Useful measurements include:
+
+- initial mount/adoption,
+- one-value update,
+- keyed row insert/update/move/remove,
+- navigation,
+- DOM operation count,
+- runtime WASM size,
+- application artifact size,
+- generated/host JS size.
+
+The meaningful question is not only “how many milliseconds?” but:
 
 ```text
-change one item
+one application change
+        ↓
+how much work did Plec perform?
 ```
 
-versus:
+Do not trade away identity or semantics to improve a synthetic benchmark.
 
-```text
-how much application work occurred?
-```
+## Dependencies and infrastructure
 
-Instrument the runtime so we can observe how many DOM operations were performed.
+Prefer an existing focused dependency over custom infrastructure when it preserves Plec's experiment and ownership model.
 
-## Milestones
+Before adding a dependency:
 
-Work in this order.
+1. confirm the repository does not already solve the problem,
+2. prefer small, well-scoped libraries,
+3. keep semantics in Plec when semantics are the thing being validated,
+4. avoid introducing frameworks that take ownership of routing, rendering, state, or compilation by accident.
 
-### Milestone 1 — scaffold
+Do not add foundational persistence/sync/offline infrastructure, a custom binary format, a new bundler, or a generalized plugin system unless directly required by the task.
 
-Create the monorepo, packages, build configuration, test infrastructure, and working demo application.
+## Scope discipline
 
-The demo must run normally before introducing compilation.
+Keep changes narrow.
 
-### Milestone 2 — static JSX compiler
+- Fix the layer that owns the problem.
+- Do not opportunistically redesign adjacent systems.
+- Do not create speculative interfaces, registries, providers, or abstractions for hypothetical future implementations.
+- Prefer obvious ownership and concrete types.
+- Comment non-obvious invariants and architectural decisions, not routine code.
+- If you discover adjacent work that is real but not required, create a linked Beads issue instead of expanding the current task.
 
-Compile a tiny JSX subset into application IR.
+## Multi-agent safety
 
-Example:
+Assume other agents may be working in the same worktree or nearby files.
 
-```tsx
-function Hello({ name }) {
-  return <div>Hello {name}</div>;
-}
-```
-
-should produce deterministic IR representing the element and text binding.
-
-Add snapshot tests.
-
-### Milestone 3 — WASM renderer
-
-Load the IR into the Rust/WASM runtime and render it into the DOM.
-
-At this point React should not be responsible for rendering the compiled component.
-
-### Milestone 4 — list rendering
-
-Support a simple loop such as:
-
-```tsx
-{
-  todos.map((todo) => <li>{todo.title}</li>);
-}
-```
-
-Represent the loop and row bindings explicitly in the IR.
-
-### Milestone 5 — TanStack DB binding
-
-Connect one `useLiveQuery` result to the compiled view graph.
-
-A TanStack DB collection mutation should result in a targeted runtime update.
-
-Instrument DOM mutation counts.
-
-### Milestone 6 — simple actions
-
-Support one straightforward event path such as:
-
-```tsx
-<button onClick={() => complete(todo.id)}>Complete</button>
-```
-
-Keep the supported action semantics narrow.
-
-### Milestone 7 — evaluate
-
-Compare the normal React/TanStack implementation against the compiled implementation.
-
-Document:
-
-- what compiled cleanly
-- what required special handling
-- what could not compile
-- bundle/runtime overhead
-- DOM operation counts
-- runtime performance
-- compiler complexity
-- whether the architecture still appears worth pursuing
-
-Do not proceed into persistence or sync until this evaluation is complete.
-
-## Code quality
-
-Keep abstractions minimal.
-
-Do not create interfaces merely because future implementations might exist.
-
-Prefer straightforward code with obvious ownership.
-
-Avoid large dependency-injection systems, generic plugin frameworks, registries, or premature extensibility.
-
-Comment unusual compiler/runtime decisions, not obvious code.
-
-Prefer small commits or clearly separated implementation steps if your environment supports them.
+- Inspect `git status --short` before making broad edits.
+- Do not revert, reset, stash, overwrite, or “clean up” changes you did not create unless explicitly instructed.
+- Stay within the claimed Beads issue/task boundary. If another issue owns adjacent work, link it rather than absorbing it.
+- Prefer additive/local edits over sweeping rewrites when unrelated working-tree changes exist.
+- Do not use destructive Git commands (`reset --hard`, `clean -fd`, forced checkout, history rewrite) without explicit authorization.
+- If concurrent changes make a required edit ambiguous, preserve both intents where possible and report the collision at handoff.
 
 ## No temporary files (hard rule)
 
-Never create temporary, scratch, or intermediate files as part of agent work — no markdown drafts, notes, JSON payloads, or scripts written to the repo, `/tmp`, or elsewhere to feed into a CLI.
+Never create scratch/intermediate files solely to feed another tool: no temporary markdown plans, JSON payload files, throwaway scripts, or repo-local notes.
 
-Work directly with the primary tool's interface instead: pass arguments/flags inline, pipe stdin when a tool requires it, and use the tool's own batching features (e.g. `bd create --graph` or repeated `bd` calls — not a hand-written plan file).
+Pass arguments inline, pipe stdin, or use the tool's batching/interface support.
 
-The only files you write are files the task itself requires in the repository (source, tests, config, docs).
+Files are allowed when they are actual task outputs: source, tests, fixtures, config, docs, benchmark results required by the repository, etc.
 
-## Decision rule
+## Issue tracking: `bd` / Beads
 
-Whenever there is a choice between:
+This repository uses **Beads for task tracking**. Do not create markdown TODO lists or a parallel issue system.
 
-A. implementing infrastructure ourselves
+Use JSON output for agent/programmatic workflows.
 
-or
-
-B. using an existing package while preserving the experiment
-
-choose B.
-
-The only novel work we are intentionally validating is:
-
-```text
-React/TanStack source
-        ↓
-application dependency graph
-```
-
-and:
-
-```text
-application dependency graph
-        ↓
-efficient WASM-driven DOM updates
-```
-
-Keep the project aggressively focused on proving or disproving those two ideas.
-
-<!-- BEGIN BEADS INTEGRATION v:1 profile:full hash:19cc25d9 -->
-
-## Issue Tracking with bd (beads)
-
-**IMPORTANT**: This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
-
-### Why bd?
-
-- Dependency-aware: Track blockers and relationships between issues
-- Git-friendly: Dolt-powered version control with native sync
-- Agent-optimized: JSON output, ready work detection, discovered-from links
-- Prevents duplicate tracking systems and confusion
-
-### Quick Start
-
-**Check for ready work:**
+Common commands:
 
 ```bash
 bd ready --json
-```
-
-**Create new issues:**
-
-```bash
-bd create "Issue title" --description="Detailed context" -t bug|feature|task -p 0-4 --json
-bd create "Issue title" --description="What this issue is about" -p 1 --deps discovered-from:bd-123 --json
-```
-
-**Claim and update:**
-
-```bash
+bd show <id> --json
 bd update <id> --claim --json
-bd update bd-42 --priority 1 --json
+bd create "Issue title" --description="Detailed context" -t task -p 2 --json
+bd create "Found bug" --description="Details" -t bug -p 1 --deps discovered-from:<parent-id> --json
+bd close <id> --reason "Completed" --json
 ```
 
-**Complete work:**
+Issue types:
 
-```bash
-bd close bd-42 --reason "Completed" --json
-```
+- `bug`: broken behavior
+- `feature`: new user-visible capability
+- `task`: implementation/refactor/test/docs work
+- `epic`: multi-issue body of work
+- `chore`: maintenance/tooling/dependencies
 
-### Issue Types
+Priorities:
 
-- `bug` - Something broken
-- `feature` - New functionality
-- `task` - Work item (tests, docs, refactoring)
-- `epic` - Large feature with subtasks
-- `chore` - Maintenance (dependencies, tooling)
+- `0`: critical
+- `1`: high
+- `2`: normal/default
+- `3`: low
+- `4`: backlog
 
-### Priorities
+Rules:
 
-- `0` - Critical (security, data loss, broken builds)
-- `1` - High (major features, important bugs)
-- `2` - Medium (default, nice-to-have)
-- `3` - Low (polish, optimization)
-- `4` - Backlog (future ideas)
+- Check `bd ready --json` when selecting unblocked work.
+- Claim an issue before implementing it when working from the queue.
+- Use `discovered-from:<parent-id>` for adjacent work found during implementation.
+- Use `--acceptance` / `--design` for issues where those fields materially reduce ambiguity.
+- Use `bd lint`, `bd stale`, and `bd orphans` for hygiene when relevant.
+- Beads data syncs through Dolt; do not treat `.beads/issues.jsonl` as the authoritative sync protocol.
+- Task-tracking guidance never grants permission to commit or push.
 
-### Workflow for AI Agents
+## Git and sync policy
 
-1. **Check ready work**: `bd ready` shows unblocked issues
-2. **Claim your task atomically**: `bd update <id> --claim`
-3. **Work on it**: Implement, test, document
-4. **Discover new work?** Create linked issue:
-   - `bd create "Found bug" --description="Details about what was found" -p 1 --deps discovered-from:<parent-id>`
-5. **Complete**: `bd close <id> --reason "Done"`
+Default to **conservative** repository mutation.
 
-### Quality
+Unless the current user/orchestrator or an explicit repository profile authorizes it:
 
-- Use `--acceptance` and `--design` fields when creating issues
-- Use `--validate` to check description completeness
+- do not commit,
+- do not push Git,
+- do not run `bd dolt push` / remote sync,
+- do not rewrite history.
 
-### Lifecycle
+At handoff, report changed files, validation performed, issue status, and any suggested commit/sync commands.
 
-- `bd defer <id>` / `bd supersede <id>` for issue management
-- `bd stale` / `bd orphans` / `bd lint` for hygiene
-- `bd human <id>` to flag for human decisions
-- `bd formula list` / `bd mol pour <name>` for structured workflows
+Explicit current instructions always win over generic session-completion guidance.
 
-### Sync
+## Before finishing implementation work
 
-bd stores issue history in Dolt:
+If code changed:
 
-- Each write auto-commits to Dolt history
-- Use `bd dolt push`/`bd dolt pull` for remote sync
-- Do not treat `.beads/issues.jsonl` as the sync protocol
+1. run the narrow relevant tests/checks,
+2. run broader gates when the change crosses compiler/runtime/browser/server boundaries,
+3. verify runtime artifact freshness when WASM changed,
+4. update/close the Beads issue if the active workflow calls for it,
+5. create linked issues for genuine remaining work rather than hiding TODOs in prose/code,
+6. report what changed and what was validated.
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
-
-### Important Rules
-
-- ✅ Use bd for ALL task tracking
-- ✅ Always use `--json` flag for programmatic use
-- ✅ Link discovered work with `discovered-from` dependencies
-- ✅ Check `bd ready` before asking "what should I work on?"
-- ❌ Do NOT create markdown TODO lists
-- ❌ Do NOT use external issue trackers
-- ❌ Do NOT duplicate tracking systems
-
-For more details, see README.md and docs/QUICKSTART.md.
-
-## Agent Context Profiles
-
-The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
-
-- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
-- **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
-- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
-
-## Session Completion
-
-This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
-
-1. **File issues for remaining work** - Create beads for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **Handle git/sync by active profile**:
-   ```bash
-   # Conservative/minimal/default: report status and proposed commands; wait for approval.
-   git status
-
-   # Team-maintainer opt-in only, unless current instructions forbid it:
-   git pull --rebase
-   bd dolt push
-   git push
-   git status
-   ```
-5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
-
-**Critical rules:**
-
-- Explicit user or orchestrator instructions override this Beads block.
-- Do not commit or push without clear authority from the active profile or the current user request.
-- If a required sync or push is blocked, stop and report the exact command and error.
-
-<!-- END BEADS INTEGRATION -->
-
-<!-- BEGIN BEADS CODEX SETUP: generated by bd setup codex -->
-
-## Beads Issue Tracker
-
-Use Beads (`bd`) for durable task tracking in repositories that include it. Use the `beads` skill at `.agents/skills/beads/SKILL.md` (project install) or `~/.agents/skills/beads/SKILL.md` (global install) for Beads workflow guidance, then use the `bd` CLI for issue operations.
-
-### Quick Reference
-
-```bash
-bd ready                # Find available work
-bd show <id>            # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>           # Complete work
-bd prime                # Refresh Beads context
-```
-
-### Rules
-
-- Use `bd` for all task tracking; do not create markdown TODO lists.
-- Run `bd prime` when Beads context is missing or stale. Codex 0.129.0+ can load Beads context automatically through native hooks; use `/hooks` to inspect or toggle them.
-- Keep persistent project memory in Beads via `bd remember`; do not create ad hoc memory files.
-
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
-<!-- END BEADS CODEX SETUP -->
+Do not claim a test passed unless you ran it in the current worktree/session.
