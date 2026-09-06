@@ -8,11 +8,13 @@
 use plec_client::runtime::TypedRuntime;
 use plec_eval::eval::typed_eval;
 use plec_ir::limits::{
-    MAX_ARTIFACT_JSON_BYTES, MAX_HOST_INPUT_JSON_BYTES, MAX_SNAPSHOT_JSON_BYTES, MAX_VALUE_DEPTH,
+    MAX_ARTIFACT_JSON_BYTES, MAX_HOST_INPUT_JSON_BYTES, MAX_LOOP_ROWS, MAX_SNAPSHOT_JSON_BYTES,
+    MAX_VALUE_DEPTH,
 };
 use plec_runtime::PlecRuntime;
 use plec_schema::delta::UpdateMetrics;
 use plec_schema::typed::TypedApplication;
+use std::collections::HashMap;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
@@ -325,5 +327,103 @@ fn self_requeuing_reaction_terminates_within_drain_depth() {
         message.contains("reaction drain depth exceeds limit")
             || message.contains("reaction execution budget exceeded"),
         "{message}"
+    );
+}
+
+#[wasm_bindgen_test]
+fn loop_projection_beyond_row_limit_is_rejected_before_mutation() {
+    let mut runtime = TypedRuntime::new(bounded_application()).unwrap();
+    let parent = web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .create_element("div")
+        .unwrap()
+        .into();
+    let projection = (0..=MAX_LOOP_ROWS)
+        .map(|index| (index.to_string(), HashMap::new()))
+        .collect::<Vec<_>>();
+    let mut metrics = UpdateMetrics::default();
+    let error = runtime
+        .reconcile_loop(0, &parent, projection, &mut metrics)
+        .expect_err("projection beyond the loop row limit must fail closed");
+    assert!(
+        error_string(error).contains("LOOP_ROW_LIMIT_EXCEEDED"),
+        "unexpected error"
+    );
+}
+
+fn envelope_artifact(component: &str) -> String {
+    format!(
+        r#"{{"version":"0.10","rootComponent":0,"components":[{{"id":"App","version":"0.10","rootNode":0,"strings":["div"],{component}}}]}}"#
+    )
+}
+
+#[wasm_bindgen_test]
+fn load_application_rejects_self_child_node_graph() {
+    // A self-referential child recursed unbounded during mount before
+    // topology validation; it must now be rejected at the load boundary.
+    let artifact = envelope_artifact(
+        r#""nodes":[{"op":"element","tag":0,"parent":null,"children":[0]}]"#,
+    );
+    let error = PlecRuntime::new()
+        .load_application(js_from_json(&artifact))
+        .expect_err("self-child node graph must be rejected");
+    assert!(
+        error_string(error).contains("node ownership is cyclic or shared"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
+fn load_application_rejects_unrooted_node_graph() {
+    let artifact = envelope_artifact(
+        r#""nodes":[{"op":"element","tag":0,"parent":null,"children":[]},{"op":"element","tag":0,"parent":null,"children":[]}]"#,
+    );
+    let error = PlecRuntime::new()
+        .load_application(js_from_json(&artifact))
+        .expect_err("unrooted nodes must be rejected");
+    assert!(
+        error_string(error).contains("node graph contains unrooted nodes"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
+fn load_application_rejects_out_of_range_expression_jump_target() {
+    let artifact = envelope_artifact(
+        r#""nodes":[{"op":"element","tag":0,"parent":null,"children":[]}],"expressions":[{"instructions":[{"op":"jump","target":9}]}]"#,
+    );
+    let error = PlecRuntime::new()
+        .load_application(js_from_json(&artifact))
+        .expect_err("out-of-range expression jump target must be rejected");
+    assert!(
+        error_string(error).contains("expression jump target out of range"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
+fn self_tail_call_action_terminates_within_call_depth() {
+    // Tail calls previously ran through native recursion with a fresh fuel
+    // budget per level, so a self-tail-call action could recurse without
+    // any bound. They now share the continuation machinery and its depth
+    // budget.
+    let mut app = bounded_application();
+    app.actions = serde_json::from_value(serde_json::json!([
+        {"frameSlots": 0, "instructions": [{"op": "call", "action": 0, "arguments": []}]}
+    ]))
+    .unwrap();
+    let mut runtime = TypedRuntime::new(app).unwrap();
+    let mut metrics = UpdateMetrics::default();
+    let error = runtime
+        .execute_action(0, &[], None, None, &mut metrics)
+        .expect_err("self-tail-call action must terminate");
+    assert!(
+        error
+            .as_string()
+            .unwrap_or_default()
+            .contains("action call depth exceeds limit"),
+        "{error:?}"
     );
 }

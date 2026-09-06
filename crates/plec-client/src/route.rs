@@ -210,7 +210,11 @@ impl RuntimeState {
             .get(graph.root_component)
             .cloned()
             .ok_or_else(|| JsValue::from_str("typed route graph root is missing"))?;
-        let mut next = TypedRuntime::new(app)?;
+        let mut next = TypedRuntime::new_with_runtime_limits(
+            app,
+            self.region_tracker.clone(),
+            self.reconcile_budget.clone(),
+        )?;
         next.set_component_definitions(graph.components);
         next.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
         next.graph_generation = self.next_typed_generation();

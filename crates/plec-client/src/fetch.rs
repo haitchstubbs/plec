@@ -2,6 +2,7 @@ use crate::prelude::*;
 use crate::runtime::*;
 use crate::vm::*;
 use plec_dom::platform::*;
+use web_sys::RequestCredentials;
 
 #[derive(Clone)]
 pub struct TypedPendingFetch {
@@ -21,6 +22,53 @@ pub struct TypedPendingFetch {
     pub require_ok: bool,
     pub graph_generation: u64,
     pub request_id: u64,
+}
+
+fn fetch_origin(url: &str) -> Option<String> {
+    let base = web_sys::window()?.location().href().ok()?;
+    web_sys::Url::new_with_base(url, &base)
+        .ok()
+        .map(|url| url.origin())
+}
+
+impl RuntimeState {
+    /// Authorizes a queued fetch against the host policy. Returns whether the
+    /// request may carry credentials, or a denial message. No grant exists:
+    /// deny, regardless of what the artifact declares.
+    fn authorize_fetch(
+        &self,
+        url: &str,
+        method: &str,
+        headers: &[(String, String)],
+    ) -> Result<bool, String> {
+        let grants = self.fetch_policy.borrow();
+        let grants = grants
+            .as_ref()
+            .ok_or_else(|| "fetch origin denied by runtime policy".to_string())?;
+        let origin =
+            fetch_origin(url).ok_or_else(|| "fetch origin denied by runtime policy".to_string())?;
+        let grant = grants
+            .iter()
+            .find(|grant| grant.origin.eq_ignore_ascii_case(&origin))
+            .ok_or_else(|| "fetch origin denied by runtime policy".to_string())?;
+        if !grant
+            .methods
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(method))
+        {
+            return Err("fetch method denied by runtime policy".into());
+        }
+        for (name, _) in headers {
+            if !grant
+                .headers
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(name))
+            {
+                return Err("fetch header denied by runtime policy".into());
+            }
+        }
+        Ok(grant.credentials)
+    }
 }
 
 fn failure(kind: &str, message: String, url: &str) -> RuntimeValue {
@@ -125,24 +173,28 @@ fn bounded_response_value(value: JsValue, url: &str) -> Result<RuntimeValue, Run
 
 impl RuntimeState {
     pub fn start_typed_fetch(&self, mut pending: TypedPendingFetch) -> Result<(), JsValue> {
-        let controller = AbortController::new()?;
-        {
-            let mut typed = self.typed.borrow_mut();
-            let typed = typed
-                .get_mut(&pending.instance_id)
-                .ok_or_else(|| JsValue::from_str("typed application missing"))?;
-            let Some(typed) = typed.runtime_for_generation_mut(pending.graph_generation) else {
-                return Ok(());
+        // Host-policy gate before any browser resource is touched. A denial
+        // completes the action through its failure path without a network
+        // request, exactly like any other fetch failure.
+        let credentials =
+            match self.authorize_fetch(&pending.url, &pending.method, &pending.headers) {
+                Ok(credentials) => credentials,
+                Err(message) => {
+                    let url = pending.url.clone();
+                    return self
+                        .complete_typed_fetch(pending, Err(failure("policy", message, &url)));
+                }
             };
-            typed.next_fetch_id += 1;
-            pending.request_id = typed.next_fetch_id;
-            typed
-                .abort_controllers
-                .insert(pending.request_id, controller.clone());
-        }
+        let controller = AbortController::new()?;
         let init = RequestInit::new();
         init.set_method(&pending.method);
         init.set_signal(Some(&controller.signal()));
+        // The credentials mode is host-owned: artifact code cannot widen it.
+        init.set_credentials(if credentials {
+            RequestCredentials::Include
+        } else {
+            RequestCredentials::Omit
+        });
         let headers = web_sys::Headers::new()?;
         for (name, value) in &pending.headers {
             headers.set(name, value)?;
@@ -151,9 +203,25 @@ impl RuntimeState {
         if let Some(body) = &pending.body {
             init.set_body(&JsValue::from_str(body));
         }
+        let browser = window()?;
+        {
+            let mut typed = self.typed.borrow_mut();
+            let typed = typed
+                .get_mut(&pending.instance_id)
+                .ok_or_else(|| JsValue::from_str("typed application missing"))?;
+            let Some(typed) = typed.runtime_for_generation_mut(pending.graph_generation) else {
+                return Ok(());
+            };
+            self.region_tracker.acquire_fetch()?;
+            typed.next_fetch_id += 1;
+            pending.request_id = typed.next_fetch_id;
+            typed
+                .abort_controllers
+                .insert(pending.request_id, controller.clone());
+        }
         // Start the browser request before yielding. Disposal can then abort an
         // in-flight promise even when it happens in the same event turn.
-        let request = window()?.fetch_with_str_and_init(&pending.url, &init);
+        let request = browser.fetch_with_str_and_init(&pending.url, &init);
         let runtime = self.clone();
         spawn_local(async move {
             let result = match JsFuture::from(request).await {
@@ -321,19 +389,54 @@ impl RuntimeState {
         pending: TypedPendingFetch,
         result: Result<RuntimeValue, RuntimeValue>,
     ) -> Result<(), JsValue> {
-        let route_loader = self
-            .typed
-            .borrow()
-            .get(&pending.instance_id)
-            .and_then(|instance| {
-                instance
-                    .runtime_for_generation(pending.graph_generation)?
-                    .app
-                    .actions
-                    .get(pending.continuation.current.action)
-                    .map(|action| action.route_loader)
-            })
-            .unwrap_or(false);
+        let result = match result {
+            Ok(value) => {
+                let bytes = value.json_body().map(|body| body.len()).map_err(|error| {
+                    failure(
+                        "decode",
+                        error.as_string().unwrap_or_default(),
+                        &pending.url,
+                    )
+                });
+                match bytes.and_then(|bytes| {
+                    pending
+                        .continuation
+                        .fetch_accounting
+                        .borrow_mut()
+                        .charge_response_bytes(bytes)
+                        .map_err(|error| {
+                            failure("limit", error.as_string().unwrap_or_default(), &pending.url)
+                        })
+                }) {
+                    Ok(()) => Ok(value),
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) => Err(error),
+        };
+        let route_loader = {
+            let mut typed = self.typed.borrow_mut();
+            let Some(instance) = typed.get_mut(&pending.instance_id) else {
+                return Ok(());
+            };
+            let Some(runtime) = instance.runtime_for_generation_mut(pending.graph_generation)
+            else {
+                return Ok(());
+            };
+            if runtime
+                .abort_controllers
+                .remove(&pending.request_id)
+                .is_some()
+            {
+                self.region_tracker.release_fetch();
+            }
+            runtime
+                .app
+                .actions
+                .get(pending.continuation.current.action)
+                .map(|action| action.route_loader)
+                .unwrap_or(false)
+        };
         if route_loader {
             return self.complete_typed_route_loader(pending, result);
         }
@@ -349,7 +452,6 @@ impl RuntimeState {
             if typed.root.is_none() {
                 return Ok(());
             }
-            typed.abort_controllers.remove(&pending.request_id);
             let mut continuation = pending.continuation;
             let frame = &mut continuation.current.frame;
             let pc = match result {
@@ -395,7 +497,7 @@ impl RuntimeState {
                     finalizers.push(finally_pc);
                 }
                 for finally_pc in finalizers.into_iter().rev() {
-                    typed.execute_action_at(
+                    typed.execute_action_at_with_fetch_accounting(
                         continuation.current.action,
                         finally_pc,
                         continuation.current.frame.clone(),
@@ -403,6 +505,7 @@ impl RuntimeState {
                         continuation.current.row.clone(),
                         None,
                         &mut metrics,
+                        continuation.fetch_accounting.clone(),
                     )?;
                     requests.extend(typed.take_pending_fetches());
                 }
@@ -476,7 +579,6 @@ impl RuntimeState {
                     else {
                         return Ok(());
                     };
-                    runtime.abort_controllers.remove(&pending.request_id);
                     let state = runtime
                         .app
                         .actions

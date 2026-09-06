@@ -1,14 +1,14 @@
 # Untrusted-input resource limits
 
 Executable Plec artifacts, runtime values, snapshots, fetch responses, source
-modules, and execution work are treated as untrusted. Every limit below is
-enforced fail-closed at the boundary before unbounded allocation or recursion
-can happen. Values are generous: they must accept any legitimate compiled
-output and reject only pathological inputs.
+modules, and execution work are treated as untrusted. Transport byte envelopes
+bound decode allocation; structural validation then rejects pathological decoded
+shapes before runtime execution. Values are generous: they must accept any
+legitimate compiled output and reject only pathological inputs.
 
 Canonical constants live in `crates/plec-ir/src/limits.rs` (re-exported by
-`plec-schema`); the TypeScript hosts mirror the byte ceilings locally and must
-be kept in sync.
+`plec-schema`). TypeScript host mirrors are tracked for generated replacement
+in Beads `wasm-runtime-a08`.
 
 ## Artifact and manifest decode (WASM boundary)
 
@@ -19,16 +19,21 @@ be kept in sync.
 | Manifest route count                         | 2,048 (`MAX_MANIFEST_ROUTES`)      | `RouteManifest::validate` (`crates/plec-ir`)                                                                                                                  |
 | JS-value normalization depth                 | 128 (`MAX_DECODE_JS_DEPTH`)        | all decode paths normalize JS Map/object/array values before stringification, so hostile nesting fails before Rust deserialization can exhaust the WASM stack |
 
-## Executable IR shape (`TypedApplication::validate_contract`)
+## Structural budgets (`TypedApplication::validate_contract`)
 
 | Boundary                        | Limit                                                                                                        |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Components per application      | 5,000 (`MAX_COMPONENT_COUNT`)                                                                                |
+| Component definitions           | 65,536 (`MAX_COMPONENT_COUNT`); pathological-shape guard only                                                |
 | Any per-component IR collection | 100,000 entries (`MAX_COMPONENT_COLLECTION_LEN`)                                                             |
-| String pool entry               | 64 KiB (`MAX_COMPONENT_STRING_BYTES`)                                                                        |
+| Total IR entries                | 1,000,000 (`MAX_TOTAL_IR_ENTRIES`)                                                                           |
+| Total instructions              | 1,000,000 (`MAX_TOTAL_INSTRUCTIONS`)                                                                         |
+| String pool                     | 1 MiB per entry / 8 MiB aggregate (`MAX_COMPONENT_STRING_BYTES`, `MAX_TOTAL_STRING_POOL_BYTES`)              |
+| Constant values                 | 1,000,000 aggregate nodes (`MAX_TOTAL_CONSTANT_NODES`)                                                       |
 | Expression program              | 10,000 instructions (`MAX_EXPRESSION_INSTRUCTIONS`)                                                          |
 | Action program                  | 10,000 instructions (`MAX_ACTION_INSTRUCTIONS`)                                                              |
 | Constant runtime values         | depth 64 (`MAX_VALUE_DEPTH`), 100,000 nodes (`MAX_VALUE_NODES`), 1 MiB per string (`MAX_VALUE_STRING_BYTES`) |
+| Node graph topology              | every structural handle in range; ownership edges form a forest rooted at the graph root and loop row templates: acyclic, no node claimed twice, fully reachable (`TypedApplication::validate_topology`) |
+| Expression control flow          | jump targets within the program, Filter/Map program handles in range (`validate_contract`)                   |
 
 ## Runtime values (host inputs, rows, fetch bodies)
 
@@ -64,7 +69,7 @@ be kept in sync.
 Cycles are already rejected by the existing `seen` set; depth and count bounds
 extend this to deep chains and file-count exhaustion.
 
-## Execution work
+## Execution budgets
 
 | Boundary              | Limit                                                                                     | Where                          |
 | --------------------- | ----------------------------------------------------------------------------------------- | ------------------------------ |
@@ -75,6 +80,22 @@ extend this to deep chains and file-count exhaustion.
 Fuel is shared across nested Filter/Map predicate evaluation, so crafted
 backward-jump loops and self-referential predicates exhaust a documented
 budget instead of pinning the tab, growing the heap, or overflowing the stack.
+Tail calls (`Call`/`CallFrame` without continuations) run inside the same
+continuation loop and its call-depth budget instead of native recursion, so
+chained or self-referential tail calls exhaust the same documented bound.
+
+## Amplification budgets
+
+| Boundary               | Limit                                                                                                 | Where                                                                                                                                            |
+| ---------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Loop expansion         | 10,000 rows (`MAX_LOOP_ROWS`)                                                                         | Projection builders reject before row allocation; `reconcile_loop` rejects before mutation                                                       |
+| Live runtime ownership | 100,000 regions (`MAX_MOUNTED_REGIONS`)                                                               | Shared application-wide region tracker; graph instances, rows, and conditional regions own idempotent lifecycle slots                            |
+| Reconcile work         | 500,000 DOM operations (`MAX_DOM_OPERATIONS_PER_RECONCILE`)                                           | One reservation spans the top-level reconcile and all deferred component work until flush quiescence                                             |
+| Concurrent fetches     | 128 (`MAX_IN_FLIGHT_FETCHES`)                                                                         | Shared application-wide fetch tracker                                                                                                            |
+| Logical action fetches | 128 fetches / 16 MiB decoded response values (`MAX_FETCHES_PER_ACTION`, `MAX_FETCH_BYTES_PER_ACTION`) | Accounting is carried by the action continuation across nested calls, continuations, and finalizers; concurrent actions receive distinct records |
+
+Product-policy caps such as manifest routes, source modules, and snapshot loop
+keys remain documented separately from these primary exhaustion defences.
 
 ## Inbound request bodies (dev server)
 
@@ -86,13 +107,16 @@ budget instead of pinning the tab, growing the heap, or overflowing the stack.
 ## Boundary tests
 
 - `crates/plec-schema/src/typed.rs` — oversized collections, deep constants,
-  oversized programs, oversized string pool entries.
+  oversized programs, oversized string pool entries, cyclic/self-child/shared
+  and unrooted node graphs, out-of-range structural handles, out-of-range
+  expression jump targets and Filter/Map program handles.
 - `crates/plec-ir/src/lib.rs` — snapshot loop-key/depth/size caps, manifest
   route count.
 - `crates/plec-compiler/src/read_source_graph.rs` — oversized source file,
   over-deep import chain, chain just within the limit still compiles.
 - `crates/plec-runtime/tests/untrusted_input_limits.rs` — oversized and
   over-deep host inputs, artifacts, snapshots, nested JS Maps, undefined
-  fields, expression/action loops, and reaction cycles at the WASM boundary.
+  fields, expression/action loops, self-tail-call actions, self-child and
+  unrooted node graphs, and reaction cycles at the WASM boundary.
 - `packages/plec-server/src/index.test.ts` — oversized request body (413) and
   oversized artifact file (500).

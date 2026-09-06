@@ -13,6 +13,9 @@ const disposeMemoryHud = installDevelopmentMemoryHud(assetUrl);
 
 // The browser only retrieves immutable artifacts. The runtime owns matching,
 // history, link interception, outlet replacement and instance disposal.
+// Capabilities declared by artifacts are requests only; the grants below are
+// the host-owned authority for cookies and fetch in this application.
+const origin = window.location.origin;
 const stressFeed = createRuntimeStressFeed();
 const app = await startPlecRouter({
   root,
@@ -21,6 +24,17 @@ const app = await startPlecRouter({
     assetUrl(
       `/graphs/${graphId.replace(/[\/\\]/g, '--').replace('#', '--')}.json`,
     ),
+  cookiePolicy: {
+    sidebar_state: { operations: ['getSync', 'set'] },
+  },
+  fetchPolicy: [
+    {
+      origin,
+      methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+      headers: ['content-type'],
+      credentials: true,
+    },
+  ],
   inputs: stressFeed.inputs,
   onQueryUpdate: stressFeed.recordRuntimeUpdate,
 });

@@ -26,4 +26,7 @@ pub use plec_schema::{
     },
 };
 
-pub use crate::state::{error, graph_instance_id, RouterListener, RuntimeState};
+pub use crate::state::{
+    error, graph_instance_id, ReconcileBudget, RegionSlot, RegionTracker, RouterListener,
+    RuntimeState,
+};

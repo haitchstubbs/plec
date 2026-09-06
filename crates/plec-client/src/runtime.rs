@@ -142,6 +142,7 @@ pub struct TypedRow {
     /// replace the keyed row which contains it.
     pub conditionals: HashMap<usize, TypedConditionalRegion>,
     pub generation: u64,
+    pub region_slot: RegionSlot,
 }
 
 /// Mutable ownership for a static conditional branch. The graph node table is
@@ -152,6 +153,7 @@ pub struct TypedConditionalRegion {
     pub selected: Option<usize>,
     pub nodes: HashMap<usize, Node>,
     pub generation: u64,
+    pub region_slot: RegionSlot,
 }
 
 /// A listener is requested as part of creating a concrete node/region. The
@@ -260,6 +262,11 @@ pub struct TypedRuntime {
     /// never from allocation counters or DOM position.
     pub path: String,
     pub root: Option<Element>,
+    /// The mounted graph itself is one live region. Rows and conditional
+    /// regions acquire their own slots below it.
+    pub region_slot: RegionSlot,
+    pub region_tracker: Rc<RegionTracker>,
+    pub reconcile_budget: Rc<RefCell<Option<ReconcileBudget>>>,
     pub nodes: HashMap<usize, Node>,
     pub states: Vec<RuntimeValue>,
     pub host_ref_nodes: Vec<Option<Node>>,
@@ -501,6 +508,10 @@ impl RuntimeState {
                 .collect::<Vec<_>>();
             if refreshes.is_empty() {
                 self.dispose_orphan_components();
+                // The outer reconcile transaction includes every deferred
+                // child mount/refresh above; release its unused reservation
+                // only once this work queue reaches quiescence.
+                self.reconcile_budget.borrow_mut().take();
                 return Ok(());
             }
             for (parent, refresh) in refreshes {
@@ -606,6 +617,12 @@ impl RuntimeState {
                     .get(request.component)
                     .ok_or_else(|| JsValue::from_str("component target out of range"))?
                     .clone();
+                let direct_regions = 1 + app
+                    .nodes
+                    .iter()
+                    .filter(|node| matches!(node, TypedNode::Conditional { .. }))
+                    .count();
+                self.reserve_deferred_reconcile(app.nodes.len(), direct_regions, app.nodes.len())?;
                 app.runtime_props = component_runtime_props(&app, &request.props)?;
                 app.runtime_component_props = app
                     .parameters
@@ -617,7 +634,11 @@ impl RuntimeState {
                         Ok(request.component_props.get(name).copied())
                     })
                     .collect::<Result<Vec<_>, JsValue>>()?;
-                let mut runtime = TypedRuntime::new(app)?;
+                let mut runtime = TypedRuntime::new_with_runtime_limits(
+                    app,
+                    self.region_tracker.clone(),
+                    self.reconcile_budget.clone(),
+                )?;
                 runtime.set_component_definitions(definitions);
                 runtime.path = request.path.clone();
                 runtime.callbacks = runtime
@@ -870,6 +891,15 @@ impl TypedRuntime {
         Ok(())
     }
     pub fn new(app: TypedApplication) -> Result<Self, JsValue> {
+        let tracker = Rc::new(RegionTracker::new());
+        Self::new_with_runtime_limits(app, tracker, Rc::new(RefCell::new(None)))
+    }
+
+    pub fn new_with_runtime_limits(
+        app: TypedApplication,
+        region_tracker: Rc<RegionTracker>,
+        reconcile_budget: Rc<RefCell<Option<ReconcileBudget>>>,
+    ) -> Result<Self, JsValue> {
         app.validate()?;
         let mut app = app;
         let mut states = Vec::new();
@@ -888,6 +918,9 @@ impl TypedRuntime {
             app,
             path: "root".into(),
             root: None,
+            region_slot: RegionSlot::acquire(region_tracker.clone())?,
+            region_tracker,
+            reconcile_budget,
             nodes: HashMap::new(),
             states,
             host_ref_nodes,
@@ -1279,6 +1312,9 @@ impl TypedRuntime {
         let rows = values
             .array()
             .ok_or_else(|| JsValue::from_str("LOOP_SOURCE_NOT_ARRAY"))?;
+        if rows.len() > plec_ir::limits::MAX_LOOP_ROWS {
+            return Err(JsValue::from_str("LOOP_ROW_LIMIT_EXCEEDED"));
+        }
         let mut projection = Vec::new();
         let mut computed = Vec::new();
         for (index, value) in rows.iter().cloned().enumerate() {
@@ -1394,6 +1430,7 @@ impl TypedRuntime {
                     nodes,
                     conditionals,
                     generation,
+                    region_slot: RegionSlot::acquire(self.region_tracker.clone())?,
                 },
             );
             self.queue_row_listeners(loop_index, &key);
@@ -1663,6 +1700,7 @@ impl TypedRuntime {
                         selected,
                         nodes,
                         generation,
+                        region_slot: RegionSlot::acquire(self.region_tracker.clone())?,
                     },
                 );
                 Ok((start, Some(end)))
@@ -1852,6 +1890,7 @@ impl TypedRuntime {
                 selected: selected_node,
                 nodes: HashMap::new(),
                 generation,
+                region_slot: RegionSlot::acquire(self.region_tracker.clone())?,
             },
         );
         // The unrendered sides' whole subtrees are absent from the markup.
@@ -2313,6 +2352,7 @@ impl TypedRuntime {
             self.pending_fetches.clear();
             for (_, controller) in self.abort_controllers.drain() {
                 controller.abort();
+                self.region_tracker.release_fetch();
             }
         }
     }
@@ -2773,6 +2813,11 @@ impl TypedRuntime {
                 Ok(start)
             }
             TypedNode::Conditional { test, .. } => {
+                // Acquire before adding boundary markers to the live parent.
+                // Row fragments are detached, but static conditionals mount
+                // directly and need the same reserve-before-mutate invariant.
+                let mut region_slot = Some(RegionSlot::acquire(self.region_tracker.clone())?);
+                let is_row_region = row.is_some();
                 let parent =
                     parent.ok_or_else(|| JsValue::from_str("conditional parent missing"))?;
                 let address = self.address_path(row_context)?.into_owned();
@@ -2785,7 +2830,7 @@ impl TypedRuntime {
                 parent.append_child(&start)?;
                 parent.append_child(&end)?;
                 let mut row_selected = None;
-                if row.is_some() {
+                if is_row_region {
                     let TypedNode::Conditional {
                         consequent,
                         alternate,
@@ -2828,11 +2873,12 @@ impl TypedRuntime {
                             selected: None,
                             nodes: HashMap::new(),
                             generation: 0,
+                            region_slot: region_slot.take().expect("conditional slot available"),
                         },
                     );
                     self.reconcile_static_conditional(index, &mut UpdateMetrics::default())?;
                 }
-                if row.is_some() {
+                if is_row_region {
                     local.insert(index, start.clone());
                     let selected = row_selected;
                     let mut nodes = HashMap::new();
@@ -2850,6 +2896,7 @@ impl TypedRuntime {
                             selected,
                             nodes,
                             generation: self.next_generation,
+                            region_slot: region_slot.take().expect("conditional slot available"),
                         },
                     );
                     self.next_generation += 1;
@@ -3117,6 +3164,9 @@ impl TypedRuntime {
             .filter_map(|(index, entry)| (entry.input == Some(input_index)).then_some(index))
             .collect::<Vec<_>>();
         if let Some(loop_index) = targets.first().copied() {
+            if values.len() > plec_ir::limits::MAX_LOOP_ROWS {
+                return Err(JsValue::from_str("LOOP_ROW_LIMIT_EXCEEDED"));
+            }
             let loop_def = self.app.loops[loop_index].clone();
             let mut collection = TypedCollection::default();
             for (index, value) in values.iter().cloned().enumerate() {
@@ -3185,6 +3235,68 @@ impl TypedRuntime {
 }
 
 impl TypedRuntime {
+    fn reserve_reconcile_budget(
+        &self,
+        nodes: usize,
+        regions: usize,
+        operations: usize,
+    ) -> Result<(), JsValue> {
+        let mut active = self.reconcile_budget.borrow_mut();
+        active
+            .get_or_insert_with(ReconcileBudget::new)
+            .reserve(nodes, regions, operations)
+    }
+
+    fn planned_row_cost(
+        &self,
+        handle: usize,
+        values: &HashMap<String, RuntimeValue>,
+        row_index: usize,
+    ) -> Result<(usize, usize), JsValue> {
+        let node = self
+            .app
+            .nodes
+            .get(handle)
+            .ok_or_else(|| JsValue::from_str("planned row node out of range"))?;
+        match node {
+            TypedNode::Element { children, .. } => {
+                children.iter().try_fold((1, 0), |cost, child| {
+                    let child = self.planned_row_cost(*child, values, row_index)?;
+                    Ok((cost.0 + child.0, cost.1 + child.1))
+                })
+            }
+            TypedNode::Text { .. } | TypedNode::Slot { .. } => Ok((1, 0)),
+            TypedNode::Conditional {
+                test,
+                consequent,
+                alternate,
+                ..
+            } => {
+                // The selection is pure, so charge the active branch rather
+                // than an inactive largest-branch estimate.
+                let selected = typed_truthy(&typed_eval(
+                    &self.app,
+                    *test,
+                    &self.states,
+                    Some(values),
+                    row_index,
+                )?)
+                .then_some(*consequent)
+                .or(*alternate);
+                let branch = selected
+                    .map(|child| self.planned_row_cost(child, values, row_index))
+                    .transpose()?
+                    .unwrap_or((0, 0));
+                Ok((branch.0 + 2, branch.1 + 1))
+            }
+            // Deferred loop/component work consumes the same shared budget
+            // when it is flushed. Only its immediately-created markers count here.
+            TypedNode::Loop { .. }
+            | TypedNode::Component { .. }
+            | TypedNode::DynamicComponent { .. } => Ok((2, 0)),
+        }
+    }
+
     fn row_dom_nodes(root: &Node, end: Option<&Node>) -> Vec<Node> {
         let mut nodes = vec![root.clone()];
         while end.is_some_and(|end| !nodes.last().unwrap().is_same_node(Some(end))) {
@@ -3203,10 +3315,56 @@ impl TypedRuntime {
         projection: Vec<(String, HashMap<String, RuntimeValue>)>,
         metrics: &mut UpdateMetrics,
     ) -> Result<(), JsValue> {
+        if projection.len() > plec_ir::limits::MAX_LOOP_ROWS {
+            return Err(JsValue::from_str("LOOP_ROW_LIMIT_EXCEEDED"));
+        }
         let desired = projection
             .iter()
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
+        let fresh = projection
+            .iter()
+            .filter(|(key, _)| {
+                self.loops
+                    .get(&loop_index)
+                    .is_none_or(|rows| !rows.rows.contains_key(key))
+            })
+            .collect::<Vec<_>>();
+        let template = self
+            .app
+            .loops
+            .get(loop_index)
+            .ok_or_else(|| JsValue::from_str("loop handle out of range"))?
+            .row_template;
+        let (planned_nodes, planned_regions) =
+            fresh
+                .iter()
+                .enumerate()
+                .try_fold((0usize, 0usize), |cost, (index, (_, values))| {
+                    let row = self.planned_row_cost(template, values, index)?;
+                    Ok::<_, JsValue>((cost.0 + row.0 + 2, cost.1 + row.1 + 1))
+                })?;
+        let stale_operations = self
+            .loops
+            .get(&loop_index)
+            .map(|rows| {
+                rows.order
+                    .iter()
+                    .filter(|key| !desired.contains(key))
+                    .filter_map(|key| rows.rows.get(key))
+                    .map(|row| Self::row_dom_nodes(&row.root, row.end.as_ref()).len())
+                    .sum::<usize>()
+            })
+            .unwrap_or(0);
+        // The complete known plan is reserved before the first stale row is
+        // removed or fresh fragment is spliced into the live tree.
+        self.reserve_reconcile_budget(
+            planned_nodes,
+            planned_regions,
+            planned_nodes
+                .saturating_add(stale_operations)
+                .saturating_add(projection.len()),
+        )?;
         let stale = self
             .loops
             .get(&loop_index)
@@ -3405,6 +3563,7 @@ impl TypedRuntime {
                 nodes,
                 conditionals,
                 generation,
+                region_slot: RegionSlot::acquire(self.region_tracker.clone())?,
             },
         );
         parent.insert_before(&fragment, before.as_ref())?;
