@@ -1,0 +1,21 @@
+{
+  "name": "plec-node-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/runtime.mjs",
+  "exports": {
+    ".": "./dist/runtime.mjs"
+  },
+  "scripts": {
+    "build": "node ../../node_modules/esbuild/bin/esbuild src/runtime.ts --bundle --format=esm --platform=node --target=node20 --outfile=dist/runtime.mjs",
+    "test": "yarn --cwd ../.. exec vitest run packages/plec-node-runtime --passWithNoTests",
+    "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec-node-runtime/tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "esbuild": "^0.27.4",
+    "typescript": "^7.0.2",
+    "vitest": "^3.2.4"
+  }
+}

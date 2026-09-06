@@ -98,6 +98,8 @@ fn visit_module(
     let absolute = fs::canonicalize(file_path)
         .map_err(|error| format!("Failed to resolve {}: {error}", file_path.display()))?;
 
+    ensure_within_roots(&absolute, root_dir, repo_root_dir)?;
+
     if !seen.insert(absolute.clone()) {
         return Ok(());
     }
@@ -145,6 +147,7 @@ fn visit_module(
 
         let target_absolute = fs::canonicalize(&resolved)
             .map_err(|error| format!("Failed to resolve {}: {error}", resolved.display()))?;
+        ensure_within_roots(&target_absolute, root_dir, repo_root_dir)?;
         let target_id = module_id_from_path(&target_absolute, root_dir, repo_root_dir);
         resolved_imports.insert((module_id.clone(), specifier.clone()), target_id);
 
@@ -248,6 +251,25 @@ fn module_id_from_path(path: &Path, root_dir: &Path, repo_root_dir: &Path) -> St
         .replace('\\', "/")
 }
 
+/// Reject modules that resolve outside the approved source roots.
+///
+/// `root_dir` is the application root and `repo_root_dir` is the workspace
+/// root that owns workspace package sources. Both paths must be canonical so
+/// `starts_with` cannot be fooled by `..` segments or symlinks; callers
+/// canonicalize before invoking this check.
+fn ensure_within_roots(path: &Path, root_dir: &Path, repo_root_dir: &Path) -> Result<(), String> {
+    if path.starts_with(root_dir) || path.starts_with(repo_root_dir) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Source module {} resolves outside the approved source roots {} and {}",
+        path.display(),
+        root_dir.display(),
+        repo_root_dir.display()
+    ))
+}
+
 /// Resolve an import to another package in the Plec workspace.
 ///
 /// The existing TypeScript implementation understands workspace package
@@ -303,7 +325,7 @@ fn resolve_workspace_module(
         .and_then(|exports| resolve_export(exports, &requested));
 
     if let Some(target) = target {
-        return Ok(resolve_workspace_source(package_dir, &target));
+        return resolve_workspace_source(package_dir, &target);
     }
     if subpath.is_empty() {
         return Ok(resolve_source_candidate(&package_dir.join("src/index")));
@@ -359,14 +381,36 @@ fn resolve_export_target(value: &Value) -> Option<String> {
     None
 }
 
-fn resolve_workspace_source(package_dir: &Path, target: &str) -> Option<PathBuf> {
+/// Resolve a workspace export target to an authored source file.
+///
+/// The resolved target must stay inside the owning package directory.
+/// Manifest exports are package-controlled data, so a malicious or mistaken
+/// export (`../../secrets`, absolute paths, symlinked targets) must fail with
+/// a deterministic diagnostic instead of expanding the readable source graph.
+fn resolve_workspace_source(package_dir: &Path, target: &str) -> Result<Option<PathBuf>, String> {
     let published = package_dir.join(target);
     let source = target
         .replace("./dist/", "./src/")
         .replace(".d.ts", "")
         .replace(".js", "");
-    resolve_source_candidate(&package_dir.join(source))
-        .or_else(|| published.is_file().then_some(published))
+    let resolved = resolve_source_candidate(&package_dir.join(source))
+        .or_else(|| published.is_file().then_some(published));
+
+    let Some(resolved) = resolved else {
+        return Ok(None);
+    };
+
+    let canonical = fs::canonicalize(&resolved)
+        .map_err(|error| format!("Failed to resolve {}: {error}", resolved.display()))?;
+
+    if !canonical.starts_with(package_dir) {
+        return Err(format!(
+            "Workspace export target {target} in {} resolves outside the package boundary",
+            package_dir.display()
+        ));
+    }
+
+    Ok(Some(canonical))
 }
 
 /// Resolve a normal external package import.
@@ -440,6 +484,121 @@ mod tests {
                 String::from("@scope/icons/icons/mark")
             )),
             Some(&String::from("packages/icons/src/icons/mark.tsx"))
+        );
+    }
+
+    #[test]
+    fn rejects_relative_parent_traversal_escape() {
+        let temp = tempdir().expect("temporary directory should be created");
+        let outside = temp.path().join("secret.ts");
+        let repo = temp.path().join("repo");
+        let app = repo.join("apps/demo");
+        let entry = app.join("src/App.tsx");
+
+        write_file(&outside, "export const secret = 1;");
+        write_file(
+            &entry,
+            r#"
+                import { secret } from "../../../../secret";
+
+                export function App() {
+                    return <div>{secret}</div>;
+                }
+            "#,
+        );
+
+        let error = read_source_graph(&entry, &app, &repo)
+            .expect_err("parent traversal escape should be rejected");
+
+        assert!(
+            error.contains("outside the approved source roots"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn ignores_absolute_import_specifiers() {
+        let temp = tempdir().expect("temporary directory should be created");
+        let repo = temp.path().join("repo");
+        let app = repo.join("apps/demo");
+        let entry = app.join("src/App.tsx");
+
+        write_file(
+            &entry,
+            r#"
+                import { secret } from "/etc/passwd";
+
+                export function App() {
+                    return <div />;
+                }
+            "#,
+        );
+
+        let graph = read_source_graph(&entry, &app, &repo)
+            .expect("absolute import should not widen the source graph");
+
+        assert_eq!(graph.modules.len(), 1);
+        assert!(graph.resolved_imports.is_empty());
+    }
+
+    #[test]
+    fn rejects_malicious_workspace_export_escape() {
+        let temp = tempdir().expect("temporary directory should be created");
+        let repo = temp.path().join("repo");
+        let app = repo.join("apps/demo");
+        let entry = app.join("src/App.tsx");
+
+        write_file(&repo.join("leak.ts"), "export const leak = 1;");
+        write_file(
+            &entry,
+            r#"
+                import { leak } from "@scope/evil/escape";
+
+                export function App() {
+                    return <div>{leak}</div>;
+                }
+            "#,
+        );
+        write_file(
+            &repo.join("packages/evil/package.json"),
+            r#"{"name":"@scope/evil","exports":{"./escape":{"default":"../../leak.js"}}}"#,
+        );
+
+        let error = read_source_graph(&entry, &app, &repo)
+            .expect_err("workspace export escape should be rejected");
+
+        assert!(error.contains("outside the package boundary"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_import_escape() {
+        let temp = tempdir().expect("temporary directory should be created");
+        let outside = temp.path().join("outside/leak.tsx");
+        let repo = temp.path().join("repo");
+        let app = repo.join("apps/demo");
+        let entry = app.join("src/App.tsx");
+        let link = app.join("src/escape.tsx");
+
+        write_file(&outside, "export const leak = 1;");
+        write_file(
+            &entry,
+            r#"
+                import { leak } from "./escape";
+
+                export function App() {
+                    return <div>{leak}</div>;
+                }
+            "#,
+        );
+        std::os::unix::fs::symlink(&outside, &link).expect("symlink should be created");
+
+        let error =
+            read_source_graph(&entry, &app, &repo).expect_err("symlink escape should be rejected");
+
+        assert!(
+            error.contains("outside the approved source roots"),
+            "{error}"
         );
     }
 

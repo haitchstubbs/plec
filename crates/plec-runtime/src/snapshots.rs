@@ -1,3 +1,4 @@
+use super::lifecycle::decode_untrusted_json;
 use super::PlecRuntime;
 use plec_client::prelude::*;
 use plec_dom::platform::now;
@@ -22,6 +23,75 @@ pub(crate) enum SnapshotShape {
 
 fn default_order_sensitive() -> bool {
     true
+}
+
+/// Rejects pathological snapshot input shapes before the projection can use
+/// them to drive allocation. The shape arrives from the host like any other
+/// facade payload, so its observed-path tables get their own structural caps
+/// beyond the decode byte envelope.
+fn validate_shape(shape: &SnapshotShape) -> Result<(), JsValue> {
+    use plec_schema::limits::{MAX_SNAPSHOT_SHAPE_PATHS, MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS};
+    let paths = match shape {
+        SnapshotShape::Scalar => return Ok(()),
+        SnapshotShape::Object { observed_paths } => observed_paths,
+        SnapshotShape::Collection {
+            key_expression,
+            observed_row_paths,
+            ..
+        } => {
+            if key_expression.is_empty() {
+                return Err(JsValue::from_str("snapshot key expression is empty"));
+            }
+            observed_row_paths
+        }
+    };
+    if paths.len() > MAX_SNAPSHOT_SHAPE_PATHS {
+        return Err(JsValue::from_str("snapshot shape path count exceeds limit"));
+    }
+    for path in paths {
+        if path.len() > MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS {
+            return Err(JsValue::from_str(
+                "snapshot shape path depth exceeds limit",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Applies the documented runtime-value budgets (depth, node count, string
+/// bytes) to a decoded snapshot payload before it can be retained as a
+/// projection or drive projection allocation. Iterative, so it cannot
+/// overflow the stack on an already-decoded deep tree.
+fn check_value_budget(value: &Value) -> Result<(), JsValue> {
+    use plec_schema::limits::{MAX_VALUE_DEPTH, MAX_VALUE_NODES, MAX_VALUE_STRING_BYTES};
+    let mut stack: Vec<(&Value, usize)> = vec![(value, 0)];
+    let mut nodes = 0usize;
+    while let Some((value, depth)) = stack.pop() {
+        if depth > MAX_VALUE_DEPTH {
+            return Err(JsValue::from_str("runtime value nesting exceeds limit"));
+        }
+        nodes += 1;
+        if nodes > MAX_VALUE_NODES {
+            return Err(JsValue::from_str("runtime value size exceeds limit"));
+        }
+        match value {
+            Value::String(string) => {
+                if string.len() > MAX_VALUE_STRING_BYTES {
+                    return Err(JsValue::from_str("runtime value string exceeds limit"));
+                }
+            }
+            Value::Array(values) => stack.extend(values.iter().map(|value| (value, depth + 1))),
+            Value::Object(map) => {
+                nodes += map.len();
+                if nodes > MAX_VALUE_NODES {
+                    return Err(JsValue::from_str("runtime value size exceeds limit"));
+                }
+                stack.extend(map.values().map(|value| (value, depth + 1)));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 pub(crate) enum SnapshotProjection {
@@ -221,8 +291,24 @@ impl PlecRuntime {
         value: JsValue,
         shape: JsValue,
     ) -> Result<JsValue, JsValue> {
-        let value_json: Value = serde_wasm_bindgen::from_value(value.clone()).map_err(error)?;
-        let shape: SnapshotShape = serde_wasm_bindgen::from_value(shape).map_err(error)?;
+        // Both payloads decode through the shared bounded path (JS-value
+        // normalization + byte ceiling + depth-guarded JSON parse) and the
+        // decoded tree passes the runtime-value budgets before any state is
+        // touched, so a hostile payload fails closed without mutating the
+        // snapshot table or reconciling rows.
+        let value_json = decode_untrusted_json(
+            &value,
+            plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
+            "snapshot value",
+        )?;
+        check_value_budget(&value_json)?;
+        let shape_json = decode_untrusted_json(
+            &shape,
+            plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
+            "snapshot shape",
+        )?;
+        let shape: SnapshotShape = serde_json::from_value(shape_json).map_err(error)?;
+        validate_shape(&shape)?;
         let projection = project(value_json, &shape)?;
         let metrics = if matches!(shape, SnapshotShape::Collection { .. }) {
             self.initialize_input(input_id.clone(), value)?
@@ -241,7 +327,12 @@ impl PlecRuntime {
         value: JsValue,
     ) -> Result<JsValue, JsValue> {
         let started = now();
-        let value: Value = serde_wasm_bindgen::from_value(value).map_err(error)?;
+        let value: Value = decode_untrusted_json(
+            &value,
+            plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
+            "snapshot value",
+        )?;
+        check_value_budget(&value)?;
         let deltas = {
             let mut snapshots = self.snapshot_inputs.borrow_mut();
             let snapshot = snapshots
@@ -322,5 +413,51 @@ mod tests {
         let previous = project(serde_json::json!({"name":"before"}), &shape).unwrap();
         let next = project(serde_json::json!({"name":"after"}), &shape).unwrap();
         assert!(reconcile("value", &previous, &next, &shape).is_empty());
+    }
+
+    // validate_shape/check_value_budget fail with JsValue errors, which only
+    // exist on wasm32; these assertions run in the browser wasm suite.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen_test::wasm_bindgen_test]
+    fn shape_validation_rejects_path_table_excess() {
+        use plec_schema::limits::{MAX_SNAPSHOT_SHAPE_PATHS, MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS};
+        let valid = SnapshotShape::Object {
+            observed_paths: vec![vec!["a".into(), "b".into()]],
+        };
+        assert!(validate_shape(&valid).is_ok());
+        assert!(validate_shape(&SnapshotShape::Scalar).is_ok());
+        let too_many = SnapshotShape::Object {
+            observed_paths: (0..=MAX_SNAPSHOT_SHAPE_PATHS)
+                .map(|index| vec![index.to_string()])
+                .collect(),
+        };
+        assert!(validate_shape(&too_many).is_err());
+        let too_deep = SnapshotShape::Object {
+            observed_paths: vec![vec!["segment".into(); MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS + 1]],
+        };
+        assert!(validate_shape(&too_deep).is_err());
+        let empty_key = SnapshotShape::Collection {
+            key_expression: String::new(),
+            order_sensitive: true,
+            observed_row_paths: Vec::new(),
+        };
+        assert!(validate_shape(&empty_key).is_err());
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen_test::wasm_bindgen_test]
+    fn value_budget_rejects_deep_oversized_and_long_string_trees() {
+        use plec_schema::limits::{MAX_VALUE_DEPTH, MAX_VALUE_NODES, MAX_VALUE_STRING_BYTES};
+        let within = serde_json::json!({"a": [1, "two", null, true]});
+        assert!(check_value_budget(&within).is_ok());
+        let mut current = serde_json::json!(0);
+        for _ in 0..=MAX_VALUE_DEPTH {
+            current = serde_json::json!([current]);
+        }
+        assert!(check_value_budget(&current).is_err());
+        let oversized = serde_json::json!((0..=MAX_VALUE_NODES).map(|i| i as u32).collect::<Vec<u32>>());
+        assert!(check_value_budget(&oversized).is_err());
+        let long_string = "x".repeat(MAX_VALUE_STRING_BYTES + 1);
+        assert!(check_value_budget(&serde_json::json!(long_string)).is_err());
     }
 }

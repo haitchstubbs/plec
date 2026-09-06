@@ -8,8 +8,9 @@
 use plec_client::runtime::TypedRuntime;
 use plec_eval::eval::typed_eval;
 use plec_ir::limits::{
-    MAX_ARTIFACT_JSON_BYTES, MAX_HOST_INPUT_JSON_BYTES, MAX_LOOP_ROWS, MAX_SNAPSHOT_JSON_BYTES,
-    MAX_VALUE_DEPTH,
+    MAX_ARTIFACT_JSON_BYTES, MAX_HOST_INPUT_JSON_BYTES, MAX_LOOP_ROWS, MAX_MOUNT_DEPTH,
+    MAX_SNAPSHOT_JSON_BYTES, MAX_SNAPSHOT_SHAPE_PATHS, MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS,
+    MAX_VALUE_DEPTH, MAX_VALUE_NODES,
 };
 use plec_runtime::PlecRuntime;
 use plec_schema::delta::UpdateMetrics;
@@ -161,6 +162,206 @@ fn oversized_ssr_snapshots_are_rejected_before_decode() {
         error_string(error) == "mismatch:ssr-snapshot-payload",
         "unexpected error"
     );
+}
+
+fn scalar_shape() -> JsValue {
+    js_from_json(r#"{"kind":"scalar"}"#)
+}
+
+#[wasm_bindgen_test]
+fn oversized_snapshot_input_values_are_rejected() {
+    let runtime = PlecRuntime::new();
+    let payload = format!(
+        r#"{{"pad":"{}"}}"#,
+        "x".repeat(MAX_HOST_INPUT_JSON_BYTES + 1024)
+    );
+    let error = runtime
+        .initialize_snapshot_input("value".into(), js_from_json(&payload), scalar_shape())
+        .expect_err("oversized snapshot value must be rejected at initialize");
+    assert!(
+        error_string(error).contains("exceeds byte limit"),
+        "unexpected error"
+    );
+    runtime
+        .initialize_snapshot_input(
+            "value".into(),
+            js_from_json(r#"{"pad":"small"}"#),
+            scalar_shape(),
+        )
+        .expect("a small snapshot value must initialize");
+    let error = runtime
+        .apply_input_snapshot("value".into(), js_from_json(&payload))
+        .expect_err("oversized snapshot value must be rejected at apply");
+    assert!(
+        error_string(error).contains("exceeds byte limit"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
+fn deeply_nested_snapshot_input_values_are_rejected() {
+    let runtime = PlecRuntime::new();
+    let depth = 200;
+    let payload = format!("{}1{}", "[".repeat(depth), "]".repeat(depth));
+    let error = runtime
+        .initialize_snapshot_input("value".into(), js_from_json(&payload), scalar_shape())
+        .expect_err("over-deep snapshot value must be rejected");
+    assert!(
+        error_string(error).contains("decode depth limit"),
+        "unexpected error"
+    );
+    runtime
+        .initialize_snapshot_input(
+            "value".into(),
+            js_from_json(r#"{"pad":"small"}"#),
+            scalar_shape(),
+        )
+        .expect("a small snapshot value must initialize");
+    let error = runtime
+        .apply_input_snapshot("value".into(), js_from_json(&payload))
+        .expect_err("over-deep snapshot value must be rejected at apply");
+    assert!(
+        error_string(error).contains("decode depth limit"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
+fn snapshot_input_node_budget_is_enforced() {
+    let runtime = PlecRuntime::new();
+    // Just over MAX_VALUE_NODES scalars stays well below the 1 MiB byte
+    // envelope, so the structural node budget is what rejects this payload.
+    let payload = format!(
+        "[{}]",
+        (0..MAX_VALUE_NODES).map(|_| "0").collect::<Vec<_>>().join(",")
+    );
+    let error = runtime
+        .initialize_snapshot_input("value".into(), js_from_json(&payload), scalar_shape())
+        .expect_err("structurally excessive snapshot value must be rejected");
+    assert!(
+        error_string(error).contains("runtime value size exceeds limit"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
+fn snapshot_shape_path_limits_are_enforced() {
+    let runtime = PlecRuntime::new();
+    let shape = format!(
+        r#"{{"kind":"object","observed_paths":[{}]}}"#,
+        (0..=MAX_SNAPSHOT_SHAPE_PATHS)
+            .map(|index| format!(r#"["path{index}"]"#))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let error = runtime
+        .initialize_snapshot_input(
+            "value".into(),
+            js_from_json(r#"{"a":1}"#),
+            js_from_json(&shape),
+        )
+        .expect_err("snapshot shape beyond the path limit must be rejected");
+    assert!(
+        error_string(error).contains("snapshot shape path count exceeds limit"),
+        "unexpected error"
+    );
+    let segments = MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS + 1;
+    let deep_shape = format!(
+        r#"{{"kind":"object","observed_paths":[[{}]]}}"#,
+        vec![r#""a""#; segments].join(",")
+    );
+    let error = runtime
+        .initialize_snapshot_input(
+            "value".into(),
+            js_from_json(r#"{"a":1}"#),
+            js_from_json(&deep_shape),
+        )
+        .expect_err("snapshot shape beyond the path depth limit must be rejected");
+    assert!(
+        error_string(error).contains("snapshot shape path depth exceeds limit"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
+fn failed_snapshot_apply_preserves_previous_projection() {
+    let runtime = PlecRuntime::new();
+    let shape = js_from_json(r#"{"kind":"object","observedPaths":[["name"]]}"#);
+    runtime
+        .initialize_snapshot_input(
+            "value".into(),
+            js_from_json(r#"{"name":"A"}"#),
+            shape,
+        )
+        .expect("snapshot initialization must succeed");
+    let oversized = format!(
+        r#"{{"pad":"{}"}}"#,
+        "x".repeat(MAX_HOST_INPUT_JSON_BYTES + 1024)
+    );
+    let error = runtime
+        .apply_input_snapshot("value".into(), js_from_json(&oversized))
+        .expect_err("oversized snapshot apply must fail closed");
+    assert!(
+        error_string(error).contains("exceeds byte limit"),
+        "unexpected error"
+    );
+    // Re-applying the identical projection must produce zero deltas: the
+    // failed apply cannot have replaced the retained projection.
+    let metrics = runtime
+        .apply_input_snapshot("value".into(), js_from_json(r#"{"name":"A"}"#))
+        .expect("re-applying the retained projection must succeed");
+    let json: serde_json::Value = serde_wasm_bindgen::from_value(metrics).unwrap();
+    assert_eq!(json["domOperations"], 0, "no deltas expected: {json}");
+}
+
+fn snapshot_application() -> PlecRuntime {
+    // Collection-shaped snapshot inputs reconcile live typed inputs, which
+    // requires a loaded (not mounted) application.
+    let runtime = PlecRuntime::new();
+    let artifact = r#"{
+        "version": "0.10", "rootComponent": 0,
+        "components": [{
+            "id": "App", "version": "0.10", "rootNode": 0,
+            "strings": ["div"], "constants": [],
+            "nodes": [{"op": "element", "tag": 0}]
+        }]
+    }"#;
+    runtime
+        .load_application(js_from_json(artifact))
+        .expect("snapshot test application must load");
+    runtime
+}
+
+#[wasm_bindgen_test]
+fn snapshot_inputs_within_limits_round_trip() {
+    let runtime = snapshot_application();
+    let shape = js_from_json(
+        r#"{"kind":"collection","key_expression":"todo.id","observed_row_paths":[["title"]]}"#,
+    );
+    runtime
+        .initialize_snapshot_input(
+            "todos".into(),
+            js_from_json(r#"[{"id":"a","title":"A"}]"#),
+            shape.clone(),
+        )
+        .expect("legitimate snapshot must initialize");
+    runtime
+        .apply_input_snapshot(
+            "todos".into(),
+            js_from_json(r#"[{"id":"a","title":"B"},{"id":"b","title":"B"}]"#),
+        )
+        .expect("legitimate snapshot apply must succeed");
+    // The same payloads delivered through serde (JS Map objects) must take
+    // the same bounded path.
+    let shape_value: serde_json::Value =
+        serde_json::from_str(r#"{"kind":"object","observed_paths":[["name"]]}"#).unwrap();
+    runtime
+        .initialize_snapshot_input(
+            "profile".into(),
+            serde_wasm_bindgen::to_value(&serde_json::json!({"name":"a"})).unwrap(),
+            serde_wasm_bindgen::to_value(&shape_value).unwrap(),
+        )
+        .expect("serde-delivered snapshot must initialize");
 }
 
 #[wasm_bindgen_test]
@@ -387,6 +588,98 @@ fn load_application_rejects_unrooted_node_graph() {
         error_string(error).contains("node graph contains unrooted nodes"),
         "unexpected error"
     );
+}
+
+#[wasm_bindgen_test]
+fn deep_linear_node_chain_fails_at_mount_depth_limit() {
+    // Topology validation accepts an acyclic chain, so one node past
+    // MAX_MOUNT_DEPTH must exhaust the documented mount budget instead of
+    // overflowing the WASM stack during instantiate_node recursion.
+    let depth = MAX_MOUNT_DEPTH + 1;
+    let mut nodes = String::new();
+    for index in 0..depth {
+        let parent = if index == 0 {
+            "null".to_string()
+        } else {
+            (index - 1).to_string()
+        };
+        let children = if index + 1 < depth {
+            format!("[{}]", index + 1)
+        } else {
+            "[]".to_string()
+        };
+        nodes.push_str(&format!(
+            r#"{{"op":"element","tag":0,"parent":{parent},"children":{children}}},"#
+        ));
+    }
+    nodes.pop();
+    let app: TypedApplication = serde_json::from_str(&format!(
+        r#"{{
+        "version": "0.10", "rootNode": 0, "strings": ["div"],
+        "nodes": [{nodes}],
+        "expressions": [], "actions": []
+    }}"#,
+    ))
+    .unwrap();
+    let mut runtime = TypedRuntime::new(app).unwrap();
+    let root = web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .create_element("div")
+        .unwrap()
+        .into();
+    let error = runtime
+        .mount(root)
+        .err()
+        .expect("chain deeper than the mount budget must fail closed");
+    assert!(
+        error_string(error).contains("mount depth exceeds limit"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
+fn node_chain_within_mount_depth_limit_still_mounts() {
+    // The budget must reject only pathological shapes: a chain exactly at
+    // MAX_MOUNT_DEPTH is still legitimate output and mounts cleanly.
+    let depth = MAX_MOUNT_DEPTH;
+    let mut nodes = String::new();
+    for index in 0..depth {
+        let parent = if index == 0 {
+            "null".to_string()
+        } else {
+            (index - 1).to_string()
+        };
+        let children = if index + 1 < depth {
+            format!("[{}]", index + 1)
+        } else {
+            "[]".to_string()
+        };
+        nodes.push_str(&format!(
+            r#"{{"op":"element","tag":0,"parent":{parent},"children":{children}}},"#
+        ));
+    }
+    nodes.pop();
+    let app: TypedApplication = serde_json::from_str(&format!(
+        r#"{{
+        "version": "0.10", "rootNode": 0, "strings": ["div"],
+        "nodes": [{nodes}],
+        "expressions": [], "actions": []
+    }}"#,
+    ))
+    .unwrap();
+    let mut runtime = TypedRuntime::new(app).unwrap();
+    let root = web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .create_element("div")
+        .unwrap()
+        .into();
+    runtime
+        .mount(root)
+        .expect("chain within the mount budget must mount");
 }
 
 #[wasm_bindgen_test]

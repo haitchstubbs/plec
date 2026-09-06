@@ -3,6 +3,7 @@ use super::assets;
 use super::bundle::bundle;
 use super::clean;
 use super::document;
+use super::host;
 use super::server;
 use super::validate;
 
@@ -20,8 +21,14 @@ pub struct BuildOptions {
     /// Build output root. Plec-owned artifacts land under `public/`.
     pub out_dir: PathBuf,
     pub optimize: bool,
-    /// Document title for the generated HTML shell.
+    /// Document title for the generated HTML shell and server manifest.
     pub title: String,
+    /// Document description; CLI flag or `plec.toml`.
+    pub description: Option<String>,
+    /// Stylesheet URL; CLI flag or `plec.toml`.
+    pub styles_href: Option<String>,
+    /// Font preload URLs; CLI flags or `plec.toml`.
+    pub preloads: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +46,7 @@ pub enum Stage {
     BrowserBundle,
     DependencyValidation,
     ServerBundle,
+    ServerManifest,
     Hash,
     Brotli,
     Document,
@@ -52,6 +60,7 @@ impl std::fmt::Display for Stage {
             Stage::BrowserBundle => "browser bundle",
             Stage::DependencyValidation => "dependency validation",
             Stage::ServerBundle => "server bundle",
+            Stage::ServerManifest => "server manifest",
             Stage::Hash => "hash",
             Stage::Brotli => "brotli",
             Stage::Document => "document",
@@ -109,7 +118,9 @@ impl std::error::Error for BuildError {
 ///       -> revision -> brotli -> server bundle -> document
 /// ```
 ///
-/// This is the single entry point both CLI variants call.
+/// This is the single entry point both CLI variants call. Host wiring
+/// (`plec.toml` -> `dist/plec-server.json`) is emitted alongside the
+/// artifacts so `plec serve` never evaluates application source.
 pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
     // Anchor everything to absolute paths so app-directory and repository
     // derivation never depend on the process working directory.
@@ -152,7 +163,8 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
     let public_dir = out_dir.join("public");
     let assets_dir = public_dir.join("assets");
     let client_entry = resolve_entry(&options.client_entry, &app_dir);
-    let server_entry = resolve_entry(&options.server_entry, &app_dir);
+    let host_config = host::resolve_host_config(&app_dir, &options)?;
+    let server_entry = resolve_entry(&host_config.server_entry, &app_dir);
 
     clean::prepare(&out_dir, &assets_dir)?;
 
@@ -174,14 +186,35 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
     let revision = assets::revision(&client_path)?;
     assets::brotli(&client_path)?;
 
-    server::bundle(
-        &server_entry,
-        &app_dir,
-        &out_dir.join("server.mjs"),
-        options.optimize,
-    )?;
+    // The canonical application bundle. The root-level `server.mjs` is a
+    // byte-identical copy so the legacy TS-host entry keeps running the same
+    // artifact while both host variants coexist.
+    let server_bundle = out_dir.join("server").join("app.mjs");
+    server::bundle(&server_entry, &app_dir, &server_bundle, options.optimize)?;
+    std::fs::copy(&server_bundle, out_dir.join("server.mjs")).map_err(|error| {
+        BuildError::with_source(
+            Stage::ServerBundle,
+            format!("cannot copy {}", server_bundle.display()),
+            error,
+        )
+    })?;
 
-    document::write_index(&public_dir, &options.title, &revision)?;
+    let has_node_runtime = host::emit_node_runtime(&repo_root, &app_dir, &out_dir)?;
+    if !has_node_runtime && server_entry.exists() {
+        // The app authored server code, but this workspace does not vendor
+        // the Node application runtime: the emitted manifest carries no
+        // `server` section and `/api/*` will 404 at runtime. Loud here beats
+        // a wall of 404s in the browser.
+        eprintln!(
+            "warning: server entry {} exists, but packages/plec-node-runtime is not vendored in \
+             this workspace; the emitted manifest will have no application runtime and /api/* \
+             will 404",
+            server_entry.display(),
+        );
+    }
+    host::emit_server_manifest(&out_dir, &host_config, has_node_runtime)?;
+
+    document::write_index(&public_dir, &host_config.title, &revision)?;
 
     Ok(BuildResult { out_dir, revision })
 }

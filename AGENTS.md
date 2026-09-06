@@ -76,6 +76,8 @@ apps/
 packages/
   plec/                   Plec authoring/runtime-facing TS APIs
   plec-browser/           Browser glue and graph/artifact loading
+  plec-node-runtime/      Node sidecar: imports the app server bundle over a private socket
+  plec-server/            Legacy TS host (`PLEC_SERVER=node`); also the SSR producer the contract checker scans
   plec-e2e/               Canonical Playwright E2E runner
   ui/                     React/shadcn UI package; do not leak into fullstack
   lucide-plec/            Generated Plec icon components
@@ -89,8 +91,20 @@ crates/
   plec-compiler/          Compiler driver
   plec-diagnostics/       Compiler diagnostics
   plec-runtime/           Rust/WASM runtime
-  plec-cli/               Plec CLI and `plec workspace` workflows
+  plec-server/            Native HTTP host (assets/SSR/loaders in Rust); `ApplicationRuntime` sidecar boundary
+  plec-cli/               Plec CLI (`build`, `serve`, `workspace`) and `plec workspace` workflows
 ```
+
+## Server host boundary
+
+The public socket is owned by Rust (`crates/plec-server`). Application
+server code lives entirely in the app (e.g. `apps/fullstack/src/server.ts`
+exporting `handleRequest`); the framework knows only contracts: the
+`handleRequest` export, `plec.toml` -> `dist/plec-server.json`, and the
+sidecar protocol. `/api/*` traffic crosses the `ApplicationRuntime` trait
+into the Node sidecar (private UDS/loopback+token); loaders, SSR
+expressions, and snapshots execute in Rust. `PLEC_SERVER=rust|node` selects
+the host in E2E; both run the same `dist/server/app.mjs` artifact.
 
 Do not infer ownership from an old package path. Inspect the current workspace before introducing a new package or crate.
 

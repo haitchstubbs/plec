@@ -24,12 +24,23 @@ export function devPort(name: string): number {
 export const e2ePort = devPort('E2E_PORT');
 export const baseURL = `http://127.0.0.1:${e2ePort}`;
 
+// PLEC_SERVER selects the HTTP host: `node` (default) runs the TS host via
+// `dist/server.mjs`; `rust` runs the native Axum host, which spawns the Node
+// sidecar for `/api/*`. Both execute the same built application bundle, so
+// differences are attributable to the host boundary.
+const serverVariant = process.env.PLEC_SERVER === 'rust' ? 'rust' : 'node';
+const startCommand =
+  serverVariant === 'rust'
+    ? 'yarn workspace @wasm-runtime/fullstack start:rust'
+    : 'yarn workspace @wasm-runtime/fullstack start';
+
 // Playwright owns the fullstack server: turbo builds it, webServer starts
-// dist/server.mjs, waits for HTTP readiness, and kills the process group
+// the selected host, waits for HTTP readiness, and kills the process group
 // afterwards. PLEC_ACCEPTANCE_CONTROL arms the one-shot loader-failure
-// fixture used by the todos loader acceptance spec.
+// fixture used by the todos loader acceptance spec; it flows into the
+// application bundle through the environment in either host.
 export const webServer = {
-  command: 'yarn workspace @wasm-runtime/fullstack start',
+  command: startCommand,
   url: baseURL,
   env: {
     PORT: String(e2ePort),

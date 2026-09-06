@@ -5,6 +5,7 @@ pub mod bundle;
 pub mod clean;
 pub mod document;
 pub mod esbuild;
+pub mod host;
 pub mod id;
 pub mod json;
 pub mod server;
