@@ -1,0 +1,21 @@
+# Host configuration for the Plec fullstack playground. `plec build` folds
+# this into dist/plec-server.json; `plec serve` consumes only the generated
+# manifest. Executable server code stays in src/server.ts (the `handleRequest`
+# contract) — nothing here is evaluated by either host.
+
+[app]
+title = "Plec fullstack playground"
+description = "Plec fullstack runtime experiment."
+
+[server]
+entry = "src/server.ts"
+
+[client]
+styles = "/assets/styles.css"
+# Self-hosted variable fonts: without preloading they are discovered only
+# after the stylesheet finishes parsing, so first paint uses fallback
+# metrics and reflows when the woff2 lands (font swap flash).
+preloads = [
+  "/assets/files/outfit-latin-wght-normal.woff2",
+  "/assets/files/raleway-latin-wght-normal.woff2",
+]

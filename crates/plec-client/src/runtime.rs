@@ -278,6 +278,10 @@ pub struct TypedRuntime {
     /// refresh_state and drain again, so depth must be tracked across
     /// nested drains to keep recursion bounded.
     pub reaction_drain_depth: usize,
+    /// Current nested mount-instantiation depth (see
+    /// `limits::MAX_MOUNT_DEPTH`): a validated acyclic chain may still be
+    /// deep enough to overflow the WASM stack, so mount recursion is bounded.
+    pub mount_depth: usize,
     pub reaction_cleanups: Vec<Option<usize>>,
     pub collections: HashMap<usize, TypedCollection>,
     pub loops: HashMap<usize, TypedLoopRows>,
@@ -927,6 +931,7 @@ impl TypedRuntime {
             focus_refs,
             pending_reactions: Vec::new(),
             reaction_drain_depth: 0,
+            mount_depth: 0,
             reaction_cleanups,
             loops: HashMap::new(),
             conditionals: HashMap::new(),
@@ -2506,6 +2511,40 @@ impl TypedRuntime {
     }
 
     pub fn instantiate_node(
+        &mut self,
+        doc: &Document,
+        index: usize,
+        parent: Option<&Node>,
+        row: Option<&HashMap<String, RuntimeValue>>,
+        row_index: usize,
+        row_context: Option<&TypedRowContext>,
+        local: &mut HashMap<usize, Node>,
+        row_regions: &mut HashMap<usize, TypedConditionalRegion>,
+    ) -> Result<Node, JsValue> {
+        // Every recursive mount path (element children, conditional branches,
+        // and loop row templates re-entering through `render_loop`) flows back
+        // through this wrapper, so a validated acyclic chain deeper than
+        // `MAX_MOUNT_DEPTH` fails with a diagnostic instead of overflowing the
+        // WASM stack.
+        if self.mount_depth >= plec_ir::limits::MAX_MOUNT_DEPTH {
+            return Err(JsValue::from_str("mount depth exceeds limit"));
+        }
+        self.mount_depth += 1;
+        let result = self.instantiate_node_bounded(
+            doc,
+            index,
+            parent,
+            row,
+            row_index,
+            row_context,
+            local,
+            row_regions,
+        );
+        self.mount_depth -= 1;
+        result
+    }
+
+    fn instantiate_node_bounded(
         &mut self,
         doc: &Document,
         index: usize,

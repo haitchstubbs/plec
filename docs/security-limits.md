@@ -51,6 +51,15 @@ in Beads `wasm-runtime-a08`.
 | Loop keys per loop node                                               | 10,000 (`MAX_SNAPSHOT_LOOP_KEYS`)   | same                                                                    |
 | Export and loader-resolved values                                     | depth 64 / 100,000 nodes            | `ensure_value_is_bounded` (same file)                                   |
 
+## Snapshot input facades
+
+| Boundary                             | Limit                                    | Where                                                                                             |
+| ------------------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Snapshot value/shape JSON bytes      | 1 MiB (`MAX_HOST_INPUT_JSON_BYTES`)      | `initialize_snapshot_input`, `apply_input_snapshot` (`crates/plec-runtime/src/snapshots.rs`)      |
+| Snapshot value trees                 | depth 64 / 100,000 nodes / 1 MiB strings | `check_value_budget` (same file)                                                                  |
+| Observed paths per snapshot shape    | 1,024 (`MAX_SNAPSHOT_SHAPE_PATHS`)       | `validate_shape` (same file)                                                                      |
+| Segments per observed path           | 64 (`MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS`)  | same                                                                                              |
+
 ## Fetch responses
 
 | Boundary                   | Limit                              | Where                                                                                                                                                            |
@@ -76,6 +85,12 @@ extend this to deep chains and file-count exhaustion.
 | Expression evaluation | 100,000 shared steps (`MAX_EXPRESSION_STEPS`), Filter/Map nesting 32 (`MAX_EVAL_NESTING`) | `crates/plec-eval/src/eval.rs` |
 | Action continuations  | 1,000,000 steps (`MAX_ACTION_STEPS`), call depth 64 (`MAX_CALL_DEPTH`)                    | `crates/plec-client/src/vm.rs` |
 | Reaction drain        | 10,000 executions (`MAX_REACTION_STEPS`), nesting 32 (`MAX_REACTION_DRAIN_DEPTH`)         | same                           |
+| Graph mount recursion | depth 128 (`MAX_MOUNT_DEPTH`)                                                             | `crates/plec-client/src/runtime.rs` |
+
+Mount recursion flows through one depth-guarded `instantiate_node` entry, so a
+validated acyclic chain up to `MAX_COMPONENT_COLLECTION_LEN` nodes deep fails
+with a `mount depth exceeds limit` diagnostic instead of overflowing the WASM
+stack.
 
 Fuel is shared across nested Filter/Map predicate evaluation, so crafted
 backward-jump loops and self-referential predicates exhaust a documented
@@ -117,6 +132,8 @@ keys remain documented separately from these primary exhaustion defences.
 - `crates/plec-runtime/tests/untrusted_input_limits.rs` — oversized and
   over-deep host inputs, artifacts, snapshots, nested JS Maps, undefined
   fields, expression/action loops, self-tail-call actions, self-child and
-  unrooted node graphs, and reaction cycles at the WASM boundary.
+  unrooted node graphs, deep linear node chains, reaction cycles, and
+  oversized/over-deep/structurally excessive snapshot input values plus
+  snapshot shape path limits at the WASM boundary.
 - `packages/plec-server/src/index.test.ts` — oversized request body (413) and
   oversized artifact file (500).

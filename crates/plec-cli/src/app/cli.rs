@@ -42,13 +42,49 @@ enum Command {
         #[arg(long, default_value = "src/server.ts")]
         server_entry: PathBuf,
 
-        /// Document title for the generated HTML shell.
-        #[arg(long, default_value = "Plec app")]
+        /// Document title; empty defers to `plec.toml`.
+        #[arg(long, default_value = "")]
         title: String,
+
+        /// Document description for the generated HTML shell.
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Stylesheet URL emitted in the document head.
+        #[arg(long)]
+        styles: Option<String>,
+
+        /// Font preload URL emitted before the stylesheet; repeatable.
+        #[arg(long = "preload")]
+        preloads: Vec<String>,
 
         /// Skip minification of browser/server bundles.
         #[arg(long)]
         no_optimize: bool,
+    },
+
+    /// Serve a built Plec application with the native host.
+    ///
+    /// Reads `plec-server.json` from the build output; every path inside
+    /// resolves relative to that manifest, so the directory is portable.
+    /// When the manifest carries a server bundle, a Node application
+    /// runtime is spawned for `/api/*` traffic and shut down with the host.
+    Serve {
+        /// Build output directory containing `plec-server.json`.
+        #[arg(default_value = "dist")]
+        dir: PathBuf,
+
+        /// Bind address. Defaults to 127.0.0.1, or 0.0.0.0 in a container.
+        #[arg(long)]
+        host: Option<String>,
+
+        /// Port; falls back to `$PORT`, then 3000.
+        #[arg(long)]
+        port: Option<u16>,
+
+        /// Development mode (also enabled unless NODE_ENV=production).
+        #[arg(long)]
+        development: bool,
     },
 }
 
@@ -86,6 +122,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             client_entry,
             server_entry,
             title,
+            description,
+            styles,
+            preloads,
             no_optimize,
         } => {
             let options = BuildOptions {
@@ -95,6 +134,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 out_dir,
                 optimize: !no_optimize,
                 title,
+                description,
+                styles_href: styles,
+                preloads,
             };
 
             let result = build(options)?;
@@ -105,6 +147,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 result.out_dir.display()
             );
         }
+
+        Command::Serve {
+            dir,
+            host,
+            port,
+            development,
+        } => crate::serve::serve(crate::serve::ServeOptions {
+            dir,
+            host,
+            port,
+            development,
+        })?,
     }
     Ok(())
 }

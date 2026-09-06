@@ -70,6 +70,12 @@ pub const MAX_ACTION_INSTRUCTIONS: usize = 10_000;
 /// independent of the JSON parser's depth guard).
 pub const MAX_DECODE_JS_DEPTH: usize = 128;
 
+/// Maximum number of observed paths in one snapshot input shape.
+pub const MAX_SNAPSHOT_SHAPE_PATHS: usize = 1_024;
+
+/// Maximum segments in one observed snapshot path of a snapshot input shape.
+pub const MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS: usize = 64;
+
 /// Maximum bytes of one source module file read by the compiler.
 pub const MAX_SOURCE_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -121,6 +127,13 @@ pub const MAX_LOOP_ROWS: usize = 10_000;
 /// conditional branches, and graph instances each hold one region slot.
 pub const MAX_MOUNTED_REGIONS: usize = 100_000;
 
+/// Maximum nesting depth of one `instantiate_node` mount chain. Topology
+/// validation makes node ownership acyclic, but a validated chain may still
+/// reach `MAX_COMPONENT_COLLECTION_LEN` nodes deep; this bounds the mount
+/// recursion itself so a deep linear graph fails with a diagnostic instead of
+/// overflowing the WASM stack.
+pub const MAX_MOUNT_DEPTH: usize = 128;
+
 /// Maximum DOM operations one top-level reconcile transaction may perform,
 /// including deferred component work it causes.
 pub const MAX_DOM_OPERATIONS_PER_RECONCILE: usize = 500_000;
@@ -152,5 +165,6 @@ mod tests {
         assert!(MAX_COMPONENT_COLLECTION_LEN >= 1_000);
         assert!(MAX_IMPORT_DEPTH >= 16);
         assert!(MAX_MODULE_COUNT >= 64);
+        assert!(MAX_MOUNT_DEPTH >= 64);
     }
 }

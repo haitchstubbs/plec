@@ -44,13 +44,32 @@ enum Command {
         #[arg(long, default_value = "src/server.ts")]
         server_entry: PathBuf,
 
-        /// Document title for the generated HTML shell.
-        #[arg(long, default_value = "Plec app")]
+        /// Document title; empty defers to `plec.toml`.
+        #[arg(long, default_value = "")]
         title: String,
 
         /// Skip minification of browser/server bundles.
         #[arg(long)]
         no_optimize: bool,
+    },
+
+    /// Serve a built Plec application with the native host.
+    Serve {
+        /// Build output directory containing `plec-server.json`.
+        #[arg(default_value = "dist")]
+        dir: PathBuf,
+
+        /// Bind address. Defaults to 127.0.0.1.
+        #[arg(long)]
+        host: Option<String>,
+
+        /// Port; falls back to `$PORT`, then 3000.
+        #[arg(long)]
+        port: Option<u16>,
+
+        /// Development mode (also enabled unless NODE_ENV=production).
+        #[arg(long)]
+        development: bool,
     },
 
     /// Developer workflow helpers for working on the Plec workspace itself.
@@ -106,12 +125,29 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 out_dir,
                 optimize: !no_optimize,
                 title,
+                description: None,
+                styles_href: None,
+                preloads: Vec::new(),
             })?;
             println!(
                 "Plec build complete (revision {}) in {}",
                 result.revision,
                 result.out_dir.display()
             );
+        }
+
+        Command::Serve {
+            dir,
+            host,
+            port,
+            development,
+        } => {
+            crate::serve::serve(crate::serve::ServeOptions {
+                dir,
+                host,
+                port,
+                development,
+            })?;
         }
 
         Command::Workspace { command } => {

@@ -10,6 +10,17 @@ import { createTodoApi, createTodoApiHandler, type Todo } from './api';
 export type { Todo };
 export { createTodoApi };
 
+/** The application's own API. Plec knows nothing about it. */
+const api = createTodoApi();
+
+/**
+ * The server-bundle contract: the only symbol the framework consumes.
+ * Both hosts execute this — the Node sidecar imports the bundle directly,
+ * and the TS host wires it as its `handleAppRequest` below.
+ */
+export const handleRequest: AppRequestHandler =
+  withAcceptanceFixture(createTodoApiHandler(api));
+
 export function createAppServer(
   publicDir: string,
   api = createTodoApi(),
@@ -30,7 +41,9 @@ export function createAppServer(
       title: 'Plec fullstack playground',
       description: 'Plec fullstack runtime experiment.',
     },
-    handleAppRequest: withAcceptanceFixture(createTodoApiHandler(api)),
+    // Transitional: while the two hosts coexist, the TS host duplicates the
+    // host configuration that `plec.toml` carries for the generated manifest.
+    handleAppRequest: handleRequest,
     development: process.env.NODE_ENV !== 'production',
   });
 }
