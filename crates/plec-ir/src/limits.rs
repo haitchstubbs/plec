@@ -2,9 +2,10 @@
 //!
 //! Artifact bytes, runtime values, snapshots, fetch responses, source
 //! modules, and execution work arrive from sources that may be hostile
-//! (browser tabs, build workers, fetched responses). Every limit here is
-//! enforced fail-closed at a boundary before unbounded allocation or
-//! recursion can happen. Values are generous: they must never reject
+//! (browser tabs, build workers, fetched responses). Byte envelopes bound
+//! transport and decode allocation; structural validation then rejects
+//! pathological decoded shapes before runtime execution. Values are generous:
+//! they must never reject
 //! legitimate compiled output, only pathological inputs. See
 //! docs/security-limits.md for the boundary-by-boundary contract.
 
@@ -34,15 +35,29 @@ pub const MAX_VALUE_NODES: usize = 100_000;
 /// Maximum byte length of one string inside a runtime value tree.
 pub const MAX_VALUE_STRING_BYTES: usize = 1024 * 1024;
 
-/// Maximum number of components in one application artifact.
-pub const MAX_COMPONENT_COUNT: usize = 5_000;
+/// Maximum number of component definitions in one application artifact. This
+/// is a pathological-shape guard; aggregate IR budgets enforce resource use.
+pub const MAX_COMPONENT_COUNT: usize = 65_536;
+
+/// Maximum total entries across executable-IR collections in one application.
+pub const MAX_TOTAL_IR_ENTRIES: usize = 1_000_000;
+
+/// Maximum total expression and action instructions in one application.
+pub const MAX_TOTAL_INSTRUCTIONS: usize = 1_000_000;
+
+/// Maximum total UTF-8 bytes across component string pools in one artifact.
+pub const MAX_TOTAL_STRING_POOL_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum total nodes across constant runtime-value trees in one artifact.
+pub const MAX_TOTAL_CONSTANT_NODES: usize = 1_000_000;
 
 /// Maximum length of any per-component IR collection (nodes, strings,
 /// constants, expressions, actions, bindings, ...).
 pub const MAX_COMPONENT_COLLECTION_LEN: usize = 100_000;
 
-/// Maximum byte length of one string in a component string pool.
-pub const MAX_COMPONENT_STRING_BYTES: usize = 64 * 1024;
+/// Emergency maximum byte length of one string in a component string pool.
+/// Aggregate string-pool bytes are the primary budget.
+pub const MAX_COMPONENT_STRING_BYTES: usize = 1024 * 1024;
 
 /// Maximum instruction count of one expression program.
 pub const MAX_EXPRESSION_INSTRUCTIONS: usize = 10_000;
@@ -87,6 +102,28 @@ pub const MAX_REACTION_DRAIN_DEPTH: usize = 32;
 /// Maximum byte length of a fetch response body decoded into a runtime
 /// value.
 pub const MAX_FETCH_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum simultaneous browser fetches across all mounted graph instances.
+pub const MAX_IN_FLIGHT_FETCHES: usize = 128;
+
+/// Maximum fetches initiated by one logical action execution, including
+/// continuations, nested calls, and finalizers.
+pub const MAX_FETCHES_PER_ACTION: usize = 128;
+
+/// Maximum aggregate response-body bytes charged to one logical action
+/// execution.
+pub const MAX_FETCH_BYTES_PER_ACTION: usize = 16 * 1024 * 1024;
+
+/// Maximum rows one loop reconcile may project before allocating row state.
+pub const MAX_LOOP_ROWS: usize = 10_000;
+
+/// Maximum live ownership regions across all mounted graph instances. Rows,
+/// conditional branches, and graph instances each hold one region slot.
+pub const MAX_MOUNTED_REGIONS: usize = 100_000;
+
+/// Maximum DOM operations one top-level reconcile transaction may perform,
+/// including deferred component work it causes.
+pub const MAX_DOM_OPERATIONS_PER_RECONCILE: usize = 500_000;
 
 /// Maximum byte length of an inbound HTTP request body buffered by the
 /// dev server.

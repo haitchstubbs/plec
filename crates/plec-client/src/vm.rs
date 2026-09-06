@@ -10,6 +10,10 @@ use plec_schema::typed::TypedCapabilityRequest;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
 
+/// Result-slot sentinel for tail-call continuations: a tail call discards
+/// the callee result, so no caller frame slot receives it.
+const TAIL_CALL_NO_SLOT: usize = usize::MAX;
+
 #[derive(Clone)]
 pub struct TypedActionFrame {
     pub action: usize,
@@ -33,6 +37,44 @@ pub struct TypedCallerContinuation {
 pub struct TypedContinuationStack {
     pub current: TypedActionFrame,
     pub callers: Vec<TypedCallerContinuation>,
+    pub fetch_accounting: Rc<RefCell<ActionFetchAccounting>>,
+}
+
+#[derive(Default)]
+pub struct ActionFetchAccounting {
+    #[cfg(feature = "fetch")]
+    fetches: usize,
+    #[cfg(feature = "fetch")]
+    bytes: usize,
+}
+
+impl ActionFetchAccounting {
+    #[cfg(feature = "fetch")]
+    fn reserve_fetch(&mut self) -> Result<(), JsValue> {
+        if self.fetches >= plec_ir::limits::MAX_FETCHES_PER_ACTION {
+            return Err(JsValue::from_str(&format!(
+                "fetch count exceeds the {} per-action limit",
+                plec_ir::limits::MAX_FETCHES_PER_ACTION
+            )));
+        }
+        self.fetches += 1;
+        Ok(())
+    }
+
+    #[cfg(feature = "fetch")]
+    pub(crate) fn charge_response_bytes(&mut self, bytes: usize) -> Result<(), JsValue> {
+        let total = self.bytes.checked_add(bytes).ok_or_else(|| {
+            JsValue::from_str("fetch response bytes overflow the per-action accounting")
+        })?;
+        if total > plec_ir::limits::MAX_FETCH_BYTES_PER_ACTION {
+            return Err(JsValue::from_str(&format!(
+                "fetch response bytes exceed the {} per-action limit",
+                plec_ir::limits::MAX_FETCH_BYTES_PER_ACTION
+            )));
+        }
+        self.bytes = total;
+        Ok(())
+    }
 }
 
 impl TypedRuntime {
@@ -101,6 +143,36 @@ impl TypedRuntime {
                     row,
                 },
                 callers: Vec::new(),
+                fetch_accounting: Rc::new(RefCell::new(ActionFetchAccounting::default())),
+            },
+            native_event,
+            metrics,
+        )
+    }
+
+    pub(crate) fn execute_action_at_with_fetch_accounting(
+        &mut self,
+        action: usize,
+        pc: usize,
+        frame: Vec<RuntimeValue>,
+        event: &[RuntimeValue],
+        row: Option<HashMap<String, RuntimeValue>>,
+        native_event: Option<&Event>,
+        metrics: &mut UpdateMetrics,
+        fetch_accounting: Rc<RefCell<ActionFetchAccounting>>,
+    ) -> Result<(), JsValue> {
+        self.execute_continuation(
+            TypedContinuationStack {
+                current: TypedActionFrame {
+                    action,
+                    pc,
+                    stack: Vec::new(),
+                    frame,
+                    event: event.to_vec(),
+                    row,
+                },
+                callers: Vec::new(),
+                fetch_accounting,
             },
             native_event,
             metrics,
@@ -345,15 +417,42 @@ impl TypedRuntime {
                                 };
                                 continue 'run;
                             }
-                            (None, None, None, None) => self.execute_action_at(
-                                target,
-                                0,
-                                child,
-                                &event,
-                                row.clone(),
-                                native_event,
-                                metrics,
-                            )?,
+                            (None, None, None, None) => {
+                                // Tail call: reuse the continuation machinery
+                                // instead of native recursion, so one shared
+                                // step budget and one call-depth bound cover
+                                // self-referential tail calls too.
+                                if continuation.callers.len()
+                                    >= plec_ir::limits::MAX_CALL_DEPTH
+                                {
+                                    return Err(JsValue::from_str(
+                                        "action call depth exceeds limit",
+                                    ));
+                                }
+                                continuation.callers.push(TypedCallerContinuation {
+                                    frame: TypedActionFrame {
+                                        action,
+                                        pc: pc + 1,
+                                        stack,
+                                        frame,
+                                        event: event.clone(),
+                                        row: row.clone(),
+                                    },
+                                    success_pc: pc + 1,
+                                    failure_pc: pc + 1,
+                                    result_slot: TAIL_CALL_NO_SLOT,
+                                    error_slot: TAIL_CALL_NO_SLOT,
+                                });
+                                continuation.current = TypedActionFrame {
+                                    action: target,
+                                    pc: 0,
+                                    stack: Vec::new(),
+                                    frame: child,
+                                    event,
+                                    row,
+                                };
+                                continue 'run;
+                            }
                             _ => return Err(JsValue::from_str("partial action call continuation")),
                         }
                     }
@@ -430,15 +529,40 @@ impl TypedRuntime {
                                 };
                                 continue 'run;
                             }
-                            (None, None, None, None) => self.execute_action_at(
-                                target,
-                                0,
-                                child,
-                                &event,
-                                row.clone(),
-                                native_event,
-                                metrics,
-                            )?,
+                            (None, None, None, None) => {
+                                // Tail call: same continuation-based bound as
+                                // the `Call` arm above.
+                                if continuation.callers.len()
+                                    >= plec_ir::limits::MAX_CALL_DEPTH
+                                {
+                                    return Err(JsValue::from_str(
+                                        "action call depth exceeds limit",
+                                    ));
+                                }
+                                continuation.callers.push(TypedCallerContinuation {
+                                    frame: TypedActionFrame {
+                                        action,
+                                        pc: pc + 1,
+                                        stack,
+                                        frame,
+                                        event: event.clone(),
+                                        row: row.clone(),
+                                    },
+                                    success_pc: pc + 1,
+                                    failure_pc: pc + 1,
+                                    result_slot: TAIL_CALL_NO_SLOT,
+                                    error_slot: TAIL_CALL_NO_SLOT,
+                                });
+                                continuation.current = TypedActionFrame {
+                                    action: target,
+                                    pc: 0,
+                                    stack: Vec::new(),
+                                    frame: child,
+                                    event,
+                                    row,
+                                };
+                                continue 'run;
+                            }
                             _ => {
                                 return Err(JsValue::from_str(
                                     "partial action callFrame continuation",
@@ -605,6 +729,7 @@ impl TypedRuntime {
                                     })
                                 })
                                 .transpose()?;
+                            continuation.fetch_accounting.borrow_mut().reserve_fetch()?;
                             continuation.current = TypedActionFrame {
                                 action,
                                 pc,
@@ -659,23 +784,27 @@ impl TypedRuntime {
                                     (caller.error_slot, caller.failure_pc)
                                 }
                             };
-                            if slot >= caller_frame.frame.len() {
-                                return Err(JsValue::from_str(
-                                    "caller continuation slot out of range",
-                                ));
+                            // Tail-call continuations discard the result, so
+                            // there is no caller frame slot to receive it.
+                            if slot != TAIL_CALL_NO_SLOT {
+                                if slot >= caller_frame.frame.len() {
+                                    return Err(JsValue::from_str(
+                                        "caller continuation slot out of range",
+                                    ));
+                                }
+                                caller_frame.frame[slot] = value;
+                                let other = if slot == caller.result_slot {
+                                    caller.error_slot
+                                } else {
+                                    caller.result_slot
+                                };
+                                if other >= caller_frame.frame.len() {
+                                    return Err(JsValue::from_str(
+                                        "caller continuation slot out of range",
+                                    ));
+                                }
+                                caller_frame.frame[other] = RuntimeValue::Null;
                             }
-                            caller_frame.frame[slot] = value;
-                            let other = if slot == caller.result_slot {
-                                caller.error_slot
-                            } else {
-                                caller.result_slot
-                            };
-                            if other >= caller_frame.frame.len() {
-                                return Err(JsValue::from_str(
-                                    "caller continuation slot out of range",
-                                ));
-                            }
-                            caller_frame.frame[other] = RuntimeValue::Null;
                             caller_frame.pc = next_pc;
                             continuation.current = caller_frame;
                             continue 'run;
@@ -695,6 +824,11 @@ impl TypedRuntime {
             }
             if let Some(caller) = continuation.callers.pop() {
                 let mut caller_frame = caller.frame;
+                if caller.result_slot == TAIL_CALL_NO_SLOT {
+                    caller_frame.pc = caller.success_pc;
+                    continuation.current = caller_frame;
+                    continue 'run;
+                }
                 if caller.result_slot >= caller_frame.frame.len()
                     || caller.error_slot >= caller_frame.frame.len()
                 {
@@ -817,9 +951,28 @@ mod tests {
             .execute_action_with_frame(0, &[], None, None, &mut metrics)
             .unwrap();
 
-        let requests = runtime.take_pending_fetches();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].body.as_deref(), Some(r#"{"title":"Plec"}"#));
+        let first = runtime.take_pending_fetches();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].body.as_deref(), Some(r#"{"title":"Plec"}"#));
+        assert_eq!(first[0].continuation.fetch_accounting.borrow().fetches, 1);
+        assert_eq!(first[0].continuation.fetch_accounting.borrow().bytes, 0);
+        first[0]
+            .continuation
+            .fetch_accounting
+            .borrow_mut()
+            .charge_response_bytes(64)
+            .unwrap();
+
+        runtime
+            .execute_action_with_frame(0, &[], None, None, &mut metrics)
+            .unwrap();
+        let second = runtime.take_pending_fetches();
+        assert_eq!(second.len(), 1);
+        assert!(!Rc::ptr_eq(
+            &first[0].continuation.fetch_accounting,
+            &second[0].continuation.fetch_accounting,
+        ));
+        assert_eq!(second[0].continuation.fetch_accounting.borrow().bytes, 0);
     }
 
     // Error-path budget tests (action loop, self-requeuing reaction) live in
@@ -887,6 +1040,9 @@ impl TypedRuntime {
             .filter_map(|(index, entry)| (entry.input == Some(input)).then_some(index))
             .collect::<Vec<_>>();
         for loop_index in targets {
+            if snapshot.order.len() > plec_ir::limits::MAX_LOOP_ROWS {
+                return Err(JsValue::from_str("LOOP_ROW_LIMIT_EXCEEDED"));
+            }
             let parent = self.parent_for_loop(loop_index)?;
             let projection = snapshot
                 .order

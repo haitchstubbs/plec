@@ -506,7 +506,11 @@ fn mount_typed_graph(
         .get(graph.root_component)
         .cloned()
         .ok_or_else(|| JsValue::from_str("typed route graph root is missing"))?;
-    let mut runtime = TypedRuntime::new(app)?;
+    let mut runtime = TypedRuntime::new_with_runtime_limits(
+        app,
+        state.region_tracker.clone(),
+        state.reconcile_budget.clone(),
+    )?;
     runtime.set_component_definitions(graph.components);
     runtime.set_host_inputs(state.typed_host_inputs.borrow().clone())?;
     runtime.graph_generation = state.next_typed_generation();
@@ -563,7 +567,11 @@ fn adopt_typed_graph(
         .get(graph.root_component)
         .cloned()
         .ok_or_else(|| JsValue::from_str("missing:ssr-root-component"))?;
-    let mut runtime = TypedRuntime::new(app)?;
+    let mut runtime = TypedRuntime::new_with_runtime_limits(
+        app,
+        state.region_tracker.clone(),
+        state.reconcile_budget.clone(),
+    )?;
     runtime.set_component_definitions(graph.components);
     runtime.ssr_imported = *state.typed_ssr_imported.borrow();
     // Adopted instances keep emitting addresses under the claimed path:

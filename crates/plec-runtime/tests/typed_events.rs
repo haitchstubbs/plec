@@ -12,6 +12,9 @@ wasm_bindgen_test_configure!(run_in_browser);
 let originalFetch;
 let fetchQueue = [];
 let aborts = 0;
+let fetchCalls = 0;
+let lastFetchCredentials = null;
+let fetchUrls = [];
 let domMutationCounts = { append: 0, insertBefore: 0, remove: 0 };
 const originalAppendChild = Node.prototype.appendChild;
 const originalInsertBefore = Node.prototype.insertBefore;
@@ -26,6 +29,9 @@ export function setPlecFetchQueue(specs) {
   fetchQueue = JSON.parse(specs);
   aborts = 0;
   window.fetch = (input, init) => {
+    fetchCalls++;
+    fetchUrls.push(String(input instanceof Request ? input.url : input));
+    lastFetchCredentials = init?.credentials ?? null;
     const spec = fetchQueue.shift();
     if (spec.reject) return Promise.reject(Object.assign(new Error(spec.reject), { name: spec.name || 'TypeError' }));
     const signal = input instanceof Request ? input.signal : init?.signal;
@@ -33,8 +39,11 @@ export function setPlecFetchQueue(specs) {
     return Promise.resolve(new Response(spec.body ?? '', { status: spec.status ?? 200, statusText: spec.statusText ?? '', headers: spec.headers ?? {} }));
   };
 }
-export function restorePlecFetch() { if (originalFetch) window.fetch = originalFetch; fetchQueue = []; }
+export function restorePlecFetch() { if (originalFetch) window.fetch = originalFetch; fetchQueue = []; lastFetchCredentials = null; fetchCalls = 0; fetchUrls = []; }
 export function plecFetchAborts() { return aborts; }
+export function plecFetchCredentials() { return lastFetchCredentials; }
+export function plecFetchCalls() { return fetchCalls; }
+export function plecFetchUrls() { return JSON.stringify(fetchUrls); }
 "#)]
 extern "C" {
     #[wasm_bindgen::prelude::wasm_bindgen(js_name = setPlecFetchQueue)]
@@ -43,6 +52,12 @@ extern "C" {
     fn restore_plec_fetch();
     #[wasm_bindgen::prelude::wasm_bindgen(js_name = plecFetchAborts)]
     fn plec_fetch_aborts() -> u32;
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = plecFetchCredentials)]
+    fn plec_fetch_credentials() -> Option<String>;
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = plecFetchCalls)]
+    fn plec_fetch_calls() -> u32;
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = plecFetchUrls)]
+    fn plec_fetch_urls() -> String;
     #[wasm_bindgen::prelude::wasm_bindgen(js_name = resetPlecDomMutations)]
     fn reset_plec_dom_mutations();
     #[wasm_bindgen::prelude::wasm_bindgen(js_name = plecDomMutations)]
@@ -60,6 +75,36 @@ impl Drop for FetchMockGuard {
 fn install_plec_fetch_queue(specs: &str) -> FetchMockGuard {
     set_plec_fetch_queue(specs);
     FetchMockGuard
+}
+
+/// The host-owned fetch policy every live fetch requires. Test artifacts
+/// fetch same-origin relative URLs, so a page-origin grant covers them; the
+/// deny path is exercised explicitly by the policy tests.
+fn grant_fetch_policy(runtime: &PlecRuntime) {
+    let origin = web_sys::window().unwrap().location().origin().unwrap();
+    runtime
+        .set_fetch_policy(js_from_json(&serde_json::json!([
+            {
+                "origin": origin,
+                "methods": ["GET", "POST", "PATCH", "PUT", "DELETE"],
+                "headers": ["content-type"],
+                "credentials": true
+            },
+            {
+                // `data:` and other opaque-origin URLs serialize their origin
+                // as "null"; granting them stays an explicit host decision.
+                "origin": "null",
+                "methods": ["GET"],
+                "credentials": false
+            }
+        ])))
+        .unwrap();
+}
+
+/// Builds a plain JS value through `JSON.parse`, matching the shape a real
+/// host passes to the policy setters.
+fn js_from_json(value: &serde_json::Value) -> JsValue {
+    js_sys::JSON::parse(&value.to_string()).unwrap()
 }
 
 struct BrowserLocationGuard {
@@ -353,16 +398,37 @@ fn keyed_row_artifact() -> serde_json::Value {
 }
 
 fn static_conditional_artifact(alternate: bool) -> serde_json::Value {
-    let alternate = alternate.then_some(3);
+    // Compiled output only contains reachable nodes: the no-alternate
+    // variant drops the false-branch node and its event entirely.
+    let (nodes, events) = if alternate {
+        (
+            serde_json::json!([
+                {"op":"element", "tag":0, "children":[1]},
+                {"op":"conditional", "test":2, "parent":0, "consequent":2, "alternate":3},
+                {"op":"element", "tag":1, "children":[]},
+                {"op":"element", "tag":1, "children":[]}
+            ]),
+            serde_json::json!([
+                {"target":2,"type":2,"action":1,"fields":[]},
+                {"target":3,"type":2,"action":0,"fields":[]}
+            ]),
+        )
+    } else {
+        (
+            serde_json::json!([
+                {"op":"element", "tag":0, "children":[1]},
+                {"op":"conditional", "test":2, "parent":0, "consequent":2, "alternate":null},
+                {"op":"element", "tag":1, "children":[]}
+            ]),
+            serde_json::json!([
+                {"target":2,"type":2,"action":1,"fields":[]}
+            ]),
+        )
+    };
     serde_json::json!({
         "rootNode":0,
         "strings":["div", "button", "click"], "constants":[false, true],
-        "nodes":[
-            {"op":"element", "tag":0, "children":[1]},
-            {"op":"conditional", "test":2, "parent":0, "consequent":2, "alternate":alternate},
-            {"op":"element", "tag":1, "children":[]},
-            {"op":"element", "tag":1, "children":[]}
-        ],
+        "nodes": nodes,
         "stateSlots":[{"initialExpression":0,"frameSlot":0}],
         "expressions":[
             {"instructions":[{"op":"constant","constant":0},{"op":"return"}]},
@@ -374,10 +440,7 @@ fn static_conditional_artifact(alternate: bool) -> serde_json::Value {
             {"frameSlots":0,"instructions":[{"op":"evaluate","expression":3},{"op":"storeState","state":0},{"op":"return"}]},
             {"frameSlots":0,"instructions":[{"op":"evaluate","expression":3},{"op":"storeState","state":0},{"op":"return"}]}
         ],
-        "events":[
-            {"target":2,"type":2,"action":1,"fields":[]},
-            {"target":3,"type":2,"action":0,"fields":[]}
-        ],
+        "events": events,
         "dependencyEdges":[{"source":{"kind":"state","handle":0},"target":{"kind":"conditional","handle":1}}]
     })
 }
@@ -588,6 +651,128 @@ fn fetch_artifact(decode: &str, require_ok: bool, nested: bool) -> serde_json::V
     })
 }
 
+/// One static button and a fetch whose single request header is
+/// artifact-controlled. Used to prove host grants gate headers.
+fn header_fetch_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "rootNode":0,
+        "strings":["div","button","click","content-type"],
+        "constants":[null,"url","success","failure","application/json"],
+        "nodes":[
+            {"op":"element","tag":0,"children":[1,2,3]},
+            {"op":"element","tag":1,"parent":0,"children":[]},
+            {"op":"text","text":0,"parent":0}, {"op":"text","text":1,"parent":0}
+        ],
+        "texts":[{"binding":0},{"binding":1}],
+        "bindings":[
+            {"target":2,"sink":"text","expression":1}, {"target":3,"sink":"text","expression":2}
+        ],
+        "events":[{"target":1,"type":2,"action":0,"fields":[]}],
+        "stateSlots":[{"initialExpression":0,"frameSlot":0},{"initialExpression":0,"frameSlot":0}],
+        "expressions":[
+            {"instructions":[{"op":"constant","constant":0},{"op":"return"}]},
+            {"instructions":[{"op":"loadState","state":0},{"op":"return"}]}, {"instructions":[{"op":"loadState","state":1},{"op":"return"}]},
+            {"instructions":[{"op":"loadFrame","slot":1},{"op":"return"}]}, {"instructions":[{"op":"loadFrame","slot":2},{"op":"return"}]},
+            {"instructions":[{"op":"constant","constant":3},{"op":"return"}]}, {"instructions":[{"op":"constant","constant":4},{"op":"return"}]}
+        ],
+        "actions":[{"frameSlots":3,"instructions":[
+            {"op":"capabilityRequest","capability":"fetch","request":{"url":5,"method":"GET","headers":[{"name":3,"value":6}],"decode":"text","requireOk":true},"successPc":1,"failurePc":4,"finallyPc":null,"resultSlot":1,"errorSlot":2},
+            {"op":"evaluate","expression":3},{"op":"storeState","state":0},{"op":"return"},
+            {"op":"evaluate","expression":4},{"op":"storeState","state":0},{"op":"return"}
+        ]}],
+        "dependencyEdges":[
+            {"source":{"kind":"state","handle":0},"target":{"kind":"binding","handle":0}},
+            {"source":{"kind":"state","handle":1},"target":{"kind":"binding","handle":1}}
+        ]
+    })
+}
+
+/// One button, one text slot, and a declared cookie capability. The action's
+/// capability request matches the artifact declaration exactly, so any denial
+/// comes from the host policy, never from declaration mismatch.
+fn cookie_get_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "rootNode":0,
+        "strings":["div","button","click","session"],
+        "constants":[null,"granted","denied"],
+        "nodes":[
+            {"op":"element","tag":0,"children":[1,2]},
+            {"op":"element","tag":1,"parent":0,"children":[]},
+            {"op":"text","text":0,"parent":0}
+        ],
+        "texts":[{"binding":0}],
+        "bindings":[{"target":2,"sink":"text","expression":1}],
+        "events":[{"target":1,"type":2,"action":0,"fields":[]}],
+        "stateSlots":[{"initialExpression":0,"frameSlot":0}],
+        "expressions":[
+            {"instructions":[{"op":"constant","constant":0},{"op":"return"}]},
+            {"instructions":[{"op":"loadState","state":0},{"op":"return"}]},
+            {"instructions":[{"op":"loadFrame","slot":1},{"op":"return"}]}, {"instructions":[{"op":"loadFrame","slot":2},{"op":"return"}]},
+            {"instructions":[{"op":"constant","constant":1},{"op":"return"}]}, {"instructions":[{"op":"constant","constant":2},{"op":"return"}]}
+        ],
+        "actions":[{
+            "frameSlots":3,
+            "instructions":[
+                {"op":"capabilityRequest","capability":"cookie","request":{"operation":"get","name":3,"path":"/","expiry":"session"},"successPc":1,"failurePc":4,"finallyPc":null,"resultSlot":1,"errorSlot":2},
+                {"op":"evaluate","expression":2},{"op":"storeState","state":0},{"op":"return"},
+                {"op":"evaluate","expression":3},{"op":"storeState","state":0},{"op":"return"}
+            ]
+        }],
+        "capabilities":[{"kind":"cookie","name":"session","operations":["get"],"path":"/","sameSite":null,"secure":null,"expiryModes":["session"]}],
+        "dependencyEdges":[{"source":{"kind":"state","handle":0},"target":{"kind":"binding","handle":0}}]
+    })
+}
+
+/// A state slot initialized from a synchronous cookie host slot; the binding
+/// renders whatever the sync cookie gate allowed at mount time.
+fn sync_cookie_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "rootNode":0,
+        "strings":["div","session"],
+        "constants":[null],
+        "nodes":[
+            {"op":"element","tag":0,"children":[1]},
+            {"op":"text","text":0,"parent":0}
+        ],
+        "texts":[{"binding":0}],
+        "bindings":[{"target":1,"sink":"text","expression":1}],
+        "events":[],
+        "hostSlots":[{"kind":"cookie","query":null,"name":1}],
+        "stateSlots":[{"initialExpression":0,"frameSlot":0}],
+        "expressions":[
+            {"instructions":[{"op":"loadHost","host":0},{"op":"return"}]},
+            {"instructions":[{"op":"loadState","state":0},{"op":"return"}]}
+        ],
+        "actions":[],
+        "dependencyEdges":[{"source":{"kind":"state","handle":0},"target":{"kind":"binding","handle":0}}]
+    })
+}
+
+fn set_session_cookie(value: &str) {
+    // web-sys exposes only the `cookie()` getter on `HtmlDocument`; the
+    // setter goes through the property itself.
+    let document = web_sys::window().unwrap().document().unwrap();
+    js_sys::Reflect::set(
+        document.as_ref(),
+        &JsValue::from_str("cookie"),
+        &JsValue::from_str(&format!("session={value}; path=/")),
+    )
+    .unwrap();
+}
+
+/// Clears the process-wide sync-cookie policy a previous test may have
+/// published: the sync gate is a thread-local, not runtime-owned state.
+fn clear_cookie_policy(runtime: &PlecRuntime) {
+    runtime
+        .set_cookie_policy(
+            serde_wasm_bindgen::to_value(
+                &Option::<std::collections::HashMap<String, serde_json::Value>>::None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+}
+
 fn caller_continuation_artifact() -> serde_json::Value {
     let mut app = fetch_artifact("text", true, false);
     app["expressions"]
@@ -770,6 +955,7 @@ fn static_output(root: &Element) -> String {
 #[wasm_bindgen_test]
 fn rust_compiler_counter_fixture_mounts_and_updates_one_text_binding() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     runtime
         .load_application(
@@ -799,6 +985,7 @@ fn rust_compiler_counter_fixture_mounts_and_updates_one_text_binding() {
 #[wasm_bindgen_test]
 fn rust_local_action_fixture_updates_existing_text_node() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, rust_local_action_artifact(), &root);
     let button = root.query_selector("button").unwrap().unwrap();
@@ -816,6 +1003,7 @@ fn rust_local_action_fixture_updates_existing_text_node() {
 #[wasm_bindgen_test]
 fn rust_component_fixture_refreshes_child_without_remounting() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, rust_component_artifact(), &root);
     let span = root.query_selector("span").unwrap().unwrap();
@@ -837,6 +1025,7 @@ fn rust_component_fixture_refreshes_child_without_remounting() {
 #[wasm_bindgen_test]
 fn component_slot_mounts_caller_owned_children_inside_the_callee_anchor() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, component_slot_artifact(), &root);
     let section = root.query_selector("section").unwrap().unwrap();
@@ -848,6 +1037,7 @@ fn component_slot_mounts_caller_owned_children_inside_the_callee_anchor() {
 #[wasm_bindgen_test]
 fn rust_keyed_slot_fixture_retains_caller_row_identity_and_disposes_slots() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, rust_keyed_slot_component_artifact(), &root);
     apply_delta(
@@ -941,6 +1131,7 @@ fn rust_keyed_slot_fixture_retains_caller_row_identity_and_disposes_slots() {
 #[wasm_bindgen_test]
 fn keyed_value_batch_updates_only_its_field_bindings_without_row_mutation() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, keyed_row_artifact(), &root);
     apply_delta(
@@ -990,6 +1181,7 @@ fn keyed_value_batch_updates_only_its_field_bindings_without_row_mutation() {
 #[wasm_bindgen_test]
 fn rust_keyed_local_action_fixture_retains_row_identity() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, rust_keyed_local_action_artifact(), &root);
     apply_delta(
@@ -1036,6 +1228,7 @@ fn rust_keyed_local_action_fixture_retains_row_identity() {
 #[wasm_bindgen_test]
 fn rust_keyed_component_fixture_retains_rows_and_disposes_removed_child() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, rust_keyed_component_artifact(), &root);
     apply_delta(
@@ -1105,6 +1298,7 @@ fn rust_keyed_component_fixture_retains_rows_and_disposes_removed_child() {
 #[wasm_bindgen_test]
 fn rust_keyed_callback_component_fixture_dispatches_parent_row_action() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, rust_keyed_callback_component_artifact(), &root);
     apply_delta(
@@ -1174,6 +1368,7 @@ fn rust_keyed_callback_component_fixture_dispatches_parent_row_action() {
 #[wasm_bindgen_test]
 fn rust_collection_mutation_fixture_updates_one_keyed_row_without_remounting() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, rust_collection_mutation_artifact(), &root);
     root.query_selector("button")
@@ -1220,6 +1415,7 @@ async fn rust_general_async_actions_fixture_preserves_frame_and_finally_lifecycl
     {
         let _fetch = install_plec_fetch_queue(r#"[{"body":"{\"id\":\"one\",\"title\":\"New\"}"}]"#);
         let runtime = PlecRuntime::new();
+        grant_fetch_policy(&runtime);
         let root = mount_root();
         load_and_mount(&runtime, general_async_actions_lifecycle_artifact(), &root);
         initialize_rows(&runtime, serde_json::json!([{"id":"one","title":"Old"}]));
@@ -1251,6 +1447,7 @@ async fn rust_general_async_actions_fixture_preserves_frame_and_finally_lifecycl
     {
         let _fetch = install_plec_fetch_queue(r#"[{"reject":"offline"}]"#);
         let runtime = PlecRuntime::new();
+        grant_fetch_policy(&runtime);
         let root = mount_root();
         load_and_mount(&runtime, general_async_actions_lifecycle_artifact(), &root);
         initialize_rows(&runtime, serde_json::json!([{"id":"one","title":"Old"}]));
@@ -1284,6 +1481,7 @@ async fn rust_general_async_actions_fixture_preserves_frame_and_finally_lifecycl
     {
         let _fetch = install_plec_fetch_queue(r#"[{"pending":true}]"#);
         let runtime = PlecRuntime::new();
+        grant_fetch_policy(&runtime);
         let root = mount_root();
         load_and_mount(&runtime, general_async_actions_lifecycle_artifact(), &root);
         root.query_selector("button")
@@ -1303,6 +1501,7 @@ async fn rust_general_async_actions_fixture_preserves_frame_and_finally_lifecycl
 #[wasm_bindgen_test]
 fn rust_nested_component_fixture_refreshes_grandchild_without_remounting() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, rust_nested_component_artifact(), &root);
     let section = root.query_selector("section").unwrap().unwrap();
@@ -1344,6 +1543,7 @@ fn rust_nested_component_fixture_refreshes_grandchild_without_remounting() {
 #[wasm_bindgen_test]
 fn rust_component_registry_routes_without_legacy_renderer() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     runtime
         .register_graph(
@@ -1361,6 +1561,7 @@ fn rust_component_registry_routes_without_legacy_renderer() {
 #[wasm_bindgen_test]
 fn rust_collection_rows_fixture_reconciles_keyed_rows_and_branch_listener() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, rust_collection_rows_artifact(), &root);
     apply_delta(
@@ -1410,6 +1611,7 @@ fn rust_collection_rows_fixture_reconciles_keyed_rows_and_branch_listener() {
 #[wasm_bindgen_test]
 fn rust_static_conditional_fixture_replaces_branch_and_disposes_listener() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, rust_static_conditional_artifact(), &root);
 
@@ -1465,6 +1667,7 @@ fn rust_static_conditional_fixture_replaces_branch_and_disposes_listener() {
 #[wasm_bindgen_test]
 fn static_listener_dispatches_once_and_dispose_removes_its_dom() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     runtime
         .load_application(
             serde_wasm_bindgen::to_value(&component_application(&serde_json::json!({
@@ -1517,6 +1720,7 @@ fn static_listener_dispatches_once_and_dispose_removes_its_dom() {
 #[wasm_bindgen_test]
 fn keyed_row_listener_survives_updates_and_moves_but_stale_row_callback_is_inert() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, keyed_row_artifact(), &root);
     initialize_rows(
@@ -1593,6 +1797,7 @@ fn keyed_row_listener_survives_updates_and_moves_but_stale_row_callback_is_inert
 #[wasm_bindgen_test]
 fn static_conditional_replaces_branch_listeners_and_supports_no_alternate() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, static_conditional_artifact(true), &root);
     let false_branch = root
@@ -1638,6 +1843,7 @@ fn static_conditional_replaces_branch_listeners_and_supports_no_alternate() {
 #[wasm_bindgen_test]
 fn row_conditional_listener_replaces_only_its_own_keyed_row() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, row_conditional_artifact(), &root);
     initialize_rows(
@@ -1697,6 +1903,7 @@ fn row_conditional_listener_replaces_only_its_own_keyed_row() {
 #[wasm_bindgen_test]
 fn nested_row_conditional_disposes_only_the_replaced_branch() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, nested_row_conditional_artifact(), &root);
     initialize_rows(
@@ -1745,6 +1952,7 @@ fn nested_row_conditional_disposes_only_the_replaced_branch() {
 #[wasm_bindgen_test]
 fn event_dispatch_exposes_only_declared_slots_and_rejects_unsupported_fields() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, event_slot_artifact(), &root);
     root.query_selector("button")
@@ -1768,6 +1976,7 @@ fn event_dispatch_exposes_only_declared_slots_and_rejects_unsupported_fields() {
 async fn row_event_frame_survives_nested_call_and_fetch_continuation() {
     let _fetch = install_plec_fetch_queue(r#"[{"body":"ok"}]"#);
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, async_row_action_artifact(), &root);
     initialize_rows(
@@ -1794,6 +2003,7 @@ async fn row_event_frame_survives_nested_call_and_fetch_continuation() {
 async fn disposing_a_typed_graph_aborts_and_discards_its_fetch() {
     let _fetch = install_plec_fetch_queue(r#"[{"pending":true}]"#);
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, async_row_action_artifact(), &root);
     initialize_rows(
@@ -1828,6 +2038,7 @@ async fn typed_fetch_decodes_json_text_and_empty_responses() {
     ] {
         let _fetch = install_plec_fetch_queue(spec);
         let runtime = PlecRuntime::new();
+        grant_fetch_policy(&runtime);
         let root = mount_root();
         load_and_mount(&runtime, fetch_artifact(decode, true, false), &root);
         click_fetch(&root);
@@ -1855,6 +2066,7 @@ async fn typed_fetch_routes_http_decode_network_and_abort_failures() {
     ] {
         let _fetch = install_plec_fetch_queue(spec);
         let runtime = PlecRuntime::new();
+        grant_fetch_policy(&runtime);
         let root = mount_root();
         load_and_mount(&runtime, fetch_artifact("json", true, false), &root);
         click_fetch(&root);
@@ -1867,6 +2079,7 @@ async fn typed_fetch_routes_http_decode_network_and_abort_failures() {
 
     let _fetch = install_plec_fetch_queue(r#"[{"status":418,"body":"teapot"}]"#);
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, fetch_artifact("text", false, false), &root);
     click_fetch(&root);
@@ -1878,6 +2091,7 @@ async fn typed_fetch_routes_http_decode_network_and_abort_failures() {
 async fn typed_fetch_runs_nested_finalizers_inner_to_outer() {
     let _fetch = install_plec_fetch_queue(r#"[{"body":"outer"},{"body":"inner"}]"#);
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, fetch_artifact("text", true, true), &root);
     click_fetch(&root);
@@ -1889,6 +2103,7 @@ async fn typed_fetch_runs_nested_finalizers_inner_to_outer() {
 async fn suspended_callee_resumes_its_caller_continuation() {
     let _fetch = install_plec_fetch_queue(r#"[{"body":"resumed"}]"#);
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, caller_continuation_artifact(), &root);
     click_fetch(&root);
@@ -1896,11 +2111,260 @@ async fn suspended_callee_resumes_its_caller_continuation() {
     assert_eq!(root.text_content().unwrap(), "resumed");
 }
 
+// --- Host capability policy (default-deny) ----------------------------------
+//
+// Artifact-declared capabilities are requests only. Every grant below comes
+// from the host policy; the tests prove that a substituted artifact cannot
+// read cookies or reach the network without one.
+
+#[wasm_bindgen_test(async)]
+async fn fetch_without_host_policy_is_denied_without_a_network_request() {
+    let _location = reset_browser_location();
+    let _fetch = install_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    load_and_mount(&runtime, fetch_artifact("text", true, false), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    let output = root.text_content().unwrap();
+    assert!(output.contains("\"kind\":\"policy\""), "{output}");
+    assert!(
+        output.contains("fetch origin denied by runtime policy"),
+        "{output}"
+    );
+    assert_eq!(plec_fetch_calls(), 0, "urls: {}", plec_fetch_urls());
+}
+
+#[wasm_bindgen_test(async)]
+async fn fetch_to_a_non_granted_origin_is_denied() {
+    let _location = reset_browser_location();
+    let _fetch = install_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
+    let runtime = PlecRuntime::new();
+    // The grant covers a different origin than the page the artifact runs on;
+    // a hostile artifact cannot redirect same-origin trust into exfiltration.
+    runtime
+        .set_fetch_policy(js_from_json(&serde_json::json!([{
+            "origin": "https://granted.example",
+            "methods": ["GET"],
+            "credentials": false
+        }])))
+        .unwrap();
+    let root = mount_root();
+    load_and_mount(&runtime, fetch_artifact("text", true, false), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    let output = root.text_content().unwrap();
+    assert!(
+        output.contains("fetch origin denied by runtime policy"),
+        "{output}"
+    );
+    assert_eq!(plec_fetch_calls(), 0, "urls: {}", plec_fetch_urls());
+}
+
+#[wasm_bindgen_test(async)]
+async fn fetch_with_a_non_granted_method_is_denied() {
+    let _location = reset_browser_location();
+    let _fetch = install_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
+    let runtime = PlecRuntime::new();
+    let origin = web_sys::window().unwrap().location().origin().unwrap();
+    runtime
+        .set_fetch_policy(js_from_json(&serde_json::json!([{
+            "origin": origin,
+            "methods": ["POST"],
+            "credentials": false
+        }])))
+        .unwrap();
+    let root = mount_root();
+    // The artifact requests GET; the grant only allows POST.
+    load_and_mount(&runtime, fetch_artifact("text", true, false), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    let output = root.text_content().unwrap();
+    assert!(
+        output.contains("fetch method denied by runtime policy"),
+        "{output}"
+    );
+    assert_eq!(plec_fetch_calls(), 0, "urls: {}", plec_fetch_urls());
+}
+
+#[wasm_bindgen_test(async)]
+async fn fetch_with_a_non_granted_header_is_denied() {
+    let _location = reset_browser_location();
+    let _fetch = install_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
+    let runtime = PlecRuntime::new();
+    let origin = web_sys::window().unwrap().location().origin().unwrap();
+    runtime
+        .set_fetch_policy(js_from_json(&serde_json::json!([{
+            "origin": origin,
+            "methods": ["GET"],
+            "headers": ["x-allowed"],
+            "credentials": false
+        }])))
+        .unwrap();
+    let root = mount_root();
+    load_and_mount(&runtime, header_fetch_artifact(), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    let output = root.text_content().unwrap();
+    assert!(
+        output.contains("fetch header denied by runtime policy"),
+        "{output}"
+    );
+    assert_eq!(plec_fetch_calls(), 0, "urls: {}", plec_fetch_urls());
+}
+
+#[wasm_bindgen_test(async)]
+async fn granted_fetch_sends_the_header_and_the_host_owned_credentials_mode() {
+    let _location = reset_browser_location();
+    let _fetch = install_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
+    let runtime = PlecRuntime::new();
+    let origin = web_sys::window().unwrap().location().origin().unwrap();
+    runtime
+        .set_fetch_policy(js_from_json(&serde_json::json!([{
+            "origin": origin,
+            "methods": ["GET"],
+            "headers": ["content-type"],
+            "credentials": false
+        }])))
+        .unwrap();
+    let root = mount_root();
+    load_and_mount(&runtime, header_fetch_artifact(), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    assert_eq!(root.text_content().unwrap(), "loaded");
+    assert_eq!(plec_fetch_credentials().as_deref(), Some("omit"));
+}
+
+#[wasm_bindgen_test(async)]
+async fn granted_fetch_credentials_mode_follows_the_grant_not_the_artifact() {
+    let _location = reset_browser_location();
+    let _fetch = install_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
+    let runtime = PlecRuntime::new();
+    let origin = web_sys::window().unwrap().location().origin().unwrap();
+    runtime
+        .set_fetch_policy(js_from_json(&serde_json::json!([{
+            "origin": origin,
+            "methods": ["GET"],
+            "credentials": true
+        }])))
+        .unwrap();
+    let root = mount_root();
+    load_and_mount(&runtime, fetch_artifact("text", true, false), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    assert_eq!(root.text_content().unwrap(), "loadedinner");
+    assert_eq!(plec_fetch_credentials().as_deref(), Some("include"));
+}
+
+#[wasm_bindgen_test(async)]
+async fn cookie_request_is_denied_without_a_host_policy_entry() {
+    let _location = reset_browser_location();
+    set_session_cookie("secret");
+    let runtime = PlecRuntime::new();
+    clear_cookie_policy(&runtime);
+    let root = mount_root();
+    load_and_mount(&runtime, cookie_get_artifact(), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    let output = root.text_content().unwrap();
+    // The artifact declared the cookie capability and its request matches it
+    // exactly; the denial proves the declaration grants nothing.
+    assert!(output.contains("\"kind\":\"cookie\""), "{output}");
+    assert!(
+        output.contains("cookie name denied by runtime policy"),
+        "{output}"
+    );
+    assert_eq!(plec_fetch_calls(), 0, "urls: {}", plec_fetch_urls());
+}
+
+#[wasm_bindgen_test(async)]
+async fn cookie_request_is_denied_when_the_policy_grants_a_different_name() {
+    let _location = reset_browser_location();
+    set_session_cookie("secret");
+    let runtime = PlecRuntime::new();
+    runtime
+        .set_cookie_policy(js_from_json(&serde_json::json!({
+            "other": {"operations": ["get"]}
+        })))
+        .unwrap();
+    let root = mount_root();
+    load_and_mount(&runtime, cookie_get_artifact(), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    let output = root.text_content().unwrap();
+    assert!(
+        output.contains("cookie name denied by runtime policy"),
+        "{output}"
+    );
+}
+
+#[wasm_bindgen_test(async)]
+async fn host_policy_grant_allows_the_declared_cookie_request() {
+    let _location = reset_browser_location();
+    set_session_cookie("secret");
+    let runtime = PlecRuntime::new();
+    runtime
+        .set_cookie_policy(js_from_json(&serde_json::json!({
+            "session": {"operations": ["get"]}
+        })))
+        .unwrap();
+    let root = mount_root();
+    load_and_mount(&runtime, cookie_get_artifact(), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    assert_eq!(root.text_content().unwrap(), "secret");
+    set_session_cookie("");
+}
+
+#[wasm_bindgen_test]
+fn sync_cookie_read_is_denied_without_a_host_policy_entry() {
+    set_session_cookie("secret");
+    let runtime = PlecRuntime::new();
+    clear_cookie_policy(&runtime);
+    let root = mount_root();
+    load_and_mount(&runtime, sync_cookie_artifact(), &root);
+    // Denial never surfaces the cookie value: the slot resolves to null,
+    // which the text sink renders as empty.
+    assert_eq!(root.text_content().unwrap(), "");
+    set_session_cookie("");
+}
+
+#[wasm_bindgen_test]
+fn sync_cookie_read_is_denied_when_the_policy_omits_get_sync() {
+    set_session_cookie("secret");
+    let runtime = PlecRuntime::new();
+    runtime
+        .set_cookie_policy(js_from_json(&serde_json::json!({
+            "session": {"operations": ["get"]}
+        })))
+        .unwrap();
+    let root = mount_root();
+    load_and_mount(&runtime, sync_cookie_artifact(), &root);
+    assert_eq!(root.text_content().unwrap(), "");
+    set_session_cookie("");
+}
+
+#[wasm_bindgen_test]
+fn sync_cookie_read_succeeds_only_with_an_explicit_get_sync_grant() {
+    set_session_cookie("secret");
+    let runtime = PlecRuntime::new();
+    runtime
+        .set_cookie_policy(js_from_json(&serde_json::json!({
+            "session": {"operations": ["getSync"]}
+        })))
+        .unwrap();
+    let root = mount_root();
+    load_and_mount(&runtime, sync_cookie_artifact(), &root);
+    assert_eq!(root.text_content().unwrap(), "secret");
+    set_session_cookie("");
+}
+
 #[wasm_bindgen_test(async)]
 async fn remount_and_typed_route_replacement_abort_stale_fetches() {
     let _location = reset_browser_location();
     let fetch = install_plec_fetch_queue(r#"[{"pending":true}]"#);
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, fetch_artifact("text", true, false), &root);
     click_fetch(&root);
@@ -1912,6 +2376,7 @@ async fn remount_and_typed_route_replacement_abort_stale_fetches() {
 
     let _fetch = install_plec_fetch_queue(r#"[{"pending":true}]"#);
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     let mut route_root = fetch_artifact("text", true, false);
     route_root["routeOutlets"] = serde_json::json!([{"id":"main","node":0}]);
@@ -1957,6 +2422,7 @@ async fn remount_and_typed_route_replacement_abort_stale_fetches() {
 fn navigation_refreshes_location_props_in_child_components() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     runtime
         .register_graph(
@@ -2014,6 +2480,7 @@ fn router_release_manifest() -> JsValue {
 fn alive_router_anchor_click_navigates() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     let _attached = AttachedRootGuard::attach(&root);
     runtime
@@ -2046,6 +2513,7 @@ fn released_router_leaves_anchor_click_and_popstate_inert() {
     let manifest = router_release_manifest();
     {
         let runtime = PlecRuntime::new();
+        grant_fetch_policy(&runtime);
         let root = mount_root();
         let _attached = AttachedRootGuard::attach(&root);
         runtime
@@ -2082,6 +2550,7 @@ fn released_router_leaves_anchor_click_and_popstate_inert() {
 fn disposed_router_ignores_anchor_click_and_popstate() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     let _attached = AttachedRootGuard::attach(&root);
     runtime
@@ -2111,6 +2580,7 @@ async fn typed_route_loader_writes_its_declared_result_state() {
     let _location = reset_browser_location();
     let _fetch = install_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     let mut route = fetch_artifact("text", true, false);
     route["routeOutlets"] = serde_json::json!([{"id":"main","node":0}]);
@@ -2155,6 +2625,7 @@ async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
     let _location = reset_browser_location();
     let fetch = install_plec_fetch_queue(r#"[{"body":"loaded"}]"#);
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     let route = rust_route_async_artifact();
     runtime
@@ -2185,6 +2656,7 @@ async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
 
     let fetch = install_plec_fetch_queue(r#"[{"status":500,"statusText":"Failed","body":"nope"}]"#);
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     let route = rust_route_async_artifact();
     runtime
@@ -2220,6 +2692,7 @@ async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
 
     let _fetch = install_plec_fetch_queue(r#"[{"pending":true}]"#);
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     let route = rust_route_async_artifact();
     runtime
@@ -2267,6 +2740,7 @@ async fn typed_route_error_receives_fetch_failure_and_retry_reloads() {
         r#"[{"status":418,"statusText":"Teapot","body":"short and stout"},{"body":"loaded"}]"#,
     );
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     let mut route = fetch_artifact("text", true, false);
     route["routeOutlets"] = serde_json::json!([{"id":"main","node":0}]);
@@ -2365,6 +2839,7 @@ fn start_adopt_fixture(runtime: &PlecRuntime, root: &Element, html: &str) -> Res
 #[wasm_bindgen_test]
 fn csr_mount_emits_canonical_structural_addresses() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, rust_nested_component_artifact(), &root);
 
@@ -2447,6 +2922,7 @@ fn collect_comment_markers(root: &Element) -> Vec<String> {
 #[wasm_bindgen_test]
 fn csr_loop_rows_carry_canonical_boundaries_and_delta_rows_match() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, keyed_row_artifact(), &root);
     initialize_rows(
@@ -2519,6 +2995,7 @@ fn csr_loop_rows_carry_canonical_boundaries_and_delta_rows_match() {
 #[wasm_bindgen_test]
 fn adoption_fails_closed_after_csr_materialization() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     // Materialize CSR DOM first (mount + user interaction).
     load_and_mount(&runtime, rust_nested_component_artifact(), &root);
@@ -2590,6 +3067,7 @@ fn adoption_fails_closed_after_csr_materialization() {
 #[wasm_bindgen_test]
 fn adopted_nested_components_claim_scoped_indexes_and_stay_live() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_adopt_fixture(&runtime, &root, &nested_adoption_html(false)).unwrap();
 
@@ -2646,6 +3124,7 @@ fn adopted_nested_components_claim_scoped_indexes_and_stay_live() {
 #[wasm_bindgen_test]
 fn adopted_replay_rejects_duplicate_root_instance_and_keeps_original_live() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_adopt_fixture(&runtime, &root, &nested_adoption_html(false)).unwrap();
 
@@ -2691,6 +3170,7 @@ fn adopted_replay_rejects_duplicate_root_instance_and_keeps_original_live() {
 #[wasm_bindgen_test]
 fn adopted_duplicate_marker_fails_instead_of_silently_claiming() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let error =
         start_adopt_fixture(&runtime, &mount_root(), &nested_adoption_html(true)).unwrap_err();
     let message = error.as_string().unwrap_or_default();
@@ -2772,6 +3252,7 @@ fn empty_text_sentinel_synthesizes_the_text_node_and_binding_writes_target_it() 
         "<!--plec:text:root/component:1/component:1:4--><!---->",
     );
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_adopt_fixture(&runtime, &root, &html).unwrap();
     let button = root.query_selector("div button").unwrap().unwrap();
@@ -2970,6 +3451,7 @@ fn snapshot_root_text(root: &Element) -> String {
 fn snapshot_import_seeds_public_exports_before_adoption() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_snapshot_fixture(
         &runtime,
@@ -2988,6 +3470,7 @@ fn snapshot_import_seeds_public_exports_before_adoption() {
 fn snapshot_binding_divergence_is_allowed_and_reported() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_snapshot_fixture(
         &runtime,
@@ -3025,6 +3508,7 @@ fn snapshot_payload_and_structure_failures_fail_closed() {
     let _location = reset_browser_location();
     // Unparseable payload: a bare string cannot decode as a snapshot.
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     root.set_inner_html("<main data-plec-node=\"root/node:0\"></main>");
     runtime
@@ -3071,6 +3555,7 @@ fn snapshot_location_mismatch_fails_closed() {
 fn snapshot_param_route_chain_adopts_with_imported_params() {
     let _location = reset_browser_location_to("/projects/p1");
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     let snapshot = snapshot_chain_fixture(
         "rev-1",
@@ -3148,6 +3633,7 @@ fn snapshot_non_active_phase_fails_closed() {
 fn abandon_adoption_purges_seeded_host_inputs() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_snapshot_fixture(
         &runtime,
@@ -3309,6 +3795,7 @@ fn conditional_toggle(root: &Element) -> web_sys::EventTarget {
 fn ssr_conditional_adopts_recorded_branch_and_flips_through_reconcile() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_conditional_fixture(
         &runtime,
@@ -3357,6 +3844,7 @@ fn ssr_conditional_adopts_recorded_branch_and_flips_through_reconcile() {
 fn ssr_conditional_divergence_keeps_recorded_side_until_first_reconcile() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     // The record claims the consequent while the recomputed initial test
     // value (false) selects the alternate: adoption proceeds, the recorded
@@ -3469,6 +3957,7 @@ fn ssr_conditional_side_disagreement_fails_closed() {
 fn ssr_conditional_none_branch_adopts_empty_region_and_flips() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_conditional_fixture(
         &runtime,
@@ -3661,6 +4150,7 @@ fn loop_row<'a>(root: &Element, key: &str) -> web_sys::Element {
 fn ssr_keyed_loop_adopts_server_rows_and_keeps_row_actions_live() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     let rows = loop_rows_json(&[("one", "One"), ("two", "Two")]);
     start_loop_fixture(
@@ -3835,6 +4325,7 @@ fn row_text_empty_sentinel_synthesizes_the_row_text_node() {
         "<!--plec:text:root/outlet:main/loop:2/key:one:4--><!---->",
     );
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_loop_fixture(
         &runtime,
@@ -3900,7 +4391,7 @@ fn nested_state_route_artifact(with_loop: bool) -> serde_json::Value {
         "constants": [""],
         "nodes": [
             {"op": "element", "tag": 0, "parent": null, "children": [1, 4]},
-            {"op": "conditional", "test": 3, "parent": 0, "consequent": 2, "alternate": 3},
+            {"op": "conditional", "test": 1, "parent": 0, "consequent": 2, "alternate": 3},
             {"op": "element", "tag": 1, "parent": 0, "children": []},
             {"op": "element", "tag": 2, "parent": 0, "children": []},
             {"op": "element", "tag": 3, "parent": 0, "children": []}
@@ -4109,6 +4600,7 @@ fn nested_panel_toggle(root: &Element) -> web_sys::EventTarget {
 fn nested_component_conditional_adopts_recorded_branch() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_nested_state_fixture(
         &runtime,
@@ -4201,6 +4693,7 @@ fn nested_component_branch_record_contradicting_dom_fails_closed() {
 fn nested_component_loop_adopts_recorded_rows_without_remount() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_nested_state_fixture(
         &runtime,
@@ -4434,6 +4927,7 @@ fn start_collection_loop_fixture(runtime: &PlecRuntime, root: &Element) -> Resul
 fn ssr_collection_loop_adopts_empty_and_receives_rows_through_deltas() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_collection_loop_fixture(&runtime, &root).unwrap();
     assert!(root.query_selector("li").unwrap().is_none());
@@ -4670,6 +5164,7 @@ fn graph_toggle_button(root: &Element) -> web_sys::EventTarget {
 fn ssr_row_conditional_adopts_region_and_flips_through_reconcile() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     // Toggle state starts true, so the server rendered the consequent
     // button inside every row's conditional region.
@@ -4832,6 +5327,7 @@ fn component_row_server_dom() -> String {
 fn ssr_component_row_template_keeps_server_content_and_props() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     root.set_inner_html(&format!(
         "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
@@ -5154,6 +5650,7 @@ fn loader_snapshot_import_resumes_without_client_refetch() {
     // the imported value rendering proves the loader never re-ran.
     let _fetch = install_plec_fetch_queue(r#"[]"#);
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_loader_transfer(
         &runtime,
@@ -5192,6 +5689,7 @@ fn loader_snapshot_import_without_outcome_fails_closed() {
 fn loader_adoption_without_snapshot_fails_closed() {
     let _location = reset_browser_location_to("/todos");
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     root.set_inner_html(&loader_route_html("x"));
     register_loader_graphs(&runtime);
@@ -5212,6 +5710,7 @@ fn loader_adoption_without_snapshot_fails_closed() {
 async fn rejected_loader_snapshot_restores_error_phase_and_retry_runs_loader() {
     let _location = reset_browser_location_to("/todos");
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_loader_transfer(
         &runtime,
@@ -5240,6 +5739,7 @@ async fn rejected_loader_snapshot_restores_error_phase_and_retry_runs_loader() {
 async fn adopted_loader_route_runs_loader_on_fresh_navigation() {
     let _location = reset_browser_location_to("/todos");
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     start_loader_transfer(
         &runtime,
@@ -5312,6 +5812,7 @@ fn metrics_number(metrics: &serde_json::Value, key: &str) -> u32 {
 fn keyed_reorder_noop_reconcile_performs_zero_dom_operations() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, keyed_row_artifact(), &root);
     initialize_rows_with_metrics(
@@ -5346,6 +5847,7 @@ fn keyed_reorder_noop_reconcile_performs_zero_dom_operations() {
 fn keyed_reorder_adjacent_swap_relocates_one_range_with_honest_accounting() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, keyed_row_artifact(), &root);
     initialize_rows_with_metrics(
@@ -5381,6 +5883,7 @@ fn keyed_reorder_adjacent_swap_relocates_one_range_with_honest_accounting() {
 fn keyed_reorder_single_move_in_large_list_is_constant_cost() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, keyed_row_artifact(), &root);
     initialize_rows_with_metrics(
@@ -5422,6 +5925,7 @@ fn keyed_reorder_single_move_in_large_list_is_constant_cost() {
 fn keyed_reorder_reversal_moves_each_non_lis_row_once() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, keyed_row_artifact(), &root);
     initialize_rows_with_metrics(
@@ -5441,6 +5945,7 @@ fn keyed_reorder_reversal_moves_each_non_lis_row_once() {
 fn keyed_reorder_mixed_insert_remove_move_preserves_identity_and_actions() {
     let _location = reset_browser_location();
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, keyed_row_artifact(), &root);
     initialize_rows_with_metrics(
@@ -5514,6 +6019,7 @@ fn hostile_sink_application() -> serde_json::Value {
 #[wasm_bindgen_test]
 fn load_application_rejects_crafted_hostile_binding_sinks() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let hostile = hostile_sink_application();
     let error = runtime
         .load_application(serde_wasm_bindgen::to_value(&component_application(&hostile)).unwrap())
@@ -5576,6 +6082,7 @@ fn load_application_rejects_crafted_hostile_binding_sinks() {
 #[wasm_bindgen_test]
 fn hostile_spread_keys_never_reach_the_dom() {
     let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
     let root = mount_root();
     let artifact = serde_json::json!({
         "rootNode": 0,

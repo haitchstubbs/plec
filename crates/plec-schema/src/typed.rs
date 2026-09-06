@@ -99,7 +99,10 @@ impl plec_ir::SsrStructureGraph for TypedApplication {
 
 impl TypedComponentApplication {
     pub fn validate(&self) -> Result<(), JsValue> {
-        use crate::limits::MAX_COMPONENT_COUNT;
+        use crate::limits::{
+            MAX_COMPONENT_COUNT, MAX_TOTAL_CONSTANT_NODES, MAX_TOTAL_INSTRUCTIONS,
+            MAX_TOTAL_IR_ENTRIES, MAX_TOTAL_STRING_POOL_BYTES,
+        };
         if self.version != "0.10"
             || self.root_component >= self.components.len()
             || self.components.len() > MAX_COMPONENT_COUNT
@@ -208,8 +211,102 @@ impl TypedComponentApplication {
                 }
             }
         }
+        let mut total_entries = 0usize;
+        let mut total_instructions = 0usize;
+        let mut total_string_bytes = 0usize;
+        let mut total_constant_nodes = 0usize;
+        for component in &self.components {
+            total_entries = total_entries
+                .checked_add(component_ir_entries(component))
+                .ok_or_else(|| JsValue::from_str("application IR entry count overflow"))?;
+            total_instructions = total_instructions
+                .checked_add(
+                    component
+                        .expressions
+                        .iter()
+                        .map(|program| program.instructions.len())
+                        .sum::<usize>(),
+                )
+                .and_then(|total| {
+                    total.checked_add(
+                        component
+                            .actions
+                            .iter()
+                            .map(|action| action.instructions.len())
+                            .sum::<usize>(),
+                    )
+                })
+                .ok_or_else(|| JsValue::from_str("application instruction count overflow"))?;
+            total_string_bytes = total_string_bytes
+                .checked_add(component.strings.iter().map(String::len).sum::<usize>())
+                .ok_or_else(|| JsValue::from_str("application string-pool bytes overflow"))?;
+            total_constant_nodes = total_constant_nodes
+                .checked_add(
+                    component
+                        .constants
+                        .iter()
+                        .map(runtime_value_nodes)
+                        .sum::<usize>(),
+                )
+                .ok_or_else(|| JsValue::from_str("application constant node count overflow"))?;
+        }
+        if total_entries > MAX_TOTAL_IR_ENTRIES {
+            return Err(JsValue::from_str("application IR entries exceed limit"));
+        }
+        if total_instructions > MAX_TOTAL_INSTRUCTIONS {
+            return Err(JsValue::from_str("application instructions exceed limit"));
+        }
+        if total_string_bytes > MAX_TOTAL_STRING_POOL_BYTES {
+            return Err(JsValue::from_str(
+                "application string-pool bytes exceed limit",
+            ));
+        }
+        if total_constant_nodes > MAX_TOTAL_CONSTANT_NODES {
+            return Err(JsValue::from_str("application constant nodes exceed limit"));
+        }
         Ok(())
     }
+}
+
+fn component_ir_entries(component: &TypedApplication) -> usize {
+    component.strings.len()
+        + component.constants.len()
+        + component.nodes.len()
+        + component.texts.len()
+        + component.bindings.len()
+        + component.prop_programs.len()
+        + component.events.len()
+        + component.inputs.len()
+        + component.state_slots.len()
+        + component.ref_slots.len()
+        + component.host_refs.len()
+        + component.reactions.len()
+        + component.listeners.len()
+        + component.parameters.len()
+        + component.expressions.len()
+        + component.actions.len()
+        + component.loops.len()
+        + component.dependency_edges.len()
+        + component.route_outlets.len()
+        + component.host_slots.len()
+        + component.capabilities.len()
+}
+
+fn runtime_value_nodes(value: &RuntimeValue) -> usize {
+    let mut nodes = 0usize;
+    let mut stack = vec![value];
+    while let Some(value) = stack.pop() {
+        nodes += 1;
+        match value {
+            RuntimeValue::Array(values) => stack.extend(values),
+            RuntimeValue::Record(values) => stack.extend(values.values()),
+            RuntimeValue::Null
+            | RuntimeValue::Bool(_)
+            | RuntimeValue::Number(_)
+            | RuntimeValue::String(_) => {}
+        }
+    }
+    nodes
 }
 
 fn validate_component_slot_target(
@@ -866,43 +963,207 @@ fn supported_event_field(name: &str) -> bool {
 }
 
 fn subtree_contains(nodes: &[TypedNode], root: usize, target: usize) -> bool {
+    // Iterative and visited-guarded on both walks: this helper runs during
+    // validation, before topology has proven the graph acyclic, so neither
+    // the child descent nor the parent walk may recurse unbounded.
     if root == target {
         return true;
     }
-    (match nodes.get(root) {
-        Some(TypedNode::Element { children, .. }) => children
-            .iter()
-            .any(|child| subtree_contains(nodes, *child, target)),
-        Some(TypedNode::Conditional {
-            consequent,
-            alternate,
-            ..
-        }) => {
-            subtree_contains(nodes, *consequent, target)
-                || alternate
-                    .map(|child| subtree_contains(nodes, child, target))
-                    .unwrap_or(false)
+    let mut descendants = Vec::new();
+    let mut seen = HashSet::new();
+    seen.insert(root);
+    descendants.push(root);
+    while let Some(index) = descendants.pop() {
+        match nodes.get(index) {
+            Some(TypedNode::Element { children, .. })
+            | Some(TypedNode::Component { children, .. }) => {
+                for child in children {
+                    if *child == target {
+                        return true;
+                    }
+                    if seen.insert(*child) {
+                        descendants.push(*child);
+                    }
+                }
+            }
+            Some(TypedNode::Conditional {
+                consequent,
+                alternate,
+                ..
+            }) => {
+                for branch in [Some(*consequent), *alternate] {
+                    let Some(branch) = branch else { continue };
+                    if branch == target {
+                        return true;
+                    }
+                    if seen.insert(branch) {
+                        descendants.push(branch);
+                    }
+                }
+            }
+            _ => {}
         }
-        Some(TypedNode::Component { children, .. }) => children
-            .iter()
-            .any(|child| subtree_contains(nodes, *child, target)),
-        _ => false,
-    }) || matches!(
-        nodes.get(target),
-        Some(TypedNode::Element { parent: Some(parent), .. }
-          | TypedNode::Text { parent: Some(parent), .. }
-          | TypedNode::Conditional { parent: Some(parent), .. }
-          | TypedNode::Loop { parent: Some(parent), .. }
-          | TypedNode::Component { parent: Some(parent), .. }
-          | TypedNode::Slot { parent: Some(parent) })
-          if subtree_contains(nodes, root, *parent)
-    )
+    }
+    let mut ancestors = Vec::new();
+    let mut seen_ancestors = HashSet::new();
+    seen_ancestors.insert(target);
+    ancestors.push(target);
+    while let Some(index) = ancestors.pop() {
+        let parent = match nodes.get(index) {
+            Some(TypedNode::Element { parent: Some(parent), .. }
+              | TypedNode::Text { parent: Some(parent), .. }
+              | TypedNode::Conditional { parent: Some(parent), .. }
+              | TypedNode::Loop { parent: Some(parent), .. }
+              | TypedNode::Component { parent: Some(parent), .. }
+              | TypedNode::Slot { parent: Some(parent) }) => *parent,
+            _ => continue,
+        };
+        if parent == root {
+            return true;
+        }
+        if seen_ancestors.insert(parent) {
+            ancestors.push(parent);
+        }
+    }
+    false
+}
+
+/// A revisit while walking ownership edges is either a cycle or two parents
+/// claiming one node; both break mount/adoption ownership invariants.
+fn mark_owned_node(
+    owned: &mut [bool],
+    stack: &mut Vec<usize>,
+    index: usize,
+) -> Result<(), &'static str> {
+    if owned[index] {
+        return Err("node ownership is cyclic or shared");
+    }
+    owned[index] = true;
+    stack.push(index);
+    Ok(())
 }
 
 impl TypedApplication {
     /// Validates untrusted executable IR before it reaches the typed runtime.
     pub fn validate(&self) -> Result<(), JsValue> {
         self.validate_contract().map_err(JsValue::from_str)
+    }
+
+    /// Node-ownership contract for untrusted graphs: every structural handle
+    /// is in range, ownership edges form a forest rooted at the graph root
+    /// and loop row templates (acyclic, no node claimed twice), and every
+    /// node is reachable. Mount recursion, region ownership, and SSR
+    /// adoption all assume this shape, so hostile graphs are rejected here
+    /// before any execution or traversal can follow them.
+    fn validate_topology(&self) -> Result<(), &'static str> {
+        let node_count = self.nodes.len();
+        let parent_in_range =
+            |parent: &Option<usize>| parent.map(|parent| parent < node_count).unwrap_or(true);
+        for node in &self.nodes {
+            match node {
+                TypedNode::Element {
+                    tag,
+                    parent,
+                    children,
+                    ..
+                } => {
+                    if *tag >= self.strings.len() {
+                        return Err("element tag handle out of range");
+                    }
+                    if children.iter().any(|child| *child >= node_count) {
+                        return Err("element child handle out of range");
+                    }
+                    if !parent_in_range(parent) {
+                        return Err("node parent handle out of range");
+                    }
+                }
+                TypedNode::Text { text, parent } => {
+                    if *text >= self.texts.len() {
+                        return Err("text handle out of range");
+                    }
+                    if !parent_in_range(parent) {
+                        return Err("node parent handle out of range");
+                    }
+                }
+                TypedNode::Conditional {
+                    test,
+                    parent,
+                    consequent,
+                    alternate,
+                } => {
+                    if *test >= self.expressions.len() {
+                        return Err("conditional test expression handle out of range");
+                    }
+                    if *consequent >= node_count
+                        || alternate.map(|branch| branch >= node_count).unwrap_or(false)
+                    {
+                        return Err("conditional branch handle out of range");
+                    }
+                    if !parent_in_range(parent) {
+                        return Err("node parent handle out of range");
+                    }
+                }
+                TypedNode::Loop { r#loop, parent } => {
+                    if *r#loop >= self.loops.len() {
+                        return Err("loop handle out of range");
+                    }
+                    if !parent_in_range(parent) {
+                        return Err("node parent handle out of range");
+                    }
+                }
+                TypedNode::Component { parent, children, .. }
+                | TypedNode::DynamicComponent { parent, children, .. } => {
+                    if children.iter().any(|child| *child >= node_count) {
+                        return Err("component child handle out of range");
+                    }
+                    if !parent_in_range(parent) {
+                        return Err("node parent handle out of range");
+                    }
+                }
+                TypedNode::Slot { parent } => {
+                    if !parent_in_range(parent) {
+                        return Err("node parent handle out of range");
+                    }
+                }
+            }
+        }
+        for loop_def in &self.loops {
+            if loop_def.row_template >= node_count {
+                return Err("loop row template handle out of range");
+            }
+        }
+        let mut owned = vec![false; node_count];
+        let mut stack = Vec::new();
+        mark_owned_node(&mut owned, &mut stack, self.root_node)?;
+        for loop_def in &self.loops {
+            mark_owned_node(&mut owned, &mut stack, loop_def.row_template)?;
+        }
+        while let Some(index) = stack.pop() {
+            match &self.nodes[index] {
+                TypedNode::Element { children, .. }
+                | TypedNode::Component { children, .. }
+                | TypedNode::DynamicComponent { children, .. } => {
+                    for child in children {
+                        mark_owned_node(&mut owned, &mut stack, *child)?;
+                    }
+                }
+                TypedNode::Conditional {
+                    consequent,
+                    alternate,
+                    ..
+                } => {
+                    mark_owned_node(&mut owned, &mut stack, *consequent)?;
+                    if let Some(alternate) = alternate {
+                        mark_owned_node(&mut owned, &mut stack, *alternate)?;
+                    }
+                }
+                TypedNode::Text { .. } | TypedNode::Loop { .. } | TypedNode::Slot { .. } => {}
+            }
+        }
+        if owned.iter().any(|owned| !owned) {
+            return Err("node graph contains unrooted nodes");
+        }
+        Ok(())
     }
 
     fn validate_contract(&self) -> Result<(), &'static str> {
@@ -965,6 +1226,7 @@ impl TypedApplication {
         if self.root_node >= self.nodes.len() {
             return Err("root node handle out of range");
         }
+        self.validate_topology()?;
         let mut outlets = HashSet::new();
         for outlet in &self.route_outlets {
             if !outlets.insert(&outlet.id)
@@ -1267,6 +1529,28 @@ impl TypedApplication {
             }
         }
         for program in &self.expressions {
+            for instruction in &program.instructions {
+                match instruction {
+                    TypedExpressionInstruction::Jump { target }
+                    | TypedExpressionInstruction::JumpIfFalse { target }
+                    | TypedExpressionInstruction::JumpIfTrue { target }
+                        if *target >= program.instructions.len() =>
+                    {
+                        return Err("expression jump target out of range");
+                    }
+                    TypedExpressionInstruction::Filter { predicate, .. }
+                        if *predicate >= self.expressions.len() =>
+                    {
+                        return Err("expression program handle out of range");
+                    }
+                    TypedExpressionInstruction::Map { mapper, .. }
+                        if *mapper >= self.expressions.len() =>
+                    {
+                        return Err("expression program handle out of range");
+                    }
+                    _ => {}
+                }
+            }
             if program.instructions.iter().any(|instruction| matches!(instruction, TypedExpressionInstruction::LoadHost { host } if *host >= self.host_slots.len())) {
                 return Err("host input handle out of range");
             }
@@ -1828,6 +2112,270 @@ mod tests {
         assert_eq!(
             app.validate_contract(),
             Err("component string pool entry exceeds limit")
+        );
+    }
+
+    #[test]
+    fn component_application_accepts_component_shape_guard_limit() {
+        let app: TypedApplication = serde_json::from_value(serde_json::json!({
+            "version": "0.10",
+            "id": "tiny",
+            "rootNode": 0,
+            "strings": ["div"],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "expressions": [],
+            "actions": []
+        }))
+        .unwrap();
+        let components = (0..crate::limits::MAX_COMPONENT_COUNT)
+            .map(|index| {
+                let mut component = app.clone();
+                component.id = format!("tiny-{index}");
+                component
+            })
+            .collect();
+        assert!(TypedComponentApplication {
+            version: "0.10".into(),
+            root_component: 0,
+            components,
+        }
+        .validate()
+        .is_ok());
+    }
+
+    fn topology_application(nodes: Value, loops: Value) -> TypedApplication {
+        serde_json::from_value(serde_json::json!({
+            "version": "0.10",
+            "rootNode": 0,
+            "strings": ["div", "ul", "li"],
+            "nodes": nodes,
+            "texts": [{"value": "Done"}],
+            "expressions": [{"instructions": []}],
+            "actions": [{"instructions": [{"op": "return"}]}],
+            "loops": loops
+        }))
+        .unwrap()
+    }
+
+    fn rooted_loop_application() -> TypedApplication {
+        // Same shape as compiled output: a static root holding a loop node,
+        // and a row-template subtree rooted separately via the loop def.
+        topology_application(
+            serde_json::json!([
+                {"op": "element", "tag": 0, "parent": null, "children": [3]},
+                {"op": "element", "tag": 1, "parent": null, "children": [2]},
+                {"op": "element", "tag": 2, "parent": 1, "children": []},
+                {"op": "loop", "loop": 0, "parent": 0}
+            ]),
+            serde_json::json!([{
+                "sourceExpression": 0, "keyExpression": 0, "itemSlot": 0,
+                "rowTemplate": 1, "input": null
+            }]),
+        )
+    }
+
+    #[test]
+    fn topology_validation_accepts_rooted_loop_forest() {
+        assert!(rooted_loop_application().validate_contract().is_ok());
+    }
+
+    #[test]
+    fn topology_validation_rejects_self_child_graph() {
+        let app = topology_application(
+            serde_json::json!([
+                {"op": "element", "tag": 0, "parent": null, "children": [0]}
+            ]),
+            serde_json::json!([]),
+        );
+        assert_eq!(
+            app.validate_contract(),
+            Err("node ownership is cyclic or shared")
+        );
+    }
+
+    #[test]
+    fn topology_validation_rejects_two_node_cycle() {
+        let app = topology_application(
+            serde_json::json!([
+                {"op": "element", "tag": 0, "parent": null, "children": [1]},
+                {"op": "element", "tag": 0, "parent": 0, "children": [0]}
+            ]),
+            serde_json::json!([]),
+        );
+        assert_eq!(
+            app.validate_contract(),
+            Err("node ownership is cyclic or shared")
+        );
+    }
+
+    #[test]
+    fn topology_validation_rejects_shared_child() {
+        let app = topology_application(
+            serde_json::json!([
+                {"op": "element", "tag": 0, "parent": null, "children": [1, 2]},
+                {"op": "element", "tag": 0, "parent": 0, "children": [2]},
+                {"op": "element", "tag": 0, "parent": 0, "children": []}
+            ]),
+            serde_json::json!([]),
+        );
+        assert_eq!(
+            app.validate_contract(),
+            Err("node ownership is cyclic or shared")
+        );
+    }
+
+    #[test]
+    fn topology_validation_rejects_unrooted_nodes() {
+        let app = topology_application(
+            serde_json::json!([
+                {"op": "element", "tag": 0, "parent": null, "children": []},
+                {"op": "element", "tag": 0, "parent": null, "children": []}
+            ]),
+            serde_json::json!([]),
+        );
+        assert_eq!(
+            app.validate_contract(),
+            Err("node graph contains unrooted nodes")
+        );
+    }
+
+    #[test]
+    fn topology_validation_rejects_out_of_range_structural_handles() {
+        let element_child = topology_application(
+            serde_json::json!([
+                {"op": "element", "tag": 0, "parent": null, "children": [1]}
+            ]),
+            serde_json::json!([]),
+        );
+        assert_eq!(
+            element_child.validate_contract(),
+            Err("element child handle out of range")
+        );
+
+        let tag = topology_application(
+            serde_json::json!([
+                {"op": "element", "tag": 9, "parent": null, "children": []}
+            ]),
+            serde_json::json!([]),
+        );
+        assert_eq!(tag.validate_contract(), Err("element tag handle out of range"));
+
+        let text = topology_application(
+            serde_json::json!([
+                {"op": "text", "text": 5, "parent": null}
+            ]),
+            serde_json::json!([]),
+        );
+        assert_eq!(text.validate_contract(), Err("text handle out of range"));
+
+        let loop_node = topology_application(
+            serde_json::json!([
+                {"op": "loop", "loop": 7, "parent": null}
+            ]),
+            serde_json::json!([]),
+        );
+        assert_eq!(loop_node.validate_contract(), Err("loop handle out of range"));
+
+        let parent = topology_application(
+            serde_json::json!([
+                {"op": "element", "tag": 0, "parent": 9, "children": []}
+            ]),
+            serde_json::json!([]),
+        );
+        assert_eq!(
+            parent.validate_contract(),
+            Err("node parent handle out of range")
+        );
+
+        let branch = topology_application(
+            serde_json::json!([
+                {"op": "conditional", "test": 0, "parent": null, "consequent": 9, "alternate": null}
+            ]),
+            serde_json::json!([]),
+        );
+        assert_eq!(
+            branch.validate_contract(),
+            Err("conditional branch handle out of range")
+        );
+
+        let test_expression = topology_application(
+            serde_json::json!([
+                {"op": "conditional", "test": 9, "parent": null, "consequent": 0, "alternate": null}
+            ]),
+            serde_json::json!([]),
+        );
+        assert_eq!(
+            test_expression.validate_contract(),
+            Err("conditional test expression handle out of range")
+        );
+
+        let row_template: TypedApplication = serde_json::from_value(serde_json::json!({
+            "version": "0.10",
+            "rootNode": 0,
+            "strings": ["div"],
+            "nodes": [{"op": "element", "tag": 0, "parent": null, "children": []}],
+            "expressions": [{"instructions": []}],
+            "actions": [],
+            "loops": [{
+                "sourceExpression": 0, "keyExpression": 0, "itemSlot": 0,
+                "rowTemplate": 9, "input": null
+            }]
+        }))
+        .unwrap();
+        assert_eq!(
+            row_template.validate_contract(),
+            Err("loop row template handle out of range")
+        );
+    }
+
+    fn expression_application(instructions: Value) -> TypedApplication {
+        serde_json::from_value(serde_json::json!({
+            "version": "0.10",
+            "rootNode": 0,
+            "strings": ["div"],
+            "nodes": [{"op": "element", "tag": 0, "parent": null, "children": []}],
+            "expressions": [{"instructions": instructions}],
+            "actions": []
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn expression_validation_rejects_out_of_range_jump_targets() {
+        for op in ["jump", "jumpIfFalse", "jumpIfTrue"] {
+            let app = expression_application(serde_json::json!([
+                {"op": op, "target": 5},
+                {"op": "return"}
+            ]));
+            assert_eq!(
+                app.validate_contract(),
+                Err("expression jump target out of range"),
+                "{op}"
+            );
+        }
+        // In-range forward jumps stay supported.
+        let app = expression_application(serde_json::json!([
+            {"op": "jumpIfFalse", "target": 1},
+            {"op": "return"}
+        ]));
+        assert!(app.validate_contract().is_ok());
+    }
+
+    #[test]
+    fn expression_validation_rejects_out_of_range_predicate_and_mapper_handles() {
+        let filter = expression_application(serde_json::json!([
+            {"op": "filter", "predicate": 9, "itemSlot": 0}
+        ]));
+        assert_eq!(
+            filter.validate_contract(),
+            Err("expression program handle out of range")
+        );
+        let map = expression_application(serde_json::json!([
+            {"op": "map", "mapper": 9, "itemSlot": 0}
+        ]));
+        assert_eq!(
+            map.validate_contract(),
+            Err("expression program handle out of range")
         );
     }
 }

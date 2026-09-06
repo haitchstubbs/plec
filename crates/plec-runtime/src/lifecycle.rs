@@ -57,8 +57,11 @@ impl PlecRuntime {
             let application: TypedComponentApplication =
                 serde_json::from_value(value).map_err(error)?;
             application.validate()?;
-            let mut typed =
-                TypedRuntime::new(application.components[application.root_component].clone())?;
+            let mut typed = TypedRuntime::new_with_runtime_limits(
+                application.components[application.root_component].clone(),
+                self.state.region_tracker.clone(),
+                self.state.reconcile_budget.clone(),
+            )?;
             typed.set_component_definitions(application.components.clone());
             typed.set_host_inputs(self.state.typed_host_inputs.borrow().clone())?;
             typed.graph_generation = self.state.next_typed_generation();
@@ -580,5 +583,9 @@ impl PlecRuntime {
 
     pub fn set_cookie_policy(&self, policy: JsValue) -> Result<(), JsValue> {
         self.state.set_cookie_policy(policy)
+    }
+
+    pub fn set_fetch_policy(&self, policy: JsValue) -> Result<(), JsValue> {
+        self.state.set_fetch_policy(policy)
     }
 }

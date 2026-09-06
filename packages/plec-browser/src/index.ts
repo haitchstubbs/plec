@@ -133,6 +133,7 @@ interface WasmRuntimeInstance {
   set_cookie_policy(
     policy: PlecRouterMountOptions['cookiePolicy'] | null,
   ): void;
+  set_fetch_policy(policy: PlecFetchPolicyGrant[] | null): void;
   initialize_input(inputId: string, rows: unknown): RuntimeMountMetrics;
   apply_delta(delta: unknown): CompiledUpdateMetrics;
   apply_deltas(deltas: unknown): CompiledUpdateMetrics;
@@ -171,12 +172,29 @@ export interface PlecRouterMountOptions {
       path?: string;
     }
   >;
+  /**
+   * Host-owned fetch grants. Default-deny: without a grant matching the
+   * request origin, method, and headers, the runtime rejects the fetch.
+   * Artifact-declared fetch capability requests never widen this surface.
+   * `credentials` controls the credentials mode; the artifact cannot.
+   */
+  fetchPolicy?: PlecFetchPolicyGrant[];
   /** Host-owned reactive inputs for routed compiled graphs. */
   inputs?: Record<string, CompiledInputProducer<any>>;
   onQueryUpdate?: (update: CompiledQueryUpdate) => void;
   /** Development/test visibility for SSR adoption decisions. Production hosts
    * may omit this and transparently take the normal mount path. */
   onAdoptionDiagnostic?: (diagnostic: PlecAdoptionDiagnostic) => void;
+}
+export interface PlecFetchPolicyGrant {
+  /** Exact serialized origin the grant applies to (`https://api.example.com`). */
+  origin: string;
+  /** Allowed request methods; an empty list grants none. */
+  methods?: string[];
+  /** Allowed request header names (case-insensitive); an empty list grants none. */
+  headers?: string[];
+  /** Whether requests under this grant may carry credentials. */
+  credentials?: boolean;
 }
 export interface PlecAdoptionDiagnostic {
   outcome: 'adopted' | 'fallback';
@@ -317,6 +335,7 @@ export async function startPlecRouter(
   });
   const runtime = new runtimeModule.PlecRuntime();
   runtime.set_cookie_policy(options.cookiePolicy ?? null);
+  runtime.set_fetch_policy(options.fetchPolicy ?? null);
   const routedInputs = options.inputs ?? {};
   const hostInputs: Record<string, unknown> = {
     'location.pathname': window.location.pathname,

@@ -14,8 +14,10 @@ fetch = [
   "web-sys/AbortSignal",
   "web-sys/Headers",
   "web-sys/Request",
+  "web-sys/RequestCredentials",
   "web-sys/RequestInit",
   "web-sys/Response",
+  "web-sys/Url",
 ]
 
 [dependencies]

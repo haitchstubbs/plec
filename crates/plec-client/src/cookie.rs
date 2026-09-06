@@ -67,11 +67,19 @@ impl RuntimeState {
         request: &TypedCookieRequest,
         value: Option<&str>,
     ) -> Result<RuntimeValue, RuntimeValue> {
-        if let Some(policy) = self
-            .cookie_policy
-            .borrow()
-            .as_ref()
-            .and_then(|entries| entries.get(name))
+        // Default-deny: the host-owned policy is the only grant source. A
+        // missing policy or a missing entry for this name denies the
+        // operation even when the artifact declares a matching capability.
+        let policy = {
+            let entries = self.cookie_policy.borrow();
+            entries
+                .as_ref()
+                .and_then(|entries| entries.get(name))
+                .cloned()
+        };
+        let Some(policy) = policy else {
+            return Err(cookie_error("cookie name denied by runtime policy"));
+        };
         {
             if !policy
                 .operations
@@ -204,7 +212,7 @@ impl RuntimeState {
             let mut more = runtime.take_pending_cookies();
             if more.is_empty() {
                 if let Some(finally_pc) = pending.finally_pc {
-                    runtime.execute_action_at(
+                    runtime.execute_action_at_with_fetch_accounting(
                         continuation.current.action,
                         finally_pc,
                         continuation.current.frame,
@@ -212,6 +220,7 @@ impl RuntimeState {
                         continuation.current.row,
                         None,
                         &mut UpdateMetrics::default(),
+                        continuation.fetch_accounting.clone(),
                     )?;
                     more.extend(runtime.take_pending_cookies());
                 }

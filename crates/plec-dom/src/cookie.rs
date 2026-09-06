@@ -31,18 +31,21 @@ pub fn set_active_cookie_policy(policy: Option<HashMap<String, CookiePolicy>>) {
 }
 
 pub fn read_sync_cookie(name: &str) -> Result<RuntimeValue, JsValue> {
+    // Default-deny: only a host-published policy entry that explicitly lists
+    // `getSync` grants a synchronous read. An absent policy, a missing entry,
+    // or an unlisted operation all deny; artifact-declared capabilities never
+    // grant authority on their own.
     let allowed = ACTIVE_COOKIE_POLICY.with(|policy| {
         policy
             .borrow()
             .as_ref()
             .and_then(|entries| entries.get(name))
-            .map(|entry| {
+            .is_some_and(|entry| {
                 entry
                     .operations
                     .iter()
                     .any(|operation| operation == "getSync")
             })
-            .unwrap_or(true)
     });
     if !allowed {
         return Err(JsValue::from_str(
