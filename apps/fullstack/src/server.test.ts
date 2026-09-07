@@ -100,6 +100,8 @@ describe('Plec application server', () => {
       pid: expect.any(Number),
       rssBytes: expect.any(Number),
       heapUsedBytes: expect.any(Number),
+      externalBytes: expect.any(Number),
+      arrayBuffersBytes: expect.any(Number),
       heapLimitBytes: expect.any(Number),
       activeResources: expect.any(Array),
     });

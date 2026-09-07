@@ -233,7 +233,10 @@ fn snapshot_input_node_budget_is_enforced() {
     // envelope, so the structural node budget is what rejects this payload.
     let payload = format!(
         "[{}]",
-        (0..MAX_VALUE_NODES).map(|_| "0").collect::<Vec<_>>().join(",")
+        (0..MAX_VALUE_NODES)
+            .map(|_| "0")
+            .collect::<Vec<_>>()
+            .join(",")
     );
     let error = runtime
         .initialize_snapshot_input("value".into(), js_from_json(&payload), scalar_shape())
@@ -288,11 +291,7 @@ fn failed_snapshot_apply_preserves_previous_projection() {
     let runtime = PlecRuntime::new();
     let shape = js_from_json(r#"{"kind":"object","observedPaths":[["name"]]}"#);
     runtime
-        .initialize_snapshot_input(
-            "value".into(),
-            js_from_json(r#"{"name":"A"}"#),
-            shape,
-        )
+        .initialize_snapshot_input("value".into(), js_from_json(r#"{"name":"A"}"#), shape)
         .expect("snapshot initialization must succeed");
     let oversized = format!(
         r#"{{"pad":"{}"}}"#,
@@ -415,6 +414,34 @@ fn nested_undefined_normalizes_to_null() {
         serde_json::from_str(&String::from(js_sys::JSON::stringify(&normalized).unwrap())).unwrap();
 
     assert!(json["optional"].is_null());
+}
+
+#[wasm_bindgen_test]
+fn wide_js_array_exhausts_normalization_budget() {
+    let input =
+        js_sys::Array::new_with_length((plec_schema::limits::MAX_DECODE_JS_NODES + 1) as u32);
+    let error = plec_client::runtime::normalize_json_value(&input, 0)
+        .expect_err("wide JS array must exhaust budget");
+    let message = error.as_string().unwrap_or_default();
+    assert!(
+        message.contains("decode width limit"),
+        "expected width limit error, got: {message}"
+    );
+}
+
+#[wasm_bindgen_test]
+fn wide_js_map_exhausts_normalization_budget() {
+    let map = js_sys::Map::new();
+    // Use an array inside the map that pushes total nodes over the budget
+    let array = js_sys::Array::new_with_length(plec_schema::limits::MAX_DECODE_JS_NODES as u32);
+    map.set(&JsValue::from_str("items"), &array);
+    let error = plec_client::runtime::normalize_json_value(&map, 0)
+        .expect_err("wide JS map contents must exhaust budget");
+    let message = error.as_string().unwrap_or_default();
+    assert!(
+        message.contains("decode width limit"),
+        "expected width limit error, got: {message}"
+    );
 }
 
 fn bounded_application() -> TypedApplication {
@@ -564,9 +591,8 @@ fn envelope_artifact(component: &str) -> String {
 fn load_application_rejects_self_child_node_graph() {
     // A self-referential child recursed unbounded during mount before
     // topology validation; it must now be rejected at the load boundary.
-    let artifact = envelope_artifact(
-        r#""nodes":[{"op":"element","tag":0,"parent":null,"children":[0]}]"#,
-    );
+    let artifact =
+        envelope_artifact(r#""nodes":[{"op":"element","tag":0,"parent":null,"children":[0]}]"#);
     let error = PlecRuntime::new()
         .load_application(js_from_json(&artifact))
         .expect_err("self-child node graph must be rejected");

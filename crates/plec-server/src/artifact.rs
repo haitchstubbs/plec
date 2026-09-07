@@ -333,6 +333,37 @@ pub enum ExpressionInstruction {
         #[serde(default)]
         field: usize,
     },
+    Index,
+    LoadRef {
+        #[serde(default)]
+        reference: usize,
+    },
+    Filter {
+        #[serde(default)]
+        predicate: usize,
+        #[serde(default)]
+        item_slot: usize,
+        #[serde(default)]
+        index_slot: Option<usize>,
+    },
+    Map {
+        #[serde(default)]
+        mapper: usize,
+        #[serde(default)]
+        item_slot: usize,
+        #[serde(default)]
+        index_slot: Option<usize>,
+    },
+    String {
+        #[serde(default)]
+        kind: String,
+        #[serde(default)]
+        count: usize,
+    },
+    OmitFields {
+        #[serde(default)]
+        fields: Vec<usize>,
+    },
     Unary {
         #[serde(default)]
         kind: String,

@@ -70,6 +70,11 @@ pub const MAX_ACTION_INSTRUCTIONS: usize = 10_000;
 /// independent of the JSON parser's depth guard).
 pub const MAX_DECODE_JS_DEPTH: usize = 128;
 
+/// Maximum total properties, elements, and nodes walked while normalizing a
+/// host-supplied JS payload before JSON round-tripping (bounds normalization
+/// width and allocation before stringification).
+pub const MAX_DECODE_JS_NODES: usize = 1_000_000;
+
 /// Maximum number of observed paths in one snapshot input shape.
 pub const MAX_SNAPSHOT_SHAPE_PATHS: usize = 1_024;
 

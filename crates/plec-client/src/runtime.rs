@@ -30,15 +30,32 @@ thread_local! {
 /// serde-wasm-bindgen serializer emits serde maps as JS `Map` instances,
 /// which `JSON.stringify` silently renders as `{}` — every map, array, and
 /// plain object is rebuilt as a plain object/array first. Recursion is
-/// depth-capped so a hostile JS graph fails predictably instead of
-/// overflowing the WASM stack.
+/// depth- and width-capped so a hostile JS graph fails predictably instead of
+/// overflowing the WASM stack or exhausting memory.
 pub fn normalize_json_value(value: &JsValue, depth: usize) -> Result<JsValue, JsValue> {
+    use plec_ir::limits::MAX_DECODE_JS_NODES;
+    let mut remaining_nodes = MAX_DECODE_JS_NODES;
+    normalize_json_value_bounded(value, depth, &mut remaining_nodes)
+}
+
+fn normalize_json_value_bounded(
+    value: &JsValue,
+    depth: usize,
+    remaining_nodes: &mut usize,
+) -> Result<JsValue, JsValue> {
     use plec_ir::limits::MAX_DECODE_JS_DEPTH;
     if depth > MAX_DECODE_JS_DEPTH {
         return Err(JsValue::from_str(
             "payload nesting exceeds the decode depth limit",
         ));
     }
+    if *remaining_nodes == 0 {
+        return Err(JsValue::from_str(
+            "payload property or element count exceeds the decode width limit",
+        ));
+    }
+    *remaining_nodes -= 1;
+
     if value.is_undefined() {
         // serde-wasm-bindgen represents Option::None as undefined. Preserve
         // the old decoder's JSON-compatible null semantics before stringify.
@@ -46,6 +63,11 @@ pub fn normalize_json_value(value: &JsValue, depth: usize) -> Result<JsValue, Js
     }
     if value.is_instance_of::<js_sys::Map>() {
         let map = value.unchecked_ref::<js_sys::Map>();
+        if map.size() as usize > *remaining_nodes {
+            return Err(JsValue::from_str(
+                "payload property or element count exceeds the decode width limit",
+            ));
+        }
         let out = js_sys::Object::new();
         let entries = map.entries();
         loop {
@@ -58,23 +80,39 @@ pub fn normalize_json_value(value: &JsValue, depth: usize) -> Result<JsValue, Js
                 .get(0)
                 .as_string()
                 .ok_or_else(|| JsValue::from_str("map keys must be strings"))?;
-            let normalized = normalize_json_value(&pair.get(1), depth + 1)?;
+            let normalized =
+                normalize_json_value_bounded(&pair.get(1), depth + 1, remaining_nodes)?;
             js_sys::Reflect::set(&out, &key.into(), &normalized)?;
         }
         Ok(out.into())
     } else if value.is_instance_of::<js_sys::Array>() {
         let array = js_sys::Array::from(value);
+        if array.length() as usize > *remaining_nodes {
+            return Err(JsValue::from_str(
+                "payload property or element count exceeds the decode width limit",
+            ));
+        }
         let out = js_sys::Array::new();
         for item in array.iter() {
-            out.push(&normalize_json_value(&item, depth + 1)?);
+            out.push(&normalize_json_value_bounded(
+                &item,
+                depth + 1,
+                remaining_nodes,
+            )?);
         }
         Ok(out.into())
     } else if value.is_object() {
         let object = value.unchecked_ref::<js_sys::Object>();
+        let keys = js_sys::Object::keys(object);
+        if keys.length() as usize > *remaining_nodes {
+            return Err(JsValue::from_str(
+                "payload property or element count exceeds the decode width limit",
+            ));
+        }
         let out = js_sys::Object::new();
-        for key in js_sys::Object::keys(object).iter() {
+        for key in keys.iter() {
             let field = js_sys::Reflect::get(object, &key)?;
-            let normalized = normalize_json_value(&field, depth + 1)?;
+            let normalized = normalize_json_value_bounded(&field, depth + 1, remaining_nodes)?;
             js_sys::Reflect::set(&out, &key, &normalized)?;
         }
         Ok(out.into())

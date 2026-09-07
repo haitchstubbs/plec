@@ -18,6 +18,7 @@ in Beads `wasm-runtime-a08`.
 | Route manifest JSON bytes                    | 1 MiB (`MAX_MANIFEST_JSON_BYTES`)  | same                                                                                                                                                          |
 | Manifest route count                         | 2,048 (`MAX_MANIFEST_ROUTES`)      | `RouteManifest::validate` (`crates/plec-ir`)                                                                                                                  |
 | JS-value normalization depth                 | 128 (`MAX_DECODE_JS_DEPTH`)        | all decode paths normalize JS Map/object/array values before stringification, so hostile nesting fails before Rust deserialization can exhaust the WASM stack |
+| JS-value normalization width / nodes         | 1,000,000 (`MAX_DECODE_JS_NODES`) | all decode paths normalize JS Map/object/array values before stringification, so hostile width fails before allocating every member                           |
 
 ## Structural budgets (`TypedApplication::validate_contract`)
 
