@@ -77,7 +77,6 @@ packages/
   plec/                   Plec authoring/runtime-facing TS APIs
   plec-browser/           Browser glue and graph/artifact loading
   plec-node-runtime/      Node sidecar: imports the app server bundle over a private socket
-  plec-server/            Legacy TS host (`PLEC_SERVER=node`); also the SSR producer the contract checker scans
   plec-e2e/               Canonical Playwright E2E runner
   ui/                     React/shadcn UI package; do not leak into fullstack
   lucide-plec/            Generated Plec icon components
@@ -103,8 +102,8 @@ exporting `handleRequest`); the framework knows only contracts: the
 `handleRequest` export, `plec.toml` -> `dist/plec-server.json`, and the
 sidecar protocol. `/api/*` traffic crosses the `ApplicationRuntime` trait
 into the Node sidecar (private UDS/loopback+token); loaders, SSR
-expressions, and snapshots execute in Rust. `PLEC_SERVER=rust|node` selects
-the host in E2E; both run the same `dist/server/app.mjs` artifact.
+expressions, and snapshots execute in Rust. E2E runs the same native host and
+`dist/server/app.mjs` application artifact used in production.
 
 Do not infer ownership from an old package path. Inspect the current workspace before introducing a new package or crate.
 
@@ -240,7 +239,7 @@ Prefer tests that assert semantics and identity, not implementation trivia.
 
 `packages/plec-e2e` is the canonical Playwright runner. Playwright owns the fullstack server lifecycle.
 
-Never manually spawn `dist/server.mjs` for E2E tests and do not leave a test server running.
+Never manually spawn an application server for E2E tests and do not leave a test server running.
 
 From the repository root:
 

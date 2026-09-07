@@ -56,8 +56,8 @@ compiler/zod/typescript code leaks into the browser bundle.
 yarn workspace @wasm-runtime/fullstack dev
 ```
 
-This rebuilds and then runs `node --watch dist/server.mjs`. The server listens
-on `PORT` (default `3000`).
+This rebuilds and then runs `plec serve dist`. The native server listens on
+`PORT` (default `3000`).
 
 There is no vite/HMR: the Rust compiler emits the route manifest and graphs
 at build time. TSX edits require re-running the fullstack build — the `dev`
@@ -121,7 +121,7 @@ yarn test:acceptance                             # Playwright full behavioral su
 
 `packages/plec-e2e` is the canonical end-to-end runner. Playwright owns the
 fullstack server for every tier: turbo builds the app, the `webServer`
-config starts `dist/server.mjs`, waits for HTTP readiness, and kills the
+config starts `plec serve dist`, waits for HTTP readiness, and kills the
 process group afterwards — no manual spawning, no leftover ports. The port
 comes from `E2E_PORT` in `.env.devports` (the canonical port registry);
 override it per run with `E2E_PORT=…`. Specs are named `*.playwright.ts`.

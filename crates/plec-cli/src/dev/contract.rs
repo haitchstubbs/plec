@@ -4,14 +4,13 @@ use std::fs;
 use std::path::Path;
 
 /// The SSR protocol spans three independently-versioned boundaries that must
-/// agree across the Rust compiler/runtime, the TypeScript server and browser
-/// glue, test fixtures, and the docs:
+/// agree across the Rust compiler/runtime/server, browser glue, test fixtures,
+/// and the docs:
 ///
 /// - **snapshot** — `PlecSsrSnapshot.version`, canonical in
 ///   `crates/plec-ir/src/lib.rs` (`SSR_SNAPSHOT_VERSION`)
 /// - **bootstrap** — the `{ version, snapshot }` HTML payload wrapper,
-///   produced by `packages/plec-server` and gated by `packages/plec-browser`
-///   (no Rust home yet: the producer is canonical)
+///   produced by `crates/plec-server` and gated by `packages/plec-browser`
 /// - **manifest** — `RouteManifest.version`, frozen in `plec-ir::validate`
 ///
 /// The scanner finds version literals near these boundaries and reports
@@ -97,7 +96,7 @@ const SITES: &[SiteSpec] = &[
     },
     SiteSpec {
         label: "server producer",
-        path: "packages/plec-server/src/index.ts",
+        path: "crates/plec-server/src/ssr/snapshot.rs",
         mixed: true,
         force: None,
         allow: &[],
@@ -242,7 +241,9 @@ pub fn scan(repo: &Repo) -> Result<Report, String> {
         bootstrap: Section {
             canonical: bootstrap_canonical,
             canonical_source: bootstrap_canonical
-                .map(|value| format!("packages/plec-server/src/index.ts (producer emits {value})"))
+                .map(|value| {
+                    format!("crates/plec-server/src/ssr/snapshot.rs (producer emits {value})")
+                })
                 .unwrap_or_else(|| "producer not found".into()),
             rows: bootstrap_rows,
         },
@@ -518,16 +519,14 @@ fn scan_manifest_version(repo: &Repo) -> Result<Option<u32>, String> {
 
 /// The first bootstrap-wrapper version the server emits.
 fn first_bootstrap_version(repo: &Repo) -> Result<Option<u32>, String> {
-    let content = read_repo_file(repo, "packages/plec-server/src/index.ts")?;
-    let lines: Vec<&str> = content.lines().collect();
+    let content = read_repo_file(repo, "crates/plec-server/src/ssr/snapshot.rs")?;
 
-    for (index, line) in lines.iter().enumerate() {
-        let is_bootstrap_emission = lines[index..]
-            .iter()
-            .take(3)
-            .any(|next| next.contains("snapshot: {"));
-        if !is_bootstrap_emission {
+    for line in content.lines() {
+        if !line.contains("BOOTSTRAP_WRAPPER_VERSION") {
             continue;
+        }
+        if line.contains("SSR_SNAPSHOT_VERSION") {
+            return Ok(Some(plec_ir::SSR_SNAPSHOT_VERSION));
         }
         for (value, _) in version_matches(line) {
             return Ok(Some(value));

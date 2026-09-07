@@ -186,18 +186,10 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
     let revision = assets::revision(&client_path)?;
     assets::brotli(&client_path)?;
 
-    // The canonical application bundle. The root-level `server.mjs` is a
-    // byte-identical copy so the legacy TS-host entry keeps running the same
-    // artifact while both host variants coexist.
+    // The native host imports this application bundle through its Node
+    // sidecar; the manifest records the path.
     let server_bundle = out_dir.join("server").join("app.mjs");
     server::bundle(&server_entry, &app_dir, &server_bundle, options.optimize)?;
-    std::fs::copy(&server_bundle, out_dir.join("server.mjs")).map_err(|error| {
-        BuildError::with_source(
-            Stage::ServerBundle,
-            format!("cannot copy {}", server_bundle.display()),
-            error,
-        )
-    })?;
 
     let has_node_runtime = host::emit_node_runtime(&repo_root, &app_dir, &out_dir)?;
     if !has_node_runtime && server_entry.exists() {

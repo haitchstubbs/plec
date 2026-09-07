@@ -18,23 +18,23 @@ in Beads `wasm-runtime-a08`.
 | Route manifest JSON bytes                    | 1 MiB (`MAX_MANIFEST_JSON_BYTES`)  | same                                                                                                                                                          |
 | Manifest route count                         | 2,048 (`MAX_MANIFEST_ROUTES`)      | `RouteManifest::validate` (`crates/plec-ir`)                                                                                                                  |
 | JS-value normalization depth                 | 128 (`MAX_DECODE_JS_DEPTH`)        | all decode paths normalize JS Map/object/array values before stringification, so hostile nesting fails before Rust deserialization can exhaust the WASM stack |
-| JS-value normalization width / nodes         | 1,000,000 (`MAX_DECODE_JS_NODES`) | all decode paths normalize JS Map/object/array values before stringification, so hostile width fails before allocating every member                           |
+| JS-value normalization width / nodes         | 1,000,000 (`MAX_DECODE_JS_NODES`)  | all decode paths normalize JS Map/object/array values before stringification, so hostile width fails before allocating every member                           |
 
 ## Structural budgets (`TypedApplication::validate_contract`)
 
-| Boundary                        | Limit                                                                                                        |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Component definitions           | 65,536 (`MAX_COMPONENT_COUNT`); pathological-shape guard only                                                |
-| Any per-component IR collection | 100,000 entries (`MAX_COMPONENT_COLLECTION_LEN`)                                                             |
-| Total IR entries                | 1,000,000 (`MAX_TOTAL_IR_ENTRIES`)                                                                           |
-| Total instructions              | 1,000,000 (`MAX_TOTAL_INSTRUCTIONS`)                                                                         |
-| String pool                     | 1 MiB per entry / 8 MiB aggregate (`MAX_COMPONENT_STRING_BYTES`, `MAX_TOTAL_STRING_POOL_BYTES`)              |
-| Constant values                 | 1,000,000 aggregate nodes (`MAX_TOTAL_CONSTANT_NODES`)                                                       |
-| Expression program              | 10,000 instructions (`MAX_EXPRESSION_INSTRUCTIONS`)                                                          |
-| Action program                  | 10,000 instructions (`MAX_ACTION_INSTRUCTIONS`)                                                              |
-| Constant runtime values         | depth 64 (`MAX_VALUE_DEPTH`), 100,000 nodes (`MAX_VALUE_NODES`), 1 MiB per string (`MAX_VALUE_STRING_BYTES`) |
-| Node graph topology              | every structural handle in range; ownership edges form a forest rooted at the graph root and loop row templates: acyclic, no node claimed twice, fully reachable (`TypedApplication::validate_topology`) |
-| Expression control flow          | jump targets within the program, Filter/Map program handles in range (`validate_contract`)                   |
+| Boundary                        | Limit                                                                                                                                                                                                    |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Component definitions           | 65,536 (`MAX_COMPONENT_COUNT`); pathological-shape guard only                                                                                                                                            |
+| Any per-component IR collection | 100,000 entries (`MAX_COMPONENT_COLLECTION_LEN`)                                                                                                                                                         |
+| Total IR entries                | 1,000,000 (`MAX_TOTAL_IR_ENTRIES`)                                                                                                                                                                       |
+| Total instructions              | 1,000,000 (`MAX_TOTAL_INSTRUCTIONS`)                                                                                                                                                                     |
+| String pool                     | 1 MiB per entry / 8 MiB aggregate (`MAX_COMPONENT_STRING_BYTES`, `MAX_TOTAL_STRING_POOL_BYTES`)                                                                                                          |
+| Constant values                 | 1,000,000 aggregate nodes (`MAX_TOTAL_CONSTANT_NODES`)                                                                                                                                                   |
+| Expression program              | 10,000 instructions (`MAX_EXPRESSION_INSTRUCTIONS`)                                                                                                                                                      |
+| Action program                  | 10,000 instructions (`MAX_ACTION_INSTRUCTIONS`)                                                                                                                                                          |
+| Constant runtime values         | depth 64 (`MAX_VALUE_DEPTH`), 100,000 nodes (`MAX_VALUE_NODES`), 1 MiB per string (`MAX_VALUE_STRING_BYTES`)                                                                                             |
+| Node graph topology             | every structural handle in range; ownership edges form a forest rooted at the graph root and loop row templates: acyclic, no node claimed twice, fully reachable (`TypedApplication::validate_topology`) |
+| Expression control flow         | jump targets within the program, Filter/Map program handles in range (`validate_contract`)                                                                                                               |
 
 ## Runtime values (host inputs, rows, fetch bodies)
 
@@ -54,19 +54,19 @@ in Beads `wasm-runtime-a08`.
 
 ## Snapshot input facades
 
-| Boundary                             | Limit                                    | Where                                                                                             |
-| ------------------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Snapshot value/shape JSON bytes      | 1 MiB (`MAX_HOST_INPUT_JSON_BYTES`)      | `initialize_snapshot_input`, `apply_input_snapshot` (`crates/plec-runtime/src/snapshots.rs`)      |
-| Snapshot value trees                 | depth 64 / 100,000 nodes / 1 MiB strings | `check_value_budget` (same file)                                                                  |
-| Observed paths per snapshot shape    | 1,024 (`MAX_SNAPSHOT_SHAPE_PATHS`)       | `validate_shape` (same file)                                                                      |
-| Segments per observed path           | 64 (`MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS`)  | same                                                                                              |
+| Boundary                          | Limit                                    | Where                                                                                        |
+| --------------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Snapshot value/shape JSON bytes   | 1 MiB (`MAX_HOST_INPUT_JSON_BYTES`)      | `initialize_snapshot_input`, `apply_input_snapshot` (`crates/plec-runtime/src/snapshots.rs`) |
+| Snapshot value trees              | depth 64 / 100,000 nodes / 1 MiB strings | `check_value_budget` (same file)                                                             |
+| Observed paths per snapshot shape | 1,024 (`MAX_SNAPSHOT_SHAPE_PATHS`)       | `validate_shape` (same file)                                                                 |
+| Segments per observed path        | 64 (`MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS`)  | same                                                                                         |
 
 ## Fetch responses
 
-| Boundary                   | Limit                              | Where                                                                                                                                                            |
-| -------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Declared `content-length`  | 8 MiB (`MAX_FETCH_RESPONSE_BYTES`) | `declared_length_failure` in `crates/plec-client/src/fetch.rs`; rejected before the body is read                                                                 |
-| Body length / JSON payload | 8 MiB                              | post-read check and `bounded_response_value` (JS Map normalization + bounded JSON parse); server route loaders enforce the same ceiling (`packages/plec-server`) |
+| Boundary                   | Limit                              | Where                                                                                                                                                                 |
+| -------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Declared `content-length`  | 8 MiB (`MAX_FETCH_RESPONSE_BYTES`) | `declared_length_failure` in `crates/plec-client/src/fetch.rs`; rejected before the body is read                                                                      |
+| Body length / JSON payload | 8 MiB                              | post-read check and `bounded_response_value` (JS Map normalization + bounded JSON parse); native server route loaders enforce the same ceiling (`crates/plec-server`) |
 
 ## Source modules and import graph (compiler)
 
@@ -81,11 +81,11 @@ extend this to deep chains and file-count exhaustion.
 
 ## Execution budgets
 
-| Boundary              | Limit                                                                                     | Where                          |
-| --------------------- | ----------------------------------------------------------------------------------------- | ------------------------------ |
-| Expression evaluation | 100,000 shared steps (`MAX_EXPRESSION_STEPS`), Filter/Map nesting 32 (`MAX_EVAL_NESTING`) | `crates/plec-eval/src/eval.rs` |
-| Action continuations  | 1,000,000 steps (`MAX_ACTION_STEPS`), call depth 64 (`MAX_CALL_DEPTH`)                    | `crates/plec-client/src/vm.rs` |
-| Reaction drain        | 10,000 executions (`MAX_REACTION_STEPS`), nesting 32 (`MAX_REACTION_DRAIN_DEPTH`)         | same                           |
+| Boundary              | Limit                                                                                     | Where                               |
+| --------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------- |
+| Expression evaluation | 100,000 shared steps (`MAX_EXPRESSION_STEPS`), Filter/Map nesting 32 (`MAX_EVAL_NESTING`) | `crates/plec-eval/src/eval.rs`      |
+| Action continuations  | 1,000,000 steps (`MAX_ACTION_STEPS`), call depth 64 (`MAX_CALL_DEPTH`)                    | `crates/plec-client/src/vm.rs`      |
+| Reaction drain        | 10,000 executions (`MAX_REACTION_STEPS`), nesting 32 (`MAX_REACTION_DRAIN_DEPTH`)         | same                                |
 | Graph mount recursion | depth 128 (`MAX_MOUNT_DEPTH`)                                                             | `crates/plec-client/src/runtime.rs` |
 
 Mount recursion flows through one depth-guarded `instantiate_node` entry, so a
@@ -115,10 +115,10 @@ keys remain documented separately from these primary exhaustion defences.
 
 ## Inbound request bodies (dev server)
 
-| Boundary                  | Limit                            | Where                                                                             |
-| ------------------------- | -------------------------------- | --------------------------------------------------------------------------------- |
-| Request body bytes        | 1 MiB (`MAX_REQUEST_BODY_BYTES`) | `readBody` in `packages/plec-server` (413 on violation, enforced while streaming) |
-| Application artifact file | 16 MiB                           | `readBoundedArtifact` in `packages/plec-server`                                   |
+| Boundary                  | Limit                            | Where                                                                         |
+| ------------------------- | -------------------------------- | ----------------------------------------------------------------------------- |
+| Request body bytes        | 1 MiB (`MAX_REQUEST_BODY_BYTES`) | `read_bounded_body` in `crates/plec-server/src/request.rs` (413 on violation) |
+| Application artifact file | 16 MiB                           | `read_bounded` in `crates/plec-server/src/artifact.rs`                        |
 
 ## Boundary tests
 
@@ -136,5 +136,5 @@ keys remain documented separately from these primary exhaustion defences.
   unrooted node graphs, deep linear node chains, reaction cycles, and
   oversized/over-deep/structurally excessive snapshot input values plus
   snapshot shape path limits at the WASM boundary.
-- `packages/plec-server/src/index.test.ts` — oversized request body (413) and
+- `crates/plec-server/tests/server.rs` — oversized request body (413) and
   oversized artifact file (500).

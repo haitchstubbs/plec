@@ -131,11 +131,10 @@ fn default_pending_mode() -> String {
 // Design decisions frozen here:
 //
 // 1. **Schema home and format.** These types live in `plec-ir` (Rust-owned);
-//    serde is camelCase to match `RouteManifest`. The TypeScript server
-//    produces JSON conforming to this schema and the WASM runtime is the
+//    serde is camelCase to match `RouteManifest`. The native server produces
+//    JSON conforming to this schema and the WASM runtime is the
 //    strict consumer. There is deliberately no Zod or TypeScript schema for
-//    the snapshot — a second schema would drift exactly like the
-//    hand-mirrored types in `packages/plec-server` already have.
+//    the snapshot — a second schema would drift from this authority.
 // 2. **Canonical encodings.** No new id spaces are introduced. Route chain
 //    entries reference manifest route ids (`"{module}#{local}"`). Loader
 //    outcomes are derived from `RouteManifestEntry { graph_id, loader_action }`
@@ -1296,16 +1295,13 @@ fn is_success(value: &ReturnOutcome) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum ReturnOutcome {
+    #[default]
     Success,
     Failure,
 }
 
-impl Default for ReturnOutcome {
-    fn default() -> Self {
-        Self::Success
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "capability", content = "request", rename_all = "camelCase")]
