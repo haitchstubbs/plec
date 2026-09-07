@@ -521,6 +521,12 @@ fn render_element(
         .strings
         .get(tag)
         .ok_or(RenderError::MissingString(component_index, tag))?;
+    // DOM-sink policy (plec_ir::sink): the tag string is interpolated
+    // verbatim into markup, so anything outside the strict HTML/SVG grammar
+    // is a markup injection channel. Fail the render closed.
+    if !plec_ir::sink::is_safe_tag_name(tag) {
+        return Err(RenderError::UnsafeTag(tag.to_owned()));
+    }
     // Writes keep program order: a spread bag is written where it occurs, and
     // later writes overwrite earlier attribute names (same-key overwrites keep
     // their original position), mirroring the runtime's sequential application.
@@ -636,27 +642,30 @@ fn render_element(
 /// Backstop for the DOM-sink policy (`plec_ir::sink`) and the reserved DOM
 /// metadata namespace (docs/dom-address-protocol.md): literal JSX collisions
 /// already fail at compile time, but spread bags are evaluated at render
-/// time, so the only cheap enforcement left is here. Fail the render closed —
-/// a reserved name that reached markup would collide with adoption markers,
-/// and HTML attribute lookup is case-insensitive, so `ONCLICK` is as much a
-/// script sink as `onclick`.
+/// time, so the only cheap enforcement left is here. The shared sink
+/// authority owns every policy decision — reserved prefixes, event-handler
+/// and document sinks, and the strict HTML/SVG-safe name grammar are all
+/// matched ASCII-case-insensitively there. Fail the render closed — a
+/// reserved name that reached markup would collide with adoption markers,
+/// and a grammar-violating name (`a href`, `x=y`) would smuggle markup into
+/// the serialized document.
 fn write_attribute(
     attributes: &mut IndexMap<String, Option<String>>,
     name: &str,
     value: &Value,
 ) -> Result<(), RenderError> {
-    let lower = name.to_lowercase();
-    if lower.starts_with("data-plec-")
-        || lower.starts_with("data-runtime-")
-        || lower.starts_with("plec:")
-    {
+    if plec_ir::sink::is_reserved_attribute_name(name) {
         return Err(RenderError::ReservedAttribute(name.to_owned()));
     }
+    let lower = name.to_ascii_lowercase();
     if lower == "srcdoc" {
         return Err(RenderError::UnsafeAttribute(name.to_owned()));
     }
     if lower.starts_with("on") {
         return Ok(());
+    }
+    if !plec_ir::sink::is_safe_attribute_name(name) {
+        return Err(RenderError::UnsafeAttribute(name.to_owned()));
     }
     if matches!(value, Value::Bool(false) | Value::Null) {
         return Ok(());

@@ -10,9 +10,44 @@
 /// Attribute names owned by the structural DOM address protocol
 /// (docs/dom-address-protocol.md). Authored or substituted IR must never
 /// collide with them: a duplicate `data-plec-node` fails adoption for the
-/// whole page.
+/// whole page. HTML attribute lookup is case-insensitive, so the reserved
+/// prefixes are matched ASCII-case-insensitively.
 pub fn is_reserved_attribute_name(name: &str) -> bool {
-    name.starts_with("data-plec-") || name.starts_with("data-runtime-") || name.starts_with("plec:")
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("data-plec-") || lower.starts_with("data-runtime-") || lower.starts_with("plec:")
+}
+
+/// The strict name grammar shared by HTML and SVG-safe names: an ASCII
+/// letter, then ASCII letters, digits, and the separator characters HTML,
+/// SVG, and ARIA rely on (`:`, `.`, `_`, `-`). Anything else — whitespace,
+/// quotes, `=`, `<`, `/`, non-ASCII — could smuggle markup through a
+/// serializer that interpolates the name verbatim, so it is rejected here.
+fn is_safe_name_grammar(name: &str) -> bool {
+    let mut characters = name.chars();
+    let first = characters.next();
+    match first {
+        Some(first) if first.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    characters.all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '_' | '-')
+    })
+}
+
+/// Element tag names writable through executable IR: the same strict grammar
+/// applied to attribute names, minus the namespace separator, which no HTML
+/// or SVG element needs. Rejects markup-bearing or whitespace-bearing tags
+/// before any serializer can interpolate them.
+pub fn is_safe_tag_name(name: &str) -> bool {
+    if name.is_empty() || !name.is_ascii() {
+        return false;
+    }
+    // No HTML or SVG element carries a namespace separator; only attribute
+    // names (e.g. `xlink:href`) do.
+    if name.contains(':') {
+        return false;
+    }
+    is_safe_name_grammar(name)
 }
 
 /// Attribute names the executable runtime may ever write.
@@ -20,9 +55,14 @@ pub fn is_reserved_attribute_name(name: &str) -> bool {
 /// HTML attribute lookup is case-insensitive, so `ONCLICK` is a live event
 /// handler exactly like `onclick`; the check is therefore case-insensitive.
 /// Declared Plec events go through the event contract instead, never through
-/// attributes.
+/// attributes. Names must also satisfy the strict HTML/SVG-safe grammar so a
+/// serializer that interpolates them verbatim cannot be turned into a markup
+/// injection channel.
 pub fn is_safe_attribute_name(name: &str) -> bool {
     if name.is_empty() || !name.is_ascii() {
+        return false;
+    }
+    if !is_safe_name_grammar(name) {
         return false;
     }
     let lower = name.to_ascii_lowercase();
@@ -118,9 +158,100 @@ mod tests {
     }
 
     #[test]
+    fn rejects_reserved_namespaces_regardless_of_case() {
+        assert!(!is_safe_attribute_name("DATA-PLEC-NODE"));
+        assert!(!is_safe_attribute_name("Data-Runtime-Row-Key"));
+        assert!(!is_safe_attribute_name("PLEC:kind"));
+        assert!(is_reserved_attribute_name("DATA-PLEC-NODE"));
+        assert!(is_reserved_attribute_name("Data-Runtime-Row-Key"));
+        assert!(is_reserved_attribute_name("PLEC:kind"));
+    }
+
+    #[test]
     fn rejects_empty_and_non_ascii_names() {
         assert!(!is_safe_attribute_name(""));
         assert!(!is_safe_attribute_name("hreﬀ"));
+    }
+
+    #[test]
+    fn rejects_names_outside_the_html_grammar() {
+        // Markup/attribute-boundary smuggling through interpolated names.
+        for name in [
+            "a href",
+            "a\thref",
+            "a\nhref",
+            "a/b",
+            "a=b",
+            "a>b",
+            "a<b",
+            "a\"b",
+            "a'b",
+            "a`b",
+            "a=b href",
+            "href ",
+            " href",
+            "1abc",
+            "-abc",
+            ":abc",
+            ".abc",
+        ] {
+            assert!(
+                !is_safe_attribute_name(name),
+                "{name:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_grammar_safe_attribute_names() {
+        for name in [
+            "class",
+            "className",
+            "href",
+            "HREF",
+            "viewBox",
+            "xlink:href",
+            "xml:lang",
+            "data-id",
+            "aria-label",
+            "stroke-width",
+            "http-equiv",
+        ] {
+            assert!(is_safe_attribute_name(name), "{name} must be allowed");
+        }
+    }
+
+    #[test]
+    fn tag_names_follow_the_strict_html_svg_grammar() {
+        for tag in [
+            "div",
+            "p",
+            "h1",
+            "a",
+            "svg",
+            "clipPath",
+            "feGaussianBlur",
+            "font-face",
+            "linearGradient",
+            "my-element",
+        ] {
+            assert!(is_safe_tag_name(tag), "{tag} must be allowed");
+        }
+        for tag in [
+            "",
+            "img src=x onerror=alert(1)",
+            "img src=x",
+            "<script>",
+            "script>",
+            "a/b",
+            "svg:path",
+            "div ",
+            " div",
+            "1div",
+            "dïv",
+        ] {
+            assert!(!is_safe_tag_name(tag), "{tag:?} must be rejected");
+        }
     }
 
     #[test]

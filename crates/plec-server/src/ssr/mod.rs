@@ -108,6 +108,8 @@ pub(crate) enum RenderError {
     UnsafeAttribute(String),
     #[error("UNSAFE_URL_ATTRIBUTE:{0}")]
     UnsafeUrlAttribute(String),
+    #[error("UNSAFE_TAG:{0}")]
+    UnsafeTag(String),
     #[error("SSR dynamic component is unavailable at {0}:{1}")]
     DynamicComponentUnavailable(String, usize),
 }
