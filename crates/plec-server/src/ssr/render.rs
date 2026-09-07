@@ -693,6 +693,26 @@ pub(crate) fn evaluate(
     scope: &Scope<'_>,
     state: &mut RenderState,
 ) -> Value {
+    // The SSR evaluator mirrors the runtime's typed VM, including its
+    // execution budgets: one shared fuel counter across nested Filter/Map
+    // work, bounded nesting. Exhaustion (or a hostile shape) fails soft to
+    // `null` — compiled artifacts are compiler-validated, so the budgets are
+    // defense in depth, not the primary contract.
+    let mut fuel = plec_ir::limits::MAX_EXPRESSION_STEPS;
+    evaluate_bounded(component, expression, scope, state, &mut fuel, 0)
+}
+
+fn evaluate_bounded(
+    component: &Component,
+    expression: usize,
+    scope: &Scope<'_>,
+    state: &mut RenderState,
+    fuel: &mut usize,
+    nesting: usize,
+) -> Value {
+    if nesting > plec_ir::limits::MAX_EVAL_NESTING {
+        return Value::Null;
+    }
     let Some(instructions) = component
         .expressions
         .get(expression)
@@ -703,6 +723,10 @@ pub(crate) fn evaluate(
     let mut stack: Vec<Value> = Vec::new();
     let mut pc = 0usize;
     while pc < instructions.len() {
+        if *fuel == 0 {
+            return Value::Null;
+        }
+        *fuel -= 1;
         match &instructions[pc] {
             ExpressionInstruction::Constant { constant } => stack.push(
                 component
@@ -769,19 +793,134 @@ pub(crate) fn evaluate(
                 stack.push(value.unwrap_or(Value::Null));
             }
             ExpressionInstruction::Field { field } => {
-                let value = stack
-                    .pop()
-                    .and_then(|value| match value {
-                        Value::Object(fields) => component
-                            .strings
-                            .get(*field)
-                            .and_then(|name| fields.get(name))
-                            .cloned(),
-                        _ => None,
-                    })
-                    .unwrap_or(Value::Null);
+                let object = stack.pop().unwrap_or(Value::Null);
+                let name = component.strings.get(*field).map(String::as_str);
+                stack.push(match (object, name) {
+                    (Value::Object(fields), Some(name)) => {
+                        fields.get(name).cloned().unwrap_or(Value::Null)
+                    }
+                    // JS property access: `array.length` / `string.length`
+                    // are real values, and SSR expressions rely on them.
+                    (Value::Array(values), Some("length")) => number_value(values.len() as f64),
+                    (Value::String(value), Some("length")) => {
+                        number_value(value.chars().count() as f64)
+                    }
+                    _ => Value::Null,
+                });
+            }
+            ExpressionInstruction::Index => {
+                let key = stack.pop().unwrap_or(Value::Null);
+                let object = stack.pop().unwrap_or(Value::Null);
+                let key = match key {
+                    Value::String(value) => value,
+                    Value::Number(value) => value
+                        .as_f64()
+                        .filter(|value| value.is_finite() && value.fract() == 0.0)
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    _ => String::new(),
+                };
+                stack.push(match object {
+                    Value::Object(fields) => fields.get(&key).cloned().unwrap_or(Value::Null),
+                    Value::Array(values) => key
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|index| values.get(index))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    Value::String(value) => key
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|index| value.chars().nth(index))
+                        .map(|character| Value::String(character.to_string()))
+                        .unwrap_or(Value::Null),
+                    _ => Value::Null,
+                });
+            }
+            // Filter/Map evaluate the predicate per item with the item as the
+            // row context (`LoadRowField`), exactly like the runtime's typed
+            // VM; item/index frame slots are ignored there too. Filter keeps
+            // truthy items as records; Map keeps every mapped value.
+            ExpressionInstruction::Filter { predicate, .. }
+            | ExpressionInstruction::Map {
+                mapper: predicate, ..
+            } => {
+                let is_map = matches!(
+                    instructions.get(pc),
+                    Some(ExpressionInstruction::Map { .. })
+                );
+                let source = stack.pop().unwrap_or(Value::Null);
+                let items = match source {
+                    Value::Array(values) => values,
+                    _ => Vec::new(),
+                };
+                let mut output = Vec::with_capacity(items.len());
+                for item in items {
+                    let record = match item {
+                        Value::Object(fields) => fields,
+                        _ => serde_json::Map::new(),
+                    };
+                    let value = evaluate_bounded(
+                        component,
+                        *predicate,
+                        &Scope {
+                            row: Some(record.clone()),
+                            ..scope.clone()
+                        },
+                        state,
+                        fuel,
+                        nesting + 1,
+                    );
+                    if is_map {
+                        output.push(value);
+                    } else if truthy(&value) {
+                        output.push(Value::Object(record));
+                    }
+                }
+                stack.push(Value::Array(output));
+            }
+            ExpressionInstruction::String { kind, count } => {
+                // `split_off` already preserves push order (first pushed
+                // first); the runtime pops LIFO and reverses to the same
+                // effect.
+                let start = stack.len().saturating_sub(*count);
+                let parts = stack.split_off(start);
+                let first = parts.first().cloned().unwrap_or(Value::Null);
+                let value = match kind.as_str() {
+                    "trim" => Value::String(dom_string(&first).trim().to_owned()),
+                    "lower" => Value::String(dom_string(&first).to_lowercase()),
+                    "upper" => Value::String(dom_string(&first).to_uppercase()),
+                    "encodeUriComponent" => {
+                        Value::String(encode_uri_component(&dom_string(&first)))
+                    }
+                    "jsonStringify" => {
+                        Value::String(serde_json::to_string(&first).unwrap_or_default())
+                    }
+                    "includes" => {
+                        let needle = dom_string(parts.get(1).unwrap_or(&Value::Null));
+                        let haystack = dom_string(&first);
+                        Value::Bool(haystack.contains(&needle))
+                    }
+                    _ => Value::String(parts.iter().map(dom_string).collect::<String>()),
+                };
                 stack.push(value);
             }
+            ExpressionInstruction::OmitFields { fields } => {
+                let value = stack.pop().unwrap_or(Value::Null);
+                let mut record = match value {
+                    Value::Object(fields) => fields,
+                    _ => serde_json::Map::new(),
+                };
+                for field in fields {
+                    if let Some(name) = component.strings.get(*field) {
+                        record.remove(name);
+                    }
+                }
+                stack.push(Value::Object(record));
+            }
+            // Refs are browser-owned values; the SSR host has none, exactly
+            // like the runtime's empty ref table.
+            ExpressionInstruction::LoadRef { .. } => stack.push(Value::Null),
             ExpressionInstruction::Unary { kind } => {
                 let value = stack.pop().unwrap_or(Value::Null);
                 stack.push(match kind.as_str() {
@@ -957,6 +1096,25 @@ fn number_value(value: f64) -> Value {
     serde_json::Number::from_f64(value)
         .map(Value::Number)
         .unwrap_or(Value::Null)
+}
+
+/// JavaScript `encodeURIComponent`: unreserved characters pass through,
+/// everything else is percent-encoded as UTF-8.
+fn encode_uri_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        let keep = byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')'
+            );
+        if keep {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 pub(crate) fn escape_html(value: &str) -> String {

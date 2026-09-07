@@ -1428,3 +1428,278 @@ async fn real_application_artifact_renders_and_validates() {
         eprintln!("{route}: {} bytes", html.len());
     }
 }
+
+#[tokio::test]
+async fn filter_and_length_expressions_gate_loops_like_the_runtime() {
+    // Regression: the SSR evaluator skipped `filter` and returned null for
+    // `array.length`, so a "has items" conditional selected the empty branch
+    // server-side and adoption claimed it — the browser rendered a
+    // remaining-count but never the rows. This fixture encodes that shape.
+    let dir = fixture_dir();
+    let mut home = json!({
+        "rootComponent": 0,
+        "components": [{
+            "id": "home",
+            "rootNode": 0,
+            "strings": ["div", "ul", "li", "done", "title", "length"],
+            "constants": [false, true, "task", "archived"],
+            "nodes": [
+                {"op": "element", "tag": 0, "children": [1]},
+                {"op": "conditional", "test": 3, "consequent": 2, "alternate": 6},
+                {"op": "element", "tag": 1, "children": [3]},
+                {"op": "loop", "loop": 0},
+                {"op": "element", "tag": 2, "children": [5]},
+                {"op": "text", "text": 0},
+                {"op": "text", "text": 1}
+            ],
+            "texts": [{"binding": 0}, {"value": "nothing open"}],
+            "bindings": [{"target": 5, "sink": "text", "expression": 5}],
+            "propPrograms": [],
+            "hostSlots": [],
+            "stateSlots": [{"initialExpression": 0}],
+            "parameters": [],
+            "expressions": [
+                {"instructions": [
+                    {"op": "constant", "constant": 0},
+                    {"op": "constant", "constant": 2},
+                    {"op": "makeRecord", "fields": [3, 4]},
+                    {"op": "constant", "constant": 1},
+                    {"op": "constant", "constant": 3},
+                    {"op": "makeRecord", "fields": [3, 4]},
+                    {"op": "makeArray", "count": 2},
+                    {"op": "return"}
+                ]},
+                {"instructions": [
+                    {"op": "loadState", "state": 0},
+                    {"op": "filter", "predicate": 2},
+                    {"op": "return"}
+                ]},
+                {"instructions": [
+                    {"op": "loadRowField", "field": 3},
+                    {"op": "unary", "kind": "not"},
+                    {"op": "return"}
+                ]},
+                {"instructions": [
+                    {"op": "loadState", "state": 0},
+                    {"op": "filter", "predicate": 2},
+                    {"op": "field", "field": 5},
+                    {"op": "return"}
+                ]},
+                {"instructions": [
+                    {"op": "loadRowField", "field": 4},
+                    {"op": "return"}
+                ]},
+                {"instructions": [
+                    {"op": "loadRowField", "field": 4},
+                    {"op": "return"}
+                ]}
+            ],
+            "actions": [],
+            "loops": [{"sourceExpression": 1, "keyExpression": 4, "itemSlot": 0, "rowTemplate": 4}],
+            "routeOutlets": []
+        }]
+    });
+    home["components"][0]["nodes"][1]["test"] = json!(3);
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": [{"id": "home", "path": "", "graphId": "home", "outletId": "main"}]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "", true)},
+            {"graphId": "home", "graph": home}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+    let html = get_html(&options(dir.path()), "/").await;
+
+    // The filtered length is 1 (one incomplete record), so the gated loop
+    // renders exactly the incomplete record as a keyed row.
+    assert!(
+        html.contains("<!--plec:conditional:root/outlet:main:1-->"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<!--plec:loop:root/outlet:main/loop:3/key:task-->"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<!--plec:text:root/outlet:main/loop:3/key:task:5-->task"),
+        "{html}"
+    );
+    // The completed record is filtered out server-side.
+    assert!(!html.contains("archived"), "{html}");
+    assert!(!html.contains("nothing open"), "{html}");
+    assert!(
+        html.contains("\"loops\":[{\"node\":3,\"keys\":[\"task\"]}]"),
+        "{html}"
+    );
+    assert_valid_bootstrap(&html, &artifact, &artifact["manifest"]);
+}
+
+#[tokio::test]
+async fn filter_predicate_with_string_ops_and_state_reads_like_the_todos_page() {
+    // The real todos predicate: `item.title.lower().includes(
+    // state.search.trim().lower())`. The search state initializes empty, so
+    // every item passes; the gated loop must render the row.
+    let dir = fixture_dir();
+    let home = json!({
+        "rootComponent": 0,
+        "components": [{
+            "id": "home",
+            "rootNode": 0,
+            "strings": ["div", "done", "title", "lower", "trim", "includes", "length"],
+            "constants": ["Try the Plec Todo API", false, ""],
+            "nodes": [
+                {"op": "element", "tag": 0, "children": [1]},
+                {"op": "conditional", "test": 5, "consequent": 2, "alternate": 6},
+                {"op": "loop", "loop": 0},
+                {"op": "element", "tag": 0, "children": [4]},
+                {"op": "text", "text": 0},
+                {"op": "text", "text": 1},
+                {"op": "text", "text": 2}
+            ],
+            "texts": [
+                {"binding": 0},
+                {"value": "row rendered"},
+                {"value": "empty branch"}
+            ],
+            "bindings": [{"target": 4, "sink": "text", "expression": 4}],
+            "propPrograms": [],
+            "hostSlots": [],
+            "stateSlots": [
+                {"initialExpression": 0},
+                {"initialExpression": 2}
+            ],
+            "parameters": [],
+            "expressions": [
+                {"instructions": [
+                    {"op": "constant", "constant": 1},
+                    {"op": "constant", "constant": 0},
+                    {"op": "makeRecord", "fields": [1, 2]},
+                    {"op": "makeArray", "count": 1},
+                    {"op": "return"}
+                ]},
+                {"instructions": [
+                    {"op": "loadState", "state": 0},
+                    {"op": "filter", "predicate": 3},
+                    {"op": "return"}
+                ]},
+                {"instructions": [
+                    {"op": "constant", "constant": 2},
+                    {"op": "return"}
+                ]},
+                {"instructions": [
+                    {"op": "loadRowField", "field": 2},
+                    {"op": "string", "kind": "lower", "count": 1},
+                    {"op": "loadState", "state": 1},
+                    {"op": "string", "kind": "trim", "count": 1},
+                    {"op": "string", "kind": "lower", "count": 1},
+                    {"op": "string", "kind": "includes", "count": 2},
+                    {"op": "return"}
+                ]},
+                {"instructions": [
+                    {"op": "loadRowField", "field": 2},
+                    {"op": "return"}
+                ]},
+                {"instructions": [
+                    {"op": "loadState", "state": 0},
+                    {"op": "filter", "predicate": 3},
+                    {"op": "field", "field": 6},
+                    {"op": "return"}
+                ]}
+            ],
+            "actions": [],
+            "loops": [{"sourceExpression": 1, "keyExpression": 4, "itemSlot": 0, "rowTemplate": 3}],
+            "routeOutlets": []
+        }]
+    });
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": [{"id": "home", "path": "", "graphId": "home", "outletId": "main"}]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "", true)},
+            {"graphId": "home", "graph": home}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+    let html = get_html(&options(dir.path()), "/").await;
+    assert!(
+        html.contains("Try the Plec Todo API"),
+        "predicate should keep the item and the loop should render: {html}"
+    );
+    assert!(!html.contains("empty branch"), "{html}");
+}
+
+#[tokio::test]
+async fn string_length_and_filter_pass_through_non_arrays() {
+    // `string.length` is a real value; a filter over a non-array yields an
+    // empty array instead of corrupting the stack.
+    let dir = fixture_dir();
+    let home = json!({
+        "rootComponent": 0,
+        "components": [{
+            "id": "home",
+            "rootNode": 0,
+            "strings": ["p", "length"],
+            "constants": ["hello", 0],
+            "nodes": [
+                {"op": "element", "tag": 0, "children": [1, 2]},
+                {"op": "text", "text": 0},
+                {"op": "text", "text": 1}
+            ],
+            "texts": [{"binding": 0}, {"binding": 1}],
+            "bindings": [
+                {"target": 1, "sink": "text", "expression": 0},
+                {"target": 2, "sink": "text", "expression": 1}
+            ],
+            "propPrograms": [],
+            "hostSlots": [],
+            "stateSlots": [],
+            "parameters": [],
+            "expressions": [
+                {"instructions": [
+                    {"op": "constant", "constant": 0},
+                    {"op": "field", "field": 1},
+                    {"op": "return"}
+                ]},
+                {"instructions": [
+                    {"op": "constant", "constant": 1},
+                    {"op": "filter", "predicate": 0},
+                    {"op": "field", "field": 1},
+                    {"op": "return"}
+                ]}
+            ],
+            "actions": [],
+            "loops": [],
+            "routeOutlets": []
+        }]
+    });
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": [{"id": "home", "path": "", "graphId": "home", "outletId": "main"}]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "", true)},
+            {"graphId": "home", "graph": home}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+    let html = get_html(&options(dir.path()), "/").await;
+    // "hello".length == 5; filter over a string (non-array) produces an
+    // empty array, whose length is 0.
+    assert!(
+        html.contains("<!--plec:text:root/outlet:main:1-->5"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<!--plec:text:root/outlet:main:2-->0"),
+        "{html}"
+    );
+}
