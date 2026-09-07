@@ -175,6 +175,7 @@ fn is_definition_line(line: &str) -> bool {
     trimmed.starts_with("pub const ")
         || trimmed.starts_with("const ")
         || trimmed.starts_with("pub fn ")
+        || trimmed.starts_with("pub(crate) fn ")
         || trimmed.starts_with("fn ")
         || trimmed.starts_with("export function ")
         || trimmed.starts_with("export const ")
@@ -324,8 +325,8 @@ mod tests {
         );
         assert_eq!(
             categorize(
-                "packages/plec-server/src/index.ts",
-                "export function bootstrapPayload("
+                "crates/plec-server/src/ssr/snapshot.rs",
+                "pub(crate) fn bootstrap_payload("
             ),
             Category::DefinedIn
         );

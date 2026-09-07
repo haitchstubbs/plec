@@ -14,7 +14,7 @@ test, and typecheck time.
 
 ```sh
 yarn workspace plec-runtime build             # once: build the WASM runtime
-yarn workspace @wasm-runtime/fullstack dev    # build + node --watch dist/server.mjs
+yarn workspace @wasm-runtime/fullstack dev    # build + plec serve dist
 ```
 
 Serves on `PORT` (default `3000`). TSX edits require a rebuild — the Rust
@@ -28,8 +28,8 @@ yarn test:e2e                                # Playwright smoke gate (repo root)
 yarn test:acceptance                         # Playwright full behavioral suites
 ```
 
-Playwright (`packages/plec-e2e`) owns the server lifecycle for e2e tiers —
-never start `dist/server.mjs` manually for tests.
+Playwright (`packages/plec-e2e`) owns the native server lifecycle for e2e
+tiers — never start a server manually for tests.
 
 Prerequisites, the WASM rebuild loop, and the stale-`.br` trap:
 [docs/getting-started.md](../../docs/getting-started.md).

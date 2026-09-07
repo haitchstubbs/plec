@@ -4,7 +4,7 @@
 //! policy: the compiler rejects hostile authored props, typed-IR validation
 //! (`plec_schema::typed`) rejects substituted artifacts, the runtime binding
 //! applier (`plec_client::bindings`) enforces it at apply time, and the SSR
-//! serializer mirrors it in `packages/plec-server`. Keep the four surfaces in
+//! serializer in `crates/plec-server` mirrors it. Keep the four surfaces in
 //! lockstep; this module is the authority.
 
 /// Attribute names owned by the structural DOM address protocol

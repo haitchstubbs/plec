@@ -230,7 +230,7 @@ async function renameFile(oldPath, newPath) {
 /**
  * Emit maximum-quality Brotli sidecars (`<artifact>.br`) next to the runtime
  * artifacts. The app stager (crates/plec-cli/src/com/stage.rs) copies them
- * when present and `plec-server` serves them negotiated by
+ * when present and the native `plec-server` serves them negotiated by
  * `Accept-Encoding`; every rebuild overwrites them so a sidecar can never
  * outlive the bytes it compresses.
  *

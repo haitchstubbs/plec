@@ -4,9 +4,9 @@
  * consumable without the monorepo. The artifact is the package folder itself;
  * this script fills `dist/` with everything it must carry:
  *
- * - compiled JS (tsc) plus bundled `./server` / `./browser` re-export entries
- *   (the workspace packages stay independent; their built output is inlined
- *   so no bare `plec-server`/`plec-browser` specifier survives)
+ * - compiled JS (tsc) plus bundled `./server` / `./browser` entries
+ *   (the browser package's built output is inlined so no bare workspace
+ *   specifier survives)
  * - staged WASM runtime assets from packages/plec-runtime/dist/runtime
  * - the cargo-built release-variant CLI binary (PLEC_CLI_VERSION=release,
  *   the public-build variant per `.env.plec` semantics)
@@ -43,12 +43,6 @@ function ensureBuilt(label, markerPath, workspace, script) {
   run('yarn', ['workspace', workspace, 'run', script]);
 }
 
-ensureBuilt(
-  'plec-server',
-  'packages/plec-server/dist/index.js',
-  'plec-server',
-  'build',
-);
 ensureBuilt(
   'plec-browser',
   'packages/plec-browser/dist/index.js',
@@ -94,15 +88,9 @@ for (const { entry, outfile, platform } of bundleEntries) {
   });
 }
 
-// The re-export type declarations must be self-contained too: tsc emits
-// `export * from "plec-server"`, which no out-of-repo consumer can resolve.
-// The dependency packages are single-file declaration units, so their built
-// declarations are copied verbatim.
+// The browser re-export declaration must be self-contained: its workspace
+// dependency is a single-file declaration unit, so copy it verbatim.
 console.log('Staging self-contained type declarations...');
-fs.copyFileSync(
-  path.join(repoRoot, 'packages/plec-server/dist/index.d.ts'),
-  path.join(distDir, 'server.d.ts'),
-);
 fs.copyFileSync(
   path.join(repoRoot, 'packages/plec-browser/dist/index.d.ts'),
   path.join(distDir, 'browser.d.ts'),
@@ -133,8 +121,7 @@ if (!isWindows) fs.chmodSync(path.join(binDir, binaryName), 0o755);
 // ---------------------------------------------------------------------------
 // Self-containment audit: the artifact must be inspectable as a folder alone.
 // ---------------------------------------------------------------------------
-const workspaceSpecifier =
-  /(?:from|import)\s*['"](?:plec-server|plec-browser)['"]/;
+const workspaceSpecifier = /(?:from|import)\s*['"]plec-browser['"]/;
 const failures = [];
 for (const entry of walk(distDir)) {
   // Test files ship in dist by existing convention; they are not runtime

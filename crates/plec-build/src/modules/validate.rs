@@ -110,8 +110,8 @@ mod tests {
             "@swc/core"
         ));
         assert!(matches_package(
-            "packages/plec-server/src/index.ts",
-            "plec-server"
+            "packages/plec-node-runtime/src/runtime.ts",
+            "plec-node-runtime"
         ));
         assert!(matches_package(
             "apps\\demo\\node_modules\\zod\\x.js",
@@ -124,8 +124,8 @@ mod tests {
         assert!(!matches_package("src/zodlike.js", "zod"));
         assert!(!matches_package("node_modules/zod-dom/index.js", "zod"));
         assert!(!matches_package(
-            "packages/plec-server-tools/x.ts",
-            "plec-server"
+            "packages/plec-node-runtime-tools/x.ts",
+            "plec-node-runtime"
         ));
         assert!(!matches_package("src/client.tsx", "typescript"));
     }

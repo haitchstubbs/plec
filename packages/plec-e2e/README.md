@@ -2,7 +2,7 @@
 
 Canonical Playwright runner for the monorepo. Playwright owns the fullstack
 server: turbo builds `@wasm-runtime/fullstack`, the `webServer` entry starts
-`dist/server.mjs`, waits for HTTP readiness, and kills the process group
+`plec serve dist`, waits for HTTP readiness, and kills the process group
 afterwards. Never spawn the server manually.
 
 ## Tiers

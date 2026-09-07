@@ -304,7 +304,7 @@ Snapshot
   definition                2  crates/plec-ir/src/lib.rs:171  definition ✓
   runtime gate              —  crates/plec-runtime/src/runtime/lifecycle.rs:460  constant ref
   runtime fixtures          2  crates/plec-runtime/tests/typed_events.rs:2630  ✓
-  server producer           1  packages/plec-server/src/index.ts:529  ~ legacy non-snapshot fallback
+  server producer           —  crates/plec-server/src/ssr/snapshot.rs:21  constant ref
   …
 
 ✓ no stale hard-coded protocol versions

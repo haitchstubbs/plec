@@ -28,15 +28,15 @@ not, the binary on PATH is the release frontend.
 
 ## Command selection
 
-| Question                                           | Command                                                     |
-| -------------------------------------------------- | ----------------------------------------------------------- |
-| Which WASM tests failed and why?                   | `plec workspace test wasm --failures`                       |
-| Re-read the last run's failures without re-running | `plec workspace test last [--failure <substr>]`             |
-| Do all SSR protocol versions agree?                | `plec workspace contract ssr [--check]`                     |
-| Where does this symbol/error code come from?       | `plec workspace trace <query>`                              |
-| Is the built/staged WASM current?                  | `plec workspace artifact stale`                             |
-| Full artifact identity + protocol report           | `plec workspace artifact provenance runtime`                |
-| Why is SSR adoption failing?                       | `plec workspace doctor adoption [--html f] [--snapshot f]`  |
+| Question                                           | Command                                                    |
+| -------------------------------------------------- | ---------------------------------------------------------- |
+| Which WASM tests failed and why?                   | `plec workspace test wasm --failures`                      |
+| Re-read the last run's failures without re-running | `plec workspace test last [--failure <substr>]`            |
+| Do all SSR protocol versions agree?                | `plec workspace contract ssr [--check]`                    |
+| Where does this symbol/error code come from?       | `plec workspace trace <query>`                             |
+| Is the built/staged WASM current?                  | `plec workspace artifact stale`                            |
+| Full artifact identity + protocol report           | `plec workspace artifact provenance runtime`               |
+| Why is SSR adoption failing?                       | `plec workspace doctor adoption [--html f] [--snapshot f]` |
 
 All commands accept `--json`.
 
@@ -110,6 +110,6 @@ hoc again. Deferred command ideas already tracked in beads: `impact`,
   app-facing docs or code.
 - The commands read workspace state (git, built artifacts, compiled IR);
   they do not start servers. Playwright owns long-running browser processes
-  for e2e — never spawn `dist/server.mjs` manually.
+  for e2e — never spawn an application server manually.
 - Compiler-graph questions (not protocol/artifact/test questions) still
   belong to the `inspect-plec-app` skill's `plec inspect` workflow.

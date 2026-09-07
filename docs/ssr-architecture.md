@@ -5,7 +5,7 @@
 ## TL;DR
 
 - SSR is **not a compiler feature**. The Rust compiler has zero SSR-specific code — it emits deterministic component graphs plus a route manifest, and SSR _emerges_ from three components agreeing on one contract.
-- The server renderer is a **~255-line TypeScript interpreter** (`packages/plec-server`) that string-renders the same compiled graph the client runs. No WASM, no React, no VDOM on the server.
+- The native Rust server (`crates/plec-server`) string-renders the same compiled graph the client runs. No WASM, no React, no VDOM on the server.
 - Hydration is called **adoption**: the WASM runtime claims server-rendered DOM by matching path-qualified markers, then re-attaches bindings and listeners in place.
 - Adoption follows a **strict contract** — one missing/mismatched marker or invalid snapshot fails the whole page, which then falls back to a destructive client-side remount (discarding all SSR HTML).
 - Loops, conditionals, and loader routes **do adopt** today: the v2 bootstrap carries a typed execution snapshot (route chain, loader outcomes, branch selections, loop row keys) that the WASM runtime validates and uses to claim server-rendered rows/branches in place.
@@ -23,8 +23,8 @@ flowchart LR
         RC --> WASM["runtime.js +\nruntime_bg.wasm"]
     end
 
-    subgraph server["Request time (Node)"]
-        REQ["GET /todos"] --> PS["plec-server\n(TS graph interpreter)"]
+    subgraph server["Request time (Rust host)"]
+        REQ["GET /todos"] --> PS["plec-server\n(Rust graph interpreter)"]
         RA --> PS
         PS --> HTML["HTML with markers\n+ #plec-bootstrap JSON"]
     end
@@ -52,13 +52,12 @@ Key property: **server renderer, browser glue, and WASM runtime all walk the exa
 - `RouteManifest::validate` enforces version 3 (`crates/plec-ir/src/lib.rs:87`).
 - `ExecutionOwner { Shared, Server, Client }` + `PublicExport` (`crates/plec-ir/src/lib.rs:11`): the server boundary is now enforced — snapshot `public.exports` re-validate through `validate_public_export` (client-owned, non-serializable, or non-explicit entries are rejected), and the SSR renderer gates server-only host loads at the render boundary. Source-level export designation is still future work; v1 snapshots ship `exports: {}` and the loader-transfer slice will be the first producer.
 
-### `packages/plec-server` — the SSR renderer (pure TS, no WASM)
+### `crates/plec-server` — the SSR renderer
 
-- `createPlecServer` (`packages/plec-server/src/index.ts:58`): one handler — `/api/*` goes to a host-supplied escape hatch; document requests take the SSR path; everything else is static assets.
-- Reads and `JSON.parse`s the **entire artifact bundle on every request** — no caching (`index.ts:68`).
-- `matchRoute` (`index.ts:165`): flat segment matching with `$param` and catch-all `*` support.
-- `renderNode` (`index.ts:196`): recursive interpretation of the graph, including a small stack-VM `evaluate` (`index.ts:235`) for expressions. Host slots are request-aware for public state — `location` resolves from the URL. Cookie host slots are server-only: they evaluate as absent during SSR and each gated load is recorded for the development-only `x-plec-ssr-gating` response header (`index.ts:282`), so request cookies can never reach markup or the bootstrap.
-- Any render throw → serve the static SPA shell instead; the `x-plec-ssr-fallback` header exposes the error **in development only** (`index.ts:77-86`).
+- The native Axum host dispatches document, asset, loader, and `/api/*` requests (`crates/plec-server/src/http.rs`). Application APIs cross only into the authenticated Node sidecar.
+- `ssr::render` interprets the executable graph using the Rust evaluator. Request location is public state; cookies remain server-only and cannot reach markup or the bootstrap.
+- `ssr::snapshot` constructs the typed bootstrap directly from `plec-ir` snapshot types, so the producer and WASM consumer share one schema authority.
+- Any document render failure serves the static SPA shell; development responses expose the fallback diagnostic.
 
 ### `packages/plec-browser` — the adoption gatekeeper
 
@@ -84,7 +83,7 @@ Two things ship in the HTML. The typed execution snapshot below carries route id
 
 **Divergence policy.** Two failure classes have distinct outcomes. _Structural mismatch_ — invalid snapshots, unknown markers, unreferenced structures — fails adoption closed with a specific code on `plec:adoption`. _Binding-value divergence_ — a recomputed static value differing from the server-rendered text — is allowed: recompute-consequences semantics win, and the divergence is counted (`PlecRuntime::ssr_text_divergences`) and surfaced on the adopted diagnostic (`snapshotImported`, `textDivergences`) for development reporting. No per-binding diffing or reconciliation exists.
 
-**1. The bootstrap script** — `<script id="plec-bootstrap" type="application/json">` containing the v2 snapshot payload (`plec-server/src/index.ts`, `bootstrapPayload`): route chain identity, public request location, explicit public exports, and structural ownership per graph instance.
+**1. The bootstrap script** — `<script id="plec-bootstrap" type="application/json">` containing the v2 snapshot payload (`crates/plec-server/src/ssr/snapshot.rs`, `bootstrap_payload`): route chain identity, public request location, explicit public exports, and structural ownership per graph instance.
 
 **2. Ownership markers** — the path grammar is the contract; paths compose as `root → /outlet:{id} → /component:{i} → /node:{i}`. The **authoritative protocol definition** — grammar, uniqueness, ownership, the one-shot adoption lifecycle invariant, and the `data-runtime-node` retirement — lives in [dom-address-protocol.md](./dom-address-protocol.md); the table below summarizes the SSR emission and claim mechanics:
 
@@ -157,11 +156,11 @@ The claim walk itself (`TypedRuntime::adopt`, `typed/runtime.rs:841`) is deliber
 
 - Post-adoption `apply_static_bindings` overwrites server values with client re-evaluation. Tag/markers are the only structural checks, but value divergence is no longer fully invisible: it is counted (`ssr_text_divergences`) and surfaced on the adopted diagnostic. Cookie differences specifically cannot diverge silently — cookies never render server-side (see the render-boundary gating above).
 - Production SSR failures serve the SPA shell with **no log or metric**; the fallback header is dev-only.
-- TS and Rust expression VMs must agree opcode-for-opcode; `binary` server-side supports only 6 operators (`plec-server/src/index.ts:253`) — an op supported in Rust but not TS renders wrong HTML that gets silently self-healed.
+- SSR expression evaluation uses the Rust evaluator, removing the former TypeScript interpreter drift risk.
 
 **Known sharp edges**
 
-- Per-request `readFile` + `JSON.parse` of the whole artifact bundle — no caching (`plec-server/src/index.ts:68`).
+- Artifact loading is bounded before parsing (`crates/plec-server/src/artifact.rs`).
 - Event handlers (`on*` props) are dropped in SSR output — a page that fails adoption is inert until the remount completes.
 - `.expect("adopted route exists")` panic path in the adopt chain (`router/navigation.rs:69`) — infallible in practice, but a WASM trap if state were inconsistent.
 - `phases.dedup()` only removes _adjacent_ duplicates; the shipped artifact contains `FullstackLayout` twice (harmless today, latent confusion later).
@@ -189,7 +188,7 @@ All adoption failures are structured strings, surfaced as mismatch codes in `ple
 | Compiler      | `crates/plec-compiler/src/routes.rs`                                 | Route/artifact lowering, `stable_revision`        |
 | Compiler      | `crates/plec-lowering/src/node.rs`                                   | Deterministic node indices (= marker coordinates) |
 | Compiler      | `crates/plec-ir/src/lib.rs`                                          | Manifest schema + v3 validation                   |
-| Server        | `packages/plec-server/src/index.ts`                                  | HTTP host + SSR graph interpreter                 |
+| Server        | `crates/plec-server/src/http.rs`                                     | HTTP host + SSR graph interpreter                 |
 | Browser       | `packages/plec-browser/src/index.ts`                                 | `startPlecRouter`, adoption gate, diagnostics     |
 | Runtime       | `crates/plec-runtime/src/runtime/lifecycle.rs`                       | `start_adopt` / `abandon_adoption`                |
 | Runtime       | `crates/plec-runtime/src/router/navigation.rs`                       | Route-chain adoption, outlet resolution           |

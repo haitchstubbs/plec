@@ -1,5 +1,4 @@
-//! Behavioral tests for the native Plec server, mirroring the TypeScript
-//! host suite (`packages/plec-server/src/index.test.ts`) it replaces. Every
+//! Behavioral tests for the native Plec server. Every
 //! document render is additionally validated against the canonical
 //! `PlecSsrSnapshot::validate` contract where the fixture carries compiled
 //! component ids.
@@ -7,16 +6,16 @@
 use std::{path::Path, sync::Arc};
 
 use axum::{
+    Router,
     body::Body,
     http::{Request, Response, StatusCode},
-    Router,
 };
 use plec_ir::PlecSsrSnapshot;
 use plec_server::{
-    artifact::ArtifactBundle, create_plec_server, runtime::AppRequestHandler, DocumentMetadata,
-    PlecServerOptions,
+    DocumentMetadata, PlecServerOptions, artifact::ArtifactBundle, create_plec_server,
+    runtime::AppRequestHandler,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const BOOTSTRAP_OPEN: &str = "<script id=\"plec-bootstrap\" type=\"application/json\">";
@@ -1007,9 +1006,11 @@ async fn fails_the_render_closed_on_srcdoc_and_script_url_attribute_writes() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(text_of(response)
-        .await
-        .contains("UNSAFE_URL_ATTRIBUTE:href"));
+    assert!(
+        text_of(response)
+            .await
+            .contains("UNSAFE_URL_ATTRIBUTE:href")
+    );
 }
 
 #[tokio::test]

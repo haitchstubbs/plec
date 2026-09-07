@@ -56,7 +56,8 @@ fn builds_expected_output_structure() {
 
     // Minimum required artifact structure.
     for artifact in [
-        "server.mjs",
+        "server/app.mjs",
+        "plec-server.json",
         "client.meta.json",
         "public/index.html",
         "public/assets/client.js",
@@ -72,6 +73,10 @@ fn builds_expected_output_structure() {
             artifact
         );
     }
+    assert!(
+        !out_dir.join("server.mjs").exists(),
+        "legacy root server bundle must not be emitted"
+    );
 
     // Plec compiler route graphs.
     let graphs_dir = out_dir.join("public/graphs");
@@ -306,7 +311,8 @@ fn builds_out_of_repo_app_from_installed_plec_package() {
 
     // Same minimum artifact structure as the in-workspace build.
     for artifact in [
-        "server.mjs",
+        "server/app.mjs",
+        "plec-server.json",
         "client.meta.json",
         "public/index.html",
         "public/route-manifest.json",
@@ -317,6 +323,10 @@ fn builds_out_of_repo_app_from_installed_plec_package() {
             "out-of-repo build should emit {artifact}"
         );
     }
+    assert!(
+        !out_dir.join("server.mjs").exists(),
+        "out-of-repo builds must not emit the legacy root server bundle"
+    );
 }
 
 #[test]

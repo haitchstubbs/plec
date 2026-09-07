@@ -4,11 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "yarn dev:rebuild",
-    "start": "node dist/server.mjs",
-    "start:rust": "cargo run --quiet -p plec-cli -- serve dist",
+    "start": "cargo run --quiet -p plec-cli -- serve dist",
     "build:plec": "plec build src/app.tsx --out-dir dist",
     "build:css": "tailwindcss -i src/styles.css -o dist/public/assets/styles.css",
-    "dev:rebuild": "yarn check:no-react && yarn --cwd ../.. exec turbo run build --filter=@wasm-runtime/fullstack && node --watch dist/server.mjs",
+    "dev:rebuild": "yarn check:no-react && yarn --cwd ../.. exec turbo run build --filter=@wasm-runtime/fullstack && yarn start",
     "build": "yarn check:no-react && yarn build:plec && node scripts/build.mjs && yarn build:css",
     "test": "yarn check:no-react && vitest run",
     "typecheck": "yarn check:no-react && cargo check -p plec-compiler",
@@ -19,8 +18,7 @@
     "@wasm-runtime/lucide-plec": "workspace:*",
     "@wasm-runtime/ui": "workspace:*",
     "plec": "workspace:*",
-    "plec-browser": "workspace:*",
-    "plec-server": "workspace:*"
+    "plec-browser": "workspace:*"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.3",
