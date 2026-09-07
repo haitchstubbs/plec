@@ -1070,6 +1070,13 @@ impl TypedApplication {
                     if *tag >= self.strings.len() {
                         return Err("element tag handle out of range");
                     }
+                    // DOM-sink policy (plec_ir::sink): a tag string is
+                    // interpolated verbatim by every serializer, so anything
+                    // outside the strict HTML/SVG grammar is a markup
+                    // injection channel and fails the graph closed.
+                    if !plec_ir::sink::is_safe_tag_name(&self.strings[*tag]) {
+                        return Err("unsafe element tag");
+                    }
                     if children.iter().any(|child| *child >= node_count) {
                         return Err("element child handle out of range");
                     }
@@ -2259,6 +2266,27 @@ mod tests {
             serde_json::json!([]),
         );
         assert_eq!(tag.validate_contract(), Err("element tag handle out of range"));
+
+        let tag_application = |tag: &str| -> TypedApplication {
+            serde_json::from_value(serde_json::json!({
+                "version": "0.10",
+                "rootNode": 0,
+                "strings": ["div", tag],
+                "nodes": [{"op": "element", "tag": 1, "parent": null, "children": []}],
+                "expressions": [{"instructions": []}],
+                "actions": [{"instructions": [{"op": "return"}]}]
+            }))
+            .unwrap()
+        };
+        assert_eq!(
+            tag_application("img src=x onerror=alert(1)").validate_contract(),
+            Err("unsafe element tag")
+        );
+        assert_eq!(
+            tag_application("svg:script").validate_contract(),
+            Err("unsafe element tag")
+        );
+        assert!(tag_application("clipPath").validate_contract().is_ok());
 
         let text = topology_application(
             serde_json::json!([

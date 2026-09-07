@@ -1013,6 +1013,128 @@ async fn fails_the_render_closed_on_srcdoc_and_script_url_attribute_writes() {
     );
 }
 
+/// Adversarial regression: a substituted artifact cannot smuggle markup
+/// through tag strings, attribute names, ASCII-cased URL names, or reserved
+/// runtime namespaces. Each vector must fail the render closed.
+#[tokio::test]
+async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
+    let render_error = |component: Value| async move {
+        let dir = fixture_dir();
+        let home = json!({
+            "rootComponent": 0,
+            "components": [component]
+        });
+        let artifact = json!({
+            "manifest": {
+                "revision": "test-revision",
+                "rootGraphId": "root",
+                "routes": [{"id": "home", "path": "", "graphId": "home", "outletId": "main"}]
+            },
+            "graphs": [
+                {"graphId": "root", "graph": page("root", "main", "", true)},
+                {"graphId": "home", "graph": home}
+            ]
+        });
+        write_artifact(dir.path(), &artifact);
+        let response = create_plec_server(options(dir.path()))
+            .oneshot(get("/"))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        text_of(response).await
+    };
+    let component_base = json!({
+        "id": "home",
+        "rootNode": 0,
+        "strings": [],
+        "constants": [],
+        "nodes": [{"op": "element", "tag": 0, "children": []}],
+        "texts": [],
+        "bindings": [],
+        "propPrograms": [],
+        "hostSlots": [],
+        "stateSlots": [],
+        "parameters": [],
+        "expressions": [],
+        "actions": [],
+        "loops": [],
+        "routeOutlets": []
+    });
+    let set = |base: &Value, field: &str, value: Value| {
+        let mut component = base.clone();
+        component[field] = value;
+        component
+    };
+
+    // Tag injection: the "tag" smuggles an attribute carrier into markup.
+    let body = render_error(set(
+        &component_base,
+        "strings",
+        json!(["img src=x onerror=alert(1)"]),
+    ))
+    .await;
+    assert!(body.contains("UNSAFE_TAG:img src=x onerror=alert(1)"), "{body}");
+
+    // Attribute-name injection: whitespace breaks out of the attribute into
+    // new markup-bearing syntax.
+    let mut component = set(
+        &component_base,
+        "strings",
+        json!(["span", "x onerror=alert(1)"]),
+    );
+    component["constants"] = json!(["alert(1)"]);
+    component["propPrograms"] =
+        json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
+    let body = render_error(component).await;
+    assert!(
+        body.contains("UNSAFE_ATTRIBUTE:x onerror=alert(1)"),
+        "{body}"
+    );
+
+    // Attribute-name injection via a quote breakout.
+    let mut component = set(
+        &component_base,
+        "strings",
+        json!(["span", "a\" onmouseover=\"alert(1)"]),
+    );
+    component["constants"] = json!(["x"]);
+    component["propPrograms"] =
+        json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
+    let body = render_error(component).await;
+    // The JSON error body escapes the embedded quotes.
+    assert!(
+        body.contains(r#"UNSAFE_ATTRIBUTE:a\" onmouseover=\"alert(1)"#),
+        "{body}"
+    );
+
+    // Uppercase URL attribute name must classify as a URL sink exactly like
+    // its lowercase spelling; the script URL fails the render closed.
+    let mut component = set(&component_base, "strings", json!(["a", "HREF"]));
+    component["constants"] = json!(["JAVASCRIPT:alert(1)"]);
+    component["propPrograms"] =
+        json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
+    let body = render_error(component).await;
+    assert!(
+        body.contains("UNSAFE_URL_ATTRIBUTE:HREF"),
+        "{body}"
+    );
+
+    // The reserved runtime namespace is rejected in any ASCII casing.
+    let mut component = set(
+        &component_base,
+        "strings",
+        json!(["span", "DATA-PLEC-NODE"]),
+    );
+    component["constants"] = json!(["forged"]);
+    component["propPrograms"] =
+        json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
+    let body = render_error(component).await;
+    assert!(
+        body.contains("RESERVED_ATTRIBUTE:DATA-PLEC-NODE"),
+        "{body}"
+    );
+}
+
 #[tokio::test]
 async fn drops_hostile_event_handler_keys_from_spread_bags_in_markup() {
     let dir = fixture_dir();
