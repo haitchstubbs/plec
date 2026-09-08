@@ -264,8 +264,20 @@ fn install_esbuild(project: &Path) {
 
 /// Install a minimal stand-in for the release `plec` package: the exports the
 /// fixture apps import plus the staged runtime assets, with `runtime.js`
-/// carrying a marker so the test can prove which source staged them.
+/// carrying a marker so the test can prove which source staged them. The
+/// staged binaries carry a provenance record the build verifies before
+/// copying them.
 fn install_plec_package(project: &Path, runtime_marker: &str) {
+    use sha2::{Digest, Sha256};
+
+    let sha256_hex = |bytes: &[u8]| {
+        let digest = Sha256::digest(bytes);
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+
     let plec = project.join("node_modules/plec");
     fs::create_dir_all(plec.join("dist/runtime")).expect("plec package dirs should be creatable");
     fs::write(
@@ -279,14 +291,19 @@ fn install_plec_package(project: &Path, runtime_marker: &str) {
          export function createRootRoute() { return {}; }\n",
     )
     .expect("plec browser stub should be writable");
+    let wasm = b"\0asm\x01\x00\x00\x00";
     fs::write(plec.join("dist/runtime/runtime.js"), runtime_marker)
         .expect("runtime.js stub should be writable");
     // Minimal valid WASM binary header; the Rust tests never execute it.
-    fs::write(
-        plec.join("dist/runtime/runtime_bg.wasm"),
-        b"\0asm\x01\x00\x00\x00",
-    )
-    .expect("runtime_bg.wasm stub should be writable");
+    fs::write(plec.join("dist/runtime/runtime_bg.wasm"), wasm)
+        .expect("runtime_bg.wasm stub should be writable");
+    let provenance = format!(
+        r#"{{"jsSha256":"{}","wasmSha256":"{}"}}"#,
+        sha256_hex(runtime_marker.as_bytes()),
+        sha256_hex(wasm),
+    );
+    fs::write(plec.join("dist/runtime/provenance.json"), provenance)
+        .expect("provenance.json stub should be writable");
 }
 
 #[test]
