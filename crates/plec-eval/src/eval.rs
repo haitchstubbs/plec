@@ -7,16 +7,19 @@ use wasm_bindgen::JsValue;
 
 pub fn typed_eval(
     app: &TypedApplication,
+    cookie_policy: Option<&plec_dom::cookie::CookiePolicyMap>,
     program: usize,
     states: &[RuntimeValue],
     row: Option<&HashMap<String, RuntimeValue>>,
     row_index: usize,
 ) -> Result<RuntimeValue, JsValue> {
-    typed_eval_frame(app, program, states, row, row_index, &[], &[])
+    typed_eval_frame(app, cookie_policy, program, states, row, row_index, &[], &[])
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn typed_eval_frame(
     app: &TypedApplication,
+    cookie_policy: Option<&plec_dom::cookie::CookiePolicyMap>,
     program: usize,
     states: &[RuntimeValue],
     row: Option<&HashMap<String, RuntimeValue>>,
@@ -25,15 +28,27 @@ pub fn typed_eval_frame(
     event: &[RuntimeValue],
 ) -> Result<RuntimeValue, JsValue> {
     let mut fuel = plec_ir::limits::MAX_EXPRESSION_STEPS;
-    typed_eval_bounded(app, program, states, row, frame, event, &mut fuel, 0)
+    typed_eval_bounded(
+        app,
+        cookie_policy,
+        program,
+        states,
+        row,
+        frame,
+        event,
+        &mut fuel,
+        0,
+    )
 }
 
 /// Execution-budget wrapper: the interpreter shares one fuel counter across
 /// every nested Filter/Map evaluation, so crafted loops or self-referential
 /// predicates exhaust a documented budget instead of pinning the tab or
 /// overflowing the stack.
+#[allow(clippy::too_many_arguments)]
 fn typed_eval_bounded(
     app: &TypedApplication,
+    cookie_policy: Option<&plec_dom::cookie::CookiePolicyMap>,
     program: usize,
     states: &[RuntimeValue],
     row: Option<&HashMap<String, RuntimeValue>>,
@@ -104,15 +119,16 @@ fn typed_eval_bounded(
                     .host_slots
                     .get(*host)
                     .and_then(|slot| match slot.kind.as_str() {
+                        // A policy denial (or any read failure) resolves the
+                        // slot to Null. Falling back to host inputs here would
+                        // leak host/SSR-adopted values past the capability
+                        // gate; the host grants `getSync` explicitly or the
+                        // slot stays empty.
                         "cookie" => slot
                             .name
                             .and_then(|name| app.strings.get(name))
-                            .and_then(|name| plec_dom::cookie::read_sync_cookie(name).ok())
-                            .or_else(|| {
-                                slot.name
-                                    .and_then(|name| app.strings.get(name))
-                                    .and_then(|name| app.host_inputs.get(name))
-                                    .cloned()
+                            .and_then(|name| {
+                                plec_dom::cookie::read_sync_cookie(cookie_policy, name).ok()
                             }),
                         "location" => app
                             .host_inputs
@@ -239,6 +255,7 @@ fn typed_eval_bounded(
                     let object = item.record().cloned().unwrap_or_default();
                     let value = typed_eval_bounded(
                         app,
+                        cookie_policy,
                         *predicate,
                         states,
                         Some(&object),
@@ -487,7 +504,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            typed_eval(&app, 0, &[], None, 0).unwrap(),
+            typed_eval(&app, None, 0, &[], None, 0).unwrap(),
             RuntimeValue::Array(vec![
                 RuntimeValue::String("first".into()),
                 RuntimeValue::String("second".into()),
@@ -512,7 +529,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            typed_eval(&app, 0, &[], None, 0).unwrap(),
+            typed_eval(&app, None, 0, &[], None, 0).unwrap(),
             RuntimeValue::Number(1.0)
         );
     }
@@ -531,7 +548,7 @@ mod tests {
         .unwrap();
         let row = HashMap::from([("2".into(), RuntimeValue::Number(3.0))]);
         assert_eq!(
-            typed_eval(&app, 0, &[], Some(&row), 0).unwrap(),
+            typed_eval(&app, None, 0, &[], Some(&row), 0).unwrap(),
             RuntimeValue::Bool(true)
         );
     }
@@ -562,7 +579,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            typed_eval(&app, 0, &[], None, 0).unwrap(),
+            typed_eval(&app, None, 0, &[], None, 0).unwrap(),
             RuntimeValue::Array(vec![
                 RuntimeValue::Record(HashMap::new()),
                 RuntimeValue::Record(HashMap::new()),

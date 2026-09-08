@@ -214,6 +214,7 @@ impl RuntimeState {
             app,
             self.region_tracker.clone(),
             self.reconcile_budget.clone(),
+            self.cookie_policy.clone(),
         )?;
         next.set_component_definitions(graph.components);
         next.set_host_inputs(self.typed_host_inputs.borrow().clone())?;

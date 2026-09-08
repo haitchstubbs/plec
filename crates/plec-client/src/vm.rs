@@ -211,6 +211,7 @@ impl TypedRuntime {
                     TypedActionInstruction::Evaluate { expression } => {
                         stack.push(typed_eval_frame(
                             &self.app,
+                            self.cookie_policy.borrow().as_ref(),
                             expression,
                             &self.states,
                             row.as_ref(),
@@ -292,6 +293,7 @@ impl TypedRuntime {
                             .map(|expression| {
                                 typed_eval_frame(
                                     &self.app,
+                                    self.cookie_policy.borrow().as_ref(),
                                     expression,
                                     &self.states,
                                     row.as_ref(),
@@ -314,6 +316,7 @@ impl TypedRuntime {
                             .map(|expression| {
                                 typed_eval_frame(
                                     &self.app,
+                                    self.cookie_policy.borrow().as_ref(),
                                     expression,
                                     &self.states,
                                     row.as_ref(),
@@ -373,6 +376,7 @@ impl TypedRuntime {
                         {
                             child[slot] = typed_eval_frame(
                                 &self.app,
+                                self.cookie_policy.borrow().as_ref(),
                                 expression,
                                 &self.states,
                                 row.as_ref(),
@@ -485,6 +489,7 @@ impl TypedRuntime {
                         {
                             child[slot] = typed_eval_frame(
                                 &self.app,
+                                self.cookie_policy.borrow().as_ref(),
                                 expression,
                                 &self.states,
                                 row.as_ref(),
@@ -578,6 +583,7 @@ impl TypedRuntime {
                     } => {
                         let key = typed_value_string(&typed_eval_frame(
                             &self.app,
+                            self.cookie_policy.borrow().as_ref(),
                             key,
                             &self.states,
                             row.as_ref(),
@@ -589,6 +595,7 @@ impl TypedRuntime {
                             .map(|program| {
                                 typed_eval_frame(
                                     &self.app,
+                                    self.cookie_policy.borrow().as_ref(),
                                     program,
                                     &self.states,
                                     row.as_ref(),
@@ -618,6 +625,7 @@ impl TypedRuntime {
                                 .map(|expression| {
                                     typed_eval_frame(
                                         &self.app,
+                                        self.cookie_policy.borrow().as_ref(),
                                         expression,
                                         &self.states,
                                         row.as_ref(),
@@ -676,6 +684,7 @@ impl TypedRuntime {
                             };
                             let url = typed_value_string(&typed_eval_frame(
                                 &self.app,
+                                self.cookie_policy.borrow().as_ref(),
                                 request.url,
                                 &self.states,
                                 row.as_ref(),
@@ -696,6 +705,7 @@ impl TypedRuntime {
                                         )?,
                                         typed_value_string(&typed_eval_frame(
                                             &self.app,
+                                            self.cookie_policy.borrow().as_ref(),
                                             header.value,
                                             &self.states,
                                             row.as_ref(),
@@ -711,6 +721,7 @@ impl TypedRuntime {
                                 .map(|expression| {
                                     typed_eval_frame(
                                         &self.app,
+                                        self.cookie_policy.borrow().as_ref(),
                                         expression,
                                         &self.states,
                                         row.as_ref(),
@@ -764,6 +775,7 @@ impl TypedRuntime {
                             .map(|expression| {
                                 typed_eval_frame(
                                     &self.app,
+                                    self.cookie_policy.borrow().as_ref(),
                                     expression,
                                     &self.states,
                                     row.as_ref(),
@@ -885,7 +897,7 @@ mod tests {
 
     #[test]
     fn call_frame_executes_action_handles_from_frame_slots_with_both_continuations() {
-        let mut runtime = TypedRuntime::new(call_frame_application()).unwrap();
+        let mut runtime = TypedRuntime::new(call_frame_application(), std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
         let mut metrics = UpdateMetrics::default();
 
         runtime
@@ -944,7 +956,7 @@ mod tests {
             }]
         }))
         .unwrap();
-        let mut runtime = TypedRuntime::new(app).unwrap();
+        let mut runtime = TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
         let mut metrics = UpdateMetrics::default();
 
         runtime
@@ -1139,7 +1151,7 @@ impl TypedRuntime {
                     self.app.bindings.get(handle).cloned(),
                     self.nodes.get(&self.app.bindings[handle].target).cloned(),
                 ) {
-                    typed_apply_binding(&self.app, &binding, &node, &self.states, None, 0)?;
+                    typed_apply_binding(&self.app, self.cookie_policy.borrow().as_ref(), &binding, &node, &self.states, None, 0)?;
                     metrics.dom_operations += 1;
                     metrics.bindings_touched += 1;
                 }
@@ -1149,7 +1161,7 @@ impl TypedRuntime {
                         for write in program.writes {
                             let value = match write.expression {
                                 Some(expression) => {
-                                    typed_eval(&self.app, expression, &self.states, None, 0)?
+                                    typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, None, 0)?
                                 }
                                 None => write
                                     .constant
@@ -1276,7 +1288,7 @@ impl TypedRuntime {
                             .and_then(|binding| self.nodes.get(&binding.target))
                             .cloned(),
                     ) {
-                        typed_apply_binding(&self.app, &binding, &node, &self.states, None, 0)?;
+                        typed_apply_binding(&self.app, self.cookie_policy.borrow().as_ref(), &binding, &node, &self.states, None, 0)?;
                         metrics.dom_operations += 1;
                         metrics.bindings_touched += 1;
                     }
@@ -1288,7 +1300,7 @@ impl TypedRuntime {
                                 let value = write
                                     .expression
                                     .map(|expression| {
-                                        typed_eval(&self.app, expression, &self.states, None, 0)
+                                        typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, None, 0)
                                     })
                                     .transpose()?
                                     .or_else(|| {
