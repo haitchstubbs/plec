@@ -9,10 +9,10 @@ members = [
   "crates/plec-ir",
   "crates/plec-lowering",
   "crates/plec-parser",
-  "crates/plec-runtime", 
+  "crates/plec-runtime",
   "crates/plec-client",
   "crates/plec-model",
-  "crates/plec-schema", 
+  "crates/plec-schema",
   "crates/plec-dom",
   "crates/plec-build",
   "crates/plec-server",
@@ -40,7 +40,35 @@ toml = "0.8"
 serde-wasm-bindgen = "=0.6.5"
 wasm-bindgen = "=0.2.128"
 wasm-bindgen-futures = "=0.4.78"
-web-sys = { version = "=0.3.105", features = ["Comment", "console", "CssStyleDeclaration", "CustomEvent", "CustomEventInit", "Document", "DocumentFragment", "DomTokenList", "Element", "Event", "EventTarget", "History", "HtmlDocument", "HtmlElement", "HtmlInputElement", "KeyboardEvent", "Location", "MediaQueryList", "MouseEvent", "MouseEventInit", "Node", "NodeList", "Performance", "PerformanceEntry", "Storage", "Text", "Window"] }
+web-sys = { version = "=0.3.105", features = [
+  "Comment",
+  "console",
+  "CssStyleDeclaration",
+  "CustomEvent",
+  "CustomEventInit",
+  "Document",
+  "DocumentFragment",
+  "DomTokenList",
+  "Element",
+  "Event",
+  "EventTarget",
+  "History",
+  "HtmlDocument",
+  "HtmlElement",
+  "HtmlInputElement",
+  "KeyboardEvent",
+  "Location",
+  "MediaQueryList",
+  "MouseEvent",
+  "MouseEventInit",
+  "Node",
+  "NodeList",
+  "Performance",
+  "PerformanceEntry",
+  "Storage",
+  "Text",
+  "Window",
+] }
 wasm-bindgen-test = "=0.3.78"
 js-sys = "=0.3.105"
 axum = "0.8.9"
@@ -52,7 +80,12 @@ reqwest = { version = "0.11", default-features = false }
 thiserror = "1"
 indexmap = "1"
 # Internal Rust→Node sidecar HTTP client (hyper 1.x over a private socket).
-hyper = { version = "1", default-features = false, features = ["client", "http1"] }
-hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+hyper = { version = "1", default-features = false, features = [
+  "client",
+  "http1",
+] }
+hyper-util = { version = "0.1", default-features = false, features = [
+  "tokio",
+] }
 http-body-util = "0.1"
 getrandom = "0.4"
