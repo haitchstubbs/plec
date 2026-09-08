@@ -5,6 +5,7 @@ use crate::events::*;
 use crate::fetch::*;
 use crate::prelude::*;
 use crate::reorder::keyed_reorder_plan;
+use plec_dom::cookie::CookiePolicy;
 use plec_dom::platform::*;
 use plec_eval::eval::*;
 use plec_schema::typed::TypedComponentProp;
@@ -336,6 +337,11 @@ pub struct TypedRuntime {
     pub graph_generation: u64,
     pub host_inputs: HashMap<String, RuntimeValue>,
     pub host_refs: HashMap<String, Node>,
+    /// Host-owned cookie capability policy shared with the owning
+    /// `RuntimeState`. Synchronous `getSync` reads evaluate against this
+    /// per-runtime store, so separately embedded runtimes never observe each
+    /// other's grants.
+    pub cookie_policy: Rc<RefCell<Option<HashMap<String, CookiePolicy>>>>,
     /// Component indices in a 0.10 node are local to its graph artifact.
     pub component_definitions: Option<Vec<TypedApplication>>,
     pub pending_cookies: Vec<TypedPendingCookie>,
@@ -680,6 +686,7 @@ impl RuntimeState {
                     app,
                     self.region_tracker.clone(),
                     self.reconcile_budget.clone(),
+                    self.cookie_policy.clone(),
                 )?;
                 runtime.set_component_definitions(definitions);
                 runtime.path = request.path.clone();
@@ -928,30 +935,59 @@ impl TypedRuntime {
             .app
             .state_slots
             .iter()
-            .map(|slot| typed_eval(&self.app, slot.initial_expression, &[], None, 0))
+            .map(|slot| {
+                typed_eval(
+                    &self.app,
+                    self.cookie_policy.borrow().as_ref(),
+                    slot.initial_expression,
+                    &[],
+                    None,
+                    0,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(())
     }
-    pub fn new(app: TypedApplication) -> Result<Self, JsValue> {
+    pub fn new(
+        app: TypedApplication,
+        cookie_policy: Rc<RefCell<Option<HashMap<String, CookiePolicy>>>>,
+    ) -> Result<Self, JsValue> {
         let tracker = Rc::new(RegionTracker::new());
-        Self::new_with_runtime_limits(app, tracker, Rc::new(RefCell::new(None)))
+        Self::new_with_runtime_limits(app, tracker, Rc::new(RefCell::new(None)), cookie_policy)
     }
 
     pub fn new_with_runtime_limits(
         app: TypedApplication,
         region_tracker: Rc<RegionTracker>,
         reconcile_budget: Rc<RefCell<Option<ReconcileBudget>>>,
+        cookie_policy: Rc<RefCell<Option<HashMap<String, CookiePolicy>>>>,
     ) -> Result<Self, JsValue> {
         app.validate()?;
         let mut app = app;
         let mut states = Vec::new();
         for slot in &app.state_slots {
-            states.push(typed_eval(&app, slot.initial_expression, &[], None, 0)?);
+            states.push(typed_eval(
+                &app,
+                cookie_policy.borrow().as_ref(),
+                slot.initial_expression,
+                &[],
+                None,
+                0,
+            )?);
         }
         app.ref_values = app
             .ref_slots
             .iter()
-            .map(|slot| typed_eval(&app, slot.initial_expression, &[], None, 0))
+            .map(|slot| {
+                typed_eval(
+                    &app,
+                    cookie_policy.borrow().as_ref(),
+                    slot.initial_expression,
+                    &[],
+                    None,
+                    0,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let host_ref_nodes = vec![None; app.host_refs.len()];
         let focus_refs = vec![None; app.ref_slots.len()];
@@ -990,6 +1026,7 @@ impl TypedRuntime {
             pending_cookies: Vec::new(),
             next_cookie_id: 0,
             next_component_instance: 0,
+            cookie_policy,
             #[cfg(feature = "fetch")]
             pending_fetches: Vec::new(),
             #[cfg(feature = "fetch")]
@@ -1045,7 +1082,7 @@ impl TypedRuntime {
                         .get(name)
                         .ok_or_else(|| JsValue::from_str("component prop name out of range"))?
                         .clone();
-                    let value = typed_eval(&self.app, expression, &self.states, row, row_index)?;
+                    let value = typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, row, row_index)?;
                     Ok((name, value))
                 })
                 .collect::<Result<HashMap<_, _>, JsValue>>()?;
@@ -1351,7 +1388,7 @@ impl TypedRuntime {
             .get(loop_index)
             .ok_or_else(|| JsValue::from_str("loop handle out of range"))?
             .clone();
-        let values = typed_eval(&self.app, loop_def.source_expression, &self.states, None, 0)?;
+        let values = typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), loop_def.source_expression, &self.states, None, 0)?;
         let rows = values
             .array()
             .ok_or_else(|| JsValue::from_str("LOOP_SOURCE_NOT_ARRAY"))?;
@@ -1367,6 +1404,7 @@ impl TypedRuntime {
                 .ok_or_else(|| JsValue::from_str("LOOP_ROW_NOT_OBJECT"))?;
             let key = typed_value_string(&typed_eval(
                 &self.app,
+                self.cookie_policy.borrow().as_ref(),
                 loop_def.key_expression,
                 &self.states,
                 Some(&row),
@@ -1683,6 +1721,7 @@ impl TypedRuntime {
                     })?;
                 let selected = if typed_truthy(&typed_eval(
                     &self.app,
+                    self.cookie_policy.borrow().as_ref(),
                     test,
                     &self.states,
                     Some(row),
@@ -2048,7 +2087,7 @@ impl TypedRuntime {
                 TypedComponentProp::Value { expression, .. } => {
                     values.insert(
                         name,
-                        typed_eval(&self.app, expression, &self.states, row, row_index)?,
+                        typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, row, row_index)?,
                     );
                 }
                 TypedComponentProp::Callable { action, .. } => {
@@ -2751,7 +2790,7 @@ impl TypedRuntime {
                         TypedComponentProp::Value { expression, .. } => {
                             values.insert(
                                 name,
-                                typed_eval(&self.app, expression, &self.states, row, row_index)?,
+                                typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, row, row_index)?,
                             );
                         }
                         TypedComponentProp::Callable { action, .. } => {
@@ -2824,7 +2863,7 @@ impl TypedRuntime {
                         TypedComponentProp::Value { expression, .. } => {
                             values.insert(
                                 name,
-                                typed_eval(&self.app, expression, &self.states, row, row_index)?,
+                                typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, row, row_index)?,
                             );
                         }
                         TypedComponentProp::Callable { action, .. } => {
@@ -2918,6 +2957,7 @@ impl TypedRuntime {
                     };
                     let selected = if typed_truthy(&typed_eval(
                         &self.app,
+                        self.cookie_policy.borrow().as_ref(),
                         test,
                         &self.states,
                         row,
@@ -3004,7 +3044,7 @@ impl TypedRuntime {
         else {
             return Err(JsValue::from_str("conditional node expected"));
         };
-        let selected = if typed_truthy(&typed_eval(&self.app, test, &self.states, None, 0)?) {
+        let selected = if typed_truthy(&typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), test, &self.states, None, 0)?) {
             Some(consequent)
         } else {
             alternate
@@ -3148,7 +3188,7 @@ impl TypedRuntime {
     ) -> Result<(), JsValue> {
         for binding in &self.app.bindings {
             if let Some(node) = nodes.get(&binding.target) {
-                typed_apply_binding(&self.app, binding, node, &self.states, row, row_index)?;
+                typed_apply_binding(&self.app, self.cookie_policy.borrow().as_ref(), binding, node, &self.states, row, row_index)?;
                 metrics.bindings_touched += 1;
             }
         }
@@ -3159,7 +3199,7 @@ impl TypedRuntime {
             for write in &program.writes {
                 let value = match write.expression {
                     Some(expression) => {
-                        typed_eval(&self.app, expression, &self.states, row, row_index)?
+                        typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, row, row_index)?
                     }
                     None => write
                         .constant
@@ -3186,7 +3226,7 @@ impl TypedRuntime {
             .get(loop_index)
             .ok_or_else(|| JsValue::from_str("loop handle out of range"))?
             .clone();
-        let values = typed_eval(&self.app, loop_def.source_expression, &self.states, None, 0)?;
+        let values = typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), loop_def.source_expression, &self.states, None, 0)?;
         let rows = values
             .array()
             .ok_or_else(|| JsValue::from_str("LOOP_SOURCE_NOT_ARRAY"))?;
@@ -3198,6 +3238,7 @@ impl TypedRuntime {
                 .ok_or_else(|| JsValue::from_str("LOOP_ROW_NOT_OBJECT"))?;
             let key = typed_value_string(&typed_eval(
                 &self.app,
+                self.cookie_policy.borrow().as_ref(),
                 loop_def.key_expression,
                 &self.states,
                 Some(&row),
@@ -3253,6 +3294,7 @@ impl TypedRuntime {
                     .ok_or_else(|| JsValue::from_str("LOOP_ROW_NOT_OBJECT"))?;
                 let key = typed_value_string(&typed_eval(
                     &self.app,
+                    self.cookie_policy.borrow().as_ref(),
                     loop_def.key_expression,
                     &self.states,
                     Some(&row),
@@ -3275,6 +3317,7 @@ impl TypedRuntime {
                 projection.push((
                     typed_value_string(&typed_eval(
                         &self.app,
+                        self.cookie_policy.borrow().as_ref(),
                         loop_def.key_expression,
                         &self.states,
                         Some(&row),
@@ -3353,6 +3396,7 @@ impl TypedRuntime {
                 // than an inactive largest-branch estimate.
                 let selected = typed_truthy(&typed_eval(
                     &self.app,
+                    self.cookie_policy.borrow().as_ref(),
                     *test,
                     &self.states,
                     Some(values),
@@ -3721,6 +3765,7 @@ impl TypedRuntime {
             }) {
                 typed_apply_binding(
                     &self.app,
+                    self.cookie_policy.borrow().as_ref(),
                     &binding,
                     node,
                     &self.states,
@@ -3741,7 +3786,7 @@ impl TypedRuntime {
                     }
                     let value = match write.expression {
                         Some(expression) => {
-                            typed_eval(&self.app, expression, &self.states, Some(&row.values), 0)?
+                            typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, Some(&row.values), 0)?
                         }
                         None => write
                             .constant
@@ -3909,6 +3954,7 @@ impl TypedRuntime {
             }) => {
                 let selected = if typed_truthy(&typed_eval(
                     &self.app,
+                    self.cookie_policy.borrow().as_ref(),
                     *test,
                     &self.states,
                     Some(row),
@@ -3961,7 +4007,7 @@ impl TypedRuntime {
                 continue;
             }
             if let Some(node) = self.nodes.get(&binding.target) {
-                typed_apply_binding(&self.app, &binding, node, &self.states, None, 0)?;
+                typed_apply_binding(&self.app, self.cookie_policy.borrow().as_ref(), &binding, node, &self.states, None, 0)?;
             }
         }
         for (target, before) in observed {
@@ -3981,7 +4027,7 @@ impl TypedRuntime {
             };
             for write in program.writes {
                 let value = match write.expression {
-                    Some(expression) => typed_eval(&self.app, expression, &self.states, None, 0)?,
+                    Some(expression) => typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, None, 0)?,
                     None => write
                         .constant
                         .and_then(|index| self.app.constants.get(index))
@@ -4154,6 +4200,7 @@ impl TypedRuntime {
             }) {
                 typed_apply_binding(
                     &self.app,
+                    self.cookie_policy.borrow().as_ref(),
                     &binding,
                     node,
                     &self.states,
@@ -4181,6 +4228,7 @@ impl TypedRuntime {
                 }
                 let value = typed_eval(
                     &self.app,
+                    self.cookie_policy.borrow().as_ref(),
                     expression,
                     &self.states,
                     Some(&values),
@@ -4244,6 +4292,7 @@ impl TypedRuntime {
             if let Some(node) = nodes.get(&binding.target) {
                 typed_apply_binding(
                     &self.app,
+                    self.cookie_policy.borrow().as_ref(),
                     &binding,
                     node,
                     &self.states,
@@ -4268,6 +4317,7 @@ impl TypedRuntime {
                 }
                 let value = typed_eval(
                     &self.app,
+                    self.cookie_policy.borrow().as_ref(),
                     expression,
                     &self.states,
                     Some(&values),
@@ -4429,6 +4479,7 @@ impl TypedRuntime {
                     let loop_def = self.app.loops[loop_index].clone();
                     let previous_key = typed_value_string(&typed_eval(
                         &self.app,
+                        self.cookie_policy.borrow().as_ref(),
                         loop_def.key_expression,
                         &self.states,
                         Some(&values),
@@ -4441,6 +4492,7 @@ impl TypedRuntime {
                     values.extend(changed.clone());
                     let next_key = typed_value_string(&typed_eval(
                         &self.app,
+                        self.cookie_policy.borrow().as_ref(),
                         loop_def.key_expression,
                         &self.states,
                         Some(&values),

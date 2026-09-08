@@ -1,14 +1,14 @@
-//! Cookie document access and the active cookie policy.
+//! Cookie document access and the synchronous `getSync` capability gate.
 //!
-//! The policy store lives here (not in the runtime state) because
-//! `read_sync_cookie` is called from the expression VM during evaluation,
-//! outside any runtime call frame; `set_cookie_policy` on the runtime
-//! facade publishes into it.
+//! The gate is a pure function of the calling runtime's host-owned policy:
+//! `read_sync_cookie` takes the policy explicitly, because the expression VM
+//! may evaluate on behalf of any `PlecRuntime` on this thread. Policy state
+//! lives on `RuntimeState` (plec-client); the runtime's evaluation entry
+//! points thread it into the VM. There is no process-global policy store.
 
 use crate::platform::document;
 use plec_schema::delta::RuntimeValue;
 use serde::Deserialize;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
 
@@ -20,33 +20,21 @@ pub struct CookiePolicy {
     pub path: Option<String>,
 }
 
-thread_local! {
-    static ACTIVE_COOKIE_POLICY: RefCell<Option<HashMap<String, CookiePolicy>>> = RefCell::new(None);
-}
+/// Map from cookie name to the host grant for that name, as configured on a
+/// single `PlecRuntime` via `set_cookie_policy`.
+pub type CookiePolicyMap = HashMap<String, CookiePolicy>;
 
-/// Publishes the runtime's cookie policy so synchronous cookie reads
-/// evaluate against the same gate as asynchronous cookie operations.
-pub fn set_active_cookie_policy(policy: Option<HashMap<String, CookiePolicy>>) {
-    ACTIVE_COOKIE_POLICY.with(|active| *active.borrow_mut() = policy);
-}
-
-pub fn read_sync_cookie(name: &str) -> Result<RuntimeValue, JsValue> {
-    // Default-deny: only a host-published policy entry that explicitly lists
-    // `getSync` grants a synchronous read. An absent policy, a missing entry,
-    // or an unlisted operation all deny; artifact-declared capabilities never
-    // grant authority on their own.
-    let allowed = ACTIVE_COOKIE_POLICY.with(|policy| {
-        policy
-            .borrow()
-            .as_ref()
-            .and_then(|entries| entries.get(name))
-            .is_some_and(|entry| {
-                entry
-                    .operations
-                    .iter()
-                    .any(|operation| operation == "getSync")
-            })
-    });
+pub fn read_sync_cookie(
+    policy: Option<&CookiePolicyMap>,
+    name: &str,
+) -> Result<RuntimeValue, JsValue> {
+    // Default-deny: only a host-owned policy entry on the calling runtime
+    // that explicitly lists `getSync` grants a synchronous read. An absent
+    // policy, a missing entry, or an unlisted operation all deny;
+    // artifact-declared capabilities never grant authority on their own.
+    let allowed = policy
+        .and_then(|entries| entries.get(name))
+        .is_some_and(|entry| entry.operations.iter().any(|operation| operation == "getSync"));
     if !allowed {
         return Err(JsValue::from_str(
             "cookie operation denied by runtime policy",

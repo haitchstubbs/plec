@@ -244,11 +244,13 @@ fn cookie_error(message: &str) -> RuntimeValue {
 }
 
 impl RuntimeState {
+    /// Stores the host-owned cookie capability policy on this runtime only.
+    /// Both asynchronous cookie operations and synchronous `getSync` reads
+    /// gate on this per-runtime store; no cross-runtime global exists.
     pub fn set_cookie_policy(&self, policy: JsValue) -> Result<(), JsValue> {
         let policy: Option<HashMap<String, CookiePolicy>> =
             serde_wasm_bindgen::from_value(policy).map_err(error)?;
-        *self.cookie_policy.borrow_mut() = policy.clone();
-        plec_dom::cookie::set_active_cookie_policy(policy);
+        *self.cookie_policy.borrow_mut() = policy;
         Ok(())
     }
 }

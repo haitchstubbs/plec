@@ -13,13 +13,14 @@ use web_sys::{Element, Node};
 
 pub fn typed_apply_binding(
     app: &TypedApplication,
+    cookie_policy: Option<&plec_dom::cookie::CookiePolicyMap>,
     binding: &TypedBinding,
     node: &Node,
     states: &[RuntimeValue],
     row: Option<&HashMap<String, RuntimeValue>>,
     index: usize,
 ) -> Result<(), JsValue> {
-    let value = typed_eval(app, binding.expression, states, row, index)?;
+    let value = typed_eval(app, cookie_policy, binding.expression, states, row, index)?;
     typed_apply_value(app, &binding.sink, binding.name, node, value)
 }
 

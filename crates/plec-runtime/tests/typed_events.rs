@@ -725,10 +725,10 @@ fn cookie_get_artifact() -> serde_json::Value {
 
 /// A state slot initialized from a synchronous cookie host slot; the binding
 /// renders whatever the sync cookie gate allowed at mount time.
-fn sync_cookie_artifact() -> serde_json::Value {
+fn sync_cookie_artifact(name: &str) -> serde_json::Value {
     serde_json::json!({
         "rootNode":0,
-        "strings":["div","session"],
+        "strings":["div", name],
         "constants":[null],
         "nodes":[
             {"op":"element","tag":0,"children":[1]},
@@ -758,19 +758,6 @@ fn set_session_cookie(value: &str) {
         &JsValue::from_str(&format!("session={value}; path=/")),
     )
     .unwrap();
-}
-
-/// Clears the process-wide sync-cookie policy a previous test may have
-/// published: the sync gate is a thread-local, not runtime-owned state.
-fn clear_cookie_policy(runtime: &PlecRuntime) {
-    runtime
-        .set_cookie_policy(
-            serde_wasm_bindgen::to_value(
-                &Option::<std::collections::HashMap<String, serde_json::Value>>::None,
-            )
-            .unwrap(),
-        )
-        .unwrap();
 }
 
 fn caller_continuation_artifact() -> serde_json::Value {
@@ -2114,8 +2101,9 @@ async fn suspended_callee_resumes_its_caller_continuation() {
 // --- Host capability policy (default-deny) ----------------------------------
 //
 // Artifact-declared capabilities are requests only. Every grant below comes
-// from the host policy; the tests prove that a substituted artifact cannot
-// read cookies or reach the network without one.
+// from the host policy owned by one runtime instance; the tests prove that a
+// substituted artifact cannot read cookies or reach the network without one,
+// and that grants never leak between runtimes on the same thread.
 
 #[wasm_bindgen_test(async)]
 async fn fetch_without_host_policy_is_denied_without_a_network_request() {
@@ -2261,7 +2249,6 @@ async fn cookie_request_is_denied_without_a_host_policy_entry() {
     let _location = reset_browser_location();
     set_session_cookie("secret");
     let runtime = PlecRuntime::new();
-    clear_cookie_policy(&runtime);
     let root = mount_root();
     load_and_mount(&runtime, cookie_get_artifact(), &root);
     click_fetch(&root);
@@ -2320,9 +2307,8 @@ async fn host_policy_grant_allows_the_declared_cookie_request() {
 fn sync_cookie_read_is_denied_without_a_host_policy_entry() {
     set_session_cookie("secret");
     let runtime = PlecRuntime::new();
-    clear_cookie_policy(&runtime);
     let root = mount_root();
-    load_and_mount(&runtime, sync_cookie_artifact(), &root);
+    load_and_mount(&runtime, sync_cookie_artifact("session"), &root);
     // Denial never surfaces the cookie value: the slot resolves to null,
     // which the text sink renders as empty.
     assert_eq!(root.text_content().unwrap(), "");
@@ -2339,8 +2325,46 @@ fn sync_cookie_read_is_denied_when_the_policy_omits_get_sync() {
         })))
         .unwrap();
     let root = mount_root();
-    load_and_mount(&runtime, sync_cookie_artifact(), &root);
+    load_and_mount(&runtime, sync_cookie_artifact("session"), &root);
     assert_eq!(root.text_content().unwrap(), "");
+    set_session_cookie("");
+}
+
+#[wasm_bindgen_test]
+fn sync_cookie_denial_does_not_fall_back_to_seeded_host_inputs() {
+    set_session_cookie("secret");
+    let root = mount_root();
+    // Host/SSR adoption can seed host inputs. When the sync policy denies the
+    // read, a cookie-named host input must never resolve the slot instead.
+    let ungranted = PlecRuntime::new();
+    ungranted
+        .set_host_inputs(js_from_json(&serde_json::json!({
+            "session": "leaked"
+        })))
+        .unwrap();
+    load_and_mount(&ungranted, sync_cookie_artifact("session"), &root);
+    assert_eq!(root.text_content().unwrap(), "");
+
+    // A policy entry without `getSync` denies too: the fallback must not
+    // reappear once a policy exists but does not grant the operation.
+    let policy_without_get_sync = PlecRuntime::new();
+    policy_without_get_sync
+        .set_cookie_policy(js_from_json(&serde_json::json!({
+            "session": {"operations": ["get"]}
+        })))
+        .unwrap();
+    policy_without_get_sync
+        .set_host_inputs(js_from_json(&serde_json::json!({
+            "session": "leaked"
+        })))
+        .unwrap();
+    let second_root = mount_root();
+    load_and_mount(
+        &policy_without_get_sync,
+        sync_cookie_artifact("session"),
+        &second_root,
+    );
+    assert_eq!(second_root.text_content().unwrap(), "");
     set_session_cookie("");
 }
 
@@ -2354,8 +2378,121 @@ fn sync_cookie_read_succeeds_only_with_an_explicit_get_sync_grant() {
         })))
         .unwrap();
     let root = mount_root();
-    load_and_mount(&runtime, sync_cookie_artifact(), &root);
+    load_and_mount(&runtime, sync_cookie_artifact("session"), &root);
     assert_eq!(root.text_content().unwrap(), "secret");
+    set_session_cookie("");
+}
+
+#[wasm_bindgen_test]
+fn sync_cookie_grants_are_isolated_between_runtimes() {
+    set_session_cookie("secret");
+    let granted = PlecRuntime::new();
+    granted
+        .set_cookie_policy(js_from_json(&serde_json::json!({
+            "session": {"operations": ["getSync"]}
+        })))
+        .unwrap();
+    // A separately embedded runtime holds no policy: the other runtime's
+    // grant on the same thread must not leak into its evaluation.
+    let ungranted = PlecRuntime::new();
+    let ungranted_root = mount_root();
+    load_and_mount(&ungranted, sync_cookie_artifact("session"), &ungranted_root);
+    assert_eq!(ungranted_root.text_content().unwrap(), "");
+
+    // The granted runtime still evaluates with its own grant.
+    let granted_root = mount_root();
+    load_and_mount(&granted, sync_cookie_artifact("session"), &granted_root);
+    assert_eq!(granted_root.text_content().unwrap(), "secret");
+    set_session_cookie("");
+}
+
+#[wasm_bindgen_test]
+fn conflicting_runtime_policies_grant_only_their_own_runtime() {
+    set_session_cookie("secret");
+    let first = PlecRuntime::new();
+    let second = PlecRuntime::new();
+    first
+        .set_cookie_policy(js_from_json(&serde_json::json!({
+            "session": {"operations": ["getSync"]}
+        })))
+        .unwrap();
+    // Publishing the second runtime's conflicting policy must not erase the
+    // first runtime's grant: the pre-isolation thread-local did exactly that.
+    second
+        .set_cookie_policy(js_from_json(&serde_json::json!({
+            "other": {"operations": ["getSync"]}
+        })))
+        .unwrap();
+    let first_root = mount_root();
+    load_and_mount(&first, sync_cookie_artifact("session"), &first_root);
+    assert_eq!(first_root.text_content().unwrap(), "secret");
+    let second_root = mount_root();
+    load_and_mount(&second, sync_cookie_artifact("session"), &second_root);
+    assert_eq!(second_root.text_content().unwrap(), "");
+    set_session_cookie("");
+}
+
+#[wasm_bindgen_test]
+fn later_policy_publications_do_not_override_earlier_runtimes() {
+    set_session_cookie("secret");
+    let first = PlecRuntime::new();
+    let second = PlecRuntime::new();
+    second
+        .set_cookie_policy(js_from_json(&serde_json::json!({
+            "other": {"operations": ["getSync"]}
+        })))
+        .unwrap();
+    // The granted runtime publishes last: the old last-set-wins gate would
+    // hand it the second runtime's (empty for "session") context.
+    first
+        .set_cookie_policy(js_from_json(&serde_json::json!({
+            "session": {"operations": ["getSync"]}
+        })))
+        .unwrap();
+    let first_root = mount_root();
+    load_and_mount(&first, sync_cookie_artifact("session"), &first_root);
+    assert_eq!(first_root.text_content().unwrap(), "secret");
+    let second_root = mount_root();
+    load_and_mount(&second, sync_cookie_artifact("session"), &second_root);
+    assert_eq!(second_root.text_content().unwrap(), "");
+    set_session_cookie("");
+}
+
+#[wasm_bindgen_test]
+fn dispose_revokes_synchronous_cookie_grants() {
+    set_session_cookie("secret");
+    let runtime = PlecRuntime::new();
+    runtime
+        .set_cookie_policy(js_from_json(&serde_json::json!({
+            "session": {"operations": ["getSync"]}
+        })))
+        .unwrap();
+    let root = mount_root();
+    load_and_mount(&runtime, sync_cookie_artifact("session"), &root);
+    assert_eq!(root.text_content().unwrap(), "secret");
+    runtime.dispose().unwrap();
+    // Re-mounting through the disposed runtime evaluates against the revoked
+    // policy: capability state does not survive disposal.
+    let remounted = mount_root();
+    load_and_mount(&runtime, sync_cookie_artifact("session"), &remounted);
+    assert_eq!(remounted.text_content().unwrap(), "");
+    set_session_cookie("");
+}
+
+#[wasm_bindgen_test]
+fn substituted_artifact_host_slot_cannot_widen_the_named_grant() {
+    set_session_cookie("secret");
+    let runtime = PlecRuntime::new();
+    runtime
+        .set_cookie_policy(js_from_json(&serde_json::json!({
+            "session": {"operations": ["getSync"]}
+        })))
+        .unwrap();
+    // A substituted artifact re-points its cookie host slot at a different
+    // name; the grant is name-scoped, so the substitution reads nothing.
+    let root = mount_root();
+    load_and_mount(&runtime, sync_cookie_artifact("other"), &root);
+    assert_eq!(root.text_content().unwrap(), "");
     set_session_cookie("");
 }
 

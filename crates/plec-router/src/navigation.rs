@@ -510,6 +510,7 @@ fn mount_typed_graph(
         app,
         state.region_tracker.clone(),
         state.reconcile_budget.clone(),
+        state.cookie_policy.clone(),
     )?;
     runtime.set_component_definitions(graph.components);
     runtime.set_host_inputs(state.typed_host_inputs.borrow().clone())?;
@@ -571,6 +572,7 @@ fn adopt_typed_graph(
         app,
         state.region_tracker.clone(),
         state.reconcile_budget.clone(),
+        state.cookie_policy.clone(),
     )?;
     runtime.set_component_definitions(graph.components);
     runtime.ssr_imported = *state.typed_ssr_imported.borrow();

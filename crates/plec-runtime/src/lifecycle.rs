@@ -61,6 +61,7 @@ impl PlecRuntime {
                 application.components[application.root_component].clone(),
                 self.state.region_tracker.clone(),
                 self.state.reconcile_budget.clone(),
+                self.state.cookie_policy.clone(),
             )?;
             typed.set_component_definitions(application.components.clone());
             typed.set_host_inputs(self.state.typed_host_inputs.borrow().clone())?;
@@ -521,6 +522,11 @@ impl PlecRuntime {
         *self.state.typed_manifest.borrow_mut() = None;
         self.state.typed_component_registry.borrow_mut().clear();
         *self.state.typed_components.borrow_mut() = None;
+        // Disposal also revokes host capability grants: a disposed runtime
+        // must not retain authority to read cookies or reach the network,
+        // even if clones of its state handle survive.
+        *self.state.cookie_policy.borrow_mut() = None;
+        *self.state.fetch_policy.borrow_mut() = None;
         Ok(())
     }
 }
