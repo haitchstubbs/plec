@@ -14,6 +14,11 @@ use super::build::{BuildError, Stage};
 pub fn write_index(public_dir: &Path, title: &str, revision: &str) -> Result<(), BuildError> {
     let index_path = public_dir.join("index.html");
 
+    // Application metadata is untrusted input (`plec.toml` or a CLI flag);
+    // the title lands in an HTML text context, so it must not be able to
+    // close the element or inject markup.
+    let title = escape_html(title);
+
     let document = format!(
         r#"<!doctype html>
 <html lang="en">
@@ -44,4 +49,40 @@ pub fn write_index(public_dir: &Path, title: &str, revision: &str) -> Result<(),
             error,
         )
     })
+}
+
+/// Escape a value for an HTML text context. Mirrors the host's SSR escaping
+/// (`plec-server` `ssr::escape_html`): the document shell and SSR documents
+/// must agree on how application metadata renders.
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_index_to(title: &str) -> String {
+        let dir = tempfile::tempdir().expect("dir");
+        write_index(dir.path(), title, "rev0123456789").expect("document write");
+        std::fs::read_to_string(dir.path().join("index.html")).expect("document read")
+    }
+
+    #[test]
+    fn title_is_html_escaped() {
+        let index = write_index_to("</title><script>alert(1)</script>");
+        assert!(!index.contains("<script>"));
+        assert!(
+            index.contains("<title>&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;</title>")
+        );
+    }
+
+    #[test]
+    fn plain_title_passes_through_unchanged() {
+        let index = write_index_to("Plec & friends <3");
+        assert!(index.contains("<title>Plec &amp; friends &lt;3</title>"));
+    }
 }
