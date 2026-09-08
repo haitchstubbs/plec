@@ -1537,6 +1537,22 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@taplo/core@npm:^0.2.0":
+  version: 0.2.0
+  resolution: "@taplo/core@npm:0.2.0"
+  checksum: 10c0/4bbc3b696c49e267da2dfcd13e7812e5c09febda583856b35569773542e93f9c28a50dab69c635e1d5e11a4de6962ab08e006985fa38d2df1b3ef19d471efa05
+  languageName: node
+  linkType: hard
+
+"@taplo/lib@npm:^0.5.0":
+  version: 0.5.0
+  resolution: "@taplo/lib@npm:0.5.0"
+  dependencies:
+    "@taplo/core": "npm:^0.2.0"
+  checksum: 10c0/0d1ea190586cac09a1c28fc43f807ba843a3313329744aacf49200da909beacbc43e5ebb89677d608b821458ad9378bc3d398c2aa7eff7e567ad59f85cc5ed82
+  languageName: node
+  linkType: hard
+
 "@ts-morph/common@npm:~0.27.0":
   version: 0.27.0
   resolution: "@ts-morph/common@npm:0.27.0"
@@ -1895,6 +1911,7 @@ __metadata:
     "@wasm-runtime/lucide-plec": "workspace:*"
     "@wasm-runtime/ui": "workspace:*"
     esbuild: "npm:^0.27.4"
+    lucide: "npm:^1.31.0"
     plec: "workspace:*"
     plec-browser: "workspace:*"
     tailwindcss: "npm:^4.3.3"
@@ -4456,7 +4473,18 @@ __metadata:
   languageName: node
   linkType: hard
 
-"prettier@npm:^3.7.4":
+"prettier-plugin-toml@npm:^2.0.6":
+  version: 2.0.6
+  resolution: "prettier-plugin-toml@npm:2.0.6"
+  dependencies:
+    "@taplo/lib": "npm:^0.5.0"
+  peerDependencies:
+    prettier: ^3.0.3
+  checksum: 10c0/8fd0817c2dfe64e694424498c901228e304b76c0909e3ba8a1baff4d259c6f65bb742362859148c3438accd8248b0cf2efd2c89e1d73f9f469cd5ed82b60e5af
+  languageName: node
+  linkType: hard
+
+"prettier@npm:^3.9.6":
   version: 3.9.6
   resolution: "prettier@npm:3.9.6"
   bin:
@@ -5611,7 +5639,8 @@ __metadata:
     beads-ui: "npm:^0.12.6"
     binaryen: "npm:^131.0.0"
     dotenv-cli: "npm:^11.0.0"
-    prettier: "npm:^3.7.4"
+    prettier: "npm:^3.9.6"
+    prettier-plugin-toml: "npm:^2.0.6"
     turbo: "npm:^2.5.6"
     typescript: "npm:^7.0.2"
     vitest: "npm:^3.2.4"
