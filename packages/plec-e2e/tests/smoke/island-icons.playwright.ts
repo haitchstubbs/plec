@@ -6,12 +6,16 @@ test('host icons adopt through stable boundaries and never resize', async ({
 }) => {
   // SSR owns the host boundary, not the provider-owned SVG descendants.
   const html = await (await page.request.get('/')).text();
-  expect(html.match(/data-plec-host="lucide:[^"]+"/g)?.length ?? 0).toBeGreaterThan(0);
+  expect(
+    html.match(/data-plec-host="lucide:[^"]+"/g)?.length ?? 0,
+  ).toBeGreaterThan(0);
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
-  expect(await page.locator('[data-plec-host^="lucide:"]').count()).toBeGreaterThan(0);
+  const boundaries = page.locator('[data-plec-host^="lucide:"]');
+  const boundaryCount = await boundaries.count();
+  expect(boundaryCount).toBeGreaterThan(0);
   await waitForMount(page);
-  expect(await page.locator('svg').count()).toBeGreaterThan(0);
+  await expect(boundaries.locator('svg')).toHaveCount(boundaryCount);
   const measure = () =>
     page.evaluate(() =>
       Array.from(document.querySelectorAll('svg')).map(

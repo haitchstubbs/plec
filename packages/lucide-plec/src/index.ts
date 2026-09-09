@@ -1,12 +1,9 @@
 export type { IconComponent, IconProps } from './create-icon.js';
 
-import * as lucide from 'lucide';
+import type { IconNode } from 'lucide';
 
 type HostHandle = { element: SVGElement; attributes: Set<string> };
-type IconDefinition = readonly (readonly [
-  string,
-  Record<string, string | number>,
-])[];
+type IconDefinition = IconNode;
 
 function setAttributes(
   element: Element,
@@ -74,7 +71,9 @@ function mountIcon(
   return { element: svg, attributes: attributeNames(attributes) };
 }
 
-export function createLucideHostProvider() {
+export function createLucideHostProvider(
+  definitions: Record<string, IconDefinition>,
+) {
   const components: Record<
     string,
     {
@@ -86,11 +85,10 @@ export function createLucideHostProvider() {
       dispose(handle: HostHandle): void;
     }
   > = {};
-  for (const [name, definition] of Object.entries(lucide)) {
-    if (!Array.isArray(definition)) continue;
+  for (const [name, definition] of Object.entries(definitions)) {
     components[name] = {
       mount: (boundary, props) =>
-        mountIcon(definition as IconDefinition, boundary, props),
+        mountIcon(definition, boundary, props),
       update: (handle, props) => {
         const attributes = { ...defaultAttributes, ...props };
         const nextNames = attributeNames(attributes);
