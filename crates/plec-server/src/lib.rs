@@ -63,6 +63,11 @@ pub struct PlecServerOptions {
     /// Fallback document metadata used when the matched route declares none.
     pub document: DocumentMetadata,
 
+    /// Trusted custom element tags the SSR serializer may serialize from
+    /// executable IR. Sourced from the server manifest (the application
+    /// build's `plec.toml`); empty keeps the strict default policy.
+    pub custom_elements: Vec<String>,
+
     pub application_runtime: Option<Arc<dyn ApplicationRuntime>>,
 
     pub development: bool,

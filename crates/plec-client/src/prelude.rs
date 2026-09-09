@@ -22,7 +22,7 @@ pub use plec_schema::{
     routing::RouteManifest,
     typed::{
         TypedActionInstruction, TypedApplication, TypedCollection, TypedComponentApplication,
-        TypedEventField, TypedExpressionInstruction, TypedNode,
+        TypedEventField, TypedExpressionInstruction, TypedHostComponentTarget, TypedNode,
     },
 };
 

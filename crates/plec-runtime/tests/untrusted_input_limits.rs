@@ -617,6 +617,89 @@ fn load_application_rejects_unrooted_node_graph() {
 }
 
 #[wasm_bindgen_test]
+fn load_application_rejects_active_element_tags() {
+    // A substituted artifact can otherwise pass topology validation, so the
+    // element-tag policy must reject active elements at the load boundary
+    // before CSR can reach Document.create_element with them.
+    for tag in ["script", "base", "object", "embed", "iframe", "link", "meta"] {
+        let artifact = format!(
+            r#"{{"version":"0.10","rootComponent":0,"components":[{{"id":"App","version":"0.10","rootNode":0,"strings":["div","{tag}"],"nodes":[{{"op":"element","tag":1,"parent":null,"children":[]}}]}}]}}"#
+        );
+        let error = PlecRuntime::new()
+            .load_application(js_from_json(&artifact))
+            .expect_err(&format!("{tag} must be rejected"));
+        assert!(
+            error_string(error).contains("forbidden element tag"),
+            "unexpected error for {tag}"
+        );
+    }
+}
+
+#[wasm_bindgen_test]
+fn load_application_rejects_unconfigured_custom_element_tags() {
+    let artifact = format!(
+        r#"{{"version":"0.10","rootComponent":0,"components":[{{"id":"App","version":"0.10","rootNode":0,"strings":["div","my-widget"],"nodes":[{{"op":"element","tag":1,"parent":null,"children":[]}}]}}]}}"#
+    );
+    let error = PlecRuntime::new()
+        .load_application(js_from_json(&artifact))
+        .expect_err("unconfigured custom elements must be rejected");
+    assert!(
+        error_string(error).contains("custom element tag not permitted"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
+fn forbidden_element_tags_cannot_be_activated_even_if_validation_is_bypassed() {
+    // Defense in depth: instantiate_node_bounded is the one DOM sink, so the
+    // namespace-aware allowlist is re-checked there against an application
+    // whose node table was mutated after validation.
+    let mut app: TypedApplication = serde_json::from_str(
+        r#"{
+        "version": "0.10", "rootNode": 0, "strings": ["div", "script"],
+        "nodes": [{"op": "element", "tag": 0}],
+        "expressions": [], "actions": []
+    }"#,
+    )
+    .unwrap();
+    let mut runtime =
+        TypedRuntime::new(app.clone(), std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
+    if let Some(plec_schema::typed::TypedNode::Element { tag, .. }) = app.nodes.get_mut(0) {
+        *tag = 1;
+    }
+    runtime.app = app;
+    let root = web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .create_element("div")
+        .unwrap()
+        .into();
+    let error = runtime
+        .mount(root)
+        .err()
+        .expect("script element must never be activated");
+    assert!(
+        error_string(error).contains("element tag rejected by policy"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
+fn load_application_rejects_unknown_element_namespaces() {
+    let artifact = envelope_artifact(
+        r#""nodes":[{"op":"element","tag":0,"namespace":"math","parent":null,"children":[]}]"#,
+    );
+    let error = PlecRuntime::new()
+        .load_application(js_from_json(&artifact))
+        .expect_err("unknown namespaces must be rejected");
+    assert!(
+        error_string(error).contains("invalid element namespace"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
 fn deep_linear_node_chain_fails_at_mount_depth_limit() {
     // Topology validation accepts an acyclic chain, so one node past
     // MAX_MOUNT_DEPTH must exhaust the documented mount budget instead of

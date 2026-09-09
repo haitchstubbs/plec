@@ -1,3 +1,4 @@
+use crate::CompilerOptions;
 use plec_parser::{module_dependencies, parse_module, ParsedModule};
 use serde_json::Value;
 use std::{
@@ -36,6 +37,15 @@ pub fn read_source_graph(
     root_dir: impl AsRef<Path>,
     repo_root_dir: impl AsRef<Path>,
 ) -> Result<SourceGraph, String> {
+    read_source_graph_with_options(entry, root_dir, repo_root_dir, &CompilerOptions::default())
+}
+
+pub fn read_source_graph_with_options(
+    entry: impl AsRef<Path>,
+    root_dir: impl AsRef<Path>,
+    repo_root_dir: impl AsRef<Path>,
+    options: &CompilerOptions,
+) -> Result<SourceGraph, String> {
     let entry = entry.as_ref();
 
     let root_dir = fs::canonicalize(root_dir.as_ref()).map_err(|error| {
@@ -62,6 +72,7 @@ pub fn read_source_graph(
         &root_dir,
         &repo_root_dir,
         &workspace,
+        options,
         None,
         &mut seen,
         &mut modules,
@@ -80,6 +91,7 @@ fn visit_module(
     root_dir: &Path,
     repo_root_dir: &Path,
     workspace: &WorkspaceIndex,
+    options: &CompilerOptions,
     canonical_id: Option<String>,
     seen: &mut HashSet<PathBuf>,
     modules: &mut Vec<ParsedModule>,
@@ -141,6 +153,13 @@ fn visit_module(
     modules.push(parsed);
 
     for specifier in dependencies {
+        if let Some(provider) = options.host_imports.get(&specifier) {
+            resolved_imports.insert(
+                (module_id.clone(), specifier.clone()),
+                format!("host:{provider}"),
+            );
+            continue;
+        }
         let Some(resolved) = resolve_module(&specifier, &absolute, workspace)? else {
             continue;
         };
@@ -156,6 +175,7 @@ fn visit_module(
             root_dir,
             repo_root_dir,
             workspace,
+            options,
             None,
             seen,
             modules,
@@ -435,6 +455,7 @@ fn resolve_dependency_module(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::fs;
     use tempfile::tempdir;
 
@@ -485,6 +506,55 @@ mod tests {
             )),
             Some(&String::from("packages/icons/src/icons/mark.tsx"))
         );
+    }
+
+    #[test]
+    fn resolves_exact_host_import_bindings_to_provider_ids() {
+        let repo = tempdir().expect("repo");
+        let app = repo.path().join("apps/demo");
+        let entry = app.join("src/App.tsx");
+        write_file(
+            &entry,
+            r#"import { House } from "lucide"; export function App() { return <House />; }"#,
+        );
+        let options = CompilerOptions {
+            host_imports: BTreeMap::from([(String::from("lucide"), String::from("icons"))]),
+            custom_elements: Default::default(),
+        };
+
+        let graph = read_source_graph_with_options(&entry, &app, repo.path(), &options)
+            .expect("host import should resolve");
+
+        assert_eq!(graph.modules.len(), 1);
+        assert_eq!(
+            graph
+                .resolved_imports
+                .get(&(String::from("src/App.tsx"), String::from("lucide"),)),
+            Some(&String::from("host:icons"))
+        );
+    }
+
+    #[test]
+    fn host_import_bindings_do_not_match_subpaths() {
+        let repo = tempdir().expect("repo");
+        let app = repo.path().join("apps/demo");
+        let entry = app.join("src/App.tsx");
+        write_file(
+            &entry,
+            r#"import { House } from "lucide/internal"; export function App() { return <House />; }"#,
+        );
+        let options = CompilerOptions {
+            host_imports: BTreeMap::from([(String::from("lucide"), String::from("icons"))]),
+            custom_elements: Default::default(),
+        };
+
+        let graph = read_source_graph_with_options(&entry, &app, repo.path(), &options)
+            .expect("unconfigured imports remain outside the host map");
+
+        assert!(!graph
+            .resolved_imports
+            .values()
+            .any(|target| target == "host:icons"));
     }
 
     #[test]

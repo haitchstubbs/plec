@@ -1,9 +1,14 @@
-import { startPlecRouter } from 'plec-browser';
+import {
+  registerPlecHostProvider,
+  startPlecRouter,
+} from 'plec-browser';
+import { createLucideHostProvider } from '@wasm-runtime/lucide-plec';
 import { installPlecPerformance } from './performance';
 import { installDevelopmentMemoryHud } from 'plec/client/effects/development-memory-hud';
 import { createRuntimeStressFeed } from './stress-feed';
 
 installPlecPerformance();
+registerPlecHostProvider('lucide', createLucideHostProvider());
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('The Plec application root is missing.');
 const revision = new URL(import.meta.url).searchParams.get('v') ?? '';

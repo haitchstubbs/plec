@@ -209,7 +209,7 @@ pub struct TypedComponentRequest {
     pub component: usize,
     pub props: HashMap<String, RuntimeValue>,
     pub callbacks: HashMap<String, TypedCallbackSpec>,
-    pub component_props: HashMap<String, usize>,
+    pub component_props: HashMap<String, TypedComponentTarget>,
     pub children: Vec<usize>,
     pub row_context: Option<TypedRowContext>,
     pub start: Node,
@@ -229,6 +229,12 @@ pub struct TypedComponentRequest {
     /// Deeper nested records below this child, passed down for grandchild
     /// adoption.
     pub ssr_nested: SsrNestedRecords,
+}
+
+#[derive(Clone)]
+pub enum TypedComponentTarget {
+    Native(usize),
+    Host(TypedHostComponentTarget),
 }
 
 pub struct TypedAdoptionRequest {
@@ -264,6 +270,7 @@ pub struct TypedComponentRefresh {
     pub call: usize,
     pub start: Node,
     pub props: HashMap<String, RuntimeValue>,
+    pub component_props: HashMap<String, TypedComponentTarget>,
 }
 
 /// Component-valued props are resolved only when their concrete target is
@@ -337,11 +344,16 @@ pub struct TypedRuntime {
     pub graph_generation: u64,
     pub host_inputs: HashMap<String, RuntimeValue>,
     pub host_refs: HashMap<String, Node>,
+    pub host_instances: Vec<HostInstance>,
     /// Host-owned cookie capability policy shared with the owning
     /// `RuntimeState`. Synchronous `getSync` reads evaluate against this
     /// per-runtime store, so separately embedded runtimes never observe each
     /// other's grants.
     pub cookie_policy: Rc<RefCell<Option<HashMap<String, CookiePolicy>>>>,
+    /// Element-tag policy this instance validates and instantiates under.
+    /// Defaults to strict; hosts widen it only through the explicit
+    /// `RuntimeState::set_tag_policy` capability channel.
+    pub tag_policy: plec_ir::sink::TagPolicy,
     /// Component indices in a 0.10 node are local to its graph artifact.
     pub component_definitions: Option<Vec<TypedApplication>>,
     pub pending_cookies: Vec<TypedPendingCookie>,
@@ -363,6 +375,14 @@ pub struct TypedRuntime {
     /// scoped to the subtree below this runtime's path. Empty outside a
     /// snapshot-backed adoption.
     pub ssr_nested: SsrNestedRecords,
+}
+
+pub struct HostInstance {
+    pub boundary: Element,
+    pub handle: JsValue,
+    pub call: Option<usize>,
+    pub provider: String,
+    pub component: String,
 }
 
 /** Mutable typed graph ownership. Definitions live in `typed_component_registry`; this
@@ -563,6 +583,23 @@ impl RuntimeState {
                 return Ok(());
             }
             for (parent, refresh) in refreshes {
+                let host_call = self.typed.borrow().get(&parent).and_then(|instance| {
+                    instance
+                        .runtime
+                        .host_instances
+                        .iter()
+                        .any(|host| host.boundary.is_same_node(Some(&refresh.start)))
+                        .then_some(())
+                });
+                if host_call.is_some() {
+                    let mut typed = self.typed.borrow_mut();
+                    typed
+                        .get_mut(&parent)
+                        .expect("host component parent exists")
+                        .runtime
+                        .refresh_host_boundary(&refresh.start, &refresh.props)?;
+                    continue;
+                }
                 let children = self
                     .typed
                     .borrow()
@@ -623,6 +660,7 @@ impl RuntimeState {
                 if let Some(mut instance) = typed.remove(&id) {
                     instance.runtime.invalidate_fetches();
                     instance.runtime.clear_listeners();
+                    instance.runtime.dispose_host_components();
                 }
             }
         }
@@ -679,14 +717,37 @@ impl RuntimeState {
                         let name = app.strings.get(parameter.name).ok_or_else(|| {
                             JsValue::from_str("component parameter handle out of range")
                         })?;
-                        Ok(request.component_props.get(name).copied())
+                        Ok(request
+                            .component_props
+                            .get(name)
+                            .and_then(|target| match target {
+                                TypedComponentTarget::Native(component) => Some(*component),
+                                TypedComponentTarget::Host(_) => None,
+                            }))
                     })
                     .collect::<Result<Vec<_>, JsValue>>()?;
-                let mut runtime = TypedRuntime::new_with_runtime_limits(
+                app.runtime_host_component_props = app
+                    .parameters
+                    .iter()
+                    .map(|parameter| {
+                        let name = app.strings.get(parameter.name).ok_or_else(|| {
+                            JsValue::from_str("component parameter handle out of range")
+                        })?;
+                        Ok(request
+                            .component_props
+                            .get(name)
+                            .and_then(|target| match target {
+                                TypedComponentTarget::Host(target) => Some(target.clone()),
+                                TypedComponentTarget::Native(_) => None,
+                            }))
+                    })
+                    .collect::<Result<Vec<_>, JsValue>>()?;
+                let mut runtime = TypedRuntime::new_with_tag_policy(
                     app,
                     self.region_tracker.clone(),
                     self.reconcile_budget.clone(),
                     self.cookie_policy.clone(),
+                    self.effective_tag_policy(),
                 )?;
                 runtime.set_component_definitions(definitions);
                 runtime.path = request.path.clone();
@@ -962,7 +1023,27 @@ impl TypedRuntime {
         reconcile_budget: Rc<RefCell<Option<ReconcileBudget>>>,
         cookie_policy: Rc<RefCell<Option<HashMap<String, CookiePolicy>>>>,
     ) -> Result<Self, JsValue> {
-        app.validate()?;
+        Self::new_with_tag_policy(
+            app,
+            region_tracker,
+            reconcile_budget,
+            cookie_policy,
+            plec_ir::sink::TagPolicy::default(),
+        )
+    }
+
+    /// Like [`TypedRuntime::new_with_runtime_limits`], but validates and
+    /// instantiates elements under an explicit trusted tag policy. The
+    /// policy can only add configured custom elements to the standard
+    /// allowlists; forbidden tags stay rejected at every layer.
+    pub fn new_with_tag_policy(
+        app: TypedApplication,
+        region_tracker: Rc<RegionTracker>,
+        reconcile_budget: Rc<RefCell<Option<ReconcileBudget>>>,
+        cookie_policy: Rc<RefCell<Option<HashMap<String, CookiePolicy>>>>,
+        tag_policy: plec_ir::sink::TagPolicy,
+    ) -> Result<Self, JsValue> {
+        app.validate_with_policy(&tag_policy)?;
         let mut app = app;
         let mut states = Vec::new();
         for slot in &app.state_slots {
@@ -1022,11 +1103,13 @@ impl TypedRuntime {
             graph_generation: 1,
             host_inputs: HashMap::new(),
             host_refs: HashMap::new(),
+            host_instances: Vec::new(),
             component_definitions: None,
             pending_cookies: Vec::new(),
             next_cookie_id: 0,
             next_component_instance: 0,
             cookie_policy,
+            tag_policy,
             #[cfg(feature = "fetch")]
             pending_fetches: Vec::new(),
             #[cfg(feature = "fetch")]
@@ -1036,6 +1119,162 @@ impl TypedRuntime {
             ssr_imported: false,
             ssr_nested: HashMap::new(),
         })
+    }
+}
+
+fn host_registry() -> Result<JsValue, JsValue> {
+    let registry = js_sys::Reflect::get(
+        &js_sys::global(),
+        &JsValue::from_str("__plec_host_components"),
+    )?;
+    if registry.is_undefined() || registry.is_null() {
+        return Err(JsValue::from_str(
+            "host component registry is not installed",
+        ));
+    }
+    Ok(registry)
+}
+
+fn host_call(method: &str, args: &[JsValue]) -> Result<JsValue, JsValue> {
+    let registry = host_registry()?;
+    let function = js_sys::Reflect::get(&registry, &JsValue::from_str(method))?
+        .dyn_into::<js_sys::Function>()
+        .map_err(|_| JsValue::from_str("host component registry method is not callable"))?;
+    let arguments = js_sys::Array::new();
+    for argument in args {
+        arguments.push(argument);
+    }
+    function.apply(&registry, &arguments).map_err(|error| error)
+}
+
+fn evaluate_host_props(
+    app: &TypedApplication,
+    cookie_policy: Option<&plec_dom::cookie::CookiePolicyMap>,
+    props: &[TypedComponentProp],
+    states: &[RuntimeValue],
+    row: Option<&HashMap<String, RuntimeValue>>,
+    row_index: usize,
+) -> Result<JsValue, JsValue> {
+    let mut values = HashMap::new();
+    for prop in props {
+        let TypedComponentProp::Value { name, expression } = prop else {
+            continue;
+        };
+        let name = app
+            .strings
+            .get(*name)
+            .ok_or_else(|| JsValue::from_str("host component prop name out of range"))?;
+        let value = typed_eval(app, cookie_policy, *expression, states, row, row_index)?;
+        if name == "__plec_props" {
+            if let RuntimeValue::Record(record) = value {
+                values = record;
+            } else {
+                return Err(JsValue::from_str("host component props must be a record"));
+            }
+        } else {
+            values.insert(name.clone(), value);
+        }
+    }
+    serde_wasm_bindgen::to_value(&RuntimeValue::Record(values)).map_err(error)
+}
+
+fn host_identity(node: &TypedNode) -> Result<(String, String), JsValue> {
+    match node {
+        TypedNode::HostComponent {
+            provider,
+            component,
+            ..
+        } => Ok((provider.clone(), component.clone())),
+        _ => Err(JsValue::from_str("host component node expected")),
+    }
+}
+
+fn validate_host_boundary(
+    boundary: &Element,
+    provider: &str,
+    component: &str,
+    marker: &str,
+) -> Result<(), JsValue> {
+    if boundary.tag_name().to_ascii_lowercase() != "span"
+        || boundary.get_attribute("data-plec-host").as_deref()
+            != Some(&format!("{provider}:{component}"))
+    {
+        return Err(JsValue::from_str(&format!("mismatch:ssr-host:{marker}")));
+    }
+    Ok(())
+}
+
+impl TypedRuntime {
+    fn refresh_host_boundary(
+        &mut self,
+        boundary: &Node,
+        props: &HashMap<String, RuntimeValue>,
+    ) -> Result<(), JsValue> {
+        let index = self
+            .host_instances
+            .iter()
+            .position(|instance| instance.boundary.is_same_node(Some(boundary)))
+            .ok_or_else(|| JsValue::from_str("host component instance missing"))?;
+        let values = props
+            .get("__plec_props")
+            .cloned()
+            .unwrap_or_else(|| RuntimeValue::Record(props.clone()));
+        let props = serde_wasm_bindgen::to_value(&values).map_err(error)?;
+        self.update_host(&self.host_instances[index].boundary.clone(), props)
+    }
+
+    fn mount_host(
+        &mut self,
+        boundary: Element,
+        provider: &str,
+        component: &str,
+        props: JsValue,
+        call: Option<usize>,
+    ) -> Result<(), JsValue> {
+        let handle = host_call(
+            "mount",
+            &[
+                JsValue::from_str(provider),
+                JsValue::from_str(component),
+                boundary.clone().into(),
+                props,
+            ],
+        )?;
+        self.host_instances.push(HostInstance {
+            boundary,
+            handle,
+            call,
+            provider: provider.into(),
+            component: component.into(),
+        });
+        Ok(())
+    }
+
+    fn update_host(&mut self, boundary: &Element, props: JsValue) -> Result<(), JsValue> {
+        let instance = self
+            .host_instances
+            .iter()
+            .find(|instance| instance.boundary.is_same_node(Some(boundary)))
+            .ok_or_else(|| JsValue::from_str("host component instance missing"))?;
+        host_call("update", &[instance.handle.clone(), props]).map(|_| ())
+    }
+
+    fn dispose_host_boundary(&mut self, node: &Node) -> Result<(), JsValue> {
+        if let Some(index) = self
+            .host_instances
+            .iter()
+            .position(|instance| instance.boundary.is_same_node(node.dyn_ref()))
+        {
+            let instance = self.host_instances.swap_remove(index);
+            host_call("dispose", &[instance.handle])?;
+        }
+        Ok(())
+    }
+
+    pub fn dispose_host_components(&mut self) {
+        for instance in self.host_instances.drain(..) {
+            let _ = host_call("dispose", &[instance.handle]);
+        }
     }
 }
 
@@ -1061,7 +1300,8 @@ impl TypedRuntime {
                 .cloned()
                 .and_then(|node| match node {
                     TypedNode::Component { props, .. }
-                    | TypedNode::DynamicComponent { props, .. } => Some(props),
+                    | TypedNode::DynamicComponent { props, .. }
+                    | TypedNode::HostComponent { props, .. } => Some(props),
                     _ => None,
                 })
             else {
@@ -1082,12 +1322,49 @@ impl TypedRuntime {
                         .get(name)
                         .ok_or_else(|| JsValue::from_str("component prop name out of range"))?
                         .clone();
-                    let value = typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, row, row_index)?;
+                    let value = typed_eval(
+                        &self.app,
+                        self.cookie_policy.borrow().as_ref(),
+                        expression,
+                        &self.states,
+                        row,
+                        row_index,
+                    )?;
                     Ok((name, value))
                 })
                 .collect::<Result<HashMap<_, _>, JsValue>>()?;
-            self.component_refreshes
-                .push(TypedComponentRefresh { call, start, props });
+            let component_props = self
+                .app
+                .nodes
+                .get(call)
+                .and_then(|node| match node {
+                    TypedNode::Component { props, .. }
+                    | TypedNode::DynamicComponent { props, .. } => Some(props),
+                    _ => None,
+                })
+                .into_iter()
+                .flatten()
+                .filter_map(|prop| match prop {
+                    TypedComponentProp::Component {
+                        name,
+                        component,
+                        host,
+                        ..
+                    } => Some((
+                        self.app.strings.get(*name)?.clone(),
+                        host.clone()
+                            .map(TypedComponentTarget::Host)
+                            .unwrap_or(TypedComponentTarget::Native(*component)),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            self.component_refreshes.push(TypedComponentRefresh {
+                call,
+                start,
+                props,
+                component_props,
+            });
         }
         Ok(())
     }
@@ -1115,6 +1392,7 @@ impl TypedRuntime {
     pub fn mount(&mut self, root: Element) -> Result<MountMetrics, JsValue> {
         self.invalidate_fetches();
         self.clear_listeners();
+        self.dispose_host_components();
         root.set_inner_html("");
         self.nodes.clear();
         self.loops.clear();
@@ -1168,6 +1446,7 @@ impl TypedRuntime {
     ) -> Result<MountMetrics, JsValue> {
         self.invalidate_fetches();
         self.clear_listeners();
+        self.dispose_host_components();
         self.nodes.clear();
         self.loops.clear();
         self.conditionals.clear();
@@ -1214,6 +1493,23 @@ impl TypedRuntime {
                         })?;
                         *slot = Some(dom_node.clone());
                     }
+                    self.nodes.insert(index, dom_node);
+                }
+                TypedNode::HostComponent { props, .. } => {
+                    let marker = format!("{path}/node:{index}");
+                    let boundary = markers.element(&marker)?;
+                    let (provider, component) = host_identity(&self.app.nodes[index])?;
+                    validate_host_boundary(&boundary, &provider, &component, &marker)?;
+                    let dom_node: Node = boundary.clone().into();
+                    let values = evaluate_host_props(
+                        &self.app,
+                        self.cookie_policy.borrow().as_ref(),
+                        &props,
+                        &self.states,
+                        None,
+                        0,
+                    )?;
+                    self.mount_host(boundary, &provider, &component, values, Some(index))?;
                     self.nodes.insert(index, dom_node);
                 }
                 TypedNode::Text { .. } => {
@@ -1300,6 +1596,35 @@ impl TypedRuntime {
                     children,
                     ..
                 } => {
+                    if let Some(Some(target)) =
+                        self.app.runtime_host_component_props.get(prop).cloned()
+                    {
+                        let marker = format!("{path}/node:{index}");
+                        let boundary = markers.element(&marker)?;
+                        validate_host_boundary(
+                            &boundary,
+                            &target.provider,
+                            &target.component,
+                            &marker,
+                        )?;
+                        let values = evaluate_host_props(
+                            &self.app,
+                            self.cookie_policy.borrow().as_ref(),
+                            &props,
+                            &self.states,
+                            None,
+                            0,
+                        )?;
+                        self.mount_host(
+                            boundary.clone(),
+                            &target.provider,
+                            &target.component,
+                            values,
+                            Some(index),
+                        )?;
+                        self.nodes.insert(index, boundary.into());
+                        continue;
+                    }
                     let component = self
                         .app
                         .runtime_component_props
@@ -1388,7 +1713,14 @@ impl TypedRuntime {
             .get(loop_index)
             .ok_or_else(|| JsValue::from_str("loop handle out of range"))?
             .clone();
-        let values = typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), loop_def.source_expression, &self.states, None, 0)?;
+        let values = typed_eval(
+            &self.app,
+            self.cookie_policy.borrow().as_ref(),
+            loop_def.source_expression,
+            &self.states,
+            None,
+            0,
+        )?;
         let rows = values
             .array()
             .ok_or_else(|| JsValue::from_str("LOOP_SOURCE_NOT_ARRAY"))?;
@@ -1587,6 +1919,7 @@ impl TypedRuntime {
             TypedNode::DynamicComponent { .. } => {
                 (format!("plec:component:{base}"), format!(":{template}"))
             }
+            TypedNode::HostComponent { .. } => (base, format!("/node:{template}")),
             TypedNode::Conditional { .. } => {
                 (format!("plec:conditional:{base}"), format!(":{template}"))
             }
@@ -1662,6 +1995,24 @@ impl TypedRuntime {
                         skipped,
                     )?;
                 }
+                Ok((dom_node, None))
+            }
+            TypedNode::HostComponent { props, .. } => {
+                let marker = format!("{path}/node:{index}");
+                let boundary = markers.element(&marker)?;
+                let (provider, component) = host_identity(&self.app.nodes[index])?;
+                validate_host_boundary(&boundary, &provider, &component, &marker)?;
+                let dom_node: Node = boundary.clone().into();
+                let values = evaluate_host_props(
+                    &self.app,
+                    self.cookie_policy.borrow().as_ref(),
+                    &props,
+                    &self.states,
+                    Some(row),
+                    row_index,
+                )?;
+                self.mount_host(boundary, &provider, &component, values, Some(index))?;
+                local.insert(index, dom_node.clone());
                 Ok((dom_node, None))
             }
             TypedNode::Text { .. } => {
@@ -1826,6 +2177,40 @@ impl TypedRuntime {
                 children,
                 ..
             } => {
+                if let Some(target) = self
+                    .app
+                    .runtime_host_component_props
+                    .get(prop)
+                    .cloned()
+                    .flatten()
+                {
+                    let marker = format!("{path}/node:{index}");
+                    let boundary = markers.element(&marker)?;
+                    validate_host_boundary(
+                        &boundary,
+                        &target.provider,
+                        &target.component,
+                        &marker,
+                    )?;
+                    let dom_node: Node = boundary.clone().into();
+                    let values = evaluate_host_props(
+                        &self.app,
+                        self.cookie_policy.borrow().as_ref(),
+                        &props,
+                        &self.states,
+                        Some(row),
+                        row_index,
+                    )?;
+                    self.mount_host(
+                        boundary,
+                        &target.provider,
+                        &target.component,
+                        values,
+                        Some(index),
+                    )?;
+                    local.insert(index, dom_node.clone());
+                    return Ok((dom_node, None));
+                }
                 let component = self
                     .app
                     .runtime_component_props
@@ -2034,6 +2419,7 @@ impl TypedRuntime {
             .ok_or_else(|| JsValue::from_str("branch node handle out of range"))?;
         Ok(match node {
             TypedNode::Element { .. } => format!("{path}/node:{handle}"),
+            TypedNode::HostComponent { .. } => format!("{path}/node:{handle}"),
             TypedNode::Text { .. } => format!("plec:text:{path}:{handle}"),
             TypedNode::Component { .. } | TypedNode::DynamicComponent { .. } => {
                 format!("plec:component:{path}:{handle}")
@@ -2087,7 +2473,14 @@ impl TypedRuntime {
                 TypedComponentProp::Value { expression, .. } => {
                     values.insert(
                         name,
-                        typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, row, row_index)?,
+                        typed_eval(
+                            &self.app,
+                            self.cookie_policy.borrow().as_ref(),
+                            expression,
+                            &self.states,
+                            row,
+                            row_index,
+                        )?,
                     );
                 }
                 TypedComponentProp::Callable { action, .. } => {
@@ -2099,8 +2492,14 @@ impl TypedRuntime {
                         },
                     );
                 }
-                TypedComponentProp::Component { component, .. } => {
-                    component_props.insert(name, component);
+                TypedComponentProp::Component {
+                    component, host, ..
+                } => {
+                    component_props.insert(
+                        name,
+                        host.map(TypedComponentTarget::Host)
+                            .unwrap_or(TypedComponentTarget::Native(component)),
+                    );
                 }
             }
         }
@@ -2200,11 +2599,14 @@ impl TypedAdoptionIndex {
                 }
             }
             Node::ELEMENT_NODE => {
-                if let Some(marker) = node
-                    .dyn_ref::<Element>()
-                    .and_then(|element| element.get_attribute("data-plec-node"))
+                let element = node.dyn_ref::<Element>();
+                if let Some(marker) =
+                    element.and_then(|element| element.get_attribute("data-plec-node"))
                 {
                     Self::register(markers, marker, node)?;
+                }
+                if element.is_some_and(|element| element.has_attribute("data-plec-host")) {
+                    return Ok(());
                 }
             }
             _ => {}
@@ -2651,6 +3053,18 @@ impl TypedRuntime {
                     .strings
                     .get(tag)
                     .ok_or_else(|| JsValue::from_str("tag handle out of range"))?;
+                // DOM-sink backstop (plec_ir::sink): validation rejects
+                // hostile element tags before mount, but this is the one
+                // place executable IR becomes a live DOM element, so the
+                // namespace-aware allowlist is re-checked here against
+                // substituted artifacts that skipped validation.
+                if !plec_ir::sink::is_allowed_element_tag_with_policy(
+                    tag,
+                    &namespace,
+                    &self.tag_policy,
+                ) {
+                    return Err(JsValue::from_str("element tag rejected by policy"));
+                }
                 let element = if namespace == "svg" {
                     doc.create_element_ns(Some("http://www.w3.org/2000/svg"), tag)?
                 } else {
@@ -2689,6 +3103,39 @@ impl TypedRuntime {
                         .get_mut(reference)
                         .ok_or_else(|| JsValue::from_str("host ref handle out of range"))?;
                     *slot = Some(node.clone());
+                }
+                Ok(node)
+            }
+            TypedNode::HostComponent {
+                provider,
+                component,
+                props,
+                ..
+            } => {
+                let element = doc.create_element("span")?;
+                let address = self.address_path(row_context)?.into_owned();
+                element.set_attribute("data-plec-node", &format!("{address}/node:{index}"))?;
+                element.set_attribute("data-plec-host", &format!("{provider}:{component}"))?;
+                let values = evaluate_host_props(
+                    &self.app,
+                    self.cookie_policy.borrow().as_ref(),
+                    &props,
+                    &self.states,
+                    row,
+                    row_index,
+                )?;
+                self.mount_host(element.clone(), &provider, &component, values, Some(index))?;
+                let node: Node = element.into();
+                if let Some(parent) = parent {
+                    if let Err(error) = parent.append_child(&node) {
+                        self.dispose_host_boundary(&node)?;
+                        return Err(error);
+                    }
+                }
+                if row.is_some() {
+                    local.insert(index, node.clone());
+                } else {
+                    self.nodes.insert(index, node.clone());
                 }
                 Ok(node)
             }
@@ -2763,6 +3210,50 @@ impl TypedRuntime {
                     .into();
                 parent.append_child(&start)?;
                 parent.append_child(&end)?;
+                if let Some(target) = self
+                    .app
+                    .runtime_host_component_props
+                    .get(prop)
+                    .and_then(Clone::clone)
+                {
+                    let boundary = doc.create_element("span")?;
+                    let address = self.address_path(row_context)?.into_owned();
+                    boundary.set_attribute("data-plec-node", &format!("{address}/node:{index}"))?;
+                    boundary.set_attribute(
+                        "data-plec-host",
+                        &format!("{}:{}", target.provider, target.component),
+                    )?;
+                    let values = evaluate_host_props(
+                        &self.app,
+                        self.cookie_policy.borrow().as_ref(),
+                        &props,
+                        &self.states,
+                        row,
+                        row_index,
+                    )?;
+                    self.mount_host(
+                        boundary.clone(),
+                        &target.provider,
+                        &target.component,
+                        values,
+                        Some(index),
+                    )?;
+                    if let Err(error) = parent.insert_before(&boundary, Some(&end)) {
+                        let node: Node = boundary.into();
+                        self.dispose_host_boundary(&node)?;
+                        let _ = parent.remove_child(&start);
+                        let _ = parent.remove_child(&end);
+                        return Err(error);
+                    }
+                    parent.remove_child(&start)?;
+                    parent.remove_child(&end)?;
+                    if row.is_some() {
+                        local.insert(index, boundary.clone().into());
+                    } else {
+                        self.nodes.insert(index, boundary.clone().into());
+                    }
+                    return Ok(boundary.into());
+                }
                 let Some(component) = self
                     .app
                     .runtime_component_props
@@ -2790,7 +3281,14 @@ impl TypedRuntime {
                         TypedComponentProp::Value { expression, .. } => {
                             values.insert(
                                 name,
-                                typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, row, row_index)?,
+                                typed_eval(
+                                    &self.app,
+                                    self.cookie_policy.borrow().as_ref(),
+                                    expression,
+                                    &self.states,
+                                    row,
+                                    row_index,
+                                )?,
                             );
                         }
                         TypedComponentProp::Callable { action, .. } => {
@@ -2802,8 +3300,14 @@ impl TypedRuntime {
                                 },
                             );
                         }
-                        TypedComponentProp::Component { component, .. } => {
-                            component_props.insert(name, component);
+                        TypedComponentProp::Component {
+                            component, host, ..
+                        } => {
+                            component_props.insert(
+                                name,
+                                host.map(TypedComponentTarget::Host)
+                                    .unwrap_or(TypedComponentTarget::Native(component)),
+                            );
                         }
                     }
                 }
@@ -2863,7 +3367,14 @@ impl TypedRuntime {
                         TypedComponentProp::Value { expression, .. } => {
                             values.insert(
                                 name,
-                                typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, row, row_index)?,
+                                typed_eval(
+                                    &self.app,
+                                    self.cookie_policy.borrow().as_ref(),
+                                    expression,
+                                    &self.states,
+                                    row,
+                                    row_index,
+                                )?,
                             );
                         }
                         TypedComponentProp::Callable { action, .. } => {
@@ -2875,8 +3386,14 @@ impl TypedRuntime {
                                 },
                             );
                         }
-                        TypedComponentProp::Component { component, .. } => {
-                            component_props.insert(name, component);
+                        TypedComponentProp::Component {
+                            component, host, ..
+                        } => {
+                            component_props.insert(
+                                name,
+                                host.map(TypedComponentTarget::Host)
+                                    .unwrap_or(TypedComponentTarget::Native(component)),
+                            );
                         }
                     }
                 }
@@ -3044,7 +3561,14 @@ impl TypedRuntime {
         else {
             return Err(JsValue::from_str("conditional node expected"));
         };
-        let selected = if typed_truthy(&typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), test, &self.states, None, 0)?) {
+        let selected = if typed_truthy(&typed_eval(
+            &self.app,
+            self.cookie_policy.borrow().as_ref(),
+            test,
+            &self.states,
+            None,
+            0,
+        )?) {
             Some(consequent)
         } else {
             alternate
@@ -3068,6 +3592,7 @@ impl TypedRuntime {
         });
         for (index, node) in &region.nodes {
             self.clear_host_ref_for_node(*index, node);
+            self.dispose_host_boundary(node)?;
             if let Some(parent) = node.parent_node() {
                 parent.remove_child(node)?;
                 metrics.dom_operations += 1;
@@ -3188,7 +3713,15 @@ impl TypedRuntime {
     ) -> Result<(), JsValue> {
         for binding in &self.app.bindings {
             if let Some(node) = nodes.get(&binding.target) {
-                typed_apply_binding(&self.app, self.cookie_policy.borrow().as_ref(), binding, node, &self.states, row, row_index)?;
+                typed_apply_binding(
+                    &self.app,
+                    self.cookie_policy.borrow().as_ref(),
+                    binding,
+                    node,
+                    &self.states,
+                    row,
+                    row_index,
+                )?;
                 metrics.bindings_touched += 1;
             }
         }
@@ -3198,9 +3731,14 @@ impl TypedRuntime {
             };
             for write in &program.writes {
                 let value = match write.expression {
-                    Some(expression) => {
-                        typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, row, row_index)?
-                    }
+                    Some(expression) => typed_eval(
+                        &self.app,
+                        self.cookie_policy.borrow().as_ref(),
+                        expression,
+                        &self.states,
+                        row,
+                        row_index,
+                    )?,
                     None => write
                         .constant
                         .and_then(|index| self.app.constants.get(index))
@@ -3226,7 +3764,14 @@ impl TypedRuntime {
             .get(loop_index)
             .ok_or_else(|| JsValue::from_str("loop handle out of range"))?
             .clone();
-        let values = typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), loop_def.source_expression, &self.states, None, 0)?;
+        let values = typed_eval(
+            &self.app,
+            self.cookie_policy.borrow().as_ref(),
+            loop_def.source_expression,
+            &self.states,
+            None,
+            0,
+        )?;
         let rows = values
             .array()
             .ok_or_else(|| JsValue::from_str("LOOP_SOURCE_NOT_ARRAY"))?;
@@ -3385,7 +3930,9 @@ impl TypedRuntime {
                     Ok((cost.0 + child.0, cost.1 + child.1))
                 })
             }
-            TypedNode::Text { .. } | TypedNode::Slot { .. } => Ok((1, 0)),
+            TypedNode::Text { .. } | TypedNode::Slot { .. } | TypedNode::HostComponent { .. } => {
+                Ok((1, 0))
+            }
             TypedNode::Conditional {
                 test,
                 consequent,
@@ -3506,6 +4053,7 @@ impl TypedRuntime {
                 self.dispose_region_listeners(loop_index, &key, row.generation);
                 for (index, node) in &row.nodes {
                     self.clear_host_ref_for_node(*index, node);
+                    self.dispose_host_boundary(node)?;
                 }
                 if let Some(parent) = row.root.parent_node() {
                     for node in Self::row_dom_nodes(&row.root, row.end.as_ref()) {
@@ -3785,9 +4333,14 @@ impl TypedRuntime {
                         }
                     }
                     let value = match write.expression {
-                        Some(expression) => {
-                            typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, Some(&row.values), 0)?
-                        }
+                        Some(expression) => typed_eval(
+                            &self.app,
+                            self.cookie_policy.borrow().as_ref(),
+                            expression,
+                            &self.states,
+                            Some(&row.values),
+                            0,
+                        )?,
                         None => write
                             .constant
                             .and_then(|index| self.app.constants.get(index))
@@ -4007,7 +4560,15 @@ impl TypedRuntime {
                 continue;
             }
             if let Some(node) = self.nodes.get(&binding.target) {
-                typed_apply_binding(&self.app, self.cookie_policy.borrow().as_ref(), &binding, node, &self.states, None, 0)?;
+                typed_apply_binding(
+                    &self.app,
+                    self.cookie_policy.borrow().as_ref(),
+                    &binding,
+                    node,
+                    &self.states,
+                    None,
+                    0,
+                )?;
             }
         }
         for (target, before) in observed {
@@ -4027,7 +4588,14 @@ impl TypedRuntime {
             };
             for write in program.writes {
                 let value = match write.expression {
-                    Some(expression) => typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, None, 0)?,
+                    Some(expression) => typed_eval(
+                        &self.app,
+                        self.cookie_policy.borrow().as_ref(),
+                        expression,
+                        &self.states,
+                        None,
+                        0,
+                    )?,
                     None => write
                         .constant
                         .and_then(|index| self.app.constants.get(index))
@@ -4101,7 +4669,9 @@ impl TypedRuntime {
 
     fn component_uses_changed_field(&self, node: usize, changed: &HashSet<String>) -> bool {
         matches!(self.app.nodes.get(node),
-            Some(TypedNode::Component { props, .. } | TypedNode::DynamicComponent { props, .. })
+            Some(TypedNode::Component { props, .. }
+                | TypedNode::DynamicComponent { props, .. }
+                | TypedNode::HostComponent { props, .. })
             if props.iter().any(|prop| matches!(prop, TypedComponentProp::Value { expression, .. }
                 if self.expression_uses_changed_field(*expression, changed)))
         )
@@ -4109,7 +4679,9 @@ impl TypedRuntime {
 
     fn component_uses_index(&self, node: usize) -> bool {
         matches!(self.app.nodes.get(node),
-            Some(TypedNode::Component { props, .. } | TypedNode::DynamicComponent { props, .. })
+            Some(TypedNode::Component { props, .. }
+                | TypedNode::DynamicComponent { props, .. }
+                | TypedNode::HostComponent { props, .. })
             if props.iter().any(|prop| matches!(prop, TypedComponentProp::Value { expression, .. }
                 if self.expression_uses_index(*expression)))
         )
@@ -4373,6 +4945,7 @@ impl TypedRuntime {
         self.dispose_region_listeners(loop_index, key, row.generation);
         for (index, node) in &row.nodes {
             self.clear_host_ref_for_node(*index, node);
+            self.dispose_host_boundary(node)?;
         }
         if let Some(parent) = row.root.parent_node() {
             for node in Self::row_dom_nodes(&row.root, row.end.as_ref()) {

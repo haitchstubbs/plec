@@ -168,10 +168,18 @@ struct HirLoweringCtx<'a> {
     scopes: Vec<std::collections::HashMap<String, BindingId>>,
     semantic_graph: &'a SemanticGraph,
     module_id: &'a str,
+    /// Trusted custom element tags from the compiler configuration. The
+    /// compile-time element diagnostics and the runtime element policy
+    /// enforce the same identity rule (crates/plec-ir/src/sink.rs).
+    custom_elements: std::collections::BTreeSet<String>,
 }
 
 impl<'a> HirLoweringCtx<'a> {
-    fn new(semantic_graph: &'a SemanticGraph, module_id: &'a str) -> Self {
+    fn new(
+        semantic_graph: &'a SemanticGraph,
+        module_id: &'a str,
+        custom_elements: &std::collections::BTreeSet<String>,
+    ) -> Self {
         Self {
             next_expr_id: 0,
             next_node_id: 0,
@@ -193,6 +201,7 @@ impl<'a> HirLoweringCtx<'a> {
             scopes: vec![std::collections::HashMap::new()],
             semantic_graph,
             module_id,
+            custom_elements: custom_elements.clone(),
         }
     }
 
@@ -288,7 +297,16 @@ pub fn lower_root_component(
     root: &RootComponent<'_>,
     semantic_graph: &SemanticGraph,
 ) -> Result<HirComponent, String> {
-    let mut ctx = HirLoweringCtx::new(semantic_graph, &root.symbol.module_id);
+    lower_root_component_with_options(root, semantic_graph, &std::collections::BTreeSet::new())
+}
+
+/// Lower a discovered root component to HIR under explicit compiler options.
+pub fn lower_root_component_with_options(
+    root: &RootComponent<'_>,
+    semantic_graph: &SemanticGraph,
+    custom_elements: &std::collections::BTreeSet<String>,
+) -> Result<HirComponent, String> {
+    let mut ctx = HirLoweringCtx::new(semantic_graph, &root.symbol.module_id, custom_elements);
     let span = source_span_from_swc(root.symbol.span, &root.symbol.module_id);
 
     lower_component_program(&root.declaration, &root.symbol.local_name, &mut ctx)?;
@@ -321,10 +339,25 @@ pub fn lower_application(
     root: &RootComponent<'_>,
     semantic_graph: &SemanticGraph,
 ) -> Result<HirApplication, String> {
+    lower_application_with_options(
+        parsed_modules,
+        root,
+        semantic_graph,
+        &std::collections::BTreeSet::new(),
+    )
+}
+
+pub fn lower_application_with_options(
+    parsed_modules: &[plec_parser::ParsedModule],
+    root: &RootComponent<'_>,
+    semantic_graph: &SemanticGraph,
+    custom_elements: &std::collections::BTreeSet<String>,
+) -> Result<HirApplication, String> {
     fn visit(
         parsed_modules: &[plec_parser::ParsedModule],
         root: &RootComponent<'_>,
         semantic_graph: &SemanticGraph,
+        custom_elements: &std::collections::BTreeSet<String>,
         visiting: &mut Vec<ComponentId>,
         components: &mut Vec<HirComponent>,
     ) -> Result<(), String> {
@@ -339,7 +372,7 @@ pub fn lower_application(
             return Ok(());
         }
         visiting.push(id.clone());
-        let component = lower_root_component(root, semantic_graph)?;
+        let component = lower_root_component_with_options(root, semantic_graph, custom_elements)?;
         let targets = component
             .nodes
             .iter()
@@ -350,7 +383,11 @@ pub fn lower_application(
                         targets.push(target.clone());
                     }
                     targets.extend(call.props.iter().filter_map(|prop| match prop {
-                        HirProp::Component { target, .. } => Some(target.clone()),
+                        HirProp::Component { target, .. }
+                            if !target.module_id.starts_with("host:") =>
+                        {
+                            Some(target.clone())
+                        }
                         _ => None,
                     }));
                     targets
@@ -367,7 +404,14 @@ pub fn lower_application(
                 Some(&target.local_name),
             )
             .map_err(|error| error.to_string())?;
-            visit(parsed_modules, &child, semantic_graph, visiting, components)?;
+            visit(
+                parsed_modules,
+                &child,
+                semantic_graph,
+                custom_elements,
+                visiting,
+                components,
+            )?;
         }
         visiting.pop();
         Ok(())
@@ -379,6 +423,7 @@ pub fn lower_application(
         parsed_modules,
         root,
         semantic_graph,
+        custom_elements,
         &mut Vec::new(),
         &mut components,
     )?;
@@ -860,6 +905,31 @@ fn lower_component_var(
             }
         },
         _ => Err("Unsupported component declaration pattern".to_string()),
+    }
+}
+
+fn component_target_from_symbol(symbol: &plec_model::ResolvedSymbol) -> HirComponentTarget {
+    if let Some(provider) = symbol.module_id.strip_prefix("host:") {
+        HirComponentTarget::Host {
+            provider: provider.to_string(),
+            component: symbol.local_name.clone(),
+        }
+    } else {
+        HirComponentTarget::Static(ComponentId::new(
+            symbol.module_id.clone(),
+            symbol.local_name.clone(),
+        ))
+    }
+}
+
+fn component_target_from_id(id: &ComponentId) -> HirComponentTarget {
+    if let Some(provider) = id.module_id.strip_prefix("host:") {
+        HirComponentTarget::Host {
+            provider: provider.to_string(),
+            component: id.local_name.clone(),
+        }
+    } else {
+        HirComponentTarget::Static(id.clone())
     }
 }
 
@@ -1887,12 +1957,9 @@ fn lower_jsx_element_with_consumed_key(
         if ctx.component_selectors.contains_key(&tag_name) {
             None
         } else if let Some(symbol) = resolved_component {
-            Some(HirComponentTarget::Static(ComponentId::new(
-                symbol.module_id,
-                symbol.local_name,
-            )))
+            Some(component_target_from_symbol(&symbol))
         } else if let Some(target) = ctx.component_aliases.get(&tag_name) {
-            Some(HirComponentTarget::Static(target.clone()))
+            Some(component_target_from_id(target))
         } else if let Ok(binding) = ctx.resolve_binding(&tag_name) {
             if matches!(
                 ctx.bindings[binding.0 as usize].kind,
@@ -2025,15 +2092,41 @@ fn lower_jsx_element_with_consumed_key(
             span,
         })
     } else {
+        let element_tag = if router_link {
+            "a".to_owned()
+        } else if router_outlet {
+            "div".to_owned()
+        } else {
+            tag_name.clone()
+        };
+        // Compile-time element-tag policy (crates/plec-ir/src/sink.rs): the
+        // earliest layer that can reject a tag the runtime element policy
+        // would fail closed on, with a precise diagnostic instead of a
+        // load-time rejection of the finished artifact. JSX carries no
+        // explicit namespace, so the tag is admitted when either namespace's
+        // allowlist takes it (mirroring the SSR serializer); the runtime
+        // resolves the concrete namespace from the lowered graph.
+        let policy = plec_ir::sink::TagPolicy {
+            custom_elements: ctx.custom_elements.clone(),
+        };
+        if !plec_ir::sink::is_allowed_element_tag_with_policy(&element_tag, "html", &policy)
+            && !plec_ir::sink::is_allowed_element_tag_with_policy(&element_tag, "svg", &policy)
+        {
+            if plec_ir::sink::is_forbidden_element_tag(&element_tag) {
+                return Err(format!(
+                    "Forbidden element tag '{element_tag}': active, embedding, and document-metadata elements are not part of the Plec element policy"
+                ));
+            }
+            if element_tag.contains('-') {
+                return Err(format!(
+                    "Custom element '{element_tag}' is not configured: add it to the [compiler] custom-elements list in plec.toml"
+                ));
+            }
+            return Err(format!("Unsupported element tag '{element_tag}'"));
+        }
         HirNode::Element(HirElement {
             id: node_id,
-            tag: if router_link {
-                "a".into()
-            } else if router_outlet {
-                "div".into()
-            } else {
-                tag_name
-            },
+            tag: element_tag,
             props,
             events,
             host_ref,
@@ -4534,5 +4627,91 @@ mod tests {
         assert!(lower_application(&modules, &root, &graph)
             .unwrap_err()
             .contains("Recursive component 'App'"));
+    }
+
+    fn lower_with_custom_elements(
+        source: &str,
+        custom_elements: &[&str],
+    ) -> Result<HirComponent, String> {
+        let module = parse_module("test.tsx", source).expect("parse should succeed");
+        let modules = vec![module];
+        let semantic_graph =
+            build_semantic_graph(&modules, &HashMap::new()).expect("graph should build");
+        let root = discover_root_component(&modules, &semantic_graph, "test.tsx", Some("App"))
+            .map_err(|e| e.to_string())?;
+        lower_root_component_with_options(
+            &root,
+            &semantic_graph,
+            &custom_elements
+                .iter()
+                .map(|tag| tag.to_string())
+                .collect::<std::collections::BTreeSet<_>>(),
+        )
+    }
+
+    #[test]
+    fn rejects_forbidden_intrinsic_elements_at_compile_time() {
+        for tag in [
+            "script", "base", "object", "embed", "iframe", "link", "meta", "style",
+        ] {
+            let error = lower_with_custom_elements(
+                &format!(
+                    "export function App() {{ return <{tag} src=\"https://example.test/x\"></{tag}>; }}"
+                ),
+                &[],
+            )
+            .unwrap_err();
+            assert!(
+                error.contains(&format!("Forbidden element tag '{tag}'")),
+                "{tag} must produce a forbidden-tag diagnostic, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_intrinsic_elements_at_compile_time() {
+        // `foo` is neither a standard HTML/SVG tag nor a configured custom
+        // element; the runtime would reject the compiled artifact, so the
+        // compiler rejects it first.
+        let error =
+            lower_with_custom_elements("export function App() { return <foo></foo>; }", &[])
+                .unwrap_err();
+        assert!(
+            error.contains("Unsupported element tag 'foo'"),
+            "must produce an unsupported-tag diagnostic, got: {error}"
+        );
+    }
+
+    #[test]
+    fn custom_elements_require_compiler_configuration() {
+        let error = lower_with_custom_elements(
+            "export function App() { return <my-widget></my-widget>; }",
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.contains("Custom element 'my-widget' is not configured"));
+
+        let hir = lower_with_custom_elements(
+            "export function App() { return <my-widget></my-widget>; }",
+            &["my-widget"],
+        )
+        .expect("configured custom element must compile");
+        assert!(hir
+            .nodes
+            .iter()
+            .any(|node| matches!(node, HirNode::Element(element) if element.tag == "my-widget")));
+    }
+
+    #[test]
+    fn standard_intrinsic_elements_still_compile() {
+        let hir = lower_with_custom_elements(
+            "export function App() { return <section><svg viewBox=\"0 0 1 1\"><circle cx=\"0\" cy=\"0\" r=\"1\" /></svg></section>; }",
+            &[],
+        )
+        .expect("standard HTML/SVG elements must compile");
+        assert!(hir
+            .nodes
+            .iter()
+            .any(|node| matches!(node, HirNode::Element(element) if element.tag == "circle")));
     }
 }

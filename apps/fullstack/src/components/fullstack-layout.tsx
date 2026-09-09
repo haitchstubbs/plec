@@ -1,6 +1,5 @@
 import { AppSidebar } from './app-sidebar';
-import { ChevronRight } from '@wasm-runtime/lucide-plec/icons/chevron-right';
-import { PanelLeft } from '@wasm-runtime/lucide-plec/icons/panel-left';
+import { ChevronRight, PanelLeft } from 'lucide';
 import {
   useState,
   useListener,

@@ -146,11 +146,15 @@ async fn render_document_inner(
         }
         None => None,
     };
+    let tag_policy = plec_ir::sink::TagPolicy {
+        custom_elements: state.options.custom_elements.iter().cloned().collect(),
+    };
     let rendered = ssr::render_application(
         &bundle,
         matched.as_ref().map(|matched| matched.route),
         context,
         loader.as_ref(),
+        &tag_policy,
         state.options.development,
     )?;
     let payload = ssr::bootstrap_payload(

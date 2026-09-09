@@ -2,6 +2,79 @@
 // this field to decide which independently-produced graph to fetch.
 type PlecRouteManifest = { rootGraphId: string };
 
+export interface PlecHostComponentLifecycle {
+  mount(boundary: Element, props: Record<string, unknown>): unknown;
+  update?(handle: unknown, props: Record<string, unknown>): void;
+  dispose?(handle: unknown): void;
+}
+
+export type PlecHostProvider = Record<
+  string,
+  PlecHostComponentLifecycle
+>;
+
+type PlecHostHandle = {
+  provider: string;
+  component: string;
+  value: unknown;
+};
+
+type PlecHostRegistry = {
+  mount(
+    provider: string,
+    component: string,
+    boundary: Element,
+    props: Record<string, unknown>,
+  ): PlecHostHandle;
+  update(handle: PlecHostHandle, props: Record<string, unknown>): void;
+  dispose(handle: PlecHostHandle): void;
+};
+
+const hostProviders = new Map<string, PlecHostProvider>();
+
+function hostRegistry(): PlecHostRegistry {
+  return {
+    mount(provider, component, boundary, props) {
+      const lifecycle = hostProviders.get(provider)?.[component];
+      if (!lifecycle)
+        throw new Error(
+          `Unknown host component: ${provider}/${component}`,
+        );
+      return {
+        provider,
+        component,
+        value: lifecycle.mount(boundary, props),
+      };
+    },
+    update(handle, props) {
+      hostProviders
+        .get(handle.provider)
+        ?.[handle.component]?.update?.(handle.value, props);
+    },
+    dispose(handle) {
+      hostProviders
+        .get(handle.provider)
+        ?.[handle.component]?.dispose?.(handle.value);
+    },
+  };
+}
+
+export function registerPlecHostProvider(
+  provider: string,
+  components: PlecHostProvider,
+): () => void {
+  hostProviders.set(provider, components);
+  (
+    globalThis as typeof globalThis & {
+      __plec_host_components?: PlecHostRegistry;
+    }
+  ).__plec_host_components = hostRegistry();
+  return () => {
+    if (hostProviders.get(provider) === components)
+      hostProviders.delete(provider);
+  };
+}
+
 export type RuntimeDelta =
   | {
       type: 'update';
@@ -134,6 +207,7 @@ interface WasmRuntimeInstance {
     policy: PlecRouterMountOptions['cookiePolicy'] | null,
   ): void;
   set_fetch_policy(policy: PlecFetchPolicyGrant[] | null): void;
+  set_tag_policy(policy: PlecRouterMountOptions['tagPolicy'] | null): void;
   initialize_input(inputId: string, rows: unknown): RuntimeMountMetrics;
   apply_delta(delta: unknown): CompiledUpdateMetrics;
   apply_deltas(deltas: unknown): CompiledUpdateMetrics;
@@ -179,6 +253,14 @@ export interface PlecRouterMountOptions {
    * `credentials` controls the credentials mode; the artifact cannot.
    */
   fetchPolicy?: PlecFetchPolicyGrant[];
+  /**
+   * Host-owned element-tag capability. Default (omitted or `null`): the
+   * strict policy — standard HTML/SVG elements only. `customElements` lists
+   * the trusted custom element tags executable IR may instantiate; forbidden
+   * tags (`script`, `iframe`, ...) can never be enabled. Must be installed
+   * before graphs load.
+   */
+  tagPolicy?: { customElements?: string[] } | null;
   /** Host-owned reactive inputs for routed compiled graphs. */
   inputs?: Record<string, CompiledInputProducer<any>>;
   onQueryUpdate?: (update: CompiledQueryUpdate) => void;
@@ -336,6 +418,9 @@ export async function startPlecRouter(
   const runtime = new runtimeModule.PlecRuntime();
   runtime.set_cookie_policy(options.cookiePolicy ?? null);
   runtime.set_fetch_policy(options.fetchPolicy ?? null);
+  if (options.tagPolicy !== undefined) {
+    runtime.set_tag_policy(options.tagPolicy ?? null);
+  }
   const routedInputs = options.inputs ?? {};
   const hostInputs: Record<string, unknown> = {
     'location.pathname': window.location.pathname,

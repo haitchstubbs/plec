@@ -168,7 +168,14 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
 
     clean::prepare(&out_dir, &assets_dir)?;
 
-    artifacts::emit(&source, &app_dir, &repo_root, &public_dir)?;
+    artifacts::emit(
+        &source,
+        &app_dir,
+        &repo_root,
+        &public_dir,
+        &host_config.host_imports,
+        &host_config.custom_elements,
+    )?;
 
     let client_path = assets_dir.join("client.js");
     let metafile_path = out_dir.join("client.meta.json");

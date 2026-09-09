@@ -506,11 +506,12 @@ fn mount_typed_graph(
         .get(graph.root_component)
         .cloned()
         .ok_or_else(|| JsValue::from_str("typed route graph root is missing"))?;
-    let mut runtime = TypedRuntime::new_with_runtime_limits(
+    let mut runtime = TypedRuntime::new_with_tag_policy(
         app,
         state.region_tracker.clone(),
         state.reconcile_budget.clone(),
         state.cookie_policy.clone(),
+        state.effective_tag_policy(),
     )?;
     runtime.set_component_definitions(graph.components);
     runtime.set_host_inputs(state.typed_host_inputs.borrow().clone())?;
@@ -568,11 +569,12 @@ fn adopt_typed_graph(
         .get(graph.root_component)
         .cloned()
         .ok_or_else(|| JsValue::from_str("missing:ssr-root-component"))?;
-    let mut runtime = TypedRuntime::new_with_runtime_limits(
+    let mut runtime = TypedRuntime::new_with_tag_policy(
         app,
         state.region_tracker.clone(),
         state.reconcile_budget.clone(),
         state.cookie_policy.clone(),
+        state.effective_tag_policy(),
     )?;
     runtime.set_component_definitions(graph.components);
     runtime.ssr_imported = *state.typed_ssr_imported.borrow();

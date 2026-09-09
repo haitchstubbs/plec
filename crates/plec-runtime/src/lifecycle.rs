@@ -56,12 +56,14 @@ impl PlecRuntime {
         if value.get("version").and_then(Value::as_str) == Some("0.10") {
             let application: TypedComponentApplication =
                 serde_json::from_value(value).map_err(error)?;
-            application.validate()?;
-            let mut typed = TypedRuntime::new_with_runtime_limits(
+            let tag_policy = self.state.effective_tag_policy();
+            application.validate_with_policy(&tag_policy)?;
+            let mut typed = TypedRuntime::new_with_tag_policy(
                 application.components[application.root_component].clone(),
                 self.state.region_tracker.clone(),
                 self.state.reconcile_budget.clone(),
                 self.state.cookie_policy.clone(),
+                tag_policy,
             )?;
             typed.set_component_definitions(application.components.clone());
             typed.set_host_inputs(self.state.typed_host_inputs.borrow().clone())?;
@@ -96,7 +98,14 @@ impl PlecRuntime {
         for (_, mut instance) in self.state.typed.borrow_mut().drain() {
             instance.runtime.invalidate_fetches();
             instance.runtime.clear_listeners();
+            instance.runtime.dispose_host_components();
             instance.runtime.clear_host_refs();
+            if let Some(mut loader) = instance.loader_runtime {
+                loader.invalidate_fetches();
+                loader.clear_listeners();
+                loader.dispose_host_components();
+                loader.clear_host_refs();
+            }
         }
     }
 }
@@ -132,7 +141,7 @@ impl PlecRuntime {
         if value.get("version").and_then(Value::as_str) == Some("0.10") {
             let application: TypedComponentApplication =
                 serde_json::from_value(value).map_err(error)?;
-            application.validate()?;
+            application.validate_with_policy(&self.state.effective_tag_policy())?;
             self.state
                 .typed_component_registry
                 .borrow_mut()
@@ -593,5 +602,13 @@ impl PlecRuntime {
 
     pub fn set_fetch_policy(&self, policy: JsValue) -> Result<(), JsValue> {
         self.state.set_fetch_policy(policy)
+    }
+
+    /// Installs the host-owned element-tag capability. `null` restores the
+    /// strict default (standard HTML/SVG elements only); a grant lists the
+    /// custom element tags executable IR may instantiate. Forbidden tags can
+    /// never be enabled. Must be set before loading or registering graphs.
+    pub fn set_tag_policy(&self, policy: JsValue) -> Result<(), JsValue> {
+        self.state.set_tag_policy(policy)
     }
 }

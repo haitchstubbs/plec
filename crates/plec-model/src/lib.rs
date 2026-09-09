@@ -508,6 +508,15 @@ pub fn resolve_local_symbol(
                 span: Span::new(swc_common::BytePos(0), swc_common::BytePos(0)),
             });
         }
+        if import.target_module_id.starts_with("host:") {
+            return Some(ResolvedSymbol {
+                module_id: import.target_module_id.clone(),
+                local_name: import.imported_name.clone(),
+                exported_name: Some(import.imported_name.clone()),
+                kind: SymbolKind::Function,
+                span: Span::new(swc_common::BytePos(0), swc_common::BytePos(0)),
+            });
+        }
         return resolve_export(graph, &import.target_module_id, &import.imported_name);
     }
 
@@ -528,6 +537,15 @@ fn resolve_export_with_visited(
     exported_name: &str,
     visited: &mut HashSet<(ModuleId, String)>,
 ) -> Option<ResolvedSymbol> {
+    if module_id.starts_with("host:") {
+        return Some(ResolvedSymbol {
+            module_id: module_id.to_string(),
+            local_name: exported_name.to_string(),
+            exported_name: Some(exported_name.to_string()),
+            kind: SymbolKind::Function,
+            span: Span::new(swc_common::BytePos(0), swc_common::BytePos(0)),
+        });
+    }
     let key = (module_id.to_string(), exported_name.to_string());
     if !visited.insert(key) {
         return None;

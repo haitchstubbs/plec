@@ -19,7 +19,7 @@ impl std::error::Error for LoweringError {}
 pub use application::lower_application_to_executable;
 pub use component::{lower_component_to_executable, lower_route_loader_to_executable};
 
-pub(crate) use context::{ComponentTargets, Ctx};
+pub(crate) use context::{ComponentTarget, ComponentTargets, Ctx};
 
 #[cfg(test)]
 mod tests {

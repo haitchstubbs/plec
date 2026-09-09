@@ -7,7 +7,7 @@
 //! needs source files, and neither host variant evaluates application code
 //! for its own wiring.
 
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,8 @@ struct AppConfig {
     server: ServerSection,
     #[serde(default)]
     client: ClientSection,
+    #[serde(default)]
+    compiler: CompilerSection,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -45,6 +47,18 @@ struct ClientSection {
     preloads: Option<Vec<String>>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct CompilerSection {
+    #[serde(default)]
+    host_imports: BTreeMap<String, String>,
+    /// Trusted custom element tags executable IR may instantiate. The
+    /// compiler diagnostics and the runtime element policy enforce the same
+    /// list (crates/plec-ir/src/sink.rs).
+    #[serde(default)]
+    custom_elements: std::collections::BTreeSet<String>,
+}
+
 /// Host configuration resolved from `plec.toml` merged with explicit build
 /// options (CLI flags win, then toml, then the existing defaults).
 #[derive(Debug, Clone)]
@@ -54,6 +68,8 @@ pub struct HostConfig {
     pub server_entry: std::path::PathBuf,
     pub styles_href: Option<String>,
     pub preloads: Vec<String>,
+    pub host_imports: BTreeMap<String, String>,
+    pub custom_elements: std::collections::BTreeSet<String>,
 }
 
 const DEFAULT_SERVER_ENTRY: &str = "src/server.ts";
@@ -64,24 +80,16 @@ pub fn resolve_host_config(
     options: &BuildOptions,
 ) -> Result<HostConfig, BuildError> {
     let config_path = app_dir.join("plec.toml");
-    let config: Option<AppConfig> = if config_path.exists() {
-        let text = std::fs::read_to_string(&config_path).map_err(|error| {
-            BuildError::with_source(
-                Stage::ServerManifest,
-                format!("cannot read {}", config_path.display()),
-                error,
-            )
-        })?;
-        Some(toml::from_str(&text).map_err(|error| {
-            BuildError::with_source(
-                Stage::ServerManifest,
-                format!("invalid {}", config_path.display()),
-                error,
-            )
-        })?)
-    } else {
-        None
-    };
+    let config = read_app_config(&config_path)?;
+    let host_imports = config
+        .as_ref()
+        .map(|config| config.compiler.host_imports.clone())
+        .unwrap_or_default();
+    validate_host_imports(&host_imports, &config_path)?;
+    let custom_elements = config
+        .as_ref()
+        .map(|config| config.compiler.custom_elements.clone())
+        .unwrap_or_default();
 
     Ok(HostConfig {
         title: {
@@ -123,7 +131,68 @@ pub fn resolve_host_config(
         } else {
             options.preloads.clone()
         },
+        host_imports,
+        custom_elements,
     })
+}
+
+pub fn resolve_host_imports(app_dir: &Path) -> Result<BTreeMap<String, String>, BuildError> {
+    let config_path = app_dir.join("plec.toml");
+    let imports = read_app_config(&config_path)?
+        .map(|config| config.compiler.host_imports)
+        .unwrap_or_default();
+    validate_host_imports(&imports, &config_path)?;
+    Ok(imports)
+}
+
+/// The trusted custom element list from the application's `plec.toml`
+/// (`[compiler] custom-elements`).
+pub fn resolve_custom_elements(
+    app_dir: &Path,
+) -> Result<std::collections::BTreeSet<String>, BuildError> {
+    let config_path = app_dir.join("plec.toml");
+    Ok(read_app_config(&config_path)?
+        .map(|config| config.compiler.custom_elements)
+        .unwrap_or_default())
+}
+
+fn read_app_config(config_path: &Path) -> Result<Option<AppConfig>, BuildError> {
+    if !config_path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(config_path).map_err(|error| {
+        BuildError::with_source(
+            Stage::ServerManifest,
+            format!("cannot read {}", config_path.display()),
+            error,
+        )
+    })?;
+    toml::from_str(&text).map(Some).map_err(|error| {
+        BuildError::with_source(
+            Stage::ServerManifest,
+            format!("invalid {}", config_path.display()),
+            error,
+        )
+    })
+}
+
+fn validate_host_imports(
+    imports: &BTreeMap<String, String>,
+    config_path: &Path,
+) -> Result<(), BuildError> {
+    if let Some((specifier, provider)) = imports
+        .iter()
+        .find(|(specifier, provider)| specifier.trim().is_empty() || provider.trim().is_empty())
+    {
+        return Err(BuildError::new(
+            Stage::ServerManifest,
+            format!(
+                "invalid host import binding in {}: import specifier and provider id must be non-empty (found {specifier:?} -> {provider:?})",
+                config_path.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -137,6 +206,10 @@ struct ServerManifest {
     styles_href: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     preloads: Vec<String>,
+    /// Trusted custom element tags; the SSR host applies the same element
+    /// policy the CSR runtime enforces.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    custom_elements: Vec<String>,
     document: ManifestDocument,
     /// Absent when the workspace does not vendor `packages/plec-node-runtime`;
     /// the host then serves documents and assets only.
@@ -177,6 +250,7 @@ pub fn emit_server_manifest(
         client_script: "/assets/client.js",
         styles_href: config.styles_href.clone(),
         preloads: config.preloads.clone(),
+        custom_elements: config.custom_elements.iter().cloned().collect(),
         document: ManifestDocument {
             title: Some(config.title.clone()),
             description: config.description.clone(),
@@ -262,6 +336,9 @@ entry = "src/server.ts"
 [client]
 styles = "/assets/styles.css"
 preloads = ["/a.woff2", "/b.woff2"]
+
+[compiler.host-imports]
+"lucide" = "icons"
 "#,
         )
         .expect("toml write");
@@ -281,6 +358,10 @@ preloads = ["/a.woff2", "/b.woff2"]
         assert_eq!(config.description.as_deref(), Some("cli description"));
         assert_eq!(config.styles_href.as_deref(), Some("/assets/styles.css"));
         assert_eq!(config.preloads.len(), 2);
+        assert_eq!(
+            config.host_imports.get("lucide"),
+            Some(&String::from("icons"))
+        );
     }
 
     #[test]
@@ -292,6 +373,8 @@ preloads = ["/a.woff2", "/b.woff2"]
             server_entry: "src/server.ts".into(),
             styles_href: Some("/assets/styles.css".into()),
             preloads: vec!["/assets/files/a.woff2".into()],
+            host_imports: BTreeMap::new(),
+            custom_elements: Default::default(),
         };
         emit_server_manifest(dir.path(), &config, true).expect("manifest");
 
@@ -318,6 +401,8 @@ preloads = ["/a.woff2", "/b.woff2"]
             server_entry: "src/server.ts".into(),
             styles_href: None,
             preloads: Vec::new(),
+            host_imports: BTreeMap::new(),
+            custom_elements: Default::default(),
         };
         emit_server_manifest(dir.path(), &config, false).expect("manifest");
         let json: serde_json::Value = serde_json::from_str(

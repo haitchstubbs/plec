@@ -1,9 +1,11 @@
-import { CircleHelp } from '@wasm-runtime/lucide-plec/icons/circle-help';
-import { House } from '@wasm-runtime/lucide-plec/icons/house';
-import { ListChecks } from '@wasm-runtime/lucide-plec/icons/list-checks';
-import { NotebookText } from '@wasm-runtime/lucide-plec/icons/notebook-text';
-import { Workflow } from '@wasm-runtime/lucide-plec/icons/workflow';
-import { Beaker } from '@wasm-runtime/lucide-plec/icons/beaker';
+import {
+  Beaker,
+  CircleHelp,
+  House,
+  ListChecks,
+  NotebookText,
+  Workflow,
+} from 'lucide';
 import {
   Link as PlecLink,
   useHostRef,

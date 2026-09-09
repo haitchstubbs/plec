@@ -13,7 +13,10 @@ use plec_ir::{limits::MAX_SNAPSHOT_LOOP_KEYS, SsrSelectedBranch};
 use serde_json::Value;
 
 use crate::{
-    artifact::{Component, ComponentApplication, ComponentProp, ExpressionInstruction, Node},
+    artifact::{
+        Component, ComponentApplication, ComponentProp, ExpressionInstruction, HostComponentTarget,
+        Node,
+    },
     request::RequestContext,
 };
 
@@ -37,6 +40,7 @@ pub(crate) struct Scope<'a> {
     pub path: String,
     pub props: Vec<Value>,
     pub component_props: HashMap<usize, ComponentTarget<'a>>,
+    pub host_component_props: HashMap<usize, HostComponentTarget>,
     pub states: Vec<Value>,
     /// Action frames are execution state the SSR renderer never owns; frame
     /// loads always observe an empty frame.
@@ -67,6 +71,7 @@ impl<'a> Scope<'a> {
             path: String::new(),
             props: Vec::new(),
             component_props: HashMap::new(),
+            host_component_props: HashMap::new(),
             states: Vec::new(),
             frame: Vec::new(),
             row: None,
@@ -260,6 +265,9 @@ pub(crate) fn render_node(
             props,
             children,
         } => {
+            if let Some(target) = scope.host_component_props.get(prop) {
+                return render_host_node(index, target, scope);
+            }
             let target = scope.component_props.get(prop).copied();
             render_component_node(
                 app,
@@ -276,6 +284,19 @@ pub(crate) fn render_node(
         Node::Element { tag, children } => {
             render_element(app, component_index, index, *tag, children, scope, state)
         }
+
+        Node::HostComponent {
+            provider,
+            component,
+            ..
+        } => render_host_node(
+            index,
+            &HostComponentTarget {
+                provider: provider.clone(),
+                component: component.clone(),
+            },
+            scope,
+        ),
 
         // Unknown ops render as nothing, mirroring the TS host.
         Node::Unknown => Ok(String::new()),
@@ -412,9 +433,14 @@ fn render_component_node(
     // mirror of `component_runtime_props` (crates/plec-runtime).
     let mut named_props = serde_json::Map::new();
     let mut component_props: HashMap<usize, ComponentTarget<'_>> = HashMap::new();
+    let mut host_component_props = HashMap::new();
     for prop in node_props {
         match prop {
-            ComponentProp::Component { name, component } => {
+            ComponentProp::Component {
+                name,
+                component,
+                host,
+            } => {
                 let Some(name) = current.strings.get(*name) else {
                     continue;
                 };
@@ -423,13 +449,17 @@ fn render_component_node(
                     .iter()
                     .position(|candidate| child.strings.get(candidate.name) == Some(name))
                 {
-                    component_props.insert(
-                        parameter,
-                        ComponentTarget {
-                            app,
-                            component: *component,
-                        },
-                    );
+                    if let Some(host) = host {
+                        host_component_props.insert(parameter, host.clone());
+                    } else {
+                        component_props.insert(
+                            parameter,
+                            ComponentTarget {
+                                app,
+                                component: *component,
+                            },
+                        );
+                    }
                 }
             }
             ComponentProp::Value { name, expression } => {
@@ -489,6 +519,7 @@ fn render_component_node(
         &Scope {
             props,
             component_props,
+            host_component_props,
             path: component_path.clone(),
             nested_key: Some(component_path),
             nested_graph_id: child.id.clone(),
@@ -500,6 +531,19 @@ fn render_component_node(
     Ok(format!(
         "<!--plec:component:{path}:{index}-->{inner}<!--plec:component-end:{path}:{index}-->",
         path = scope.path
+    ))
+}
+
+fn render_host_node(
+    index: usize,
+    target: &HostComponentTarget,
+    scope: &Scope<'_>,
+) -> Result<String, RenderError> {
+    Ok(format!(
+        "<span data-plec-node=\"{}\" data-plec-host=\"{}:{}\"></span>",
+        escape_attribute(&format!("{}/node:{index}", scope.path)),
+        escape_attribute(&target.provider),
+        escape_attribute(&target.component),
     ))
 }
 
@@ -523,8 +567,16 @@ fn render_element(
         .ok_or(RenderError::MissingString(component_index, tag))?;
     // DOM-sink policy (plec_ir::sink): the tag string is interpolated
     // verbatim into markup, so anything outside the strict HTML/SVG grammar
-    // is a markup injection channel. Fail the render closed.
-    if !plec_ir::sink::is_safe_tag_name(tag) {
+    // is a markup injection channel. Element identity is additionally
+    // allowlisted per namespace (mirroring the CSR runtime's instantiation
+    // policy, including the server manifest's trusted custom elements), so
+    // substituted artifacts cannot activate `script`-class elements. The
+    // server artifact carries no namespace field, so the tag passes when
+    // either namespace's allowlist admits it; fail the render closed.
+    let policy = &state.tag_policy;
+    if !plec_ir::sink::is_allowed_element_tag_with_policy(tag, "html", policy)
+        && !plec_ir::sink::is_allowed_element_tag_with_policy(tag, "svg", policy)
+    {
         return Err(RenderError::UnsafeTag(tag.to_owned()));
     }
     // Writes keep program order: a spread bag is written where it occurs, and

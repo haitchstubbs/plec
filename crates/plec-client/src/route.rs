@@ -68,9 +68,11 @@ impl RuntimeState {
         if let Some(mut instance) = self.typed.borrow_mut().remove(id) {
             instance.runtime.invalidate_fetches();
             instance.runtime.clear_listeners();
+            instance.runtime.dispose_host_components();
             if let Some(mut loader) = instance.loader_runtime {
                 loader.invalidate_fetches();
                 loader.clear_listeners();
+                loader.dispose_host_components();
             }
             if let Some(node) = instance.runtime.root.and_then(|root| root.first_child()) {
                 if let Some(parent) = node.parent_node() {
@@ -210,11 +212,12 @@ impl RuntimeState {
             .get(graph.root_component)
             .cloned()
             .ok_or_else(|| JsValue::from_str("typed route graph root is missing"))?;
-        let mut next = TypedRuntime::new_with_runtime_limits(
+        let mut next = TypedRuntime::new_with_tag_policy(
             app,
             self.region_tracker.clone(),
             self.reconcile_budget.clone(),
             self.cookie_policy.clone(),
+            self.effective_tag_policy(),
         )?;
         next.set_component_definitions(graph.components);
         next.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
@@ -234,6 +237,13 @@ impl RuntimeState {
                 .clone()
                 .ok_or_else(|| JsValue::from_str("typed route is not mounted"))?
         };
+        {
+            let mut typed = self.typed.borrow_mut();
+            let instance = typed
+                .get_mut(id)
+                .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
+            instance.runtime.dispose_host_components();
+        }
         next.mount(root)?;
         {
             let mut typed = self.typed.borrow_mut();
@@ -311,6 +321,7 @@ impl RuntimeState {
             loader.mount(root)?;
             let mut previous = std::mem::replace(&mut instance.runtime, loader);
             previous.invalidate_fetches();
+            previous.dispose_host_components();
             instance.graph_id = instance
                 .route_state
                 .as_ref()
@@ -332,6 +343,7 @@ impl RuntimeState {
             if let Some(mut loader) = instance.loader_runtime.take() {
                 loader.invalidate_fetches();
                 loader.clear_listeners();
+                loader.dispose_host_components();
             }
             let state = instance
                 .route_state

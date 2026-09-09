@@ -2,7 +2,11 @@ use super::artifact;
 use super::contract;
 use super::repo::Repo;
 use super::wasmtest;
-use plec_compiler::{lower_route_artifacts, lower_routes, read_source_graph};
+use plec_build::modules::host::{resolve_custom_elements, resolve_host_imports};
+use plec_compiler::{
+    lower_route_artifacts_with_options, lower_routes, read_source_graph_with_options,
+    CompilerOptions,
+};
 use plec_ir::{ComponentApplication, Node, RouteManifest};
 use plec_model::build_semantic_graph;
 use serde::Serialize;
@@ -156,15 +160,28 @@ fn compile_application(repo: &Repo, source: &Path) -> Result<CompiledApp, String
         .map(|dir| dir.to_path_buf())
         .unwrap_or_else(|| repo.root.clone());
 
-    let source_graph = read_source_graph(&source, &app_dir, &repo.root)
-        .map_err(|error| format!("source graph: {error}"))?;
+    let host_imports =
+        resolve_host_imports(&app_dir).map_err(|error| format!("host config: {error}"))?;
+    let custom_elements =
+        resolve_custom_elements(&app_dir).map_err(|error| format!("host config: {error}"))?;
+    let source_graph = read_source_graph_with_options(
+        &source,
+        &app_dir,
+        &repo.root,
+        &CompilerOptions {
+            host_imports,
+            custom_elements: custom_elements.clone(),
+        },
+    )
+    .map_err(|error| format!("source graph: {error}"))?;
     let semantic_graph =
         build_semantic_graph(&source_graph.modules, &source_graph.resolved_imports)
             .map_err(|error| format!("semantic graph: {error}"))?;
     let routes = lower_routes(&source_graph.modules, &semantic_graph)
         .map_err(|error| format!("routes: {error}"))?;
-    let bundle = lower_route_artifacts(&source_graph.modules, &semantic_graph, &routes)
-        .map_err(|error| format!("route artifacts: {error}"))?;
+    let bundle =
+        lower_route_artifacts_with_options(&source_graph.modules, &semantic_graph, &routes, &custom_elements)
+            .map_err(|error| format!("route artifacts: {error}"))?;
 
     let mut registry = BTreeMap::new();
     for artifact in &bundle.graphs {

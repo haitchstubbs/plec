@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use plec_compiler::{lower_route_artifacts, lower_routes, read_source_graph};
+use plec_compiler::{
+    lower_route_artifacts_with_options, lower_routes, read_source_graph_with_options,
+    CompilerOptions,
+};
 use plec_model::build_semantic_graph;
 
 use super::id::sanitize;
@@ -19,11 +22,21 @@ pub fn emit(
     app_dir: &Path,
     repo_root: &Path,
     public_dir: &Path,
+    host_imports: &std::collections::BTreeMap<String, String>,
+    custom_elements: &std::collections::BTreeSet<String>,
 ) -> Result<(), BuildError> {
     let stage = Stage::Compile;
 
-    let source_graph = read_source_graph(source, app_dir, repo_root)
-        .map_err(|error| BuildError::new(stage, error))?;
+    let source_graph = read_source_graph_with_options(
+        source,
+        app_dir,
+        repo_root,
+        &CompilerOptions {
+            host_imports: host_imports.clone(),
+            custom_elements: custom_elements.clone(),
+        },
+    )
+    .map_err(|error| BuildError::new(stage, error))?;
 
     let semantic_graph =
         build_semantic_graph(&source_graph.modules, &source_graph.resolved_imports)
@@ -32,14 +45,18 @@ pub fn emit(
     let routes = lower_routes(&source_graph.modules, &semantic_graph)
         .map_err(|error| BuildError::new(stage, error.to_string()))?;
 
-    let bundle = lower_route_artifacts(&source_graph.modules, &semantic_graph, &routes).map_err(
-        |error| {
-            BuildError::new(
-                stage,
-                format!("unsupported compiled route application: {error}"),
-            )
-        },
-    )?;
+    let bundle = lower_route_artifacts_with_options(
+        &source_graph.modules,
+        &semantic_graph,
+        &routes,
+        custom_elements,
+    )
+    .map_err(|error| {
+        BuildError::new(
+            stage,
+            format!("unsupported compiled route application: {error}"),
+        )
+    })?;
 
     let graphs_dir = public_dir.join("graphs");
 
