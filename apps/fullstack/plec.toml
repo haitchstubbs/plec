@@ -19,3 +19,6 @@ preloads = [
   "/assets/files/outfit-latin-wght-normal.woff2",
   "/assets/files/raleway-latin-wght-normal.woff2",
 ]
+
+[compiler.host-imports]
+"lucide" = "lucide"

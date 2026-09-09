@@ -197,6 +197,14 @@ pub enum Node {
         #[serde(default)]
         children: Vec<usize>,
     },
+    HostComponent {
+        #[serde(default)]
+        provider: String,
+        #[serde(default)]
+        component: String,
+        #[serde(default)]
+        props: Vec<ComponentProp>,
+    },
     /// Insertion range for the implicit `children` prop.
     Slot,
     /// Unknown ops render as nothing, mirroring the TS host's fallthrough.
@@ -222,9 +230,18 @@ pub enum ComponentProp {
         name: usize,
         #[serde(default)]
         component: usize,
+        #[serde(default)]
+        host: Option<HostComponentTarget>,
     },
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostComponentTarget {
+    pub provider: String,
+    pub component: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -29,6 +29,11 @@ pub struct ServerManifest {
     pub styles_href: Option<String>,
     #[serde(default)]
     pub preloads: Vec<String>,
+    /// Trusted custom element tags (the application's `plec.toml`
+    /// `[compiler] custom-elements`), consumed by the SSR element-tag
+    /// policy. Absent in older manifests.
+    #[serde(default)]
+    pub custom_elements: Vec<String>,
     #[serde(default)]
     pub document: DocumentMetadata,
     /// The Node application-runtime section. Absent for builds that ship no
@@ -125,6 +130,7 @@ impl LoadedServerManifest {
             client_script: self.manifest.client_script.clone(),
             styles_href: self.manifest.styles_href.clone(),
             preloads: self.manifest.preloads.clone(),
+            custom_elements: self.manifest.custom_elements.clone(),
             document: self.manifest.document.clone(),
             application_runtime: None,
             development,

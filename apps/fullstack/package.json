@@ -17,6 +17,7 @@
   "dependencies": {
     "@wasm-runtime/lucide-plec": "workspace:*",
     "@wasm-runtime/ui": "workspace:*",
+    "lucide": "^1.31.0",
     "plec": "workspace:*",
     "plec-browser": "workspace:*"
   },

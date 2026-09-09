@@ -60,6 +60,8 @@ pub struct TypedApplication {
     #[serde(skip)]
     pub runtime_component_props: Vec<Option<usize>>,
     #[serde(skip)]
+    pub runtime_host_component_props: Vec<Option<TypedHostComponentTarget>>,
+    #[serde(skip)]
     pub ref_values: Vec<RuntimeValue>,
 }
 
@@ -99,6 +101,11 @@ impl plec_ir::SsrStructureGraph for TypedApplication {
 
 impl TypedComponentApplication {
     pub fn validate(&self) -> Result<(), JsValue> {
+        self.validate_with_policy(&plec_ir::sink::TagPolicy::default())
+    }
+
+    /// Validates every component graph under an explicit element-tag policy.
+    pub fn validate_with_policy(&self, policy: &plec_ir::sink::TagPolicy) -> Result<(), JsValue> {
         use crate::limits::{
             MAX_COMPONENT_COUNT, MAX_TOTAL_CONSTANT_NODES, MAX_TOTAL_INSTRUCTIONS,
             MAX_TOTAL_IR_ENTRIES, MAX_TOTAL_STRING_POOL_BYTES,
@@ -110,7 +117,7 @@ impl TypedComponentApplication {
             return Err(JsValue::from_str("invalid component application"));
         }
         for component in &self.components {
-            component.validate()?;
+            component.validate_with_policy(policy)?;
             if component.id.is_empty() {
                 return Err(JsValue::from_str("component graph id is required"));
             }
@@ -338,9 +345,26 @@ pub struct TypedComponentParameter {
 
 #[derive(Clone)]
 pub enum TypedComponentProp {
-    Value { name: usize, expression: usize },
-    Callable { name: usize, action: usize },
-    Component { name: usize, component: usize },
+    Value {
+        name: usize,
+        expression: usize,
+    },
+    Callable {
+        name: usize,
+        action: usize,
+    },
+    Component {
+        name: usize,
+        component: usize,
+        host: Option<TypedHostComponentTarget>,
+    },
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypedHostComponentTarget {
+    pub provider: String,
+    pub component: String,
 }
 
 impl<'de> Deserialize<'de> for TypedComponentProp {
@@ -352,20 +376,28 @@ impl<'de> Deserialize<'de> for TypedComponentProp {
             expression: Option<usize>,
             action: Option<usize>,
             component: Option<usize>,
+            host: Option<TypedHostComponentTarget>,
         }
         let raw = Raw::deserialize(deserializer)?;
-        match (raw.kind.as_str(), raw.expression, raw.action, raw.component) {
-            ("value", Some(expression), None, None) => Ok(Self::Value {
+        match (
+            raw.kind.as_str(),
+            raw.expression,
+            raw.action,
+            raw.component,
+            raw.host,
+        ) {
+            ("value", Some(expression), None, None, None) => Ok(Self::Value {
                 name: raw.name,
                 expression,
             }),
-            ("callable", None, Some(action), None) => Ok(Self::Callable {
+            ("callable", None, Some(action), None, None) => Ok(Self::Callable {
                 name: raw.name,
                 action,
             }),
-            ("component", None, None, Some(component)) => Ok(Self::Component {
+            ("component", None, None, Some(component), host) => Ok(Self::Component {
                 name: raw.name,
                 component,
+                host,
             }),
             _ => Err(serde::de::Error::custom("invalid component prop")),
         }
@@ -387,7 +419,13 @@ impl TypedComponentProp {
         match self {
             Self::Value { expression, .. } => *expression < app.expressions.len(),
             Self::Callable { action, .. } => *action < app.actions.len(),
-            Self::Component { component, .. } => *component < usize::MAX,
+            Self::Component {
+                component, host, ..
+            } => {
+                host.as_ref()
+                    .is_some_and(|host| !host.provider.is_empty() && !host.component.is_empty())
+                    || *component < usize::MAX
+            }
         }
     }
 }
@@ -653,6 +691,13 @@ pub enum TypedNode {
         props: Vec<TypedComponentProp>,
         #[serde(default)]
         children: Vec<usize>,
+    },
+    HostComponent {
+        provider: String,
+        component: String,
+        parent: Option<usize>,
+        #[serde(default)]
+        props: Vec<TypedComponentProp>,
     },
     Slot {
         parent: Option<usize>,
@@ -1010,12 +1055,31 @@ fn subtree_contains(nodes: &[TypedNode], root: usize, target: usize) -> bool {
     ancestors.push(target);
     while let Some(index) = ancestors.pop() {
         let parent = match nodes.get(index) {
-            Some(TypedNode::Element { parent: Some(parent), .. }
-              | TypedNode::Text { parent: Some(parent), .. }
-              | TypedNode::Conditional { parent: Some(parent), .. }
-              | TypedNode::Loop { parent: Some(parent), .. }
-              | TypedNode::Component { parent: Some(parent), .. }
-              | TypedNode::Slot { parent: Some(parent) }) => *parent,
+            Some(
+                TypedNode::Element {
+                    parent: Some(parent),
+                    ..
+                }
+                | TypedNode::Text {
+                    parent: Some(parent),
+                    ..
+                }
+                | TypedNode::Conditional {
+                    parent: Some(parent),
+                    ..
+                }
+                | TypedNode::Loop {
+                    parent: Some(parent),
+                    ..
+                }
+                | TypedNode::Component {
+                    parent: Some(parent),
+                    ..
+                }
+                | TypedNode::Slot {
+                    parent: Some(parent),
+                },
+            ) => *parent,
             _ => continue,
         };
         if parent == root {
@@ -1045,8 +1109,20 @@ fn mark_owned_node(
 
 impl TypedApplication {
     /// Validates untrusted executable IR before it reaches the typed runtime.
+    ///
+    /// Strict element-tag policy: standard HTML/SVG elements only. Hosts with
+    /// an explicit trusted custom-element configuration must use
+    /// [`TypedApplication::validate_with_policy`].
     pub fn validate(&self) -> Result<(), JsValue> {
-        self.validate_contract().map_err(JsValue::from_str)
+        self.validate_with_policy(&plec_ir::sink::TagPolicy::default())
+    }
+
+    /// Validates untrusted executable IR under an explicit element-tag
+    /// policy. The policy only ever widens the standard-element allowlist
+    /// with configured custom elements; forbidden tags stay rejected.
+    pub fn validate_with_policy(&self, policy: &plec_ir::sink::TagPolicy) -> Result<(), JsValue> {
+        self.validate_contract_with_policy(policy)
+            .map_err(JsValue::from_str)
     }
 
     /// Node-ownership contract for untrusted graphs: every structural handle
@@ -1055,7 +1131,7 @@ impl TypedApplication {
     /// node is reachable. Mount recursion, region ownership, and SSR
     /// adoption all assume this shape, so hostile graphs are rejected here
     /// before any execution or traversal can follow them.
-    fn validate_topology(&self) -> Result<(), &'static str> {
+    fn validate_topology(&self, policy: &plec_ir::sink::TagPolicy) -> Result<(), &'static str> {
         let node_count = self.nodes.len();
         let parent_in_range =
             |parent: &Option<usize>| parent.map(|parent| parent < node_count).unwrap_or(true);
@@ -1063,6 +1139,7 @@ impl TypedApplication {
             match node {
                 TypedNode::Element {
                     tag,
+                    namespace,
                     parent,
                     children,
                     ..
@@ -1070,12 +1147,30 @@ impl TypedApplication {
                     if *tag >= self.strings.len() {
                         return Err("element tag handle out of range");
                     }
+                    let tag_name = &self.strings[*tag];
                     // DOM-sink policy (plec_ir::sink): a tag string is
                     // interpolated verbatim by every serializer, so anything
                     // outside the strict HTML/SVG grammar is a markup
                     // injection channel and fails the graph closed.
-                    if !plec_ir::sink::is_safe_tag_name(&self.strings[*tag]) {
+                    if !plec_ir::sink::is_safe_tag_name(tag_name) {
                         return Err("unsafe element tag");
+                    }
+                    // Element instantiation is namespace-aware: only the
+                    // HTML and SVG namespaces exist in executable IR, and
+                    // the tag must belong to its namespace's allowlist.
+                    if namespace != "html" && namespace != "svg" {
+                        return Err("invalid element namespace");
+                    }
+                    if !plec_ir::sink::is_allowed_element_tag_with_policy(
+                        tag_name, namespace, policy,
+                    ) {
+                        if plec_ir::sink::is_forbidden_element_tag(tag_name) {
+                            return Err("forbidden element tag");
+                        }
+                        if namespace == "html" && tag_name.contains('-') {
+                            return Err("custom element tag not permitted");
+                        }
+                        return Err("unsupported element tag");
                     }
                     if children.iter().any(|child| *child >= node_count) {
                         return Err("element child handle out of range");
@@ -1102,7 +1197,9 @@ impl TypedApplication {
                         return Err("conditional test expression handle out of range");
                     }
                     if *consequent >= node_count
-                        || alternate.map(|branch| branch >= node_count).unwrap_or(false)
+                        || alternate
+                            .map(|branch| branch >= node_count)
+                            .unwrap_or(false)
                     {
                         return Err("conditional branch handle out of range");
                     }
@@ -1118,8 +1215,12 @@ impl TypedApplication {
                         return Err("node parent handle out of range");
                     }
                 }
-                TypedNode::Component { parent, children, .. }
-                | TypedNode::DynamicComponent { parent, children, .. } => {
+                TypedNode::Component {
+                    parent, children, ..
+                }
+                | TypedNode::DynamicComponent {
+                    parent, children, ..
+                } => {
                     if children.iter().any(|child| *child >= node_count) {
                         return Err("component child handle out of range");
                     }
@@ -1130,6 +1231,20 @@ impl TypedApplication {
                 TypedNode::Slot { parent } => {
                     if !parent_in_range(parent) {
                         return Err("node parent handle out of range");
+                    }
+                }
+                TypedNode::HostComponent {
+                    provider,
+                    component,
+                    parent,
+                    props,
+                } => {
+                    if provider.is_empty()
+                        || component.is_empty()
+                        || !parent_in_range(parent)
+                        || props.iter().any(|prop| !prop.valid(self))
+                    {
+                        return Err("invalid host component");
                     }
                 }
             }
@@ -1164,7 +1279,10 @@ impl TypedApplication {
                         mark_owned_node(&mut owned, &mut stack, *alternate)?;
                     }
                 }
-                TypedNode::Text { .. } | TypedNode::Loop { .. } | TypedNode::Slot { .. } => {}
+                TypedNode::Text { .. }
+                | TypedNode::Loop { .. }
+                | TypedNode::Slot { .. }
+                | TypedNode::HostComponent { .. } => {}
             }
         }
         if owned.iter().any(|owned| !owned) {
@@ -1174,6 +1292,13 @@ impl TypedApplication {
     }
 
     fn validate_contract(&self) -> Result<(), &'static str> {
+        self.validate_contract_with_policy(&plec_ir::sink::TagPolicy::default())
+    }
+
+    fn validate_contract_with_policy(
+        &self,
+        policy: &plec_ir::sink::TagPolicy,
+    ) -> Result<(), &'static str> {
         use crate::limits::{
             MAX_ACTION_INSTRUCTIONS, MAX_COMPONENT_COLLECTION_LEN, MAX_COMPONENT_STRING_BYTES,
             MAX_EXPRESSION_INSTRUCTIONS,
@@ -1233,7 +1358,7 @@ impl TypedApplication {
         if self.root_node >= self.nodes.len() {
             return Err("root node handle out of range");
         }
-        self.validate_topology()?;
+        self.validate_topology(policy)?;
         let mut outlets = HashSet::new();
         for outlet in &self.route_outlets {
             if !outlets.insert(&outlet.id)
@@ -2247,6 +2372,130 @@ mod tests {
     }
 
     #[test]
+    fn topology_validation_rejects_forbidden_and_unsupported_element_tags() {
+        let tag_application = |tag: &str, namespace: &str| -> TypedApplication {
+            serde_json::from_value(serde_json::json!({
+                "version": "0.10",
+                "rootNode": 0,
+                "strings": ["div", tag],
+                "nodes": [{
+                    "op": "element",
+                    "tag": 1,
+                    "namespace": namespace,
+                    "parent": null,
+                    "children": []
+                }],
+                "expressions": [{"instructions": []}],
+                "actions": [{"instructions": [{"op": "return"}]}]
+            }))
+            .unwrap()
+        };
+        for tag in [
+            "script", "SCRIPT", "base", "object", "embed", "iframe", "link", "meta", "style",
+        ] {
+            assert_eq!(
+                tag_application(tag, "html").validate_contract(),
+                Err("forbidden element tag"),
+                "{tag} must be forbidden"
+            );
+        }
+        // SVG namespace does not rescue a forbidden HTML-namespace tag:
+        // matching is by tag identity, not namespace.
+        assert_eq!(
+            tag_application("script", "svg").validate_contract(),
+            Err("forbidden element tag")
+        );
+        assert_eq!(
+            tag_application("foo", "html").validate_contract(),
+            Err("unsupported element tag")
+        );
+        assert_eq!(
+            tag_application("clipPath", "html").validate_contract(),
+            Err("unsupported element tag")
+        );
+        assert_eq!(
+            tag_application("div", "svg").validate_contract(),
+            Err("unsupported element tag")
+        );
+        assert!(tag_application("div", "html").validate_contract().is_ok());
+        assert!(tag_application("circle", "svg").validate_contract().is_ok());
+    }
+
+    #[test]
+    fn topology_validation_rejects_custom_elements_without_policy() {
+        let custom_application = |tag: &str| -> TypedApplication {
+            serde_json::from_value(serde_json::json!({
+                "version": "0.10",
+                "rootNode": 0,
+                "strings": ["div", tag],
+                "nodes": [{"op": "element", "tag": 1, "parent": null, "children": []}],
+                "expressions": [{"instructions": []}],
+                "actions": [{"instructions": [{"op": "return"}]}]
+            }))
+            .unwrap()
+        };
+        assert_eq!(
+            custom_application("my-widget").validate_contract(),
+            Err("custom element tag not permitted")
+        );
+    }
+
+    #[test]
+    fn validate_with_policy_allows_only_configured_custom_elements() {
+        let policy_application = |tag: &str| -> TypedApplication {
+            serde_json::from_value(serde_json::json!({
+                "version": "0.10",
+                "rootNode": 0,
+                "strings": ["div", tag],
+                "nodes": [{"op": "element", "tag": 1, "parent": null, "children": []}],
+                "expressions": [{"instructions": []}],
+                "actions": [{"instructions": [{"op": "return"}]}]
+            }))
+            .unwrap()
+        };
+        let policy = plec_ir::sink::TagPolicy {
+            custom_elements: std::collections::BTreeSet::from([String::from("my-widget")]),
+        };
+        assert!(policy_application("my-widget")
+            .validate_with_policy(&policy)
+            .is_ok());
+        // The policy cannot rehabilitate forbidden tags: strict validation
+        // still rejects `script` with the same identity rule.
+        assert_eq!(
+            policy_application("script").validate_contract(),
+            Err("forbidden element tag")
+        );
+    }
+
+    #[test]
+    fn topology_validation_rejects_unknown_element_namespaces() {
+        let namespace_application = |namespace: &str| -> TypedApplication {
+            serde_json::from_value(serde_json::json!({
+                "version": "0.10",
+                "rootNode": 0,
+                "strings": ["div"],
+                "nodes": [{
+                    "op": "element",
+                    "tag": 0,
+                    "namespace": namespace,
+                    "parent": null,
+                    "children": []
+                }],
+                "expressions": [{"instructions": []}],
+                "actions": [{"instructions": [{"op": "return"}]}]
+            }))
+            .unwrap()
+        };
+        for namespace in ["math", "", "HTML", "xhtml", "SVG"] {
+            assert_eq!(
+                namespace_application(namespace).validate_contract(),
+                Err("invalid element namespace"),
+                "namespace {namespace:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn topology_validation_rejects_out_of_range_structural_handles() {
         let element_child = topology_application(
             serde_json::json!([
@@ -2265,28 +2514,39 @@ mod tests {
             ]),
             serde_json::json!([]),
         );
-        assert_eq!(tag.validate_contract(), Err("element tag handle out of range"));
+        assert_eq!(
+            tag.validate_contract(),
+            Err("element tag handle out of range")
+        );
 
-        let tag_application = |tag: &str| -> TypedApplication {
+        let tag_application = |tag: &str, namespace: &str| -> TypedApplication {
             serde_json::from_value(serde_json::json!({
                 "version": "0.10",
                 "rootNode": 0,
                 "strings": ["div", tag],
-                "nodes": [{"op": "element", "tag": 1, "parent": null, "children": []}],
+                "nodes": [{
+                    "op": "element",
+                    "tag": 1,
+                    "namespace": namespace,
+                    "parent": null,
+                    "children": []
+                }],
                 "expressions": [{"instructions": []}],
                 "actions": [{"instructions": [{"op": "return"}]}]
             }))
             .unwrap()
         };
         assert_eq!(
-            tag_application("img src=x onerror=alert(1)").validate_contract(),
+            tag_application("img src=x onerror=alert(1)", "html").validate_contract(),
             Err("unsafe element tag")
         );
         assert_eq!(
-            tag_application("svg:script").validate_contract(),
+            tag_application("svg:script", "html").validate_contract(),
             Err("unsafe element tag")
         );
-        assert!(tag_application("clipPath").validate_contract().is_ok());
+        assert!(tag_application("clipPath", "svg")
+            .validate_contract()
+            .is_ok());
 
         let text = topology_application(
             serde_json::json!([
@@ -2302,7 +2562,10 @@ mod tests {
             ]),
             serde_json::json!([]),
         );
-        assert_eq!(loop_node.validate_contract(), Err("loop handle out of range"));
+        assert_eq!(
+            loop_node.validate_contract(),
+            Err("loop handle out of range")
+        );
 
         let parent = topology_application(
             serde_json::json!([

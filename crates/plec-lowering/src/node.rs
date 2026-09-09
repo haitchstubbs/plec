@@ -3,10 +3,11 @@ use std::collections::BTreeSet;
 use plec_hir::*;
 use plec_ir::{
     Binding, ComponentProp, DependencyEdge, DependencyEndpoint, Event, EventField,
-    ExpressionInstruction, ExpressionProgram, Loop, Node, PropProgram, PropWrite, Text, Value,
+    ExpressionInstruction, ExpressionProgram, HostComponentTarget, Loop, Node, PropProgram,
+    PropWrite, Text, Value,
 };
 
-use crate::{Ctx, LoweringError};
+use crate::{ComponentTarget, Ctx, LoweringError};
 
 impl Ctx<'_> {
     pub(crate) fn node(
@@ -207,12 +208,42 @@ impl Ctx<'_> {
                             .get(target)
                             .ok_or_else(|| self.err("component target missing from application"))?,
                     ),
-                    plec_hir::HirComponentTarget::Prop(_) => None,
+                    plec_hir::HirComponentTarget::Host { .. }
+                    | plec_hir::HirComponentTarget::Prop(_) => None,
                 };
+                if let plec_hir::HirComponentTarget::Host {
+                    provider,
+                    component,
+                } = &call.target
+                {
+                    let (expression, dependencies) =
+                        self.component_props_record(&call.props, self.active_loop.is_some())?;
+                    let index = self.app.nodes.len();
+                    let props_name = self.string("__plec_props");
+                    self.app.nodes.push(Node::HostComponent {
+                        provider: provider.clone(),
+                        component: component.clone(),
+                        parent,
+                        props: vec![ComponentProp::Value {
+                            name: props_name,
+                            expression,
+                        }],
+                    });
+                    self.edges(dependencies, "hostComponent", index);
+                    self.prop_edges(expression, "hostComponent", index);
+                    self.row_edges(expression, "hostComponent", index);
+                    return Ok(index);
+                }
                 let empty_parameters = Vec::new();
                 let (parameters, has_slot, direct_props) = static_target
-                    .map(|(_, parameters, has_slot, direct_props)| {
-                        (parameters, *has_slot, *direct_props)
+                    .and_then(|target| match target {
+                        ComponentTarget::Native {
+                            parameters,
+                            has_slot,
+                            direct_props,
+                            ..
+                        } => Some((parameters, *has_slot, *direct_props)),
+                        ComponentTarget::Host { .. } => None,
                     })
                     .unwrap_or((&empty_parameters, false, false));
                 let mut supplied = BTreeSet::new();
@@ -263,20 +294,32 @@ impl Ctx<'_> {
                             )
                         }
                         HirProp::Component { name, target } => {
-                            let component = targets
-                                .get(&target)
-                                .ok_or_else(|| {
-                                    self.err("component prop target missing from application")
-                                })?
-                                .0;
-                            (
-                                name.clone(),
-                                ComponentProp::Component {
-                                    name: self.string(&name),
-                                    component,
-                                },
-                                BTreeSet::new(),
-                            )
+                            let target = targets.get(&target).ok_or_else(|| {
+                                self.err("component prop target missing from application")
+                            })?;
+                            match target {
+                                ComponentTarget::Native { index, .. } => (
+                                    name.clone(),
+                                    ComponentProp::Component {
+                                        name: self.string(&name),
+                                        component: *index,
+                                        host: None,
+                                    },
+                                    BTreeSet::new(),
+                                ),
+                                ComponentTarget::Host { provider, component } => (
+                                    name.clone(),
+                                    ComponentProp::Component {
+                                        name: self.string(&name),
+                                        component: 0,
+                                        host: Some(HostComponentTarget {
+                                            provider: provider.clone(),
+                                            component: component.clone(),
+                                        }),
+                                    },
+                                    BTreeSet::new(),
+                                ),
+                            }
                         }
                         HirProp::Spread { .. } if direct_props => continue,
                         HirProp::Spread { .. } => {
@@ -331,7 +374,10 @@ impl Ctx<'_> {
                 match &call.target {
                     plec_hir::HirComponentTarget::Static(_) => {
                         self.app.nodes.push(Node::Component {
-                            component: static_target.expect("static target").0,
+                            component: match static_target.expect("static target") {
+                                ComponentTarget::Native { index, .. } => *index,
+                                ComponentTarget::Host { .. } => unreachable!(),
+                            },
                             parent,
                             props,
                             children,
@@ -349,6 +395,7 @@ impl Ctx<'_> {
                             children,
                         });
                     }
+                    plec_hir::HirComponentTarget::Host { .. } => unreachable!(),
                 }
                 self.edges(dependencies, "component", index);
                 let expressions = match &self.app.nodes[index] {
@@ -464,7 +511,7 @@ impl Ctx<'_> {
                     handle,
                     r#loop: None,
                 },
-            })
+            });
         }
     }
     fn row_edges(&mut self, expression: usize, kind: &'static str, target_handle: usize) {

@@ -94,6 +94,12 @@ pub struct HirComponentCall {
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirComponentTarget {
     Static(ComponentId),
+    /// An explicitly registered external renderer target. Host components do
+    /// not have a Plec component graph or descendant HIR.
+    Host {
+        provider: String,
+        component: String,
+    },
     /// A component-valued parameter, selected by the caller at mount time.
     Prop(BindingId),
 }

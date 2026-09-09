@@ -7,8 +7,20 @@ use crate::LoweringError;
 
 /// component index, declared props (name, callable, component), children slot,
 /// direct props-bag parameter.
-pub(crate) type ComponentTargets =
-    HashMap<ComponentId, (usize, Vec<(String, bool, bool)>, bool, bool)>;
+pub(crate) enum ComponentTarget {
+    Native {
+        index: usize,
+        parameters: Vec<(String, bool, bool)>,
+        has_slot: bool,
+        direct_props: bool,
+    },
+    Host {
+        provider: String,
+        component: String,
+    },
+}
+
+pub(crate) type ComponentTargets = HashMap<ComponentId, ComponentTarget>;
 
 pub(crate) struct Ctx<'a> {
     pub(crate) component: &'a HirComponent,

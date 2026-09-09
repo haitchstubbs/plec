@@ -410,6 +410,7 @@ fn options(runtime: NodeApplicationRuntime) -> PlecServerOptions {
         client_script: None,
         styles_href: None,
         preloads: Vec::new(),
+        custom_elements: Vec::new(),
         document: DocumentMetadata::default(),
         application_runtime: Some(std::sync::Arc::new(runtime)),
         development: false,

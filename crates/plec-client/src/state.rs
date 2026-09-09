@@ -194,6 +194,11 @@ pub struct RuntimeState {
     /// even without the `fetch` feature so the host policy surface is
     /// feature-independent.
     pub fetch_policy: Rc<RefCell<Option<Vec<FetchPolicyGrant>>>>,
+    /// Host-owned element-tag capability (`None` = strict default policy:
+    /// standard HTML/SVG elements only). This is the only channel that can
+    /// widen executable-IR element instantiation beyond the standard
+    /// allowlists, and it never un-forbids forbidden tags.
+    pub tag_policy: Rc<RefCell<Option<plec_ir::sink::TagPolicy>>>,
 }
 
 /// One host-owned fetch grant. Authority comes only from grants published
@@ -219,12 +224,39 @@ pub struct FetchPolicyGrant {
     pub credentials: bool,
 }
 
+/// One host-owned element-tag capability grant. Authority comes only from
+/// the policy published through `set_tag_policy`; artifacts never carry tag
+/// authority of their own.
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagPolicyGrant {
+    /// Trusted custom element tags (canonical lowercase HTML-namespace
+    /// names, e.g. `my-widget`).
+    #[serde(default)]
+    pub custom_elements: Vec<String>,
+}
+
 impl RuntimeState {
     pub fn set_fetch_policy(&self, policy: JsValue) -> Result<(), JsValue> {
         let policy: Option<Vec<FetchPolicyGrant>> =
             serde_wasm_bindgen::from_value(policy).map_err(error)?;
         *self.fetch_policy.borrow_mut() = policy;
         Ok(())
+    }
+
+    pub fn set_tag_policy(&self, policy: JsValue) -> Result<(), JsValue> {
+        let grant: Option<TagPolicyGrant> =
+            serde_wasm_bindgen::from_value(policy).map_err(error)?;
+        *self.tag_policy.borrow_mut() = grant.map(|grant| plec_ir::sink::TagPolicy {
+            custom_elements: grant.custom_elements.into_iter().collect(),
+        });
+        Ok(())
+    }
+
+    /// The element-tag policy every validation and instantiation path must
+    /// enforce: the host grant when installed, the strict default otherwise.
+    pub fn effective_tag_policy(&self) -> plec_ir::sink::TagPolicy {
+        self.tag_policy.borrow().clone().unwrap_or_default()
     }
 }
 
@@ -250,6 +282,7 @@ impl RuntimeState {
             typed_components: Rc::new(RefCell::new(None)),
             cookie_policy: Rc::new(RefCell::new(None)),
             fetch_policy: Rc::new(RefCell::new(None)),
+            tag_policy: Rc::new(RefCell::new(None)),
         }
     }
 

@@ -45,6 +45,9 @@ pub(crate) struct RenderState {
     pub branches: BTreeMap<String, BTreeMap<usize, SsrSelectedBranch>>,
     pub loops: BTreeMap<String, BTreeMap<usize, Vec<String>>>,
     pub nested: BTreeMap<String, NestedRecord>,
+    /// The element-tag policy this render serializes under (mirror of the
+    /// CSR runtime's policy; forbidden tags stay rejected everywhere).
+    pub tag_policy: plec_ir::sink::TagPolicy,
 }
 
 impl RenderState {
@@ -56,6 +59,7 @@ impl RenderState {
             branches: BTreeMap::new(),
             loops: BTreeMap::new(),
             nested: BTreeMap::new(),
+            tag_policy: plec_ir::sink::TagPolicy::default(),
         }
     }
 }
@@ -129,6 +133,7 @@ pub(crate) fn render_application(
     route: Option<&Route>,
     request: &RequestContext,
     loader: Option<&plec_ir::SsrLoaderOutcome>,
+    tag_policy: &plec_ir::sink::TagPolicy,
     development: bool,
 ) -> Result<RenderedApplication, RenderError> {
     let root = bundle
@@ -178,6 +183,7 @@ pub(crate) fn render_application(
         branches: BTreeMap::from([(ROOT_GRAPH_INSTANCE_ID.to_owned(), BTreeMap::new())]),
         loops: BTreeMap::from([(ROOT_GRAPH_INSTANCE_ID.to_owned(), BTreeMap::new())]),
         nested: BTreeMap::new(),
+        tag_policy: tag_policy.clone(),
     };
     if let Some(child_graph) = &child_graph {
         state
@@ -193,6 +199,7 @@ pub(crate) fn render_application(
         path: "root".to_owned(),
         props: Vec::new(),
         component_props: std::collections::HashMap::new(),
+        host_component_props: std::collections::HashMap::new(),
         states: Vec::new(),
         frame: Vec::new(),
         row: None,

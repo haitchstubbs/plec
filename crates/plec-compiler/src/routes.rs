@@ -201,6 +201,17 @@ pub fn lower_route_artifacts(
     graph: &SemanticGraph,
     routes: &HirRouteApplication,
 ) -> Result<RouteArtifactBundle, RouteError> {
+    lower_route_artifacts_with_options(modules, graph, routes, &std::collections::BTreeSet::new())
+}
+
+/// Like [`lower_route_artifacts`], but compiles intrinsic JSX elements under
+/// the configured trusted custom-element list.
+pub fn lower_route_artifacts_with_options(
+    modules: &[ParsedModule],
+    graph: &SemanticGraph,
+    routes: &HirRouteApplication,
+    custom_elements: &std::collections::BTreeSet<String>,
+) -> Result<RouteArtifactBundle, RouteError> {
     let mut phases = vec![routes.root.clone()];
     for route in &routes.routes {
         phases.push(route.component.clone());
@@ -218,8 +229,9 @@ pub fn lower_route_artifacts(
             Some(&phase.local_name),
         )
         .map_err(|error| RouteError(error.to_string()))?;
-        let application = crate::lower_application(modules, &root, graph)
-            .map_err(|error| RouteError(error.to_string()))?;
+        let application =
+            crate::lower_application_with_options(modules, &root, graph, custom_elements)
+                .map_err(|error| RouteError(error.to_string()))?;
         let executable = crate::lower_application_to_executable(&application)
             .map_err(|error| RouteError(error.to_string()))?;
         artifacts.push(RouteArtifact {

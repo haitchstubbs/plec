@@ -1,8 +1,10 @@
 use crate::dev;
 
 use clap::{Parser, Subcommand};
-use plec_build::{build, BuildOptions};
-use plec_compiler::{compile, load, lower_route_manifest, lower_routes};
+use plec_build::{build, modules::host::resolve_custom_elements, modules::host::resolve_host_imports, BuildOptions};
+use plec_compiler::{
+    compile_with_options, load_with_options, lower_route_manifest, lower_routes, CompilerOptions,
+};
 use plec_inspect::Inspector;
 use std::path::PathBuf;
 
@@ -87,7 +89,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Command::Inspect { source, query } => {
-            let application = compile(&source)?;
+            let options = compiler_options_for_source(&source)?;
+            let application = compile_with_options(&source, &options)?;
             let inspector = Inspector::new(&application);
             let result = pollster::block_on(inspector.query(&query));
             for error in &result.errors {
@@ -97,12 +100,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Command::Raw { source } => {
-            let application = compile(&source)?;
+            let options = compiler_options_for_source(&source)?;
+            let application = compile_with_options(&source, &options)?;
             println!("{}", serde_json::to_string_pretty(&application)?);
         }
 
         Command::Routes { source } => {
-            let (modules, semantic_graph) = load(&source)?;
+            let options = compiler_options_for_source(&source)?;
+            let (modules, semantic_graph) = load_with_options(&source, &options)?;
             let routes = lower_routes(&modules, &semantic_graph)?;
             println!(
                 "{}",
@@ -155,4 +160,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+fn compiler_options_for_source(
+    source: &std::path::Path,
+) -> Result<CompilerOptions, Box<dyn std::error::Error>> {
+    let app_dir = source
+        .parent()
+        .and_then(std::path::Path::parent)
+        .unwrap_or_else(|| std::path::Path::new("."));
+    Ok(CompilerOptions {
+        host_imports: resolve_host_imports(app_dir)?.into_iter().collect(),
+        custom_elements: resolve_custom_elements(app_dir)?,
+    })
 }

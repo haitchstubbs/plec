@@ -1,7 +1,7 @@
-use plec_hir::{HirApplication, HirBindingKind, HirNode, HirParameterSource};
+use plec_hir::{HirApplication, HirBindingKind, HirNode, HirParameterSource, HirProp};
 use plec_ir::{ComponentApplication, ExecutableComponent, COMPONENT_VERSION};
 
-use crate::{component::lower_component, ComponentTargets, LoweringError};
+use crate::{component::lower_component, ComponentTarget, ComponentTargets, LoweringError};
 
 pub fn lower_application_to_executable(
     application: &HirApplication,
@@ -56,12 +56,44 @@ pub fn lower_application_to_executable(
         }
         targets.insert(
             component.id.clone(),
-            (index, props, has_slot == 1, direct_props),
+            ComponentTarget::Native {
+                index,
+                parameters: props,
+                has_slot: has_slot == 1,
+                direct_props,
+            },
         );
     }
-    let root_component = *targets
+    for component in &application.components {
+        for node in &component.nodes {
+            let HirNode::Component(call) = node else {
+                continue;
+            };
+            for prop in &call.props {
+                let HirProp::Component { target, .. } = prop else {
+                    continue;
+                };
+                if targets.contains_key(target) {
+                    continue;
+                }
+                if let Some(provider) = target.module_id.strip_prefix("host:") {
+                    targets.insert(
+                        target.clone(),
+                        ComponentTarget::Host {
+                            provider: provider.to_owned(),
+                            component: target.local_name.clone(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+    let root_component = targets
         .get(&application.root)
-        .map(|(index, _, _, _)| index)
+        .map(|target| match target {
+            ComponentTarget::Native { index, .. } => *index,
+            ComponentTarget::Host { .. } => usize::MAX,
+        })
         .ok_or_else(|| LoweringError("application root component missing".into()))?;
     let components = application
         .components

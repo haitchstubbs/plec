@@ -68,6 +68,7 @@ fn options(dir: &Path) -> PlecServerOptions {
         client_script: None,
         styles_href: None,
         preloads: Vec::new(),
+        custom_elements: Vec::new(),
         document: DocumentMetadata::default(),
         application_runtime: None,
         development: false,
@@ -929,12 +930,15 @@ async fn fails_the_render_closed_when_a_spread_bag_carries_a_reserved_attribute(
 #[tokio::test]
 async fn fails_the_render_closed_on_srcdoc_and_script_url_attribute_writes() {
     let srcdoc_dir = fixture_dir();
+    // The element is an allowed tag: this vector exercises the attribute
+    // policy (`srcdoc` is an inline-document sink on any element). The tag
+    // itself is covered by `fails_the_render_closed_on_active_element_tags`.
     let srcdoc_home = json!({
         "rootComponent": 0,
         "components": [{
             "id": "home",
             "rootNode": 0,
-            "strings": ["iframe", "srcdoc"],
+            "strings": ["div", "srcdoc"],
             "constants": ["<script>alert(1)</script>"],
             "nodes": [{"op": "element", "tag": 0, "children": []}],
             "texts": [],
@@ -1133,6 +1137,105 @@ async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
         body.contains("RESERVED_ATTRIBUTE:DATA-PLEC-NODE"),
         "{body}"
     );
+}
+
+/// Adversarial regression: a substituted artifact cannot activate active,
+/// embedding, or document-metadata elements through the SSR serializer. The
+/// element-tag allowlist (crates/plec-ir/src/sink.rs) must fail the render
+/// closed for every casing and namespace spelling.
+#[tokio::test]
+async fn fails_the_render_closed_on_active_element_tags() {
+    for tag in ["script", "SCRIPT", "base", "object", "embed", "iframe", "link", "meta"] {
+        let dir = fixture_dir();
+        let home = json!({
+            "rootComponent": 0,
+            "components": [{
+                "id": "home",
+                "rootNode": 0,
+                "strings": [tag],
+                "constants": [],
+                "nodes": [{"op": "element", "tag": 0, "children": []}],
+                "texts": [],
+                "bindings": [],
+                "propPrograms": [],
+                "hostSlots": [],
+                "stateSlots": [],
+                "parameters": [],
+                "expressions": [],
+                "actions": [],
+                "loops": [],
+                "routeOutlets": []
+            }]
+        });
+        let artifact = json!({
+            "manifest": {
+                "revision": "test-revision",
+                "rootGraphId": "root",
+                "routes": [{"id": "home", "path": "", "graphId": "home", "outletId": "main"}]
+            },
+            "graphs": [
+                {"graphId": "root", "graph": page("root", "main", "", true)},
+                {"graphId": "home", "graph": home}
+            ]
+        });
+        write_artifact(dir.path(), &artifact);
+        let response = create_plec_server(options(dir.path()))
+            .oneshot(get("/"))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = text_of(response).await;
+        assert!(
+            body.contains(&format!("UNSAFE_TAG:{tag}")),
+            "{tag} must fail the render closed, got: {body}"
+        );
+    }
+}
+
+/// The server manifest's trusted custom-element list is the only channel
+/// that widens the SSR element policy; an unconfigured custom element still
+/// fails closed.
+#[tokio::test]
+async fn unconfigured_custom_elements_fail_the_render_closed() {
+    let dir = fixture_dir();
+    let home = json!({
+        "rootComponent": 0,
+        "components": [{
+            "id": "home",
+            "rootNode": 0,
+            "strings": ["my-widget"],
+            "constants": [],
+            "nodes": [{"op": "element", "tag": 0, "children": []}],
+            "texts": [],
+            "bindings": [],
+            "propPrograms": [],
+            "hostSlots": [],
+            "stateSlots": [],
+            "parameters": [],
+            "expressions": [],
+            "actions": [],
+            "loops": [],
+            "routeOutlets": []
+        }]
+    });
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": [{"id": "home", "path": "", "graphId": "home", "outletId": "main"}]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "", true)},
+            {"graphId": "home", "graph": home}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+    let response = create_plec_server(options(dir.path()))
+        .oneshot(get("/"))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(text_of(response).await.contains("UNSAFE_TAG:my-widget"));
 }
 
 #[tokio::test]

@@ -859,7 +859,20 @@ pub struct ComponentParameter {
 pub enum ComponentProp {
     Value { name: usize, expression: usize },
     Callable { name: usize, action: usize },
-    Component { name: usize, component: usize },
+    Component {
+        name: usize,
+        component: usize,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        host: Option<HostComponentTarget>,
+    },
+}
+
+/// Stable identity for a registered external renderer component.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostComponentTarget {
+    pub provider: String,
+    pub component: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -979,6 +992,13 @@ pub enum Node {
         props: Vec<ComponentProp>,
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
         children: Vec<usize>,
+    },
+    /// A provider-owned DOM subtree. The runtime owns only the boundary.
+    HostComponent {
+        provider: String,
+        component: String,
+        parent: Option<usize>,
+        props: Vec<ComponentProp>,
     },
     /// Insertion range for the implicit `children` prop. The content belongs
     /// to the caller, not the component definition which declares this node.
