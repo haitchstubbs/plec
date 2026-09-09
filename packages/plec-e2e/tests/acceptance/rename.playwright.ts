@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { forwardTodoRequest } from '../support/helpers';
+import { forwardTodoRequest, waitForMount } from '../support/helpers';
 
 // Rename requires the full native-event chain: a real keydown on the edit
 // input, a PATCH emitted by Plec, a 2xx response, and the row text updating.
@@ -46,6 +46,10 @@ test('rename emits native keydown, PATCH, and updates the row', async ({
   await expect(
     page.getByRole('heading', { name: 'Todos' }),
   ).toBeVisible();
+  // SSR markup is inert until runtime ownership transfers. A click that
+  // lands before hydration is lost to the page, so the native-event chain
+  // below must start from a mounted graph.
+  await waitForMount(page);
 
   const row = page.locator('li[data-runtime-row-key]').first();
   await row.waitFor();

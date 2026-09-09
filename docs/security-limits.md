@@ -86,12 +86,19 @@ extend this to deep chains and file-count exhaustion.
 | Expression evaluation | 100,000 shared steps (`MAX_EXPRESSION_STEPS`), Filter/Map nesting 32 (`MAX_EVAL_NESTING`) | `crates/plec-eval/src/eval.rs`      |
 | Action continuations  | 1,000,000 steps (`MAX_ACTION_STEPS`), call depth 64 (`MAX_CALL_DEPTH`)                    | `crates/plec-client/src/vm.rs`      |
 | Reaction drain        | 10,000 executions (`MAX_REACTION_STEPS`), nesting 32 (`MAX_REACTION_DRAIN_DEPTH`)         | same                                |
-| Graph mount recursion | depth 128 (`MAX_MOUNT_DEPTH`)                                                             | `crates/plec-client/src/runtime.rs` |
+| Graph mount recursion | depth 128 (`MAX_MOUNT_DEPTH`), stack watermark 512 KiB (`MAX_MOUNT_STACK_BYTES`)          | `crates/plec-client/src/runtime.rs` |
 
 Mount recursion flows through one depth-guarded `instantiate_node` entry, so a
 validated acyclic chain up to `MAX_COMPONENT_COLLECTION_LEN` nodes deep fails
 with a `mount depth exceeds limit` diagnostic instead of overflowing the WASM
-stack.
+stack. Because per-frame stack cost varies with node kind and build profile
+(debug frames are far larger than release frames), depth alone cannot
+guarantee native stack safety: the same entry records a stack watermark at the
+outermost frame and fails with a `mount stack budget exceeded` diagnostic once
+one mount chain consumes more than `MAX_MOUNT_STACK_BYTES` — half of the
+default 1 MiB wasm32 stack — regardless of frame sizes. Mount recursion itself
+is frame-dispatched per node kind, so a chain exactly at `MAX_MOUNT_DEPTH`
+mounts cleanly in every build profile.
 
 Fuel is shared across nested Filter/Map predicate evaluation, so crafted
 backward-jump loops and self-referential predicates exhaust a documented

@@ -328,6 +328,11 @@ pub struct TypedRuntime {
     /// `limits::MAX_MOUNT_DEPTH`): a validated acyclic chain may still be
     /// deep enough to overflow the WASM stack, so mount recursion is bounded.
     pub mount_depth: usize,
+    /// Frame address recorded when the outermost `instantiate_node` entered
+    /// (see `limits::MAX_MOUNT_STACK_BYTES`). Zero outside a mount chain.
+    /// The logical depth budget cannot guarantee native stack safety on its
+    /// own because per-frame cost varies with node kind and build profile.
+    pub mount_stack_base: usize,
     pub reaction_cleanups: Vec<Option<usize>>,
     pub collections: HashMap<usize, TypedCollection>,
     pub loops: HashMap<usize, TypedLoopRows>,
@@ -1087,6 +1092,7 @@ impl TypedRuntime {
             pending_reactions: Vec::new(),
             reaction_drain_depth: 0,
             mount_depth: 0,
+            mount_stack_base: 0,
             reaction_cleanups,
             loops: HashMap::new(),
             conditionals: HashMap::new(),
@@ -1175,7 +1181,20 @@ fn evaluate_host_props(
             values.insert(name.clone(), value);
         }
     }
-    serde_wasm_bindgen::to_value(&RuntimeValue::Record(values)).map_err(error)
+    host_value_to_js(&RuntimeValue::Record(values))
+}
+
+/// Serializes a runtime value crossing into a host provider as a JSON-plain
+/// JS value. The default `serde_wasm_bindgen` serializer emits Rust maps as
+/// ES6 `Map` instances, and providers read props with object spread /
+/// `Object.entries`, so a `Map` props bag would silently drop every prop
+/// (className, href, aria-*, ...) at the provider boundary. Nested records
+/// inside props must stay plain objects for the same reason.
+fn host_value_to_js(value: &RuntimeValue) -> Result<JsValue, JsValue> {
+    use serde::Serialize as _;
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .map_err(error)
 }
 
 fn host_identity(node: &TypedNode) -> Result<(String, String), JsValue> {
@@ -1219,7 +1238,7 @@ impl TypedRuntime {
             .get("__plec_props")
             .cloned()
             .unwrap_or_else(|| RuntimeValue::Record(props.clone()));
-        let props = serde_wasm_bindgen::to_value(&values).map_err(error)?;
+        let props = host_value_to_js(&values)?;
         self.update_host(&self.host_instances[index].boundary.clone(), props)
     }
 
@@ -1398,6 +1417,10 @@ impl TypedRuntime {
         self.loops.clear();
         self.conditionals.clear();
         self.listener_requests.clear();
+        // A failed earlier mount can unwind mid-chain; the fresh mount must
+        // start with clean recursion accounting, not stale depth/watermark.
+        self.mount_depth = 0;
+        self.mount_stack_base = 0;
         let doc = document()?;
         let root_node: Node = root.clone().into();
         self.instantiate_node(
@@ -3004,9 +3027,22 @@ impl TypedRuntime {
         // and loop row templates re-entering through `render_loop`) flows back
         // through this wrapper, so a validated acyclic chain deeper than
         // `MAX_MOUNT_DEPTH` fails with a diagnostic instead of overflowing the
-        // WASM stack.
+        // WASM stack. Depth alone cannot guarantee native stack safety —
+        // per-frame cost varies with node kind and build profile — so the
+        // wrapper also tracks the stack watermark recorded at the outermost
+        // mount and fails closed against `MAX_MOUNT_STACK_BYTES` before the
+        // native stack can overflow.
+        let stack_pointer = Self::mount_stack_pointer();
+        if self.mount_depth == 0 {
+            self.mount_stack_base = stack_pointer;
+        }
         if self.mount_depth >= plec_ir::limits::MAX_MOUNT_DEPTH {
             return Err(JsValue::from_str("mount depth exceeds limit"));
+        }
+        if self.mount_stack_base.saturating_sub(stack_pointer)
+            > plec_ir::limits::MAX_MOUNT_STACK_BYTES
+        {
+            return Err(JsValue::from_str("mount stack budget exceeded"));
         }
         self.mount_depth += 1;
         let result = self.instantiate_node_bounded(
@@ -3020,6 +3056,9 @@ impl TypedRuntime {
             row_regions,
         );
         self.mount_depth -= 1;
+        if self.mount_depth == 0 {
+            self.mount_stack_base = 0;
+        }
         result
     }
 
@@ -3034,6 +3073,11 @@ impl TypedRuntime {
         local: &mut HashMap<usize, Node>,
         row_regions: &mut HashMap<usize, TypedConditionalRegion>,
     ) -> Result<Node, JsValue> {
+        // The dispatcher clones the node handle and forwards each kind to a
+        // dedicated instantiation method. One recursion level then costs the
+        // frame of the node kind actually being mounted instead of the union
+        // of every kind's locals, keeping a full `MAX_MOUNT_DEPTH` chain
+        // within the native stack budget in every build profile.
         match self
             .app
             .nodes
@@ -3047,497 +3091,649 @@ impl TypedRuntime {
                 children,
                 host_ref,
                 ..
-            } => {
-                let tag = self
-                    .app
-                    .strings
-                    .get(tag)
-                    .ok_or_else(|| JsValue::from_str("tag handle out of range"))?;
-                // DOM-sink backstop (plec_ir::sink): validation rejects
-                // hostile element tags before mount, but this is the one
-                // place executable IR becomes a live DOM element, so the
-                // namespace-aware allowlist is re-checked here against
-                // substituted artifacts that skipped validation.
-                if !plec_ir::sink::is_allowed_element_tag_with_policy(
-                    tag,
-                    &namespace,
-                    &self.tag_policy,
-                ) {
-                    return Err(JsValue::from_str("element tag rejected by policy"));
-                }
-                let element = if namespace == "svg" {
-                    doc.create_element_ns(Some("http://www.w3.org/2000/svg"), tag)?
-                } else {
-                    doc.create_element(tag)?
-                };
-                // The canonical structural address: identical grammar to the
-                // server-rendered `data-plec-node` marker for the same graph
-                // position, so CSR-created and server-created DOM share one
-                // identity protocol.
-                let address = self.address_path(row_context)?.into_owned();
-                element.set_attribute("data-plec-node", &format!("{address}/node:{index}"))?;
-                let node: Node = element.into();
-                if let Some(parent) = parent {
-                    parent.append_child(&node)?;
-                }
-                for child in children {
-                    self.instantiate_node(
-                        doc,
-                        child,
-                        Some(&node),
-                        row,
-                        row_index,
-                        row_context,
-                        local,
-                        row_regions,
-                    )?;
-                }
-                if row.is_some() {
-                    local.insert(index, node.clone());
-                } else {
-                    self.nodes.insert(index, node.clone());
-                }
-                if let Some(reference) = host_ref {
-                    let slot = self
-                        .host_ref_nodes
-                        .get_mut(reference)
-                        .ok_or_else(|| JsValue::from_str("host ref handle out of range"))?;
-                    *slot = Some(node.clone());
-                }
-                Ok(node)
-            }
+            } => self.instantiate_element(
+                doc,
+                index,
+                tag,
+                namespace,
+                children,
+                host_ref,
+                parent,
+                row,
+                row_index,
+                row_context,
+                local,
+                row_regions,
+            ),
             TypedNode::HostComponent {
                 provider,
                 component,
                 props,
                 ..
-            } => {
-                let element = doc.create_element("span")?;
-                let address = self.address_path(row_context)?.into_owned();
-                element.set_attribute("data-plec-node", &format!("{address}/node:{index}"))?;
-                element.set_attribute("data-plec-host", &format!("{provider}:{component}"))?;
-                let values = evaluate_host_props(
-                    &self.app,
-                    self.cookie_policy.borrow().as_ref(),
-                    &props,
-                    &self.states,
-                    row,
-                    row_index,
-                )?;
-                self.mount_host(element.clone(), &provider, &component, values, Some(index))?;
-                let node: Node = element.into();
-                if let Some(parent) = parent {
-                    if let Err(error) = parent.append_child(&node) {
-                        self.dispose_host_boundary(&node)?;
-                        return Err(error);
-                    }
-                }
-                if row.is_some() {
-                    local.insert(index, node.clone());
-                } else {
-                    self.nodes.insert(index, node.clone());
-                }
-                Ok(node)
-            }
+            } => self.instantiate_host_component(
+                doc,
+                index,
+                provider,
+                component,
+                props,
+                parent,
+                row,
+                row_index,
+                row_context,
+                local,
+            ),
             TypedNode::Text { text, .. } => {
-                let descriptor = self
-                    .app
-                    .texts
-                    .get(text)
-                    .ok_or_else(|| JsValue::from_str("text handle out of range"))?;
-                let value = descriptor.value.clone().unwrap_or_default();
-                let node: Node = doc.create_text_node(&value).into();
-                if let Some(parent) = parent {
-                    parent.append_child(&node)?;
-                }
-                if row.is_some() {
-                    local.insert(index, node.clone());
-                } else {
-                    self.nodes.insert(index, node.clone());
-                }
-                Ok(node)
+                self.instantiate_text(doc, index, text, parent, row, local)
             }
             TypedNode::Loop { r#loop, .. } => {
-                // Rows carry their own canonical `plec:loop:{rowPath}` /
-                // `plec:loop-end:{rowPath}` boundary markers, exactly like
-                // server-rendered rows. There is deliberately no separate
-                // loop-position anchor: the server emits none, and a
-                // component-local `plec:loop:{index}` comment would be an
-                // unresolvable competitor grammar.
-                let address = self.address_path(row_context)?.into_owned();
-                let path_base = format!("{address}/loop:{index}/key:");
-                if let Some(rows) = self.loops.get_mut(&r#loop) {
-                    rows.path_base = Some(path_base);
-                } else {
-                    self.loops.insert(
-                        r#loop,
-                        TypedLoopRows {
-                            order: Vec::new(),
-                            rows: HashMap::new(),
-                            path_base: Some(path_base),
-                        },
-                    );
-                }
-                self.render_loop(
-                    r#loop,
-                    parent.ok_or_else(|| JsValue::from_str("loop parent missing"))?,
-                )?;
-                let first = self.loops.get(&r#loop).and_then(|state| {
-                    state
-                        .order
-                        .first()
-                        .and_then(|key| state.rows.get(key))
-                        .map(|row| row.root.clone())
-                });
-                match first {
-                    Some(root) => Ok(root),
-                    None => Ok(doc.create_text_node("").into()),
-                }
+                self.instantiate_loop_node(doc, index, r#loop, parent, row_context)
             }
             TypedNode::DynamicComponent {
                 prop,
                 props,
                 children,
                 ..
-            } => {
-                let parent = parent.ok_or_else(|| JsValue::from_str("component parent missing"))?;
-                let address = self.address_path(row_context)?.into_owned();
-                let start: Node = doc
-                    .create_comment(&format!("plec:component:{address}:{index}"))
-                    .into();
-                let end: Node = doc
-                    .create_comment(&format!("plec:component-end:{address}:{index}"))
-                    .into();
-                parent.append_child(&start)?;
-                parent.append_child(&end)?;
-                if let Some(target) = self
-                    .app
-                    .runtime_host_component_props
-                    .get(prop)
-                    .and_then(Clone::clone)
-                {
-                    let boundary = doc.create_element("span")?;
-                    let address = self.address_path(row_context)?.into_owned();
-                    boundary.set_attribute("data-plec-node", &format!("{address}/node:{index}"))?;
-                    boundary.set_attribute(
-                        "data-plec-host",
-                        &format!("{}:{}", target.provider, target.component),
-                    )?;
-                    let values = evaluate_host_props(
-                        &self.app,
-                        self.cookie_policy.borrow().as_ref(),
-                        &props,
-                        &self.states,
-                        row,
-                        row_index,
-                    )?;
-                    self.mount_host(
-                        boundary.clone(),
-                        &target.provider,
-                        &target.component,
-                        values,
-                        Some(index),
-                    )?;
-                    if let Err(error) = parent.insert_before(&boundary, Some(&end)) {
-                        let node: Node = boundary.into();
-                        self.dispose_host_boundary(&node)?;
-                        let _ = parent.remove_child(&start);
-                        let _ = parent.remove_child(&end);
-                        return Err(error);
-                    }
-                    parent.remove_child(&start)?;
-                    parent.remove_child(&end)?;
-                    if row.is_some() {
-                        local.insert(index, boundary.clone().into());
-                    } else {
-                        self.nodes.insert(index, boundary.clone().into());
-                    }
-                    return Ok(boundary.into());
-                }
-                let Some(component) = self
-                    .app
-                    .runtime_component_props
-                    .get(prop)
-                    .and_then(|value| *value)
-                else {
-                    if row.is_some() {
-                        local.insert(index, start.clone());
-                    } else {
-                        self.nodes.insert(index, start.clone());
-                    }
-                    return Ok(start);
-                };
-                let mut values = HashMap::new();
-                let mut callbacks = HashMap::new();
-                let mut component_props = HashMap::new();
-                for prop in props {
-                    let name = self
-                        .app
-                        .strings
-                        .get(prop.name())
-                        .ok_or_else(|| JsValue::from_str("component prop name out of range"))?
-                        .clone();
-                    match prop {
-                        TypedComponentProp::Value { expression, .. } => {
-                            values.insert(
-                                name,
-                                typed_eval(
-                                    &self.app,
-                                    self.cookie_policy.borrow().as_ref(),
-                                    expression,
-                                    &self.states,
-                                    row,
-                                    row_index,
-                                )?,
-                            );
-                        }
-                        TypedComponentProp::Callable { action, .. } => {
-                            callbacks.insert(
-                                name,
-                                TypedCallbackSpec {
-                                    action,
-                                    row: row.cloned(),
-                                },
-                            );
-                        }
-                        TypedComponentProp::Component {
-                            component, host, ..
-                        } => {
-                            component_props.insert(
-                                name,
-                                host.map(TypedComponentTarget::Host)
-                                    .unwrap_or(TypedComponentTarget::Native(component)),
-                            );
-                        }
-                    }
-                }
-                let key = format!("{index}:{}", self.next_component_instance);
-                self.next_component_instance += 1;
-                self.component_requests.push(TypedComponentRequest {
-                    call: index,
-                    component,
-                    props: values,
-                    callbacks,
-                    component_props,
-                    children,
-                    row_context: row_context.cloned(),
-                    start: start.clone(),
-                    end,
-                    key,
-                    path: format!("{address}/component:{index}"),
-                    adoption: None,
-                    ssr_branches: HashMap::new(),
-                    ssr_loops: HashMap::new(),
-                    ssr_nested: HashMap::new(),
-                });
-                if row.is_some() {
-                    local.insert(index, start.clone());
-                } else {
-                    self.nodes.insert(index, start.clone());
-                }
-                Ok(start)
-            }
+            } => self.instantiate_dynamic_component(
+                doc,
+                index,
+                prop,
+                props,
+                children,
+                parent,
+                row,
+                row_index,
+                row_context,
+                local,
+            ),
             TypedNode::Component {
                 component,
                 props,
                 children,
                 ..
-            } => {
-                let parent = parent.ok_or_else(|| JsValue::from_str("component parent missing"))?;
-                let address = self.address_path(row_context)?.into_owned();
-                let start: Node = doc
-                    .create_comment(&format!("plec:component:{address}:{index}"))
-                    .into();
-                let end: Node = doc
-                    .create_comment(&format!("plec:component-end:{address}:{index}"))
-                    .into();
-                parent.append_child(&start)?;
-                parent.append_child(&end)?;
-                let mut values = HashMap::new();
-                let mut callbacks = HashMap::new();
-                let mut component_props = HashMap::new();
-                for prop in props {
-                    let name = self
-                        .app
-                        .strings
-                        .get(prop.name())
-                        .ok_or_else(|| JsValue::from_str("component prop name out of range"))?
-                        .clone();
-                    match prop {
-                        TypedComponentProp::Value { expression, .. } => {
-                            values.insert(
-                                name,
-                                typed_eval(
-                                    &self.app,
-                                    self.cookie_policy.borrow().as_ref(),
-                                    expression,
-                                    &self.states,
-                                    row,
-                                    row_index,
-                                )?,
-                            );
-                        }
-                        TypedComponentProp::Callable { action, .. } => {
-                            callbacks.insert(
-                                name,
-                                TypedCallbackSpec {
-                                    action,
-                                    row: row.cloned(),
-                                },
-                            );
-                        }
-                        TypedComponentProp::Component {
-                            component, host, ..
-                        } => {
-                            component_props.insert(
-                                name,
-                                host.map(TypedComponentTarget::Host)
-                                    .unwrap_or(TypedComponentTarget::Native(component)),
-                            );
-                        }
-                    }
-                }
-                let key = format!("{index}:{}", self.next_component_instance);
-                self.next_component_instance += 1;
-                self.component_requests.push(TypedComponentRequest {
-                    call: index,
-                    component,
-                    props: values,
-                    callbacks,
-                    component_props,
-                    children,
-                    row_context: row_context.cloned(),
-                    start: start.clone(),
-                    end,
-                    key,
-                    path: format!("{address}/component:{index}"),
-                    adoption: None,
-                    ssr_branches: HashMap::new(),
-                    ssr_loops: HashMap::new(),
-                    ssr_nested: HashMap::new(),
-                });
-                if row.is_some() {
-                    local.insert(index, start.clone());
-                } else {
-                    self.nodes.insert(index, start.clone());
-                }
-                Ok(start)
-            }
+            } => self.instantiate_component_call(
+                doc,
+                index,
+                component,
+                props,
+                children,
+                parent,
+                row,
+                row_index,
+                row_context,
+                local,
+            ),
             TypedNode::Slot { .. } => {
-                let parent = parent.ok_or_else(|| JsValue::from_str("slot parent missing"))?;
-                let address = self.address_path(row_context)?.into_owned();
-                let start: Node = doc
-                    .create_comment(&format!("plec:slot:{address}:{index}"))
-                    .into();
-                let end: Node = doc
-                    .create_comment(&format!("plec:slot-end:{address}:{index}"))
-                    .into();
-                parent.append_child(&start)?;
-                parent.append_child(&end)?;
-                self.slot_requests.push(TypedSlotRequest {
-                    start: start.clone(),
-                    end,
-                });
-                if row.is_some() {
-                    local.insert(index, start.clone());
-                } else {
-                    self.nodes.insert(index, start.clone());
-                }
-                Ok(start)
+                self.instantiate_slot(doc, index, parent, row, row_context, local)
             }
-            TypedNode::Conditional { test, .. } => {
-                // Acquire before adding boundary markers to the live parent.
-                // Row fragments are detached, but static conditionals mount
-                // directly and need the same reserve-before-mutate invariant.
-                let mut region_slot = Some(RegionSlot::acquire(self.region_tracker.clone())?);
-                let is_row_region = row.is_some();
-                let parent =
-                    parent.ok_or_else(|| JsValue::from_str("conditional parent missing"))?;
-                let address = self.address_path(row_context)?.into_owned();
-                let start: Node = doc
-                    .create_comment(&format!("plec:conditional:{address}:{index}"))
-                    .into();
-                let end: Node = doc
-                    .create_comment(&format!("plec:conditional-end:{address}:{index}"))
-                    .into();
-                parent.append_child(&start)?;
-                parent.append_child(&end)?;
-                let mut row_selected = None;
-                if is_row_region {
-                    let TypedNode::Conditional {
-                        consequent,
-                        alternate,
-                        ..
-                    } = self.app.nodes[index].clone()
-                    else {
-                        unreachable!()
-                    };
-                    let selected = if typed_truthy(&typed_eval(
-                        &self.app,
-                        self.cookie_policy.borrow().as_ref(),
-                        test,
-                        &self.states,
-                        row,
-                        row_index,
-                    )?) {
-                        Some(consequent)
-                    } else {
-                        alternate
-                    };
-                    row_selected = selected;
-                    if let Some(selected) = selected {
-                        let child = self.instantiate_node(
-                            doc,
-                            selected,
-                            Some(parent),
-                            row,
-                            row_index,
-                            row_context,
-                            local,
-                            row_regions,
-                        )?;
-                        parent.insert_before(&child, Some(&end))?;
-                    }
-                } else {
-                    self.conditionals.insert(
-                        index,
-                        TypedConditionalRegion {
-                            start: start.clone(),
-                            end: end.clone(),
-                            selected: None,
-                            nodes: HashMap::new(),
-                            generation: 0,
-                            region_slot: region_slot.take().expect("conditional slot available"),
-                        },
-                    );
-                    self.reconcile_static_conditional(index, &mut UpdateMetrics::default())?;
-                }
-                if is_row_region {
-                    local.insert(index, start.clone());
-                    let selected = row_selected;
-                    let mut nodes = HashMap::new();
-                    if let Some(selected) = selected {
-                        self.collect_instantiated_branch_nodes(selected, local, &mut nodes);
-                    }
-                    for target in nodes.keys() {
-                        local.remove(target);
-                    }
-                    row_regions.insert(
-                        index,
-                        TypedConditionalRegion {
-                            start: start.clone(),
-                            end,
-                            selected,
-                            nodes,
-                            generation: self.next_generation,
-                            region_slot: region_slot.take().expect("conditional slot available"),
-                        },
-                    );
-                    self.next_generation += 1;
-                }
-                Ok(start)
+            TypedNode::Conditional { test, .. } => self.instantiate_conditional(
+                doc,
+                index,
+                test,
+                parent,
+                row,
+                row_index,
+                row_context,
+                local,
+                row_regions,
+            ),
+        }
+    }
+
+    /// The frame address of this wrapper. The stack grows downward on the
+    /// supported wasm32 and native targets, so outermost frames carry the
+    /// largest addresses and `outermost - current` approximates the native
+    /// stack bytes one mount chain has consumed.
+    fn mount_stack_pointer() -> usize {
+        let marker = 0u8;
+        std::hint::black_box(&marker as *const u8 as usize)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn instantiate_element(
+        &mut self,
+        doc: &Document,
+        index: usize,
+        tag: usize,
+        namespace: String,
+        children: Vec<usize>,
+        host_ref: Option<usize>,
+        parent: Option<&Node>,
+        row: Option<&HashMap<String, RuntimeValue>>,
+        row_index: usize,
+        row_context: Option<&TypedRowContext>,
+        local: &mut HashMap<usize, Node>,
+        row_regions: &mut HashMap<usize, TypedConditionalRegion>,
+    ) -> Result<Node, JsValue> {
+        let tag = self
+            .app
+            .strings
+            .get(tag)
+            .ok_or_else(|| JsValue::from_str("tag handle out of range"))?;
+        // DOM-sink backstop (plec_ir::sink): validation rejects
+        // hostile element tags before mount, but this is the one
+        // place executable IR becomes a live DOM element, so the
+        // namespace-aware allowlist is re-checked here against
+        // substituted artifacts that skipped validation.
+        if !plec_ir::sink::is_allowed_element_tag_with_policy(tag, &namespace, &self.tag_policy) {
+            return Err(JsValue::from_str("element tag rejected by policy"));
+        }
+        let element = if namespace == "svg" {
+            doc.create_element_ns(Some("http://www.w3.org/2000/svg"), tag)?
+        } else {
+            doc.create_element(tag)?
+        };
+        // The canonical structural address: identical grammar to the
+        // server-rendered `data-plec-node` marker for the same graph
+        // position, so CSR-created and server-created DOM share one
+        // identity protocol.
+        let address = self.address_path(row_context)?.into_owned();
+        element.set_attribute("data-plec-node", &format!("{address}/node:{index}"))?;
+        let node: Node = element.into();
+        if let Some(parent) = parent {
+            parent.append_child(&node)?;
+        }
+        for child in children {
+            self.instantiate_node(
+                doc,
+                child,
+                Some(&node),
+                row,
+                row_index,
+                row_context,
+                local,
+                row_regions,
+            )?;
+        }
+        if row.is_some() {
+            local.insert(index, node.clone());
+        } else {
+            self.nodes.insert(index, node.clone());
+        }
+        if let Some(reference) = host_ref {
+            let slot = self
+                .host_ref_nodes
+                .get_mut(reference)
+                .ok_or_else(|| JsValue::from_str("host ref handle out of range"))?;
+            *slot = Some(node.clone());
+        }
+        Ok(node)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn instantiate_host_component(
+        &mut self,
+        doc: &Document,
+        index: usize,
+        provider: String,
+        component: String,
+        props: Vec<TypedComponentProp>,
+        parent: Option<&Node>,
+        row: Option<&HashMap<String, RuntimeValue>>,
+        row_index: usize,
+        row_context: Option<&TypedRowContext>,
+        local: &mut HashMap<usize, Node>,
+    ) -> Result<Node, JsValue> {
+        let element = doc.create_element("span")?;
+        let address = self.address_path(row_context)?.into_owned();
+        element.set_attribute("data-plec-node", &format!("{address}/node:{index}"))?;
+        element.set_attribute("data-plec-host", &format!("{provider}:{component}"))?;
+        let values = evaluate_host_props(
+            &self.app,
+            self.cookie_policy.borrow().as_ref(),
+            &props,
+            &self.states,
+            row,
+            row_index,
+        )?;
+        self.mount_host(element.clone(), &provider, &component, values, Some(index))?;
+        let node: Node = element.into();
+        if let Some(parent) = parent {
+            if let Err(error) = parent.append_child(&node) {
+                self.dispose_host_boundary(&node)?;
+                return Err(error);
             }
         }
+        if row.is_some() {
+            local.insert(index, node.clone());
+        } else {
+            self.nodes.insert(index, node.clone());
+        }
+        Ok(node)
+    }
+
+    fn instantiate_text(
+        &mut self,
+        doc: &Document,
+        index: usize,
+        text: usize,
+        parent: Option<&Node>,
+        row: Option<&HashMap<String, RuntimeValue>>,
+        local: &mut HashMap<usize, Node>,
+    ) -> Result<Node, JsValue> {
+        let descriptor = self
+            .app
+            .texts
+            .get(text)
+            .ok_or_else(|| JsValue::from_str("text handle out of range"))?;
+        let value = descriptor.value.clone().unwrap_or_default();
+        let node: Node = doc.create_text_node(&value).into();
+        if let Some(parent) = parent {
+            parent.append_child(&node)?;
+        }
+        if row.is_some() {
+            local.insert(index, node.clone());
+        } else {
+            self.nodes.insert(index, node.clone());
+        }
+        Ok(node)
+    }
+
+    fn instantiate_loop_node(
+        &mut self,
+        doc: &Document,
+        index: usize,
+        r#loop: usize,
+        parent: Option<&Node>,
+        row_context: Option<&TypedRowContext>,
+    ) -> Result<Node, JsValue> {
+        // Rows carry their own canonical `plec:loop:{rowPath}` /
+        // `plec:loop-end:{rowPath}` boundary markers, exactly like
+        // server-rendered rows. There is deliberately no separate
+        // loop-position anchor: the server emits none, and a
+        // component-local `plec:loop:{index}` comment would be an
+        // unresolvable competitor grammar.
+        let address = self.address_path(row_context)?.into_owned();
+        let path_base = format!("{address}/loop:{index}/key:");
+        if let Some(rows) = self.loops.get_mut(&r#loop) {
+            rows.path_base = Some(path_base);
+        } else {
+            self.loops.insert(
+                r#loop,
+                TypedLoopRows {
+                    order: Vec::new(),
+                    rows: HashMap::new(),
+                    path_base: Some(path_base),
+                },
+            );
+        }
+        self.render_loop(
+            r#loop,
+            parent.ok_or_else(|| JsValue::from_str("loop parent missing"))?,
+        )?;
+        let first = self.loops.get(&r#loop).and_then(|state| {
+            state
+                .order
+                .first()
+                .and_then(|key| state.rows.get(key))
+                .map(|row| row.root.clone())
+        });
+        match first {
+            Some(root) => Ok(root),
+            None => Ok(doc.create_text_node("").into()),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn instantiate_dynamic_component(
+        &mut self,
+        doc: &Document,
+        index: usize,
+        prop: usize,
+        props: Vec<TypedComponentProp>,
+        children: Vec<usize>,
+        parent: Option<&Node>,
+        row: Option<&HashMap<String, RuntimeValue>>,
+        row_index: usize,
+        row_context: Option<&TypedRowContext>,
+        local: &mut HashMap<usize, Node>,
+    ) -> Result<Node, JsValue> {
+        let parent = parent.ok_or_else(|| JsValue::from_str("component parent missing"))?;
+        let address = self.address_path(row_context)?.into_owned();
+        let start: Node = doc
+            .create_comment(&format!("plec:component:{address}:{index}"))
+            .into();
+        let end: Node = doc
+            .create_comment(&format!("plec:component-end:{address}:{index}"))
+            .into();
+        parent.append_child(&start)?;
+        parent.append_child(&end)?;
+        if let Some(target) = self
+            .app
+            .runtime_host_component_props
+            .get(prop)
+            .and_then(Clone::clone)
+        {
+            let boundary = doc.create_element("span")?;
+            let address = self.address_path(row_context)?.into_owned();
+            boundary.set_attribute("data-plec-node", &format!("{address}/node:{index}"))?;
+            boundary.set_attribute(
+                "data-plec-host",
+                &format!("{}:{}", target.provider, target.component),
+            )?;
+            let values = evaluate_host_props(
+                &self.app,
+                self.cookie_policy.borrow().as_ref(),
+                &props,
+                &self.states,
+                row,
+                row_index,
+            )?;
+            self.mount_host(
+                boundary.clone(),
+                &target.provider,
+                &target.component,
+                values,
+                Some(index),
+            )?;
+            if let Err(error) = parent.insert_before(&boundary, Some(&end)) {
+                let node: Node = boundary.into();
+                self.dispose_host_boundary(&node)?;
+                let _ = parent.remove_child(&start);
+                let _ = parent.remove_child(&end);
+                return Err(error);
+            }
+            parent.remove_child(&start)?;
+            parent.remove_child(&end)?;
+            if row.is_some() {
+                local.insert(index, boundary.clone().into());
+            } else {
+                self.nodes.insert(index, boundary.clone().into());
+            }
+            return Ok(boundary.into());
+        }
+        let Some(component) = self
+            .app
+            .runtime_component_props
+            .get(prop)
+            .and_then(|value| *value)
+        else {
+            if row.is_some() {
+                local.insert(index, start.clone());
+            } else {
+                self.nodes.insert(index, start.clone());
+            }
+            return Ok(start);
+        };
+        let (values, callbacks, component_props) =
+            self.evaluate_component_call_props(&props, row, row_index)?;
+        let key = format!("{index}:{}", self.next_component_instance);
+        self.next_component_instance += 1;
+        self.component_requests.push(TypedComponentRequest {
+            call: index,
+            component,
+            props: values,
+            callbacks,
+            component_props,
+            children,
+            row_context: row_context.cloned(),
+            start: start.clone(),
+            end,
+            key,
+            path: format!("{address}/component:{index}"),
+            adoption: None,
+            ssr_branches: HashMap::new(),
+            ssr_loops: HashMap::new(),
+            ssr_nested: HashMap::new(),
+        });
+        if row.is_some() {
+            local.insert(index, start.clone());
+        } else {
+            self.nodes.insert(index, start.clone());
+        }
+        Ok(start)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn instantiate_component_call(
+        &mut self,
+        doc: &Document,
+        index: usize,
+        component: usize,
+        props: Vec<TypedComponentProp>,
+        children: Vec<usize>,
+        parent: Option<&Node>,
+        row: Option<&HashMap<String, RuntimeValue>>,
+        row_index: usize,
+        row_context: Option<&TypedRowContext>,
+        local: &mut HashMap<usize, Node>,
+    ) -> Result<Node, JsValue> {
+        let parent = parent.ok_or_else(|| JsValue::from_str("component parent missing"))?;
+        let address = self.address_path(row_context)?.into_owned();
+        let start: Node = doc
+            .create_comment(&format!("plec:component:{address}:{index}"))
+            .into();
+        let end: Node = doc
+            .create_comment(&format!("plec:component-end:{address}:{index}"))
+            .into();
+        parent.append_child(&start)?;
+        parent.append_child(&end)?;
+        let (values, callbacks, component_props) =
+            self.evaluate_component_call_props(&props, row, row_index)?;
+        let key = format!("{index}:{}", self.next_component_instance);
+        self.next_component_instance += 1;
+        self.component_requests.push(TypedComponentRequest {
+            call: index,
+            component,
+            props: values,
+            callbacks,
+            component_props,
+            children,
+            row_context: row_context.cloned(),
+            start: start.clone(),
+            end,
+            key,
+            path: format!("{address}/component:{index}"),
+            adoption: None,
+            ssr_branches: HashMap::new(),
+            ssr_loops: HashMap::new(),
+            ssr_nested: HashMap::new(),
+        });
+        if row.is_some() {
+            local.insert(index, start.clone());
+        } else {
+            self.nodes.insert(index, start.clone());
+        }
+        Ok(start)
+    }
+
+    /// Shared prop evaluation for static and dynamic component calls: value
+    /// props evaluate eagerly, callables record their action (with the row
+    /// snapshot that was live at mount), and component-valued props record
+    /// their concrete native/host target.
+    fn evaluate_component_call_props(
+        &mut self,
+        props: &[TypedComponentProp],
+        row: Option<&HashMap<String, RuntimeValue>>,
+        row_index: usize,
+    ) -> Result<
+        (
+            HashMap<String, RuntimeValue>,
+            HashMap<String, TypedCallbackSpec>,
+            HashMap<String, TypedComponentTarget>,
+        ),
+        JsValue,
+    > {
+        let mut values = HashMap::new();
+        let mut callbacks = HashMap::new();
+        let mut component_props = HashMap::new();
+        for prop in props {
+            let name = self
+                .app
+                .strings
+                .get(prop.name())
+                .ok_or_else(|| JsValue::from_str("component prop name out of range"))?
+                .clone();
+            match prop {
+                TypedComponentProp::Value { expression, .. } => {
+                    values.insert(
+                        name,
+                        typed_eval(
+                            &self.app,
+                            self.cookie_policy.borrow().as_ref(),
+                            *expression,
+                            &self.states,
+                            row,
+                            row_index,
+                        )?,
+                    );
+                }
+                TypedComponentProp::Callable { action, .. } => {
+                    callbacks.insert(
+                        name,
+                        TypedCallbackSpec {
+                            action: *action,
+                            row: row.cloned(),
+                        },
+                    );
+                }
+                TypedComponentProp::Component {
+                    component, host, ..
+                } => {
+                    component_props.insert(
+                        name,
+                        host.clone()
+                            .map(TypedComponentTarget::Host)
+                            .unwrap_or(TypedComponentTarget::Native(*component)),
+                    );
+                }
+            }
+        }
+        Ok((values, callbacks, component_props))
+    }
+
+    fn instantiate_slot(
+        &mut self,
+        doc: &Document,
+        index: usize,
+        parent: Option<&Node>,
+        row: Option<&HashMap<String, RuntimeValue>>,
+        row_context: Option<&TypedRowContext>,
+        local: &mut HashMap<usize, Node>,
+    ) -> Result<Node, JsValue> {
+        let parent = parent.ok_or_else(|| JsValue::from_str("slot parent missing"))?;
+        let address = self.address_path(row_context)?.into_owned();
+        let start: Node = doc
+            .create_comment(&format!("plec:slot:{address}:{index}"))
+            .into();
+        let end: Node = doc
+            .create_comment(&format!("plec:slot-end:{address}:{index}"))
+            .into();
+        parent.append_child(&start)?;
+        parent.append_child(&end)?;
+        self.slot_requests.push(TypedSlotRequest {
+            start: start.clone(),
+            end,
+        });
+        if row.is_some() {
+            local.insert(index, start.clone());
+        } else {
+            self.nodes.insert(index, start.clone());
+        }
+        Ok(start)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn instantiate_conditional(
+        &mut self,
+        doc: &Document,
+        index: usize,
+        test: usize,
+        parent: Option<&Node>,
+        row: Option<&HashMap<String, RuntimeValue>>,
+        row_index: usize,
+        row_context: Option<&TypedRowContext>,
+        local: &mut HashMap<usize, Node>,
+        row_regions: &mut HashMap<usize, TypedConditionalRegion>,
+    ) -> Result<Node, JsValue> {
+        // Acquire before adding boundary markers to the live parent.
+        // Row fragments are detached, but static conditionals mount
+        // directly and need the same reserve-before-mutate invariant.
+        let mut region_slot = Some(RegionSlot::acquire(self.region_tracker.clone())?);
+        let is_row_region = row.is_some();
+        let parent = parent.ok_or_else(|| JsValue::from_str("conditional parent missing"))?;
+        let address = self.address_path(row_context)?.into_owned();
+        let start: Node = doc
+            .create_comment(&format!("plec:conditional:{address}:{index}"))
+            .into();
+        let end: Node = doc
+            .create_comment(&format!("plec:conditional-end:{address}:{index}"))
+            .into();
+        parent.append_child(&start)?;
+        parent.append_child(&end)?;
+        let mut row_selected = None;
+        if is_row_region {
+            let TypedNode::Conditional {
+                consequent,
+                alternate,
+                ..
+            } = self.app.nodes[index].clone()
+            else {
+                unreachable!()
+            };
+            let selected = if typed_truthy(&typed_eval(
+                &self.app,
+                self.cookie_policy.borrow().as_ref(),
+                test,
+                &self.states,
+                row,
+                row_index,
+            )?) {
+                Some(consequent)
+            } else {
+                alternate
+            };
+            row_selected = selected;
+            if let Some(selected) = selected {
+                let child = self.instantiate_node(
+                    doc,
+                    selected,
+                    Some(parent),
+                    row,
+                    row_index,
+                    row_context,
+                    local,
+                    row_regions,
+                )?;
+                parent.insert_before(&child, Some(&end))?;
+            }
+        } else {
+            self.conditionals.insert(
+                index,
+                TypedConditionalRegion {
+                    start: start.clone(),
+                    end: end.clone(),
+                    selected: None,
+                    nodes: HashMap::new(),
+                    generation: 0,
+                    region_slot: region_slot.take().expect("conditional slot available"),
+                },
+            );
+            self.reconcile_static_conditional(index, &mut UpdateMetrics::default())?;
+        }
+        if is_row_region {
+            local.insert(index, start.clone());
+            let selected = row_selected;
+            let mut nodes = HashMap::new();
+            if let Some(selected) = selected {
+                self.collect_instantiated_branch_nodes(selected, local, &mut nodes);
+            }
+            for target in nodes.keys() {
+                local.remove(target);
+            }
+            row_regions.insert(
+                index,
+                TypedConditionalRegion {
+                    start: start.clone(),
+                    end,
+                    selected,
+                    nodes,
+                    generation: self.next_generation,
+                    region_slot: region_slot.take().expect("conditional slot available"),
+                },
+            );
+            self.next_generation += 1;
+        }
+        Ok(start)
     }
 }
 
