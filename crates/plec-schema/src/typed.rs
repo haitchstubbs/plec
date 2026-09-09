@@ -1291,6 +1291,7 @@ impl TypedApplication {
         Ok(())
     }
 
+    #[allow(dead_code)] // This function may not be used in all contexts
     fn validate_contract(&self) -> Result<(), &'static str> {
         self.validate_contract_with_policy(&plec_ir::sink::TagPolicy::default())
     }
