@@ -6255,3 +6255,115 @@ fn hostile_spread_keys_never_reach_the_dom() {
     assert!(!markup.contains("onclick"), "hostile markup: {markup}");
     assert!(!markup.contains("srcdoc"), "hostile markup: {markup}");
 }
+
+/// The compiled Todos rename shape: one keyed row component whose child owns
+/// an `editing` value prop driving a conditional, plus a callable that stores
+/// the parent state the prop derives from. Clicking the child button must
+/// refresh the child through the parent state change and swap the branch —
+/// the exact transition the rename acceptance test exercises.
+#[wasm_bindgen_test]
+fn rust_keyed_callback_component_fixture_swaps_child_conditional_from_parent_state() {
+    let mut app = rust_keyed_callback_component_artifact();
+    // Parent: derive an `editing` value prop from state 0 and re-queue the
+    // row's component refresh when state 0 changes.
+    app["components"][0]["strings"] =
+        serde_json::json!(["items", "main", "p", "ul", "id", "title", "onPick", "editing"]);
+    app["components"][0]["expressions"] = serde_json::json!([
+        {"instructions":[{"op":"constant","constant":0},{"op":"return"}]},
+        {"instructions":[{"op":"loadState","state":0},{"op":"return"}]},
+        {"instructions":[{"op":"makeArray","count":0},{"op":"return"}]},
+        {"instructions":[{"op":"loadRowField","field":4},{"op":"return"}]},
+        {"instructions":[{"op":"loadRowField","field":5},{"op":"return"}]},
+        {"instructions":[{"op":"loadFrame","slot":0},{"op":"return"}]},
+        {"instructions":[
+            {"op":"loadState","state":0},
+            {"op":"loadRowField","field":5},
+            {"op":"binary","kind":"equal"},
+            {"op":"return"}
+        ]}
+    ]);
+    app["components"][0]["nodes"][4]["props"] = serde_json::json!([
+        {"kind": "value", "name": 5, "expression": 4},
+        {"kind": "value", "name": 7, "expression": 6},
+        {"kind": "callable", "name": 6, "action": 0}
+    ]);
+    app["components"][0]["dependencyEdges"] = serde_json::json!([
+        {"source":{"kind":"state","handle":0},"target":{"kind":"binding","handle":0}},
+        {"source":{"kind":"state","handle":0},"target":{"kind":"component","handle":4}}
+    ]);
+    // Child: conditional driven by the `editing` prop, button forwards onPick.
+    // String indices 0-3 must keep their fixture meanings ("title", "onPick",
+    // "button", "click") because the event table references them by index.
+    app["components"][1]["strings"] =
+        serde_json::json!(["title", "onPick", "button", "click", "editing"]);
+    app["components"][1]["parameters"] = serde_json::json!([
+        {"name": 0, "callable": false},
+        {"name": 1, "callable": true},
+        {"name": 4, "callable": false}
+    ]);
+    app["components"][1]["texts"] =
+        serde_json::json!([{"value": "EDITING"}, {"value": "IDLE"}, {"value": "Pick"}]);
+    app["components"][1]["nodes"] = serde_json::json!([
+        {"op":"element","tag":2,"parent":null,"children":[1,2]},
+        {"op":"text","text":2,"parent":0},
+        {"op":"conditional","test":1,"parent":0,"consequent":3,"alternate":4},
+        {"op":"text","text":0,"parent":null},
+        {"op":"text","text":1,"parent":null}
+    ]);
+    app["components"][1]["expressions"] = serde_json::json!([
+        {"instructions":[{"op":"loadProp","prop":0},{"op":"return"}]},
+        {"instructions":[{"op":"loadProp","prop":2},{"op":"return"}]}
+    ]);
+    app["components"][1]["dependencyEdges"] = serde_json::json!([
+        {"source":{"kind":"prop","handle":2},"target":{"kind":"conditional","handle":2}}
+    ]);
+
+    let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
+    let root = mount_root();
+    // The whole chain must run without throwing: a swallowed error inside
+    // the event listener would otherwise look like a lost click.
+    js_sys::eval(
+        r#"globalThis.__test_errors = [];
+        window.addEventListener('error', (e) => __test_errors.push(String(e.message)));
+        window.addEventListener('unhandledrejection', (e) => __test_errors.push(String(e.reason)));"#,
+    )
+    .unwrap();
+    load_and_mount(&runtime, app, &root);
+    apply_delta(
+        &runtime,
+        serde_json::json!({"type":"insert","input_id":"items","row_key":"one","row":{"id":"one","title":"One"},"before_row_key":null}),
+    );
+    assert_eq!(
+        root.text_content().unwrap(),
+        "PickIDLE",
+        "row must mount in display mode"
+    );
+    root.query_selector("button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::EventTarget>()
+        .unwrap()
+        .dispatch_event(&Event::new("click").unwrap())
+        .unwrap();
+    let errors = js_sys::Reflect::get(&js_sys::global(), &"__test_errors".into()).unwrap();
+    let errors = js_sys::JSON::stringify(&errors).unwrap();
+    assert_eq!(
+        errors, "[]",
+        "the callback chain must run without page errors"
+    );
+    assert_eq!(
+        root.query_selector("p")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "One",
+        "parent row action must store the picked id"
+    );
+    assert_eq!(
+        root.text_content().unwrap(),
+        "OnePickEDITING",
+        "the editing prop must flip the child conditional without remounting"
+    );
+}

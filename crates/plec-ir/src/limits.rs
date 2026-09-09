@@ -139,6 +139,15 @@ pub const MAX_MOUNTED_REGIONS: usize = 100_000;
 /// overflowing the WASM stack.
 pub const MAX_MOUNT_DEPTH: usize = 128;
 
+/// Maximum native call-stack bytes one `instantiate_node` mount chain may
+/// consume. The logical `MAX_MOUNT_DEPTH` budget cannot guarantee stack
+/// safety on its own because instantiation frames vary with node kind and
+/// build profile (debug frames are orders of magnitude larger than release
+/// frames), so mount recursion also tracks a stack watermark from the
+/// outermost frame and fails with a diagnostic before the native stack —
+/// the default 1 MiB wasm32 stack in every profile — can overflow.
+pub const MAX_MOUNT_STACK_BYTES: usize = 512 * 1024;
+
 /// Maximum DOM operations one top-level reconcile transaction may perform,
 /// including deferred component work it causes.
 pub const MAX_DOM_OPERATIONS_PER_RECONCILE: usize = 500_000;
