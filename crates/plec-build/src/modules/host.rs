@@ -7,7 +7,10 @@
 //! needs source files, and neither host variant evaluates application code
 //! for its own wiring.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -51,12 +54,22 @@ struct ClientSection {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct CompilerSection {
     #[serde(default)]
-    host_imports: BTreeMap<String, String>,
+    host_imports: BTreeMap<String, HostImportBinding>,
     /// Trusted custom element tags executable IR may instantiate. The
     /// compiler diagnostics and the runtime element policy enforce the same
     /// list (crates/plec-ir/src/sink.rs).
     #[serde(default)]
     custom_elements: std::collections::BTreeSet<String>,
+}
+
+/// One `[compiler.host-imports]` entry. `provider` is the artifact-declared
+/// host component provider id the import specifier resolves to; `adapter`
+/// is the browser module the build bundles the provider factory from.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostImportBinding {
+    provider: String,
+    adapter: String,
 }
 
 /// Host configuration resolved from `plec.toml` merged with explicit build
@@ -69,6 +82,7 @@ pub struct HostConfig {
     pub styles_href: Option<String>,
     pub preloads: Vec<String>,
     pub host_imports: BTreeMap<String, String>,
+    pub host_adapters: BTreeMap<String, String>,
     pub custom_elements: std::collections::BTreeSet<String>,
 }
 
@@ -83,9 +97,28 @@ pub fn resolve_host_config(
     let config = read_app_config(&config_path)?;
     let host_imports = config
         .as_ref()
-        .map(|config| config.compiler.host_imports.clone())
+        .map(|config| {
+            config
+                .compiler
+                .host_imports
+                .iter()
+                .map(|(specifier, binding)| (specifier.clone(), binding.provider.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
         .unwrap_or_default();
     validate_host_imports(&host_imports, &config_path)?;
+    let host_adapters = config
+        .as_ref()
+        .map(|config| {
+            config
+                .compiler
+                .host_imports
+                .iter()
+                .map(|(_, binding)| (binding.provider.clone(), binding.adapter.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    validate_host_adapters(&host_adapters, &config_path)?;
     let custom_elements = config
         .as_ref()
         .map(|config| config.compiler.custom_elements.clone())
@@ -132,17 +165,42 @@ pub fn resolve_host_config(
             options.preloads.clone()
         },
         host_imports,
+        host_adapters,
         custom_elements,
     })
 }
 
+/// The compiler-facing view: import specifier -> artifact-declared provider
+/// id (`host:{provider}` module resolution).
 pub fn resolve_host_imports(app_dir: &Path) -> Result<BTreeMap<String, String>, BuildError> {
     let config_path = app_dir.join("plec.toml");
-    let imports = read_app_config(&config_path)?
-        .map(|config| config.compiler.host_imports)
-        .unwrap_or_default();
+    let imports = read_host_import_bindings(&config_path)?
+        .into_iter()
+        .map(|(specifier, binding)| (specifier, binding.provider))
+        .collect();
     validate_host_imports(&imports, &config_path)?;
     Ok(imports)
+}
+
+/// The bundler-facing view: provider id -> browser adapter module. Only
+/// providers with a configured adapter get a bundled `/assets/providers/*.js`
+/// entry and a `host-providers.json` record.
+pub fn resolve_host_adapters(app_dir: &Path) -> Result<BTreeMap<String, String>, BuildError> {
+    let config_path = app_dir.join("plec.toml");
+    let adapters = read_host_import_bindings(&config_path)?
+        .into_iter()
+        .map(|(_, binding)| (binding.provider, binding.adapter))
+        .collect();
+    validate_host_adapters(&adapters, &config_path)?;
+    Ok(adapters)
+}
+
+fn read_host_import_bindings(
+    config_path: &Path,
+) -> Result<BTreeMap<String, HostImportBinding>, BuildError> {
+    Ok(read_app_config(config_path)?
+        .map(|config| config.compiler.host_imports)
+        .unwrap_or_default())
 }
 
 /// The trusted custom element list from the application's `plec.toml`
@@ -195,6 +253,25 @@ fn validate_host_imports(
     Ok(())
 }
 
+fn validate_host_adapters(
+    adapters: &BTreeMap<String, String>,
+    config_path: &Path,
+) -> Result<(), BuildError> {
+    if let Some((provider, adapter)) = adapters
+        .iter()
+        .find(|(provider, adapter)| provider.trim().is_empty() || adapter.trim().is_empty())
+    {
+        return Err(BuildError::new(
+            Stage::ServerManifest,
+            format!(
+                "invalid host provider adapter in {}: provider id and adapter module must be non-empty (found {provider:?} -> {adapter:?})",
+                config_path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ServerManifest {
@@ -231,6 +308,71 @@ struct ManifestDocument {
 struct ManifestRuntimeSection {
     entry: &'static str,
     runtime: &'static str,
+}
+
+/// Wire version of `/host-providers.json`. Browser glue gates the same
+/// value in `registerPlecProviders`; `plec workspace contract ssr` tracks
+/// the pair. The manifest versions independently of the SSR snapshot and
+/// bootstrap wrappers: producer and consumer ship in the same build, so it
+/// never rides a snapshot version bump.
+pub(crate) const PROVIDER_MANIFEST_VERSION: u32 = 1;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderManifest<'a> {
+    version: u32,
+    revision: &'a str,
+    providers: Vec<ProviderManifestEntry<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderManifestEntry<'a> {
+    id: &'a str,
+    module: String,
+    components: Vec<&'a str>,
+}
+
+/// Emits `dist/public/host-providers.json` for `registerPlecProviders` in
+/// `packages/plec-browser`. Module paths are build-owned asset URLs so the
+/// browser gate can reject everything outside `/assets/providers/`.
+pub fn emit_provider_manifest(
+    public_dir: &Path,
+    providers: &BTreeMap<String, BTreeSet<String>>,
+    revision: &str,
+) -> Result<(), BuildError> {
+    let manifest = ProviderManifest {
+        version: PROVIDER_MANIFEST_VERSION,
+        revision,
+        providers: providers
+            .iter()
+            .map(|(id, components)| ProviderManifestEntry {
+                id,
+                module: format!(
+                    "/assets/providers/{}.js?v={revision}",
+                    super::id::sanitize(id)
+                ),
+                components: components.iter().map(String::as_str).collect(),
+            })
+            .collect(),
+    };
+    let json = serde_json::to_string_pretty(&manifest).map_err(|error| {
+        BuildError::with_source(
+            Stage::BrowserBundle,
+            "failed to serialize host provider manifest",
+            error,
+        )
+    })?;
+    std::fs::write(public_dir.join("host-providers.json"), json).map_err(|error| {
+        BuildError::with_source(
+            Stage::BrowserBundle,
+            format!(
+                "cannot write {}",
+                public_dir.join("host-providers.json").display()
+            ),
+            error,
+        )
+    })
 }
 
 /// Writes `dist/plec-server.json`. All paths are relative to the manifest's
@@ -338,7 +480,7 @@ styles = "/assets/styles.css"
 preloads = ["/a.woff2", "/b.woff2"]
 
 [compiler.host-imports]
-"lucide" = "icons"
+"lucide" = { provider = "lucide", adapter = "@wasm-runtime/lucide-plec" }
 "#,
         )
         .expect("toml write");
@@ -360,7 +502,11 @@ preloads = ["/a.woff2", "/b.woff2"]
         assert_eq!(config.preloads.len(), 2);
         assert_eq!(
             config.host_imports.get("lucide"),
-            Some(&String::from("icons"))
+            Some(&String::from("lucide"))
+        );
+        assert_eq!(
+            config.host_adapters.get("lucide"),
+            Some(&String::from("@wasm-runtime/lucide-plec"))
         );
     }
 
@@ -374,6 +520,7 @@ preloads = ["/a.woff2", "/b.woff2"]
             styles_href: Some("/assets/styles.css".into()),
             preloads: vec!["/assets/files/a.woff2".into()],
             host_imports: BTreeMap::new(),
+            host_adapters: BTreeMap::new(),
             custom_elements: Default::default(),
         };
         emit_server_manifest(dir.path(), &config, true).expect("manifest");
@@ -402,6 +549,7 @@ preloads = ["/a.woff2", "/b.woff2"]
             styles_href: None,
             preloads: Vec::new(),
             host_imports: BTreeMap::new(),
+            host_adapters: BTreeMap::new(),
             custom_elements: Default::default(),
         };
         emit_server_manifest(dir.path(), &config, false).expect("manifest");
@@ -410,5 +558,33 @@ preloads = ["/a.woff2", "/b.woff2"]
         )
         .expect("json");
         assert!(json.get("server").is_none());
+    }
+
+    #[test]
+    fn provider_manifest_records_build_owned_module_urls() {
+        let dir = tempfile::tempdir().expect("dir");
+        let public_dir = dir.path().join("public");
+        std::fs::create_dir_all(&public_dir).expect("public dir");
+        let providers = BTreeMap::from([(
+            String::from("lucide"),
+            BTreeSet::from([String::from("House"), String::from("Beaker")]),
+        )]);
+
+        emit_provider_manifest(&public_dir, &providers, "revision-1").expect("manifest");
+
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(public_dir.join("host-providers.json"))
+                .expect("manifest read"),
+        )
+        .expect("json");
+        assert_eq!(json["version"], PROVIDER_MANIFEST_VERSION);
+        assert_eq!(json["revision"], "revision-1");
+        assert_eq!(json["providers"][0]["id"], "lucide");
+        assert_eq!(
+            json["providers"][0]["module"],
+            "/assets/providers/lucide.js?v=revision-1"
+        );
+        assert_eq!(json["providers"][0]["components"][0], "Beaker");
+        assert_eq!(json["providers"][0]["components"][1], "House");
     }
 }

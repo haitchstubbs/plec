@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use plec_compiler::{
     lower_route_artifacts_with_options, lower_routes, read_source_graph_with_options,
@@ -12,6 +15,10 @@ use super::stage::stage;
 
 use super::build::{BuildError, Stage};
 
+pub struct ArtifactOutput {
+    pub host_components: BTreeMap<String, BTreeSet<String>>,
+}
+
 /// Emit the Plec compiler artifacts for the routed application in-process.
 ///
 /// This mirrors the `plec-route-manifest --artifacts` pipeline (source graph
@@ -24,7 +31,7 @@ pub fn emit(
     public_dir: &Path,
     host_imports: &std::collections::BTreeMap<String, String>,
     custom_elements: &std::collections::BTreeSet<String>,
-) -> Result<(), BuildError> {
+) -> Result<ArtifactOutput, BuildError> {
     let stage = Stage::Compile;
 
     let source_graph = read_source_graph_with_options(
@@ -78,7 +85,53 @@ pub fn emit(
     out(&public_dir.join("route-artifact.json"), &bundle, false)
         .map_err(|error| BuildError::with_source(stage, "failed to write route artifact", error))?;
 
-    stage_runtime(app_dir, repo_root, public_dir)
+    let host_components = collect_host_components(&bundle);
+    stage_runtime(app_dir, repo_root, public_dir)?;
+    Ok(ArtifactOutput { host_components })
+}
+
+fn collect_host_components(
+    bundle: &plec_compiler::RouteArtifactBundle,
+) -> BTreeMap<String, BTreeSet<String>> {
+    use plec_ir::{ComponentProp, Node};
+
+    let mut components = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut insert = |provider: &str, component: &str| {
+        components
+            .entry(provider.to_owned())
+            .or_default()
+            .insert(component.to_owned());
+    };
+
+    for graph in &bundle.graphs {
+        for application in &graph.graph.components {
+            for node in &application.nodes {
+                let props = match node {
+                    Node::HostComponent {
+                        provider,
+                        component,
+                        props,
+                        ..
+                    } => {
+                        insert(provider, component);
+                        props
+                    }
+                    Node::Component { props, .. } | Node::DynamicComponent { props, .. } => props,
+                    _ => continue,
+                };
+                for prop in props {
+                    if let ComponentProp::Component {
+                        host: Some(target), ..
+                    } = prop
+                    {
+                        insert(&target.provider, &target.component);
+                    }
+                }
+            }
+        }
+    }
+
+    components
 }
 
 /// Stage the prebuilt WASM runtime next to the compiler artifacts.

@@ -1,26 +1,31 @@
 use super::build::{BuildError, Stage};
 use sha2::{Digest, Sha256};
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
-/// Derive the asset revision from the emitted browser artifact.
+/// Derive the asset revision from every browser bootstrap artifact.
 ///
-/// Hashing the output (rather than entry sources) keeps the revision honest
-/// when transitive dependencies change. The digest is truncated to the same
-/// 12 characters the original JavaScript build used.
-pub fn revision(client_path: &Path) -> Result<String, BuildError> {
+/// Hashing emitted output (rather than entry sources) keeps the revision
+/// honest when transitive dependencies change. Provider chunks participate so
+/// a cached manifest can never select code from a different client build.
+pub fn revision(paths: &[PathBuf]) -> Result<String, BuildError> {
     let stage = Stage::Hash;
-
-    let client = fs::read(client_path).map_err(|error| {
-        BuildError::with_source(
-            stage,
-            format!("failed to read browser artifact {}", client_path.display()),
-            error,
-        )
-    })?;
-
-    let digest = Sha256::digest(&client);
+    let mut digest = Sha256::new();
+    for path in paths {
+        let bytes = fs::read(path).map_err(|error| {
+            BuildError::with_source(
+                stage,
+                format!("failed to read browser artifact {}", path.display()),
+                error,
+            )
+        })?;
+        digest.update(bytes);
+    }
 
     let hex = digest
+        .finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();

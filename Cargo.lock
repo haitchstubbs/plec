@@ -1544,6 +1544,7 @@ version = "0.1.0"
 dependencies = [
  "brotli",
  "plec-compiler",
+ "plec-ir",
  "plec-model",
  "serde",
  "serde_json",

@@ -549,10 +549,15 @@ impl RuntimeState {
             Ok(value) => {
                 // Route loader data is an explicit host input to the normal
                 // route graph. It never crosses the VM as a browser Response.
-                // `responseJson` decodes actions receive an {ok,status,body}
+                // `responseJson` decodes receive an {ok,status,body}
                 // envelope so they can branch on transport outcome themselves;
                 // loader consumers asked for the payload alone, so export the
-                // unwrapped body here.
+                // unwrapped body here. The exported payload is also the
+                // loader result state value: SSR resolves the same outcome
+                // (loader.rs `execute_route_loader`) as the bare body, so a
+                // slot that is both `loaderResultState` and
+                // `loadHost("loaderData")`-initialised must never observe the
+                // transport envelope.
                 let exported = match &value {
                     RuntimeValue::Record(record)
                         if record.len() == 3
@@ -566,7 +571,7 @@ impl RuntimeState {
                 };
                 self.typed_host_inputs
                     .borrow_mut()
-                    .insert("loaderData".into(), exported);
+                    .insert("loaderData".into(), exported.clone());
                 let restore = {
                     let mut typed = self.typed.borrow_mut();
                     let instance = match typed.get_mut(&instance_id) {
@@ -594,17 +599,30 @@ impl RuntimeState {
                         // Without a preserved loader runtime there is no
                         // restore path: the fetch completed against the live
                         // normal graph, so its host inputs must be re-applied
-                        // before the dependency refresh for loader-data
-                        // initialisers to observe the outcome.
+                        // before the loader data becomes visible.
+                        //
+                        // Re-application alone only rewrites values in
+                        // place: bindings compiled against host slots (the
+                        // `useLoaderData` shape reads
+                        // `loadHost("loaderData")` directly and carries no
+                        // dependency edges) keep their pre-fetch DOM until
+                        // the static bindings are re-applied, mirroring how
+                        // location host inputs refresh on navigation.
                         runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+                        runtime.apply_static_bindings()?;
+                        runtime.queue_static_component_refreshes()?;
                     }
-                    runtime.states[state] = value;
+                    runtime.states[state] = exported;
                     runtime.refresh_state(state, &mut UpdateMetrics::default())?;
                     restore
                 };
                 if restore {
                     self.restore_typed_route_normal(&instance_id)?;
                 }
+                // Re-applied bindings can queue component refreshes; without
+                // this drain child components keep their pre-fetch props,
+                // mirroring the plain fetch completion path.
+                self.flush_component_work()?;
                 self.install_typed_event_listeners()?;
             }
         }

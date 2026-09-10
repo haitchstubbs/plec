@@ -3,14 +3,20 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-/// The SSR protocol spans three independently-versioned boundaries that must
-/// agree across the Rust compiler/runtime/server, browser glue, test fixtures,
-/// and the docs:
+/// The SSR protocol spans four independently-versioned boundaries that must
+/// agree across the Rust compiler/runtime/server, browser glue, test
+/// fixtures, and the docs:
 ///
 /// - **snapshot** — `PlecSsrSnapshot.version`, canonical in
 ///   `crates/plec-ir/src/lib.rs` (`SSR_SNAPSHOT_VERSION`)
 /// - **bootstrap** — the `{ version, snapshot }` HTML payload wrapper,
 ///   produced by `crates/plec-server` and gated by `packages/plec-browser`
+/// - **host-provider** — the `/host-providers.json` manifest, produced by
+///   `crates/plec-build` (`PROVIDER_MANIFEST_VERSION`) and gated by
+///   `registerPlecProviders` in `packages/plec-browser`. It versions
+///   independently of snapshot/bootstrap: producer and consumer ship in the
+///   same build (revision cache-busted), so provider shape changes never
+///   ride a snapshot version bump.
 /// - **manifest** — `RouteManifest.version`, frozen in `plec-ir::validate`
 ///
 /// The scanner finds version literals near these boundaries and reports
@@ -19,12 +25,16 @@ use std::path::Path;
 /// v1 → v2 surfaces every site the change must touch.
 
 pub const CANONICAL_FILE: &str = "crates/plec-ir/src/lib.rs";
+pub const HOST_PROVIDER_CANONICAL_FILE: &str = "crates/plec-build/src/modules/host.rs";
+const HOST_PROVIDER_DEFINITION: &str = "const PROVIDER_MANIFEST_VERSION";
+const HOST_PROVIDER_DEFINITION_NAME: &str = "PROVIDER_MANIFEST_VERSION";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Snapshot,
     Bootstrap,
+    HostProvider,
     Manifest,
 }
 
@@ -50,16 +60,22 @@ pub struct Section {
 pub struct Report {
     pub snapshot: Section,
     pub bootstrap: Section,
+    pub host_provider: Section,
     pub manifest: Section,
 }
 
 impl Report {
     pub fn conflicts(&self) -> Vec<&Row> {
-        [&self.snapshot, &self.bootstrap, &self.manifest]
-            .into_iter()
-            .flat_map(|section| section.rows.iter())
-            .filter(|row| row.status.starts_with("CONFLICT"))
-            .collect()
+        [
+            &self.snapshot,
+            &self.bootstrap,
+            &self.host_provider,
+            &self.manifest,
+        ]
+        .into_iter()
+        .flat_map(|section| section.rows.iter())
+        .filter(|row| row.status.starts_with("CONFLICT"))
+        .collect()
     }
 }
 
@@ -69,6 +85,10 @@ struct SiteSpec {
     /// Refine matches by nearby keywords instead of forcing one kind.
     mixed: bool,
     force: Option<Kind>,
+    /// Kind for mixed-site matches whose surrounding window carries no
+    /// recognizable boundary keyword. `None` drops the match: the literal
+    /// belongs to a manifest this scanner does not track on that site.
+    fallback: Option<Kind>,
     allow: &'static [(u32, &'static str)],
     /// Path substrings to skip (relative to the site root).
     exclude: &'static [&'static str],
@@ -77,9 +97,10 @@ struct SiteSpec {
 const SITES: &[SiteSpec] = &[
     SiteSpec {
         label: "runtime gate",
-        path: "crates/plec-runtime/src/runtime/lifecycle.rs",
+        path: "crates/plec-runtime/src/lifecycle.rs",
         mixed: false,
         force: Some(Kind::Snapshot),
+        fallback: None,
         allow: &[],
         exclude: &[],
     },
@@ -88,10 +109,8 @@ const SITES: &[SiteSpec] = &[
         path: "crates/plec-runtime/tests/typed_events.rs",
         mixed: true,
         force: None,
-        allow: &[
-            (1, "intentional legacy fixture"),
-            (999, "version gate fixture"),
-        ],
+        fallback: Some(Kind::Snapshot),
+        allow: &[(1, "intentional legacy fixture"), (999, "version gate fixture")],
         exclude: &[],
     },
     SiteSpec {
@@ -99,14 +118,40 @@ const SITES: &[SiteSpec] = &[
         path: "crates/plec-server/src/ssr/snapshot.rs",
         mixed: true,
         force: None,
+        fallback: Some(Kind::Snapshot),
+        allow: &[],
+        exclude: &[],
+    },
+    SiteSpec {
+        // host.rs also emits `dist/plec-server.json` (the server host
+        // manifest), whose version is a separate untracked boundary: its
+        // literals fall through `fallback: None` and are dropped.
+        label: "host-provider producer",
+        path: HOST_PROVIDER_CANONICAL_FILE,
+        mixed: true,
+        force: None,
+        fallback: None,
         allow: &[],
         exclude: &[],
     },
     SiteSpec {
         label: "browser gate",
         path: "packages/plec-browser/src/index.ts",
-        mixed: false,
-        force: Some(Kind::Bootstrap),
+        mixed: true,
+        force: None,
+        // The file hosts both the bootstrap wrapper gate and the
+        // host-provider manifest gate; unrecognised literals stay bootstrap
+        // because the bootstrap gate is this site's original contract.
+        fallback: Some(Kind::Bootstrap),
+        allow: &[],
+        exclude: &[],
+    },
+    SiteSpec {
+        label: "host-provider tests",
+        path: "packages/plec-browser/src/index.test.ts",
+        mixed: true,
+        force: None,
+        fallback: None,
         allow: &[],
         exclude: &[],
     },
@@ -115,6 +160,7 @@ const SITES: &[SiteSpec] = &[
         path: "packages/plec-browser/src/bootstrap.test.ts",
         mixed: true,
         force: None,
+        fallback: Some(Kind::Snapshot),
         allow: &[],
         exclude: &[],
     },
@@ -123,6 +169,7 @@ const SITES: &[SiteSpec] = &[
         path: "packages/plec-e2e/tests",
         mixed: true,
         force: None,
+        fallback: Some(Kind::Snapshot),
         allow: &[(999, "version gate fixture")],
         exclude: &["/bench/", "/bench"],
     },
@@ -131,6 +178,7 @@ const SITES: &[SiteSpec] = &[
         path: "docs/ssr-architecture.md",
         mixed: true,
         force: None,
+        fallback: Some(Kind::Snapshot),
         allow: &[],
         exclude: &[],
     },
@@ -142,13 +190,21 @@ pub fn scan(repo: &Repo) -> Result<Report, String> {
     // plec-ir dependency. Cross-check against the source text so a stale
     // CLI build cannot silently bless old constants.
     let compiled_snapshot = plec_ir::SSR_SNAPSHOT_VERSION;
-    let source_snapshot = scan_definition(repo, "pub const SSR_SNAPSHOT_VERSION")?;
+    let source_snapshot = scan_definition(repo, CANONICAL_FILE, "pub const SSR_SNAPSHOT_VERSION")?;
     let manifest_canonical = scan_manifest_version(repo)?;
     // Bootstrap canonical: whatever the server producer currently emits.
     let bootstrap_canonical = first_bootstrap_version(repo)?;
+    // Host-provider canonical: the named constant in the plec-build producer.
+    let host_provider_canonical = scan_definition(
+        repo,
+        HOST_PROVIDER_CANONICAL_FILE,
+        HOST_PROVIDER_DEFINITION,
+    )?
+    .map(|(value, _)| value);
 
     let mut snapshot_rows = vec![snapshot_definition_row(compiled_snapshot, source_snapshot)];
     let mut bootstrap_rows = Vec::new();
+    let mut host_provider_rows = Vec::new();
     let mut manifest_rows = Vec::new();
 
     // Rows repeated within one line (a line can mention `version` twice) are
@@ -178,7 +234,12 @@ pub fn scan(repo: &Repo) -> Result<Report, String> {
 
                 for (value, hint) in &matches {
                     let value = *value;
-                    let kind = kind_of(*hint);
+                    // `None` means the literal sits in a context this
+                    // scanner does not track on this site; dropping it is
+                    // the contract, not a missed detection.
+                    let Some(kind) = kind_of(*hint) else {
+                        continue;
+                    };
                     let status = row_status(
                         value,
                         kind,
@@ -186,6 +247,7 @@ pub fn scan(repo: &Repo) -> Result<Report, String> {
                         compiled_snapshot,
                         manifest_canonical,
                         bootstrap_canonical,
+                        host_provider_canonical,
                     );
 
                     let row = Row {
@@ -201,6 +263,7 @@ pub fn scan(repo: &Repo) -> Result<Report, String> {
                     match kind {
                         Kind::Snapshot => snapshot_rows.push(row),
                         Kind::Bootstrap => bootstrap_rows.push(row),
+                        Kind::HostProvider => host_provider_rows.push(row),
                         Kind::Manifest => manifest_rows.push(row),
                     }
                 }
@@ -208,19 +271,36 @@ pub fn scan(repo: &Repo) -> Result<Report, String> {
                 // Constant-reference rows: the site deliberately names the
                 // canonical constant instead of hard-coding a literal. Lines
                 // that carry a literal were already reported above.
-                if matches.is_empty()
-                    && text.contains("SSR_SNAPSHOT_VERSION")
-                    && !text.contains("pub const SSR_SNAPSHOT_VERSION")
-                {
-                    snapshot_rows.push(Row {
-                        site: site.label.to_string(),
-                        file: file.clone(),
-                        line: index + 1,
-                        kind: Kind::Snapshot,
-                        value: None,
-                        status: "constant ref".to_string(),
-                        text: text.trim().to_string(),
-                    });
+                if matches.is_empty() {
+                    if text.contains("SSR_SNAPSHOT_VERSION")
+                        && !text.contains("pub const SSR_SNAPSHOT_VERSION")
+                    {
+                        snapshot_rows.push(Row {
+                            site: site.label.to_string(),
+                            file: file.clone(),
+                            line: index + 1,
+                            kind: Kind::Snapshot,
+                            value: None,
+                            status: "constant ref".to_string(),
+                            text: text.trim().to_string(),
+                        });
+                    }
+                    // The provider producer names `PROVIDER_MANIFEST_VERSION`
+                    // at the emission site; a literal there would be a
+                    // regression the canonical constant exists to prevent.
+                    if text.contains(HOST_PROVIDER_DEFINITION_NAME)
+                        && !text.contains(HOST_PROVIDER_DEFINITION)
+                    {
+                        host_provider_rows.push(Row {
+                            site: site.label.to_string(),
+                            file: file.clone(),
+                            line: index + 1,
+                            kind: Kind::HostProvider,
+                            value: None,
+                            status: "constant ref".to_string(),
+                            text: text.trim().to_string(),
+                        });
+                    }
                 }
             }
         }
@@ -246,6 +326,17 @@ pub fn scan(repo: &Repo) -> Result<Report, String> {
                 })
                 .unwrap_or_else(|| "producer not found".into()),
             rows: bootstrap_rows,
+        },
+        host_provider: Section {
+            canonical: host_provider_canonical,
+            canonical_source: host_provider_canonical
+                .map(|value| {
+                    format!(
+                        "{HOST_PROVIDER_CANONICAL_FILE} ({HOST_PROVIDER_DEFINITION}: {value})"
+                    )
+                })
+                .unwrap_or_else(|| "producer constant not found".into()),
+            rows: host_provider_rows,
         },
         manifest: Section {
             canonical: manifest_canonical,
@@ -294,11 +385,13 @@ fn row_status(
     snapshot_canonical: u32,
     manifest_canonical: Option<u32>,
     bootstrap_canonical: Option<u32>,
+    host_provider_canonical: Option<u32>,
 ) -> String {
     let canonical = match kind {
         Kind::Snapshot => Some(snapshot_canonical),
         Kind::Manifest => manifest_canonical,
         Kind::Bootstrap => bootstrap_canonical,
+        Kind::HostProvider => host_provider_canonical,
     };
 
     let Some(canonical) = canonical else {
@@ -319,24 +412,35 @@ fn row_status(
 /// Kind resolution for a matched line:
 /// 1. forced by the site spec (single-purpose sites),
 /// 2. manifest context (`rootGraphId` / `RouteManifest` nearby),
-/// 3. bootstrap wrapper emission (`snapshot: {` within the next two lines),
-/// 4. "bootstrap" mentioned in the surrounding window,
-/// 5. the line's own hint, defaulting to snapshot.
-fn classify(window: &str, next: &str, hint: Option<Kind>, site: &SiteSpec) -> Kind {
+/// 3. bootstrap wrapper emission (`snapshot: {` within the next two lines)
+///    or "bootstrap" in the surrounding window,
+/// 4. host-provider manifest context (`provider` in the surrounding
+///    window),
+/// 5. the line's own hint,
+/// 6. the site's fallback, defaulting to snapshot.
+///
+/// `None` drops the match: the literal belongs to a manifest this scanner
+/// does not track on that site (for example the server host manifest
+/// emitted alongside the provider manifest in `host.rs`).
+fn classify(window: &str, next: &str, hint: Option<Kind>, site: &SiteSpec) -> Option<Kind> {
     if let Some(force) = site.force {
-        return force;
+        return Some(force);
     }
 
     if site.mixed {
         if window.contains("rootGraphId") || window.contains("RouteManifest") {
-            return Kind::Manifest;
+            return Some(Kind::Manifest);
         }
         if next.contains("snapshot: {") || window.to_ascii_lowercase().contains("bootstrap") {
-            return Kind::Bootstrap;
+            return Some(Kind::Bootstrap);
         }
+        if window.to_ascii_lowercase().contains("provider") {
+            return Some(Kind::HostProvider);
+        }
+        return hint.or(site.fallback);
     }
 
-    hint.unwrap_or(Kind::Snapshot)
+    Some(hint.unwrap_or(Kind::Snapshot))
 }
 
 fn window(lines: &[String], index: usize) -> String {
@@ -472,10 +576,14 @@ fn collect_dir_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// The `SSR_SNAPSHOT_VERSION` constant as written in the plec-ir source —
-/// guards against a stale CLI binary disagreeing with the workspace.
-fn scan_definition(repo: &Repo, needle: &str) -> Result<Option<(u32, usize)>, String> {
-    let content = read_repo_file(repo, CANONICAL_FILE)?;
+/// A `const NAME: u32 = N;` initializer as written in the given source file —
+/// guards against a stale constant disagreeing with a consumer elsewhere.
+fn scan_definition(
+    repo: &Repo,
+    file: &str,
+    needle: &str,
+) -> Result<Option<(u32, usize)>, String> {
+    let content = read_repo_file(repo, file)?;
 
     for (index, line) in content.lines().enumerate() {
         if line.contains(needle) {
@@ -570,6 +678,16 @@ pub fn print_report(report: &Report) -> bool {
         print_row(row);
     }
 
+    println!("\nHost provider manifest");
+    println!(
+        "  canonical version       {}  {}",
+        show(report.host_provider.canonical),
+        report.host_provider.canonical_source
+    );
+    for row in &report.host_provider.rows {
+        print_row(row);
+    }
+
     println!("\nManifest");
     println!(
         "  canonical version       {}  {}",
@@ -659,17 +777,75 @@ mod tests {
             path: "x",
             mixed: true,
             force: None,
+            fallback: Some(Kind::Snapshot),
             allow: &[],
             exclude: &[],
         };
         let line = r#"        "version": 3,"#;
         let context = r#"        "rootGraphId": "app#Root","#;
 
-        assert_eq!(classify(context, "", None, &site), Kind::Manifest);
+        assert_eq!(classify(context, "", None, &site), Some(Kind::Manifest));
         // A `snapshot: {` opener within the next two lines marks the
         // bootstrap wrapper, not the snapshot payload itself.
-        assert_eq!(classify(line, "snapshot: {", None, &site), Kind::Bootstrap);
-        assert_eq!(classify(line, "", None, &site), Kind::Snapshot);
+        assert_eq!(
+            classify(line, "snapshot: {", None, &site),
+            Some(Kind::Bootstrap)
+        );
+        assert_eq!(classify(line, "", None, &site), Some(Kind::Snapshot));
+    }
+
+    #[test]
+    fn classifies_host_provider_context_and_fallbacks() {
+        let browser_gate = SiteSpec {
+            label: "browser gate",
+            path: "packages/plec-browser/src/index.ts",
+            mixed: true,
+            force: None,
+            fallback: Some(Kind::Bootstrap),
+            allow: &[],
+            exclude: &[],
+        };
+        // The host-provider gate sits in the same file as the bootstrap
+        // gate; the window decides which boundary a literal belongs to.
+        assert_eq!(
+            classify("type HostProviderManifest = {", "", None, &browser_gate),
+            Some(Kind::HostProvider)
+        );
+        assert_eq!(
+            classify(
+                "const manifest = value as Partial<HostProviderManifest>;",
+                "",
+                None,
+                &browser_gate
+            ),
+            Some(Kind::HostProvider)
+        );
+        // The bootstrap wrapper gate itself: no boundary keyword in the
+        // window, so the site fallback applies.
+        assert_eq!(
+            classify("parsed.version === 2 &&", "", None, &browser_gate),
+            Some(Kind::Bootstrap)
+        );
+
+        // The producer file also emits the server host manifest; those
+        // literals belong to an untracked boundary and must be dropped.
+        let producer = SiteSpec {
+            label: "host-provider producer",
+            path: HOST_PROVIDER_CANONICAL_FILE,
+            mixed: true,
+            force: None,
+            fallback: None,
+            allow: &[],
+            exclude: &[],
+        };
+        assert_eq!(
+            classify("let manifest = ProviderManifest {", "", None, &producer),
+            Some(Kind::HostProvider)
+        );
+        assert_eq!(
+            classify("let manifest = ServerManifest {", "", None, &producer),
+            None
+        );
     }
 
     #[test]
@@ -679,17 +855,30 @@ mod tests {
             path: "x",
             mixed: true,
             force: None,
+            fallback: Some(Kind::Snapshot),
             allow: &[(999, "version gate fixture")],
             exclude: &[],
         };
         assert_eq!(
-            row_status(999, Kind::Snapshot, &site, 2, None, None),
+            row_status(999, Kind::Snapshot, &site, 2, None, None, Some(1)),
             "~ version gate fixture"
         );
         assert_eq!(
-            row_status(1, Kind::Snapshot, &site, 2, None, None),
+            row_status(1, Kind::Snapshot, &site, 2, None, None, Some(1)),
             "CONFLICT: found 1, expected 2"
         );
-        assert_eq!(row_status(2, Kind::Snapshot, &site, 2, None, None), "✓");
+        assert_eq!(
+            row_status(2, Kind::Snapshot, &site, 2, None, None, Some(1)),
+            "✓"
+        );
+        // Host-provider literals compare against the provider canonical.
+        assert_eq!(
+            row_status(1, Kind::HostProvider, &site, 2, None, None, Some(1)),
+            "✓"
+        );
+        assert_eq!(
+            row_status(2, Kind::HostProvider, &site, 2, None, None, Some(1)),
+            "CONFLICT: found 2, expected 1"
+        );
     }
 }
