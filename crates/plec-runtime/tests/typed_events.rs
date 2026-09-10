@@ -324,17 +324,13 @@ fn rust_general_async_actions_artifact() -> serde_json::Value {
     .expect("Rust general async fixture should be valid JSON")
 }
 
-/// The general-async fixture is the compiler's golden output: its fetch uses
-/// `decode: "responseJson"`, whose action result is the `{ok,status,body}`
-/// envelope. The lifecycle test pins the raw-body row value the legacy
-/// `decode: "json"` capability produces — the lowering does not yet emit the
-/// body extraction `await fetch()` values need under responseJson, so the
-/// envelope shape would leave the replaced row without its `title` field.
+/// The general-async fixture is the compiler's golden output. `await fetch()`
+/// resolves to the `{ok,status,body}` response envelope under
+/// `decode: "responseJson"`; the action extracts `body` with the explicit
+/// `field` instruction (the `.json()` await) before using the decoded record,
+/// so the replaced keyed row carries its fields.
 fn general_async_actions_lifecycle_artifact() -> serde_json::Value {
-    let mut artifact = rust_general_async_actions_artifact();
-    artifact["actions"][0]["instructions"][0]["request"]["decode"] =
-        serde_json::Value::String("json".into());
-    artifact
+    rust_general_async_actions_artifact()
 }
 
 fn component_slot_artifact() -> serde_json::Value {

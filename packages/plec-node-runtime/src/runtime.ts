@@ -141,7 +141,7 @@ export async function start({
   };
 
   process.stdout.write(
-    `PLEC_RUNTIME_READY ${JSON.stringify(ready)}\n`,
+    `➠︎          Plec Ready: ${JSON.stringify(ready)}\n`,
   );
 
   return server;

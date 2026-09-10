@@ -19,8 +19,8 @@ pub(crate) const UNHANDLED_VALUE: &str = "unhandled";
 /// Structured sidecar stdout lines. Application modules may log freely
 /// during import, so readiness is a recognizable protocol line, never "the
 /// first stdout output".
-pub(crate) const READY_PREFIX: &str = "PLEC_RUNTIME_READY ";
-pub(crate) const ERROR_PREFIX: &str = "PLEC_RUNTIME_ERROR ";
+pub(crate) const READY_PREFIX: &str = "➠︎           Plec Ready ";
+pub(crate) const ERROR_PREFIX: &str = "➠︎           Plec Runtime Error ";
 
 /// The sidecar protocol version carried in the READY payload.
 pub(crate) const SIDECAR_PROTOCOL_VERSION: u32 = 1;

@@ -3,6 +3,7 @@
   "rootNode": 0,
   "strings": [
     "items",
+    "body",
     "message",
     "main",
     "button",
@@ -17,18 +18,18 @@
   "nodes": [
     {
       "op": "element",
-      "tag": 2,
+      "tag": 3,
       "parent": null,
       "children": [1, 3, 5, 7]
     },
-    { "op": "element", "tag": 3, "parent": 0, "children": [2] },
+    { "op": "element", "tag": 4, "parent": 0, "children": [2] },
     { "op": "text", "text": 0, "parent": 1 },
-    { "op": "element", "tag": 5, "parent": 0, "children": [4] },
+    { "op": "element", "tag": 6, "parent": 0, "children": [4] },
     { "op": "text", "text": 1, "parent": 3 },
-    { "op": "element", "tag": 5, "parent": 0, "children": [6] },
+    { "op": "element", "tag": 6, "parent": 0, "children": [6] },
     { "op": "text", "text": 2, "parent": 5 },
-    { "op": "element", "tag": 6, "parent": 0, "children": [10] },
-    { "op": "element", "tag": 8, "parent": null, "children": [9] },
+    { "op": "element", "tag": 7, "parent": 0, "children": [10] },
+    { "op": "element", "tag": 9, "parent": null, "children": [9] },
     { "op": "text", "text": 3, "parent": 8 },
     { "op": "loop", "loop": 0, "parent": 7 }
   ],
@@ -39,12 +40,12 @@
     { "binding": 2 }
   ],
   "bindings": [
-    { "target": 4, "sink": "text", "expression": 7 },
-    { "target": 6, "sink": "text", "expression": 8 },
-    { "target": 9, "sink": "text", "expression": 11 }
+    { "target": 4, "sink": "text", "expression": 8 },
+    { "target": 6, "sink": "text", "expression": 9 },
+    { "target": 9, "sink": "text", "expression": 12 }
   ],
   "propPrograms": [],
-  "events": [{ "target": 1, "type": 4, "action": 0 }],
+  "events": [{ "target": 1, "type": 5, "action": 0 }],
   "inputs": [{ "name": 0, "kind": "collection" }],
   "stateSlots": [
     { "initialExpression": 0, "frameSlot": 0 },
@@ -71,20 +72,27 @@
     },
     {
       "instructions": [
+        { "op": "loadFrame", "slot": 0 },
+        { "op": "field", "field": 1 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
         { "op": "constant", "constant": 3 },
         { "op": "return" }
       ]
     },
     {
       "instructions": [
-        { "op": "loadFrame", "slot": 0 },
+        { "op": "loadFrame", "slot": 1 },
         { "op": "return" }
       ]
     },
     {
       "instructions": [
-        { "op": "loadFrame", "slot": 1 },
-        { "op": "field", "field": 1 },
+        { "op": "loadFrame", "slot": 2 },
+        { "op": "field", "field": 2 },
         { "op": "return" }
       ]
     },
@@ -114,20 +122,20 @@
     },
     {
       "instructions": [
-        { "op": "loadRowField", "field": 7 },
+        { "op": "loadRowField", "field": 8 },
         { "op": "return" }
       ]
     },
     {
       "instructions": [
-        { "op": "loadRowField", "field": 9 },
+        { "op": "loadRowField", "field": 10 },
         { "op": "return" }
       ]
     }
   ],
   "actions": [
     {
-      "frameSlots": 3,
+      "frameSlots": 4,
       "instructions": [
         {
           "op": "capabilityRequest",
@@ -139,23 +147,25 @@
             "requireOk": false
           },
           "successPc": 1,
-          "failurePc": 3,
-          "finallyPc": 6,
+          "failurePc": 5,
+          "finallyPc": 8,
           "resultSlot": 0,
-          "errorSlot": 1
+          "errorSlot": 2
         },
+        { "op": "evaluate", "expression": 3 },
+        { "op": "storeFrame", "slot": 1 },
         {
           "op": "collectionMutation",
           "input": 0,
           "kind": "keyedReplace",
-          "key": 3,
-          "value": 4
+          "key": 4,
+          "value": 5
         },
-        { "op": "jump", "target": 8 },
-        { "op": "evaluate", "expression": 5 },
-        { "op": "storeState", "state": 0 },
-        { "op": "jump", "target": 8 },
+        { "op": "jump", "target": 10 },
         { "op": "evaluate", "expression": 6 },
+        { "op": "storeState", "state": 0 },
+        { "op": "jump", "target": 10 },
+        { "op": "evaluate", "expression": 7 },
         { "op": "storeState", "state": 1 },
         { "op": "return" }
       ]
@@ -163,9 +173,9 @@
   ],
   "loops": [
     {
-      "sourceExpression": 9,
-      "keyExpression": 10,
-      "itemSlot": 8,
+      "sourceExpression": 10,
+      "keyExpression": 11,
+      "itemSlot": 9,
       "rowTemplate": 8,
       "input": 0
     }
@@ -180,7 +190,7 @@
       "target": { "kind": "binding", "handle": 1 }
     },
     {
-      "source": { "kind": "rowField", "handle": 9, "loop": 0 },
+      "source": { "kind": "rowField", "handle": 10, "loop": 0 },
       "target": { "kind": "binding", "handle": 2 }
     }
   ]
