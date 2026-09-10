@@ -41,9 +41,6 @@ benchmarks/results/*
 test-results/
 playwright-report/
 
-# Generated Icon Files
-packages/lucide-plec/src/icons/
-
 # Executable files
 *.exe
 
