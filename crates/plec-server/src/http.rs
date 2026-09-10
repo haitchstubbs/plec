@@ -19,6 +19,11 @@ pub(crate) struct RouteMatch<'a> {
     pub params: HashMap<String, String>,
 }
 
+pub(crate) struct RouteExecution<'a> {
+    pub route_match: RouteMatch<'a>,
+    pub loader: Option<plec_ir::SsrLoaderOutcome>,
+}
+
 pub(crate) async fn dispatch(
     State(state): State<ServerState>,
     request: Request<Body>,
@@ -134,45 +139,42 @@ async fn render_document_inner(
     context: &mut RequestContext,
 ) -> Result<Response<Body>, ServerError> {
     let bundle = artifact::read_bounded(&state.options.artifact_path).await?;
-    let matched = match_route(&bundle.manifest, &context.pathname)?;
+    let matched = match_route(&bundle.manifest, &context.pathname);
     // SSR markup and app handlers must observe the same matched params the
     // browser snapshot carries, so the request context stops dropping them.
-    if let Some(matched) = &matched {
-        context.params = matched.params.clone();
-    }
-    let loader = match &matched {
-        Some(matched) => {
-            loader::execute_route_loader(&bundle, matched.route, context, &state.http).await?
+    let mut executions = Vec::new();
+    if let Some(matched) = matched {
+        for route_match in matched {
+            context.params = route_match.params.clone();
+            let loader =
+                loader::execute_route_loader(&bundle, route_match.route, context, &state.http)
+                    .await?;
+            executions.push(RouteExecution {
+                route_match,
+                loader,
+            });
         }
-        None => None,
-    };
+    }
     let tag_policy = plec_ir::sink::TagPolicy {
         custom_elements: state.options.custom_elements.iter().cloned().collect(),
     };
     let rendered = ssr::render_application(
         &bundle,
-        matched.as_ref().map(|matched| matched.route),
+        &executions,
         context,
-        loader.as_ref(),
         &tag_policy,
         state.options.development,
     )?;
-    let payload = ssr::bootstrap_payload(
-        &bundle,
-        matched.as_ref(),
-        context,
-        loader.as_ref(),
-        &rendered,
-    );
+    let payload = ssr::bootstrap_payload(&bundle, &executions, context, &rendered);
     // No bootstrap means nothing to resume: the browser mounts fresh.
     let bootstrap = payload.map(|payload| {
         serde_json::to_string(&payload)
             .expect("snapshot serialization cannot fail")
             .replace('<', "\\u003c")
     });
-    let document = matched
-        .as_ref()
-        .and_then(|matched| matched.route.meta.as_ref())
+    let document = executions
+        .last()
+        .and_then(|execution| execution.route_match.route.meta.as_ref())
         .map(|meta| DocumentMetadata {
             title: meta.title.clone(),
             description: meta.description.clone(),
@@ -199,62 +201,23 @@ async fn render_document_inner(
 pub(crate) fn match_route<'a>(
     manifest: &'a Manifest,
     pathname: &str,
-) -> Result<Option<RouteMatch<'a>>, ServerError> {
-    let parts: Vec<_> = pathname
-        .trim_matches('/')
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect();
-
-    let mut candidates: Vec<_> = manifest
-        .routes
-        .iter()
-        .filter(|route| {
-            route.path.is_empty()
-                || route.path == "*"
-                || route.path.split('/').count() == parts.len()
-        })
-        .collect();
-    candidates.sort_by_key(|route| route.path == "*");
-
-    for route in candidates {
-        if route.path.is_empty() {
-            if parts.is_empty() {
-                return Ok(Some(RouteMatch {
-                    route,
-                    params: HashMap::new(),
-                }));
-            }
-
-            continue;
-        }
-
-        if route.path == "*" {
-            return Ok(Some(RouteMatch {
-                route,
-                params: HashMap::new(),
-            }));
-        }
-
-        let mut params = HashMap::new();
-        let mut matched = true;
-
-        for (segment, part) in route.path.split('/').zip(parts.iter()) {
-            if let Some(name) = segment.strip_prefix('$') {
-                let value = crate::request::decode_uri_component(part)?;
-                params.insert(name.to_owned(), value);
-            } else if segment != *part {
-                matched = false;
-                break;
-            }
-        }
-
-        if matched {
-            return Ok(Some(RouteMatch { route, params }));
-        }
-    }
-
-    Ok(None)
+) -> Option<Vec<RouteMatch<'a>>> {
+    let routing_manifest = manifest.routing_manifest();
+    plec_schema::routing::match_route_chain(&routing_manifest, pathname).and_then(|chain| {
+        chain
+            .into_iter()
+            .map(|matched| {
+                manifest
+                    .routes
+                    .iter()
+                    .find(|route| route.id == matched.route.id)
+                    .map(|route| RouteMatch {
+                        route,
+                        params: matched.params,
+                    })
+            })
+            .collect()
+    })
 }
 
 fn is_document_request(pathname: &str) -> bool {

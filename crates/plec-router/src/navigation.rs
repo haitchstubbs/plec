@@ -4,15 +4,9 @@ use plec_client::route::{ssr_snapshot_value, typed_location, TypedLocation};
 use plec_client::runtime::*;
 use plec_dom::platform::{document, window};
 use plec_schema::delta::RuntimeValue;
-use plec_schema::routing::RouteManifestEntry;
+use plec_schema::routing::{match_route_chain, RouteManifestEntry, RouteMatch as TypedRouteMatch};
 use std::collections::HashMap;
 use web_sys::{CustomEvent, CustomEventInit};
-
-#[derive(Clone)]
-struct TypedRouteMatch {
-    route: RouteManifestEntry,
-    params: HashMap<String, String>,
-}
 
 pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Result<(), JsValue> {
     let manifest = state
@@ -717,142 +711,7 @@ fn ssr_loader_error(message: &str) -> RuntimeValue {
 }
 
 fn typed_route_chain(manifest: &RouteManifest, pathname: &str) -> Vec<TypedRouteMatch> {
-    let parts = pathname
-        .trim_matches('/')
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    typed_route_chain_from(manifest, None, &parts, 0, HashMap::new()).unwrap_or_default()
-}
-
-fn typed_route_chain_from(
-    manifest: &RouteManifest,
-    parent: Option<&str>,
-    parts: &[&str],
-    offset: usize,
-    params: HashMap<String, String>,
-) -> Option<Vec<TypedRouteMatch>> {
-    let mut candidates = manifest
-        .routes
-        .iter()
-        .filter_map(|route| {
-            (route.parent_id.as_deref() == parent && !route.path.is_empty() && route.path != "*")
-                .then(|| route_match(route, parts, offset, &params))
-                .flatten()
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by_key(|(static_segments, _, _, _)| std::cmp::Reverse(*static_segments));
-    for (_, route, next_offset, next_params) in candidates {
-        let mut branch = vec![TypedRouteMatch {
-            route: route.clone(),
-            params: next_params.clone(),
-        }];
-        if next_offset < parts.len() {
-            if let Some(mut child) =
-                typed_route_chain_from(manifest, Some(&route.id), parts, next_offset, next_params)
-            {
-                branch.append(&mut child);
-                return Some(branch);
-            }
-        } else if let Some(mut child) =
-            typed_route_chain_from(manifest, Some(&route.id), parts, next_offset, next_params)
-        {
-            branch.append(&mut child);
-            return Some(branch);
-        } else {
-            return Some(branch);
-        }
-    }
-    if offset == parts.len() {
-        if let Some(route) = manifest
-            .routes
-            .iter()
-            .find(|route| route.parent_id.as_deref() == parent && route.path.is_empty())
-        {
-            let mut branch = vec![TypedRouteMatch {
-                route: route.clone(),
-                params: params.clone(),
-            }];
-            if let Some(mut child) =
-                typed_route_chain_from(manifest, Some(&route.id), parts, offset, params)
-            {
-                branch.append(&mut child);
-            }
-            return Some(branch);
-        }
-    }
-    manifest
-        .routes
-        .iter()
-        .find(|route| route.parent_id.as_deref() == parent && route.path == "*")
-        .map(|route| {
-            vec![TypedRouteMatch {
-                route: route.clone(),
-                params,
-            }]
-        })
-}
-
-fn route_match(
-    route: &RouteManifestEntry,
-    parts: &[&str],
-    offset: usize,
-    params: &HashMap<String, String>,
-) -> Option<(usize, RouteManifestEntry, usize, HashMap<String, String>)> {
-    let segments = route
-        .path
-        .trim_matches('/')
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    if segments.len() > parts.len().saturating_sub(offset) {
-        return None;
-    }
-    let mut params = params.clone();
-    let mut static_segments = 0;
-    for (index, segment) in segments.iter().enumerate() {
-        let value = parts[offset + index];
-        if let Some(name) = segment.strip_prefix('$') {
-            params.insert(name.into(), decode_path_segment(value));
-        } else if *segment == value {
-            static_segments += 1;
-        } else {
-            return None;
-        }
-    }
-    Some((
-        static_segments,
-        route.clone(),
-        offset + segments.len(),
-        params,
-    ))
-}
-
-fn decode_path_segment(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut output = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2])) {
-                output.push(high * 16 + low);
-                index += 3;
-                continue;
-            }
-        }
-        output.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8(output).unwrap_or_else(|_| value.into())
-}
-
-fn hex(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
+    match_route_chain(manifest, pathname).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1021,9 +880,8 @@ mod tests {
             root_graph_id: "root".into(),
             routes: vec![route("layout", None, ""), route("home", Some("layout"), "")],
         };
-        // Known semantic gap: the flat server matcher publishes only the first
-        // pathless route (the layout) while the typed chain descends into the
-        // index child. This disagreement must be detectable, never silent.
+        // A truncated transferred chain is malformed and must be detectable,
+        // never silently adopted.
         let derived = typed_route_chain(&nested, "/");
         assert_eq!(
             ssr_route_chain_mismatch(&[instance("layout", &[])], &derived, &HashMap::new()),

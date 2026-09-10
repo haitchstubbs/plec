@@ -13,7 +13,8 @@ use plec_ir::{
 use serde::Serialize;
 
 use crate::{
-    artifact::ArtifactBundle, http::RouteMatch, request::RequestContext, ssr::RenderedApplication,
+    artifact::ArtifactBundle, http::RouteExecution, request::RequestContext,
+    ssr::RenderedApplication,
 };
 
 /// The bootstrap wrapper the browser adoption gate reads: `{ version,
@@ -32,22 +33,13 @@ pub(crate) struct BootstrapPayload {
 /// emitted and the browser mounts fresh.
 pub(crate) fn bootstrap_payload(
     bundle: &ArtifactBundle,
-    route_match: Option<&RouteMatch<'_>>,
+    routes: &[RouteExecution<'_>],
     context: &RequestContext,
-    loader: Option<&plec_ir::SsrLoaderOutcome>,
     rendered: &RenderedApplication,
 ) -> Option<BootstrapPayload> {
-    let route_match = route_match?;
-    // A rejected loader rendered the error phase; the browser resumes that
-    // phase from the snapshot instead of refetching on first paint.
-    let phase = if matches!(
-        loader.map(|loader| &loader.state),
-        Some(SsrLoaderState::Rejected { .. })
-    ) {
-        SsrRoutePhase::Error
-    } else {
-        SsrRoutePhase::Active
-    };
+    if routes.is_empty() {
+        return None;
+    }
     let mut graphs = BTreeMap::new();
     graphs.insert(
         ROOT_GRAPH_INSTANCE_ID.to_owned(),
@@ -57,7 +49,7 @@ pub(crate) fn bootstrap_payload(
             rendered,
         ),
     );
-    if let Some(child) = &rendered.child_graph {
+    for child in &rendered.child_graphs {
         graphs.insert(
             child.instance.clone(),
             graph_structure(&child.instance, &child.graph_id, rendered),
@@ -93,15 +85,26 @@ pub(crate) fn bootstrap_payload(
         snapshot: PlecSsrSnapshot {
             version: SSR_SNAPSHOT_VERSION,
             revision: bundle.manifest.revision.clone(),
-            routes: vec![SsrRouteInstance {
-                route_id: route_match.route.id.clone(),
-                params: route_match
-                    .params
-                    .iter()
-                    .map(|(name, value)| (name.clone(), value.clone()))
-                    .collect(),
-                phase,
-            }],
+            routes: routes
+                .iter()
+                .map(|execution| SsrRouteInstance {
+                    route_id: execution.route_match.route.id.clone(),
+                    params: execution
+                        .route_match
+                        .params
+                        .iter()
+                        .map(|(name, value)| (name.clone(), value.clone()))
+                        .collect(),
+                    phase: if matches!(
+                        execution.loader.as_ref().map(|loader| &loader.state),
+                        Some(SsrLoaderState::Rejected { .. })
+                    ) {
+                        SsrRoutePhase::Error
+                    } else {
+                        SsrRoutePhase::Active
+                    },
+                })
+                .collect(),
             // Public request state: the location is public by contract and
             // cookies are gated at the render boundary. `exports` holds
             // explicitly public values only (PublicExport /
@@ -111,10 +114,10 @@ pub(crate) fn bootstrap_payload(
                 location: format!("{}{}", context.pathname, super::url_search(&context.url)),
                 exports: BTreeMap::new(),
             },
-            loaders: loader
-                .cloned()
-                .map(|loader| vec![loader])
-                .unwrap_or_default(),
+            loaders: routes
+                .iter()
+                .filter_map(|execution| execution.loader.clone())
+                .collect(),
             structure: SsrStructure { graphs, nested },
         },
     })
