@@ -164,7 +164,8 @@ const GENERAL_ASYNC_ACTION_SOURCE: &str = r#"
         const [done, setDone] = useState(false);
         async function refresh() {
             try {
-                const todo = await fetch("/todo");
+                const response = await fetch("/todo");
+                const todo = await response.json();
                 todos.keyedReplace("one", todo);
             } catch (reason) {
                 setError(reason.message);

@@ -4545,6 +4545,30 @@ mod tests {
         );
     }
 
+    /// `await fetch()` always resolves to the `{ok,status,body}` response
+    /// envelope; decoded bodies only come from the explicit `.json()`/`.text()`
+    /// await. Consumption-sensitive decode selection is deliberately avoided.
+    #[test]
+    fn keeps_the_response_envelope_for_directly_awaited_fetch_targets() {
+        let hir = build_and_lower(
+            "export function App() { async function load() { const response = await fetch('/todos'); return response; } return <button onClick={load}>Load</button>; }",
+        )
+        .unwrap();
+        let action = hir
+            .callables
+            .iter()
+            .find(|callable| hir.bindings[callable.binding.0 as usize].name == "load")
+            .unwrap();
+        assert!(matches!(
+            action.body,
+            HirCallableBody::Block(ref statements)
+                if matches!(
+                    statements.first(),
+                    Some(HirStmt::AwaitFetch { target: Some(_), decode, .. }) if decode == "responseJson"
+                )
+        ));
+    }
+
     #[test]
     fn lowers_function_typed_async_callback_parameters_and_local_values() {
         let hir = build_and_lower(
