@@ -41,10 +41,72 @@ pub fn typed_eval_frame(
     )
 }
 
+/// Estimated live byte size of one runtime value. Iterative by contract:
+/// values are validated acyclic trees, but the walk must not trust that for
+/// recursion depth. Sizes are charged to the evaluation stack when a value
+/// is pushed and released when it is popped, so hostile constant-pushing
+/// programs hit a documented memory ceiling instead of only instruction
+/// fuel (which bounds steps, not bytes per step).
+fn value_size_bytes(value: &RuntimeValue) -> usize {
+    let mut bytes = 0usize;
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            RuntimeValue::Null | RuntimeValue::Bool(_) | RuntimeValue::Number(_) => bytes += 8,
+            RuntimeValue::String(value) => bytes += value.len(),
+            RuntimeValue::Array(values) => {
+                bytes += 16 + 8 * values.len();
+                pending.extend(values.iter());
+            }
+            RuntimeValue::Record(values) => {
+                bytes += 16 + 8 * values.len();
+                pending.extend(values.values());
+            }
+        }
+    }
+    bytes
+}
+
+fn expression_stack_push(
+    stack: &mut Vec<RuntimeValue>,
+    sizes: &mut Vec<usize>,
+    bytes: &mut usize,
+    value: RuntimeValue,
+) -> Result<(), JsValue> {
+    if stack.len() >= plec_ir::limits::MAX_EVAL_STACK_VALUES {
+        return Err(JsValue::from_str(
+            "expression evaluation stack exceeds value limit",
+        ));
+    }
+    let size = value_size_bytes(&value);
+    if *bytes + size > plec_ir::limits::MAX_EVAL_STACK_BYTES {
+        return Err(JsValue::from_str(
+            "expression evaluation stack exceeds byte limit",
+        ));
+    }
+    stack.push(value);
+    sizes.push(size);
+    *bytes += size;
+    Ok(())
+}
+
+fn expression_stack_pop(
+    stack: &mut Vec<RuntimeValue>,
+    sizes: &mut Vec<usize>,
+    bytes: &mut usize,
+) -> Option<RuntimeValue> {
+    let value = stack.pop()?;
+    *bytes -= sizes.pop().unwrap_or_default();
+    Some(value)
+}
+
 /// Execution-budget wrapper: the interpreter shares one fuel counter across
 /// every nested Filter/Map evaluation, so crafted loops or self-referential
 /// predicates exhaust a documented budget instead of pinning the tab or
-/// overflowing the stack.
+/// overflowing the stack. The value stack additionally tracks live value
+/// count and estimated bytes against `MAX_EVAL_STACK_VALUES` /
+/// `MAX_EVAL_STACK_BYTES`, because instruction fuel alone cannot bound the
+/// memory one `Constant` deep-clone may enqueue.
 #[allow(clippy::too_many_arguments)]
 fn typed_eval_bounded(
     app: &TypedApplication,
@@ -66,6 +128,8 @@ fn typed_eval_bounded(
         .ok_or_else(|| JsValue::from_str("expression handle out of range"))?
         .instructions;
     let mut stack = Vec::<RuntimeValue>::new();
+    let mut stack_sizes = Vec::<usize>::new();
+    let mut stack_bytes = 0usize;
     let mut pc = 0usize;
     while pc < instructions.len() {
         if *fuel == 0 {
@@ -74,46 +138,72 @@ fn typed_eval_bounded(
         *fuel -= 1;
         let instruction = &instructions[pc];
         match instruction {
-            TypedExpressionInstruction::Constant { constant } => stack.push(
+            TypedExpressionInstruction::Constant { constant } => expression_stack_push(
+                &mut stack,
+                &mut stack_sizes,
+                &mut stack_bytes,
                 app.constants
                     .get(*constant)
                     .cloned()
                     .unwrap_or(RuntimeValue::Null),
-            ),
-            TypedExpressionInstruction::LoadState { state } => {
-                stack.push(states.get(*state).cloned().unwrap_or(RuntimeValue::Null))
-            }
-            TypedExpressionInstruction::LoadRef { reference } => stack.push(
+            )?,
+            TypedExpressionInstruction::LoadState { state } => expression_stack_push(
+                &mut stack,
+                &mut stack_sizes,
+                &mut stack_bytes,
+                states.get(*state).cloned().unwrap_or(RuntimeValue::Null),
+            )?,
+            TypedExpressionInstruction::LoadRef { reference } => expression_stack_push(
+                &mut stack,
+                &mut stack_sizes,
+                &mut stack_bytes,
                 app.ref_values
                     .get(*reference)
                     .cloned()
                     .unwrap_or(RuntimeValue::Null),
-            ),
-            TypedExpressionInstruction::LoadProp { prop } => stack.push(
+            )?,
+            TypedExpressionInstruction::LoadProp { prop } => expression_stack_push(
+                &mut stack,
+                &mut stack_sizes,
+                &mut stack_bytes,
                 app.runtime_props
                     .get(*prop)
                     .cloned()
                     .unwrap_or(RuntimeValue::Null),
-            ),
-            TypedExpressionInstruction::LoadRowRecord => {
-                stack.push(RuntimeValue::Record(row.cloned().unwrap_or_default()))
-            }
+            )?,
+            TypedExpressionInstruction::LoadRowRecord => expression_stack_push(
+                &mut stack,
+                &mut stack_sizes,
+                &mut stack_bytes,
+                RuntimeValue::Record(row.cloned().unwrap_or_default()),
+            )?,
             TypedExpressionInstruction::LoadRowField { field } => {
                 let field = app.strings.get(*field).map(String::as_str).unwrap_or("");
-                stack.push(if field.is_empty() {
-                    RuntimeValue::Record(row.cloned().unwrap_or_default())
-                } else {
-                    row.and_then(|value| value.get(field))
-                        .cloned()
-                        .unwrap_or(RuntimeValue::Null)
-                });
+                expression_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    if field.is_empty() {
+                        RuntimeValue::Record(row.cloned().unwrap_or_default())
+                    } else {
+                        row.and_then(|value| value.get(field))
+                            .cloned()
+                            .unwrap_or(RuntimeValue::Null)
+                    },
+                )?
             }
-            TypedExpressionInstruction::LoadEventField { field } => {
-                stack.push(event.get(*field).cloned().unwrap_or(RuntimeValue::Null))
-            }
-            TypedExpressionInstruction::LoadFrame { slot } => {
-                stack.push(frame.get(*slot).cloned().unwrap_or(RuntimeValue::Null))
-            }
+            TypedExpressionInstruction::LoadEventField { field } => expression_stack_push(
+                &mut stack,
+                &mut stack_sizes,
+                &mut stack_bytes,
+                event.get(*field).cloned().unwrap_or(RuntimeValue::Null),
+            )?,
+            TypedExpressionInstruction::LoadFrame { slot } => expression_stack_push(
+                &mut stack,
+                &mut stack_sizes,
+                &mut stack_bytes,
+                frame.get(*slot).cloned().unwrap_or(RuntimeValue::Null),
+            )?,
             TypedExpressionInstruction::LoadHost { host } => {
                 let value = app
                     .host_slots
@@ -190,32 +280,38 @@ fn typed_eval_bounded(
                         _ => None,
                     })
                     .unwrap_or(RuntimeValue::Null);
-                stack.push(value)
+                expression_stack_push(&mut stack, &mut stack_sizes, &mut stack_bytes, value)?
             }
             TypedExpressionInstruction::Field { field } => {
-                let object = stack
-                    .pop()
-                    .ok_or_else(|| JsValue::from_str("expression stack underflow: field"))?;
+                let object = expression_stack_pop(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                )
+                .ok_or_else(|| JsValue::from_str("expression stack underflow: field"))?;
                 let field = app.strings.get(*field).map(String::as_str).unwrap_or("");
-                stack.push(match object {
-                    RuntimeValue::Record(value) => {
-                        value.get(field).cloned().unwrap_or(RuntimeValue::Null)
-                    }
-                    RuntimeValue::Array(value) if field == "length" => {
-                        RuntimeValue::Number(value.len() as f64)
-                    }
-                    RuntimeValue::String(value) if field == "length" => {
-                        RuntimeValue::Number(value.chars().count() as f64)
-                    }
-                    _ => RuntimeValue::Null,
-                });
+                expression_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    match object {
+                        RuntimeValue::Record(value) => {
+                            value.get(field).cloned().unwrap_or(RuntimeValue::Null)
+                        }
+                        RuntimeValue::Array(value) if field == "length" => {
+                            RuntimeValue::Number(value.len() as f64)
+                        }
+                        RuntimeValue::String(value) if field == "length" => {
+                            RuntimeValue::Number(value.chars().count() as f64)
+                        }
+                        _ => RuntimeValue::Null,
+                    },
+                )?;
             }
             TypedExpressionInstruction::Index => {
-                let key = stack
-                    .pop()
+                let key = expression_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
                     .ok_or_else(|| JsValue::from_str("expression stack underflow: index key"))?;
-                let object = stack
-                    .pop()
+                let object = expression_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
                     .ok_or_else(|| JsValue::from_str("expression stack underflow: index object"))?;
                 let key = match key {
                     RuntimeValue::String(value) => value,
@@ -224,31 +320,35 @@ fn typed_eval_bounded(
                     }
                     _ => String::new(),
                 };
-                stack.push(match object {
-                    RuntimeValue::Record(value) => {
-                        value.get(&key).cloned().unwrap_or(RuntimeValue::Null)
-                    }
-                    RuntimeValue::Array(value) => key
-                        .parse::<usize>()
-                        .ok()
-                        .and_then(|index| value.get(index))
-                        .cloned()
-                        .unwrap_or(RuntimeValue::Null),
-                    RuntimeValue::String(value) => key
-                        .parse::<usize>()
-                        .ok()
-                        .and_then(|index| value.chars().nth(index))
-                        .map(|value| RuntimeValue::String(value.to_string()))
-                        .unwrap_or(RuntimeValue::Null),
-                    _ => RuntimeValue::Null,
-                });
+                expression_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    match object {
+                        RuntimeValue::Record(value) => {
+                            value.get(&key).cloned().unwrap_or(RuntimeValue::Null)
+                        }
+                        RuntimeValue::Array(value) => key
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|index| value.get(index))
+                            .cloned()
+                            .unwrap_or(RuntimeValue::Null),
+                        RuntimeValue::String(value) => key
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|index| value.chars().nth(index))
+                            .map(|value| RuntimeValue::String(value.to_string()))
+                            .unwrap_or(RuntimeValue::Null),
+                        _ => RuntimeValue::Null,
+                    },
+                )?;
             }
             TypedExpressionInstruction::Filter { predicate, .. }
             | TypedExpressionInstruction::Map {
                 mapper: predicate, ..
             } => {
-                let source = stack
-                    .pop()
+                let source = expression_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
                     .ok_or_else(|| JsValue::from_str("expression stack underflow: collection"))?;
                 let mut output = Vec::new();
                 for (_index, item) in source.array().unwrap_or(&[]).iter().cloned().enumerate() {
@@ -270,13 +370,26 @@ fn typed_eval_bounded(
                         output.push(RuntimeValue::Record(object));
                     }
                 }
-                stack.push(RuntimeValue::Array(output));
+                expression_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    RuntimeValue::Array(output),
+                )?;
             }
             TypedExpressionInstruction::String { kind, count } => {
                 if stack.len() < *count {
                     return Err(JsValue::from_str("expression stack underflow: string"));
                 }
-                let mut parts = (0..*count).filter_map(|_| stack.pop()).collect::<Vec<_>>();
+                let mut parts = Vec::with_capacity(*count);
+                for _ in 0..*count {
+                    parts.push(
+                        expression_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                            .ok_or_else(|| {
+                                JsValue::from_str("expression stack underflow: string")
+                            })?,
+                    );
+                }
                 parts.reverse();
                 let value = match kind.as_str() {
                     "trim" => RuntimeValue::String(
@@ -311,13 +424,21 @@ fn typed_eval_bounded(
                         parts.iter().map(typed_value_string).collect::<String>(),
                     ),
                 };
-                stack.push(value);
+                expression_stack_push(&mut stack, &mut stack_sizes, &mut stack_bytes, value)?;
             }
             TypedExpressionInstruction::MakeArray { count, spreads } => {
                 if stack.len() < *count {
                     return Err(JsValue::from_str("expression stack underflow: makeArray"));
                 }
-                let mut values = (0..*count).filter_map(|_| stack.pop()).collect::<Vec<_>>();
+                let mut values = Vec::with_capacity(*count);
+                for _ in 0..*count {
+                    values.push(
+                        expression_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                            .ok_or_else(|| {
+                                JsValue::from_str("expression stack underflow: makeArray")
+                            })?,
+                    );
+                }
                 values.reverse();
                 let mut output = Vec::new();
                 for (index, value) in values.into_iter().enumerate() {
@@ -327,15 +448,26 @@ fn typed_eval_bounded(
                         output.push(value);
                     }
                 }
-                stack.push(RuntimeValue::Array(output));
+                expression_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    RuntimeValue::Array(output),
+                )?;
             }
             TypedExpressionInstruction::MakeRecord { fields, spreads } => {
                 if stack.len() < fields.len() {
                     return Err(JsValue::from_str("expression stack underflow: makeRecord"));
                 }
-                let mut values = (0..fields.len())
-                    .filter_map(|_| stack.pop())
-                    .collect::<Vec<_>>();
+                let mut values = Vec::with_capacity(fields.len());
+                for _ in 0..fields.len() {
+                    values.push(
+                        expression_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                            .ok_or_else(|| {
+                                JsValue::from_str("expression stack underflow: makeRecord")
+                            })?,
+                    );
+                }
                 values.reverse();
                 let mut record = HashMap::new();
                 for (index, (field, value)) in fields.iter().zip(values).enumerate() {
@@ -347,7 +479,12 @@ fn typed_eval_bounded(
                         record.insert(field.clone(), value);
                     }
                 }
-                stack.push(RuntimeValue::Record(record));
+                expression_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    RuntimeValue::Record(record),
+                )?;
             }
             TypedExpressionInstruction::OmitFields { fields } => {
                 let value = stack
@@ -359,14 +496,17 @@ fn typed_eval_bounded(
                         record.remove(name);
                     }
                 }
-                stack.push(RuntimeValue::Record(record));
+                expression_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    RuntimeValue::Record(record),
+                )?;
             }
             TypedExpressionInstruction::Binary { kind } => {
-                let right = stack
-                    .pop()
+                let right = expression_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
                     .ok_or_else(|| JsValue::from_str("expression stack underflow: binary"))?;
-                let left = stack
-                    .pop()
+                let left = expression_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
                     .ok_or_else(|| JsValue::from_str("expression stack underflow: binary"))?;
                 let result = match kind.as_str() {
                     "equal" => RuntimeValue::Bool(left == right),
@@ -416,34 +556,42 @@ fn typed_eval_bounded(
                     "lessEqual" => RuntimeValue::Bool(left.number() <= right.number()),
                     _ => RuntimeValue::Null,
                 };
-                stack.push(result);
+                expression_stack_push(&mut stack, &mut stack_sizes, &mut stack_bytes, result)?;
             }
             TypedExpressionInstruction::Unary { kind } => {
-                let value = stack
-                    .pop()
+                let value = expression_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
                     .ok_or_else(|| JsValue::from_str("expression stack underflow: unary"))?;
-                stack.push(match kind.as_str() {
-                    "not" => RuntimeValue::Bool(!typed_truthy(&value)),
-                    "minus" => RuntimeValue::Number(-value.number()),
-                    _ => value,
-                });
+                expression_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    match kind.as_str() {
+                        "not" => RuntimeValue::Bool(!typed_truthy(&value)),
+                        "minus" => RuntimeValue::Number(-value.number()),
+                        _ => value,
+                    },
+                )?;
             }
             TypedExpressionInstruction::JumpIfFalse { target } => {
-                if !typed_truthy(
-                    &stack.pop().ok_or_else(|| {
-                        JsValue::from_str("expression stack underflow: jumpIfFalse")
-                    })?,
-                ) {
+                let condition = expression_stack_pop(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                )
+                .ok_or_else(|| JsValue::from_str("expression stack underflow: jumpIfFalse"))?;
+                if !typed_truthy(&condition) {
                     pc = *target;
                     continue;
                 }
             }
             TypedExpressionInstruction::JumpIfTrue { target } => {
-                if typed_truthy(
-                    &stack.pop().ok_or_else(|| {
-                        JsValue::from_str("expression stack underflow: jumpIfTrue")
-                    })?,
-                ) {
+                let condition = expression_stack_pop(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                )
+                .ok_or_else(|| JsValue::from_str("expression stack underflow: jumpIfTrue"))?;
+                if typed_truthy(&condition) {
                     pc = *target;
                     continue;
                 }
@@ -453,12 +601,15 @@ fn typed_eval_bounded(
                 continue;
             }
             TypedExpressionInstruction::Return => {
-                return Ok(stack.pop().unwrap_or(RuntimeValue::Null))
+                return Ok(
+                    expression_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                        .unwrap_or(RuntimeValue::Null),
+                )
             }
         };
         pc += 1;
     }
-    Ok(stack.pop().unwrap_or(RuntimeValue::Null))
+    Ok(expression_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes).unwrap_or(RuntimeValue::Null))
 }
 
 pub fn typed_truthy(value: &RuntimeValue) -> bool {

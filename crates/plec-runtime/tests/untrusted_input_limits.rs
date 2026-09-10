@@ -8,9 +8,9 @@
 use plec_client::runtime::TypedRuntime;
 use plec_eval::eval::typed_eval;
 use plec_ir::limits::{
-    MAX_ARTIFACT_JSON_BYTES, MAX_HOST_INPUT_JSON_BYTES, MAX_LOOP_ROWS, MAX_MOUNT_DEPTH,
-    MAX_SNAPSHOT_JSON_BYTES, MAX_SNAPSHOT_SHAPE_PATHS, MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS,
-    MAX_VALUE_DEPTH, MAX_VALUE_NODES,
+    MAX_ARTIFACT_JSON_BYTES, MAX_FRAME_SLOTS, MAX_HOST_INPUT_JSON_BYTES, MAX_LOOP_ROWS,
+    MAX_MOUNT_DEPTH, MAX_NODE_GRAPH_DEPTH, MAX_SNAPSHOT_JSON_BYTES, MAX_SNAPSHOT_SHAPE_PATHS,
+    MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS, MAX_VALUE_DEPTH, MAX_VALUE_NODES, MAX_VALUE_STRING_BYTES,
 };
 use plec_runtime::PlecRuntime;
 use plec_schema::delta::UpdateMetrics;
@@ -700,11 +700,12 @@ fn load_application_rejects_unknown_element_namespaces() {
 }
 
 #[wasm_bindgen_test]
-fn deep_linear_node_chain_fails_at_mount_depth_limit() {
-    // Topology validation accepts an acyclic chain, so one node past
-    // MAX_MOUNT_DEPTH must exhaust the documented mount budget instead of
-    // overflowing the WASM stack during instantiate_node recursion.
-    let depth = MAX_MOUNT_DEPTH + 1;
+fn load_application_rejects_node_graph_beyond_depth_limit() {
+    // Topology validation bounds structural depth (MAX_NODE_GRAPH_DEPTH), so
+    // an acyclic chain one node past the budget fails at the load boundary —
+    // before mount recursion, the adoption walk, or the SSR render can
+    // follow it into native recursion.
+    let depth = MAX_NODE_GRAPH_DEPTH + 1;
     let mut nodes = String::new();
     for index in 0..depth {
         let parent = if index == 0 {
@@ -722,28 +723,12 @@ fn deep_linear_node_chain_fails_at_mount_depth_limit() {
         ));
     }
     nodes.pop();
-    let app: TypedApplication = serde_json::from_str(&format!(
-        r#"{{
-        "version": "0.10", "rootNode": 0, "strings": ["div"],
-        "nodes": [{nodes}],
-        "expressions": [], "actions": []
-    }}"#,
-    ))
-    .unwrap();
-    let mut runtime = TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
-    let root = web_sys::window()
-        .unwrap()
-        .document()
-        .unwrap()
-        .create_element("div")
-        .unwrap()
-        .into();
-    let error = runtime
-        .mount(root)
-        .err()
-        .expect("chain deeper than the mount budget must fail closed");
+    let artifact = envelope_artifact(&format!(r#""nodes":[{nodes}]"#));
+    let error = PlecRuntime::new()
+        .load_application(js_from_json(&artifact))
+        .expect_err("graph deeper than the depth budget must be rejected");
     assert!(
-        error_string(error).contains("mount depth exceeds limit"),
+        error_string(error).contains("node graph depth exceeds limit"),
         "unexpected error"
     );
 }
@@ -826,6 +811,114 @@ fn self_tail_call_action_terminates_within_call_depth() {
             .as_string()
             .unwrap_or_default()
             .contains("action call depth exceeds limit"),
+        "{error:?}"
+    );
+}
+
+#[wasm_bindgen_test]
+fn load_application_rejects_component_call_cycle() {
+    // A component reference cycle mounted fresh instances wave after wave
+    // until the mounted-region budget tripped; validation must reject the
+    // cycle itself at the load boundary.
+    let artifact = r#"{"version":"0.10","rootComponent":0,"components":[
+        {"id":"A","version":"0.10","rootNode":0,"strings":[],"nodes":[
+            {"op":"component","component":1,"parent":null,"props":[],"children":[]}]},
+        {"id":"B","version":"0.10","rootNode":0,"strings":[],"nodes":[
+            {"op":"component","component":0,"parent":null,"props":[],"children":[]}]}
+    ]}"#;
+    let error = PlecRuntime::new()
+        .load_application(js_from_json(artifact))
+        .expect_err("component call cycle must be rejected");
+    assert!(
+        error_string(error).contains("component call graph contains a cycle"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
+fn load_application_accepts_host_resolved_component_prop_back_reference() {
+    // A component prop with a host target (lucide icon, etc.) resolves
+    // outside the component table at runtime, so its placeholder index is
+    // not a static call edge — even when the placeholder names the parent.
+    // Compiled layouts legitimately contain this shape.
+    let artifact = r#"{"version":"0.10","rootComponent":0,"components":[
+        {"id":"A","version":"0.10","rootNode":0,"strings":["Icon","div"],"nodes":[
+            {"op":"component","component":1,"parent":null,"props":[
+                {"kind":"component","name":0,"component":0,
+                 "host":{"provider":"lucide","component":"House"}}],"children":[]}]},
+        {"id":"B","version":"0.10","rootNode":0,"strings":["Icon","div"],"parameters":[
+            {"name":0,"callable":false,"component":true}],"nodes":[
+            {"op":"element","tag":1,"parent":null}]}
+    ]}"#;
+    PlecRuntime::new()
+        .load_application(js_from_json(artifact))
+        .expect("host-resolved component prop must not create a static call edge");
+}
+
+#[wasm_bindgen_test]
+fn load_application_rejects_oversized_frame_slots() {
+    // frameSlots sizes the action frame allocation directly, so an artifact
+    // cannot request an unbounded vector before slot-index checks run.
+    let artifact = envelope_artifact(&format!(
+        r#""nodes":[{{"op":"element","tag":0,"parent":null,"children":[]}}],"actions":[{{"frameSlots":{},"instructions":[]}}]"#,
+        MAX_FRAME_SLOTS + 1
+    ));
+    let error = PlecRuntime::new()
+        .load_application(js_from_json(&artifact))
+        .expect_err("frameSlots beyond the cap must be rejected");
+    assert!(
+        error_string(error).contains("action frame slots exceed limit"),
+        "unexpected error"
+    );
+}
+
+#[wasm_bindgen_test]
+fn constant_pushing_loop_terminates_at_stack_value_limit() {
+    // Instruction fuel bounds steps, not live stack values: a backward-jump
+    // constant pusher must hit the value-count ceiling instead of cloning
+    // constants until fuel runs out.
+    let mut app = bounded_application();
+    app.expressions = serde_json::from_value(serde_json::json!([
+        {"instructions": [
+            {"op": "constant", "constant": 0},
+            {"op": "jump", "target": 0}
+        ]}
+    ]))
+    .unwrap();
+    let error = typed_eval(&app, None, 0, &[], None, 0)
+        .expect_err("constant pusher must stop at the stack value limit");
+    assert!(
+        error
+            .as_string()
+            .unwrap_or_default()
+            .contains("expression evaluation stack exceeds value limit"),
+        "{error:?}"
+    );
+}
+
+#[wasm_bindgen_test]
+fn constant_pushing_loop_terminates_at_stack_byte_limit() {
+    // One value can hold MAX_VALUE_STRING_BYTES of payload, so byte
+    // accounting must cap the stack long before the value-count ceiling.
+    let mut app = bounded_application();
+    app.constants = serde_json::from_value(serde_json::json!([
+        {"pad": "x".repeat(MAX_VALUE_STRING_BYTES)}
+    ]))
+    .unwrap();
+    app.expressions = serde_json::from_value(serde_json::json!([
+        {"instructions": [
+            {"op": "constant", "constant": 0},
+            {"op": "jump", "target": 0}
+        ]}
+    ]))
+    .unwrap();
+    let error = typed_eval(&app, None, 0, &[], None, 0)
+        .expect_err("large-constant pusher must stop at the stack byte limit");
+    assert!(
+        error
+            .as_string()
+            .unwrap_or_default()
+            .contains("expression evaluation stack exceeds byte limit"),
         "{error:?}"
     );
 }
