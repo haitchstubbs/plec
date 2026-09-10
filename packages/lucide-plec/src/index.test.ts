@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createLucideHostProvider } from './index';
+import { LucidePlecAdapter } from './index';
 
 class FakeSvgElement {
   readonly attributes = new Map<string, string>();
@@ -31,12 +31,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('createLucideHostProvider', () => {
+describe('LucidePlecAdapter', () => {
   it('registers only supplied icons and preserves their lifecycle', () => {
     vi.stubGlobal('document', {
       createElementNS: () => new FakeSvgElement(),
     });
-    const provider = createLucideHostProvider({
+    const provider = LucidePlecAdapter({
       Mark: [['path', { d: 'M0 0' }]],
     });
     const icon = provider.Mark;

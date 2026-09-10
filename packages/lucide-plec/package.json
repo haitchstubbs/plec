@@ -9,10 +9,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./src/index.ts"
-    },
-    "./icons/*": {
-      "types": "./dist/icons/*.d.ts",
-      "default": "./src/icons/*.tsx"
     }
   },
   "files": [
@@ -27,9 +23,9 @@
     "experimental"
   ],
   "scripts": {
-    "build": "node scripts/generate-icons.mjs && yarn --cwd ../.. exec tsc -p packages/lucide-plec/tsconfig.json",
+    "build": " yarn --cwd . exec tsc -p ./tsconfig.json",
     "test": "yarn exec vitest run --passWithNoTests",
-    "typecheck": "node scripts/generate-icons.mjs && yarn --cwd ../.. exec tsc -p packages/lucide-plec/tsconfig.json --noEmit"
+    "typecheck": "yarn --cwd . exec tsc -p ./tsconfig.json --noEmit"
   },
   "dependencies": {
     "lucide": "^1.31.0",

@@ -2,6 +2,8 @@ export type { IconComponent, IconProps } from './create-icon.js';
 
 import type { IconNode } from 'lucide';
 
+export * from 'lucide';
+
 type HostHandle = { element: SVGElement; attributes: Set<string> };
 type IconDefinition = IconNode;
 
@@ -104,3 +106,12 @@ export function createLucideHostProvider(
   }
   return components;
 }
+
+/** Build-generated provider entries pass only icons referenced by compiled IR. */
+export function LucidePlecAdapter(
+  definitions: Record<string, IconDefinition>,
+) {
+  return createLucideHostProvider(definitions);
+}
+
+export default LucidePlecAdapter;
