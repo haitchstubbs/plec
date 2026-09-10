@@ -31,6 +31,19 @@ type PlecHostRegistry = {
 };
 
 const hostProviders = new Map<string, PlecHostProvider>();
+let providerRegistration: Promise<void> | undefined;
+
+type HostProviderManifest = {
+  version: 1;
+  revision: string;
+  providers: {
+    id: string;
+    module: string;
+    components: string[];
+  }[];
+};
+
+type HostProviderAdapter = () => PlecHostProvider;
 
 function hostRegistry(): PlecHostRegistry {
   return {
@@ -59,20 +72,123 @@ function hostRegistry(): PlecHostRegistry {
   };
 }
 
-export function registerPlecHostProvider(
-  provider: string,
-  components: PlecHostProvider,
-): () => void {
-  hostProviders.set(provider, components);
+function installHostRegistry() {
   (
     globalThis as typeof globalThis & {
       __plec_host_components?: PlecHostRegistry;
     }
   ).__plec_host_components = hostRegistry();
+}
+
+export function registerPlecHostProvider(
+  provider: string,
+  components: PlecHostProvider,
+): () => void {
+  hostProviders.set(provider, components);
+  installHostRegistry();
   return () => {
     if (hostProviders.get(provider) === components)
       hostProviders.delete(provider);
   };
+}
+
+/** Installs the browser providers emitted by the current Plec build. */
+export function registerPlecProviders(): Promise<void> {
+  if (providerRegistration) return providerRegistration;
+  providerRegistration = loadPlecProviders().catch((error) => {
+    providerRegistration = undefined;
+    throw error;
+  });
+  return providerRegistration;
+}
+
+async function loadPlecProviders() {
+  const revision = new URL(import.meta.url).searchParams.get('v');
+  const manifestUrl = new URL(
+    '/host-providers.json',
+    window.location.origin,
+  );
+  if (revision) manifestUrl.searchParams.set('v', revision);
+  const response = await fetch(manifestUrl);
+  if (!response.ok)
+    throw new Error(
+      `Failed to load host provider manifest: ${response.status}`,
+    );
+  const manifest = await boundedResponseJson(
+    response,
+    MAX_PROVIDER_MANIFEST_JSON_BYTES,
+    'host provider manifest',
+  );
+  if (!isHostProviderManifest(manifest))
+    throw new Error('Invalid host provider manifest');
+  if (revision && manifest.revision !== revision)
+    throw new Error('Stale host provider manifest');
+  const loaded = await Promise.all(
+    manifest.providers.map(
+      async (entry): Promise<[string, PlecHostProvider]> => {
+        const moduleUrl = providerModuleUrl(entry, manifest.revision);
+        const module = await import(/* @vite-ignore */ moduleUrl.href);
+        if (typeof module.default !== 'function')
+          throw new Error(
+            `Host provider adapter ${entry.id} has no default factory`,
+          );
+        const adapter = module.default as HostProviderAdapter;
+        return [entry.id, adapter()];
+      },
+    ),
+  );
+  // Keep the registry unavailable until every configured adapter loads.
+  for (const [provider, components] of loaded)
+    hostProviders.set(provider, components);
+  installHostRegistry();
+}
+
+function isHostProviderManifest(
+  value: unknown,
+): value is HostProviderManifest {
+  if (!value || typeof value !== 'object') return false;
+  const manifest = value as Partial<HostProviderManifest>;
+  if (
+    manifest.version !== 1 ||
+    typeof manifest.revision !== 'string' ||
+    manifest.revision.length === 0 ||
+    !Array.isArray(manifest.providers)
+  )
+    return false;
+  const seen = new Set<string>();
+  return manifest.providers.every((entry) => {
+    if (
+      !entry ||
+      typeof entry.id !== 'string' ||
+      typeof entry.module !== 'string' ||
+      !Array.isArray(entry.components) ||
+      !/^[A-Za-z0-9_-]+$/.test(entry.id) ||
+      seen.has(entry.id)
+    )
+      return false;
+    seen.add(entry.id);
+    return entry.components.every(
+      (component) =>
+        typeof component === 'string' &&
+        /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(component),
+    );
+  });
+}
+
+function providerModuleUrl(
+  entry: HostProviderManifest['providers'][number],
+  revision: string,
+): URL {
+  const url = new URL(entry.module, window.location.origin);
+  if (
+    url.origin !== window.location.origin ||
+    !url.pathname.startsWith('/assets/providers/') ||
+    url.searchParams.get('v') !== revision ||
+    url.searchParams.size !== 1 ||
+    url.hash
+  )
+    throw new Error(`Invalid host provider module URL for ${entry.id}`);
+  return url;
 }
 
 export type RuntimeDelta =
@@ -366,6 +482,7 @@ export function markPlecTiming(name: PlecTimingMark): void {
 const MAX_ARTIFACT_JSON_BYTES = 16 * 1024 * 1024;
 const MAX_SNAPSHOT_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_RUNTIME_JS_BYTES = 16 * 1024 * 1024;
+const MAX_PROVIDER_MANIFEST_JSON_BYTES = 1024 * 1024;
 
 /** Fetches and parses a JSON response under a hard byte ceiling: the
  * declared content-length is rejected before reading, and the actual body

@@ -23,11 +23,17 @@
     },
     "plec#build": {
       "dependsOn": ["plec-browser#build", "plec-runtime#build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../../Cargo.lock",
+        "../../Cargo.toml",
+        "../../crates/**"
+      ],
       "outputs": ["dist/**"]
     },
     "@wasm-runtime/fullstack#build": {
       "cache": false,
-      "dependsOn": ["plec-runtime#build"],
+      "dependsOn": ["plec#build"],
       "outputs": ["dist/**"]
     },
     "test": {

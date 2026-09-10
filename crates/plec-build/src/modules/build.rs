@@ -7,7 +7,10 @@ use super::host;
 use super::server;
 use super::validate;
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 /// Configuration for the shared application build pipeline.
 #[derive(Debug, Clone)]
@@ -168,13 +171,27 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
 
     clean::prepare(&out_dir, &assets_dir)?;
 
-    artifacts::emit(
+    let artifacts = artifacts::emit(
         &source,
         &app_dir,
         &repo_root,
         &public_dir,
         &host_config.host_imports,
         &host_config.custom_elements,
+    )?;
+
+    let automatic_providers = artifacts
+        .host_components
+        .into_iter()
+        .filter(|(provider, _)| host_config.host_adapters.contains_key(provider))
+        .collect::<BTreeMap<_, _>>();
+
+    super::bundle::bundle_host_providers(
+        &automatic_providers,
+        &host_config.host_adapters,
+        &app_dir,
+        &assets_dir,
+        options.optimize,
     )?;
 
     let client_path = assets_dir.join("client.js");
@@ -190,7 +207,14 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
 
     validate::browser_dependencies(&metafile_path)?;
 
-    let revision = assets::revision(&client_path)?;
+    let mut revision_paths = vec![client_path.clone()];
+    revision_paths.extend(automatic_providers.keys().map(|provider| {
+        assets_dir
+            .join("providers")
+            .join(format!("{}.js", super::id::sanitize(provider)))
+    }));
+    let revision = assets::revision(&revision_paths)?;
+    host::emit_provider_manifest(&public_dir, &automatic_providers, &revision)?;
     assets::brotli(&client_path)?;
 
     // The native host imports this application bundle through its Node

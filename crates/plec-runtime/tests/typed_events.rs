@@ -2757,6 +2757,136 @@ async fn typed_route_loader_writes_its_declared_result_state() {
     assert_eq!(root.text_content().unwrap_or_default(), "loaded");
 }
 
+/// The compiler emits `Route.useLoaderData()` as text bindings whose
+/// expressions read `loadHost("loaderData")` directly and carry no
+/// dependency edges, plus a loader result state slot for the route
+/// protocol. On a fresh client navigation (no SSR, no pending phase graph)
+/// the loader fetch completes against the live normal graph, so the outcome
+/// can only reach the DOM through host-input re-application plus a static
+/// binding re-apply. The payload, not the `{ok,status,body}` envelope, must
+/// land in the loader result state so the slot matches the outcome SSR
+/// transfers on a hard load.
+#[wasm_bindgen_test(async)]
+async fn client_navigation_seeds_loader_host_state_into_mounted_graph() {
+    let _location = reset_browser_location();
+    let _fetch = install_plec_fetch_queue(
+        r#"[{"body":"{\"headline\":\"server headline\"}","headers":{"content-type":"application/json"}}]"#,
+    );
+    let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
+    let root = mount_root();
+    runtime
+        .register_graph(
+            "root".into(),
+            serde_wasm_bindgen::to_value(&loader_host_state_layout_artifact()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "page".into(),
+            serde_wasm_bindgen::to_value(&loader_host_state_page_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        &serde_json::json!({
+            "version": 3,
+            "rootGraphId": "root",
+            "routes": [
+                {"id": "notes", "path": "notes", "graphId": "page", "outletId": "main", "loaderAction": 0}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    runtime.start(root.clone(), manifest).unwrap();
+    assert_eq!(root.text_content().unwrap_or_default(), "layout");
+    runtime.navigate("/notes".into(), false).unwrap();
+    settle_fetch().await;
+    assert_eq!(
+        root.text_content().unwrap_or_default(),
+        "layoutserver headline"
+    );
+}
+
+/// Fresh client navigation mounts the route graph by clearing the outlet
+/// element (`TypedRuntime::mount`), so the layout's outlet must be a
+/// dedicated empty element rather than the element holding layout content.
+fn loader_host_state_layout_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "loader-transfer.tsx#Root",
+            "rootNode": 0,
+            "strings": ["main", "p", "div"],
+            "constants": [],
+            "nodes": [
+                {"op": "element", "tag": 0, "parent": null, "children": [1, 2]},
+                {"op": "element", "tag": 1, "parent": 0, "children": [3]},
+                {"op": "element", "tag": 2, "parent": 0, "children": []},
+                {"op": "text", "text": 0, "parent": 1}
+            ],
+            "texts": [{"value": "layout"}],
+            "bindings": [],
+            "propPrograms": [],
+            "events": [],
+            "inputs": [],
+            "hostSlots": [],
+            "stateSlots": [],
+            "parameters": [],
+            "expressions": [],
+            "actions": [],
+            "loops": [],
+            "dependencyEdges": [],
+            "routeOutlets": [{"id": "main", "node": 2}]
+        }]
+    })
+}
+
+fn loader_host_state_page_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "loader-transfer.tsx#HostStatePage",
+            "rootNode": 0,
+            "strings": ["section", "h1", "headline"],
+            "constants": ["/api/data", null],
+            "nodes": [
+                {"op": "element", "tag": 0, "parent": null, "children": [1]},
+                {"op": "element", "tag": 1, "parent": 0, "children": [2]},
+                {"op": "text", "text": 0, "parent": 1}
+            ],
+            "texts": [{"binding": 0}],
+            "bindings": [{"target": 2, "sink": "text", "expression": 0}],
+            "propPrograms": [],
+            "events": [],
+            "inputs": [],
+            "hostSlots": [{"kind": "loaderData"}],
+            "stateSlots": [{"initialExpression": 1, "frameSlot": 0}],
+            "parameters": [],
+            "expressions": [
+                {"instructions": [{"op": "loadHost", "host": 0}, {"op": "field", "field": 2}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 1}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]}
+            ],
+            "actions": [{
+                "frameSlots": 2,
+                "loaderResultState": 0,
+                "routeLoader": true,
+                "instructions": [
+                    {"op": "capabilityRequest", "capability": "fetch", "request": {"url": 2, "method": "GET", "decode": "responseJson", "requireOk": true}, "successPc": 1, "failurePc": 2, "resultSlot": 0, "errorSlot": 1},
+                    {"op": "return"},
+                    {"op": "return", "outcome": "failure"}
+                ]
+            }],
+            "loops": [],
+            "dependencyEdges": [],
+            "routeOutlets": []
+        }]
+    })
+}
+
 #[wasm_bindgen_test(async)]
 async fn rust_route_async_fixture_navigates_and_disposes_stale_loader() {
     let _location = reset_browser_location();

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   markPlecTiming,
   adaptLiveCollection,
+  registerPlecProviders,
   validateSsrRouteChain,
   wireRoutedInputs,
   type LiveCollectionChange,
@@ -77,6 +78,36 @@ describe('ssr route chain gate', () => {
 });
 
 describe('compiled browser adapter', () => {
+  it('rejects provider modules outside the build-owned asset boundary', async () => {
+    vi.stubGlobal('window', {
+      location: { origin: 'http://plec.test' },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              version: 1,
+              revision: 'revision-1',
+              providers: [
+                {
+                  id: 'lucide',
+                  module: 'https://attacker.test/provider.js',
+                  components: ['House'],
+                },
+              ],
+            }),
+          ),
+      ),
+    );
+
+    await expect(registerPlecProviders()).rejects.toThrow(
+      'Invalid host provider module URL for lucide',
+    );
+    vi.unstubAllGlobals();
+  });
+
   it('emits named Plec mount boundaries through User Timing', () => {
     const mark = vi.fn();
     vi.stubGlobal('performance', { mark });

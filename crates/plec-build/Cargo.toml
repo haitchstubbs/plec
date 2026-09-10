@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 brotli = { workspace = true }
 plec-compiler = { path = "../plec-compiler" }
+plec-ir = { path = "../plec-ir" }
 plec-model = { path = "../plec-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
