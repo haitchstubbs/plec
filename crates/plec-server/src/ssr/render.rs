@@ -143,6 +143,26 @@ pub(crate) fn render_node(
     scope: &Scope<'_>,
     state: &mut RenderState,
 ) -> Result<String, RenderError> {
+    // Every recursive render path (element children, conditional branches,
+    // slot children, loop rows, and component calls) flows back through this
+    // wrapper, so a deep — still acyclic, compiler-validated — graph fails
+    // with a diagnostic instead of overflowing the native stack.
+    if state.render_depth >= plec_ir::limits::MAX_SSR_RENDER_DEPTH {
+        return Err(RenderError::RenderDepthExceeded);
+    }
+    state.render_depth += 1;
+    let result = render_node_bounded(app, component_index, index, scope, state);
+    state.render_depth -= 1;
+    result
+}
+
+fn render_node_bounded(
+    app: &ComponentApplication,
+    component_index: usize,
+    index: usize,
+    scope: &Scope<'_>,
+    state: &mut RenderState,
+) -> Result<String, RenderError> {
     let component = app
         .components
         .get(component_index)
@@ -772,11 +792,68 @@ pub(crate) fn evaluate(
 ) -> Value {
     // The SSR evaluator mirrors the runtime's typed VM, including its
     // execution budgets: one shared fuel counter across nested Filter/Map
-    // work, bounded nesting. Exhaustion (or a hostile shape) fails soft to
+    // work, bounded nesting, and a bounded value stack (live value count and
+    // estimated bytes). Exhaustion (or a hostile shape) fails soft to
     // `null` — compiled artifacts are compiler-validated, so the budgets are
     // defense in depth, not the primary contract.
     let mut fuel = plec_ir::limits::MAX_EXPRESSION_STEPS;
     evaluate_bounded(component, expression, scope, state, &mut fuel, 0)
+}
+
+/// Estimated live byte size of one transport value (iterative; values are
+/// validated acyclic trees). Mirrors the runtime evaluator's stack-byte
+/// accounting so both sides bound `Constant` deep-clone memory the same way.
+fn value_size_bytes(value: &Value) -> usize {
+    let mut bytes = 0usize;
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::Null | Value::Bool(_) | Value::Number(_) => bytes += 8,
+            Value::String(value) => bytes += value.len(),
+            Value::Array(values) => {
+                bytes += 16 + 8 * values.len();
+                pending.extend(values.iter());
+            }
+            Value::Object(values) => {
+                bytes += 16 + 8 * values.len();
+                pending.extend(values.values());
+            }
+        }
+    }
+    bytes
+}
+
+/// Pushes one value with the runtime evaluator's stack budgets. Returns
+/// `false` — the caller fails soft to `Value::Null` — when the live value
+/// count or byte estimate would exceed `MAX_EVAL_STACK_VALUES` /
+/// `MAX_EVAL_STACK_BYTES`.
+fn evaluate_stack_push(
+    stack: &mut Vec<Value>,
+    sizes: &mut Vec<usize>,
+    bytes: &mut usize,
+    value: Value,
+) -> bool {
+    if stack.len() >= plec_ir::limits::MAX_EVAL_STACK_VALUES {
+        return false;
+    }
+    let size = value_size_bytes(&value);
+    if *bytes + size > plec_ir::limits::MAX_EVAL_STACK_BYTES {
+        return false;
+    }
+    stack.push(value);
+    sizes.push(size);
+    *bytes += size;
+    true
+}
+
+fn evaluate_stack_pop(
+    stack: &mut Vec<Value>,
+    sizes: &mut Vec<usize>,
+    bytes: &mut usize,
+) -> Option<Value> {
+    let value = stack.pop()?;
+    *bytes -= sizes.pop().unwrap_or_default();
+    Some(value)
 }
 
 fn evaluate_bounded(
@@ -798,6 +875,8 @@ fn evaluate_bounded(
         return Value::Null;
     };
     let mut stack: Vec<Value> = Vec::new();
+    let mut stack_sizes: Vec<usize> = Vec::new();
+    let mut stack_bytes = 0usize;
     let mut pc = 0usize;
     while pc < instructions.len() {
         if *fuel == 0 {
@@ -805,21 +884,49 @@ fn evaluate_bounded(
         }
         *fuel -= 1;
         match &instructions[pc] {
-            ExpressionInstruction::Constant { constant } => stack.push(
-                component
-                    .constants
-                    .get(*constant)
-                    .cloned()
-                    .unwrap_or(Value::Null),
-            ),
+            ExpressionInstruction::Constant { constant } => {
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    component
+                        .constants
+                        .get(*constant)
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                ) {
+                    return Value::Null;
+                }
+            }
             ExpressionInstruction::LoadState { state: slot } => {
-                stack.push(scope.states.get(*slot).cloned().unwrap_or(Value::Null))
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    scope.states.get(*slot).cloned().unwrap_or(Value::Null),
+                ) {
+                    return Value::Null;
+                }
             }
             ExpressionInstruction::LoadProp { prop } => {
-                stack.push(scope.props.get(*prop).cloned().unwrap_or(Value::Null))
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    scope.props.get(*prop).cloned().unwrap_or(Value::Null),
+                ) {
+                    return Value::Null;
+                }
             }
             ExpressionInstruction::LoadFrame { slot } => {
-                stack.push(scope.frame.get(*slot).cloned().unwrap_or(Value::Null))
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    scope.frame.get(*slot).cloned().unwrap_or(Value::Null),
+                ) {
+                    return Value::Null;
+                }
             }
             ExpressionInstruction::LoadHost { host } => {
                 let slot = component.host_slots.get(*host);
@@ -840,9 +947,25 @@ fn evaluate_bounded(
                                 ));
                             }
                         }
-                        stack.push(Value::Null);
+                        if !evaluate_stack_push(
+                            &mut stack,
+                            &mut stack_sizes,
+                            &mut stack_bytes,
+                            Value::Null,
+                        ) {
+                            return Value::Null;
+                        }
                     }
-                    Some("loaderData") => stack.push(scope.loader_data.clone()),
+                    Some("loaderData") => {
+                        if !evaluate_stack_push(
+                            &mut stack,
+                            &mut stack_sizes,
+                            &mut stack_bytes,
+                            scope.loader_data.clone(),
+                        ) {
+                            return Value::Null;
+                        }
+                    }
                     Some("location") => {
                         let mut location = serde_json::Map::new();
                         location.insert(
@@ -853,13 +976,36 @@ fn evaluate_bounded(
                             "search".to_owned(),
                             Value::String(super::url_search(&scope.request.url)),
                         );
-                        stack.push(Value::Object(location));
+                        if !evaluate_stack_push(
+                            &mut stack,
+                            &mut stack_sizes,
+                            &mut stack_bytes,
+                            Value::Object(location),
+                        ) {
+                            return Value::Null;
+                        }
                     }
-                    _ => stack.push(Value::Null),
+                    _ => {
+                        if !evaluate_stack_push(
+                            &mut stack,
+                            &mut stack_sizes,
+                            &mut stack_bytes,
+                            Value::Null,
+                        ) {
+                            return Value::Null;
+                        }
+                    }
                 }
             }
             ExpressionInstruction::LoadRowRecord => {
-                stack.push(scope.row.clone().map(Value::Object).unwrap_or(Value::Null))
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    scope.row.clone().map(Value::Object).unwrap_or(Value::Null),
+                ) {
+                    return Value::Null;
+                }
             }
             ExpressionInstruction::LoadRowField { field } => {
                 let value = component
@@ -867,27 +1013,46 @@ fn evaluate_bounded(
                     .get(*field)
                     .and_then(|name| scope.row.as_ref().and_then(|row| row.get(name)))
                     .cloned();
-                stack.push(value.unwrap_or(Value::Null));
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    value.unwrap_or(Value::Null),
+                ) {
+                    return Value::Null;
+                }
             }
             ExpressionInstruction::Field { field } => {
-                let object = stack.pop().unwrap_or(Value::Null);
+                let object = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                    .unwrap_or(Value::Null);
                 let name = component.strings.get(*field).map(String::as_str);
-                stack.push(match (object, name) {
-                    (Value::Object(fields), Some(name)) => {
-                        fields.get(name).cloned().unwrap_or(Value::Null)
-                    }
-                    // JS property access: `array.length` / `string.length`
-                    // are real values, and SSR expressions rely on them.
-                    (Value::Array(values), Some("length")) => number_value(values.len() as f64),
-                    (Value::String(value), Some("length")) => {
-                        number_value(value.chars().count() as f64)
-                    }
-                    _ => Value::Null,
-                });
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    match (object, name) {
+                        (Value::Object(fields), Some(name)) => {
+                            fields.get(name).cloned().unwrap_or(Value::Null)
+                        }
+                        // JS property access: `array.length` / `string.length`
+                        // are real values, and SSR expressions rely on them.
+                        (Value::Array(values), Some("length")) => {
+                            number_value(values.len() as f64)
+                        }
+                        (Value::String(value), Some("length")) => {
+                            number_value(value.chars().count() as f64)
+                        }
+                        _ => Value::Null,
+                    },
+                ) {
+                    return Value::Null;
+                }
             }
             ExpressionInstruction::Index => {
-                let key = stack.pop().unwrap_or(Value::Null);
-                let object = stack.pop().unwrap_or(Value::Null);
+                let key = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                    .unwrap_or(Value::Null);
+                let object = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                    .unwrap_or(Value::Null);
                 let key = match key {
                     Value::String(value) => value,
                     Value::Number(value) => value
@@ -897,22 +1062,29 @@ fn evaluate_bounded(
                         .unwrap_or_default(),
                     _ => String::new(),
                 };
-                stack.push(match object {
-                    Value::Object(fields) => fields.get(&key).cloned().unwrap_or(Value::Null),
-                    Value::Array(values) => key
-                        .parse::<usize>()
-                        .ok()
-                        .and_then(|index| values.get(index))
-                        .cloned()
-                        .unwrap_or(Value::Null),
-                    Value::String(value) => key
-                        .parse::<usize>()
-                        .ok()
-                        .and_then(|index| value.chars().nth(index))
-                        .map(|character| Value::String(character.to_string()))
-                        .unwrap_or(Value::Null),
-                    _ => Value::Null,
-                });
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    match object {
+                        Value::Object(fields) => fields.get(&key).cloned().unwrap_or(Value::Null),
+                        Value::Array(values) => key
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|index| values.get(index))
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        Value::String(value) => key
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|index| value.chars().nth(index))
+                            .map(|character| Value::String(character.to_string()))
+                            .unwrap_or(Value::Null),
+                        _ => Value::Null,
+                    },
+                ) {
+                    return Value::Null;
+                }
             }
             // Filter/Map evaluate the predicate per item with the item as the
             // row context (`LoadRowField`), exactly like the runtime's typed
@@ -926,7 +1098,8 @@ fn evaluate_bounded(
                     instructions.get(pc),
                     Some(ExpressionInstruction::Map { .. })
                 );
-                let source = stack.pop().unwrap_or(Value::Null);
+                let source = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                    .unwrap_or(Value::Null);
                 let items = match source {
                     Value::Array(values) => values,
                     _ => Vec::new(),
@@ -954,14 +1127,23 @@ fn evaluate_bounded(
                         output.push(Value::Object(record));
                     }
                 }
-                stack.push(Value::Array(output));
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    Value::Array(output),
+                ) {
+                    return Value::Null;
+                }
             }
             ExpressionInstruction::String { kind, count } => {
                 // `split_off` already preserves push order (first pushed
                 // first); the runtime pops LIFO and reverses to the same
                 // effect.
                 let start = stack.len().saturating_sub(*count);
+                let popped_sizes = stack_sizes.split_off(start);
                 let parts = stack.split_off(start);
+                stack_bytes -= popped_sizes.iter().sum::<usize>();
                 let first = parts.first().cloned().unwrap_or(Value::Null);
                 let value = match kind.as_str() {
                     "trim" => Value::String(dom_string(&first).trim().to_owned()),
@@ -980,10 +1162,13 @@ fn evaluate_bounded(
                     }
                     _ => Value::String(parts.iter().map(dom_string).collect::<String>()),
                 };
-                stack.push(value);
+                if !evaluate_stack_push(&mut stack, &mut stack_sizes, &mut stack_bytes, value) {
+                    return Value::Null;
+                }
             }
             ExpressionInstruction::OmitFields { fields } => {
-                let value = stack.pop().unwrap_or(Value::Null);
+                let value = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                    .unwrap_or(Value::Null);
                 let mut record = match value {
                     Value::Object(fields) => fields,
                     _ => serde_json::Map::new(),
@@ -993,32 +1178,76 @@ fn evaluate_bounded(
                         record.remove(name);
                     }
                 }
-                stack.push(Value::Object(record));
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    Value::Object(record),
+                ) {
+                    return Value::Null;
+                }
             }
             // Refs are browser-owned values; the SSR host has none, exactly
             // like the runtime's empty ref table.
-            ExpressionInstruction::LoadRef { .. } => stack.push(Value::Null),
+            ExpressionInstruction::LoadRef { .. } => {
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    Value::Null,
+                ) {
+                    return Value::Null;
+                }
+            }
             ExpressionInstruction::Unary { kind } => {
-                let value = stack.pop().unwrap_or(Value::Null);
-                stack.push(match kind.as_str() {
-                    "not" => Value::Bool(!truthy(&value)),
-                    "minus" => number_value(-to_number(&value)),
-                    _ => value,
-                });
+                let value = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                    .unwrap_or(Value::Null);
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    match kind.as_str() {
+                        "not" => Value::Bool(!truthy(&value)),
+                        "minus" => number_value(-to_number(&value)),
+                        _ => value,
+                    },
+                ) {
+                    return Value::Null;
+                }
             }
             ExpressionInstruction::Binary { kind } => {
-                let right = stack.pop().unwrap_or(Value::Null);
-                let left = stack.pop().unwrap_or(Value::Null);
-                stack.push(binary(kind, left, right));
+                let right = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                    .unwrap_or(Value::Null);
+                let left = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                    .unwrap_or(Value::Null);
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    binary(kind, left, right),
+                ) {
+                    return Value::Null;
+                }
             }
             ExpressionInstruction::MakeArray { count, spreads } => {
                 let start = stack.len().saturating_sub(*count);
+                let popped_sizes = stack_sizes.split_off(start);
                 let values = stack.split_off(start);
-                stack.push(Value::Array(apply_array_spreads(values, spreads)));
+                stack_bytes -= popped_sizes.iter().sum::<usize>();
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    Value::Array(apply_array_spreads(values, spreads)),
+                ) {
+                    return Value::Null;
+                }
             }
             ExpressionInstruction::MakeRecord { fields, spreads } => {
                 let start = stack.len().saturating_sub(fields.len());
+                let popped_sizes = stack_sizes.split_off(start);
                 let values = stack.split_off(start);
+                stack_bytes -= popped_sizes.iter().sum::<usize>();
                 let mut record = serde_json::Map::new();
                 for (position, (field, value)) in fields.iter().zip(values).enumerate() {
                     if spreads.get(position).copied().unwrap_or(false) {
@@ -1029,20 +1258,30 @@ fn evaluate_bounded(
                         record.insert(name.clone(), value);
                     }
                 }
-                stack.push(Value::Object(record));
+                if !evaluate_stack_push(
+                    &mut stack,
+                    &mut stack_sizes,
+                    &mut stack_bytes,
+                    Value::Object(record),
+                ) {
+                    return Value::Null;
+                }
             }
             ExpressionInstruction::Jump { target } => {
                 pc = *target;
                 continue;
             }
             ExpressionInstruction::JumpIfFalse { target } => {
-                if !truthy(&stack.pop().unwrap_or(Value::Null)) {
+                let condition = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                    .unwrap_or(Value::Null);
+                if !truthy(&condition) {
                     pc = *target;
                     continue;
                 }
             }
             ExpressionInstruction::Return => {
-                return stack.pop().unwrap_or(Value::Null);
+                return evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
+                    .unwrap_or(Value::Null);
             }
             // Unknown instructions are skipped without stack effect, matching
             // the TS host; SSR-path expressions never contain them.
@@ -1050,7 +1289,7 @@ fn evaluate_bounded(
         }
         pc += 1;
     }
-    stack.pop().unwrap_or(Value::Null)
+    evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes).unwrap_or(Value::Null)
 }
 
 fn apply_array_spreads(values: Vec<Value>, spreads: &[bool]) -> Vec<Value> {

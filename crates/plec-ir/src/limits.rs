@@ -139,6 +139,36 @@ pub const MAX_MOUNTED_REGIONS: usize = 100_000;
 /// overflowing the WASM stack.
 pub const MAX_MOUNT_DEPTH: usize = 128;
 
+/// Maximum structural depth of one validated node-ownership tree (graph
+/// root or loop row template to leaf). Topology validation rejects deeper
+/// graphs at the artifact boundary, so mount, adoption, and SSR rendering
+/// recursion only ever walk graphs within this bound — the same ceiling the
+/// mount budget enforces at runtime (`MAX_MOUNT_DEPTH`).
+pub const MAX_NODE_GRAPH_DEPTH: usize = 128;
+
+/// Maximum `frameSlots` of one action program. Slots are a per-frame
+/// `Vec<RuntimeValue>` allocation sized directly from this field, so an
+/// untrusted artifact must not be able to request an arbitrary allocation
+/// (legitimate lowering reserves a handful of slots per action).
+pub const MAX_FRAME_SLOTS: usize = 4096;
+
+/// Maximum number of live values on one expression-evaluation stack.
+/// Legitimate expression trees are shallow; this bounds pathological
+/// constant-pushing programs that instruction fuel alone would only slow.
+pub const MAX_EVAL_STACK_VALUES: usize = 1_000;
+
+/// Maximum estimated byte size of the values live on one expression
+/// evaluation stack. `Constant` deep-clones whole constant-pool trees, so
+/// value-count accounting alone cannot bound memory (one value may hold
+/// `MAX_VALUE_NODES` nodes). Size is charged when a value is pushed.
+pub const MAX_EVAL_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum native call-stack depth of one SSR `render_node` walk. The
+/// native renderer walks compiler-validated acyclic graphs, but graph depth
+/// is bounded by validation, not by the native stack, so the walk fails
+/// closed before deep chains can overflow it.
+pub const MAX_SSR_RENDER_DEPTH: usize = 256;
+
 /// Maximum native call-stack bytes one `instantiate_node` mount chain may
 /// consume. The logical `MAX_MOUNT_DEPTH` budget cannot guarantee stack
 /// safety on its own because instantiation frames vary with node kind and
@@ -180,5 +210,10 @@ mod tests {
         assert!(MAX_IMPORT_DEPTH >= 16);
         assert!(MAX_MODULE_COUNT >= 64);
         assert!(MAX_MOUNT_DEPTH >= 64);
+        assert!(MAX_NODE_GRAPH_DEPTH >= 64);
+        assert!(MAX_FRAME_SLOTS >= 64);
+        assert!(MAX_EVAL_STACK_VALUES >= 100);
+        assert!(MAX_EVAL_STACK_BYTES >= 1024 * 1024);
+        assert!(MAX_SSR_RENDER_DEPTH >= 64);
     }
 }

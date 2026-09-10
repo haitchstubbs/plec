@@ -218,6 +218,9 @@ impl TypedComponentApplication {
                 }
             }
         }
+        validate_component_call_graph_acyclic(
+            self.components.iter().map(component_call_targets),
+        )?;
         let mut total_entries = 0usize;
         let mut total_instructions = 0usize;
         let mut total_string_bytes = 0usize;
@@ -331,6 +334,72 @@ fn validate_component_slot_target(
     }
     if children.iter().any(|child| *child >= caller_node_count) {
         return Err("component child out of range");
+    }
+    Ok(())
+}
+
+/// Every static component-call edge leaving one component graph: direct
+/// `Component` nodes plus component-valued props. Host-resolved component
+/// props (`host` target) resolve outside the component table at runtime and
+/// carry no static graph edge — the compiler excludes them from its
+/// recursion check the same way. Dynamic component targets resolve from
+/// runtime prop values, so no static edge exists to validate for them;
+/// their instantiation is bounded by the mounted-region budget.
+fn component_call_targets(component: &TypedApplication) -> Vec<usize> {
+    let mut targets = Vec::new();
+    for node in &component.nodes {
+        if let TypedNode::Component {
+            component: target,
+            props,
+            ..
+        } = node
+        {
+            targets.push(*target);
+            for prop in props {
+                if let TypedComponentProp::Component {
+                    component: target,
+                    host: None,
+                    ..
+                } = prop
+                {
+                    targets.push(*target);
+                }
+            }
+        }
+    }
+    targets
+}
+
+/// The component-call graph must be acyclic: a reference cycle would mount
+/// fresh component instances forever (the runtime only stops at the
+/// mounted-region budget, long after wasted work), and every recursive
+/// traversal over the component table assumes this shape. Kahn's peeling
+/// keeps the check iterative — the graph may hold up to `MAX_COMPONENT_COUNT`
+/// nodes, too deep for native recursion.
+fn validate_component_call_graph_acyclic<I>(targets_per_component: I) -> Result<(), &'static str>
+where
+    I: IntoIterator<Item = Vec<usize>>,
+{
+    let edges: Vec<Vec<usize>> = targets_per_component.into_iter().collect();
+    let mut in_degree = vec![0usize; edges.len()];
+    for targets in &edges {
+        for target in targets {
+            in_degree[*target] += 1;
+        }
+    }
+    let mut queue: Vec<usize> = (0..edges.len()).filter(|index| in_degree[*index] == 0).collect();
+    let mut cursor = 0usize;
+    while let Some(index) = queue.get(cursor).copied() {
+        cursor += 1;
+        for target in &edges[index] {
+            in_degree[*target] -= 1;
+            if in_degree[*target] == 0 {
+                queue.push(*target);
+            }
+        }
+    }
+    if cursor < edges.len() {
+        return Err("component call graph contains a cycle");
     }
     Ok(())
 }
@@ -910,6 +979,13 @@ pub fn validate_typed_action_contract(
     expression_count: usize,
     input_kinds: &[String],
 ) -> Result<(), &'static str> {
+    // The frame is allocated as `vec![Null; frame_slots]` before any
+    // instruction runs (and cloned per stacked continuation), so an
+    // untrusted `frameSlots` value must be capped before slot-index checks
+    // would otherwise accept it.
+    if action.frame_slots > crate::limits::MAX_FRAME_SLOTS {
+        return Err("action frame slots exceed limit");
+    }
     let mut parameter_slots = HashSet::new();
     for slot in &action.parameter_slots {
         if *slot >= action.frame_slots {
@@ -1096,14 +1172,15 @@ fn subtree_contains(nodes: &[TypedNode], root: usize, target: usize) -> bool {
 /// claiming one node; both break mount/adoption ownership invariants.
 fn mark_owned_node(
     owned: &mut [bool],
-    stack: &mut Vec<usize>,
+    stack: &mut Vec<(usize, usize)>,
     index: usize,
+    depth: usize,
 ) -> Result<(), &'static str> {
     if owned[index] {
         return Err("node ownership is cyclic or shared");
     }
     owned[index] = true;
-    stack.push(index);
+    stack.push((index, depth));
     Ok(())
 }
 
@@ -1127,11 +1204,13 @@ impl TypedApplication {
 
     /// Node-ownership contract for untrusted graphs: every structural handle
     /// is in range, ownership edges form a forest rooted at the graph root
-    /// and loop row templates (acyclic, no node claimed twice), and every
-    /// node is reachable. Mount recursion, region ownership, and SSR
-    /// adoption all assume this shape, so hostile graphs are rejected here
-    /// before any execution or traversal can follow them.
+    /// and loop row templates (acyclic, no node claimed twice, and no tree
+    /// deeper than `MAX_NODE_GRAPH_DEPTH`), and every node is reachable.
+    /// Mount recursion, region ownership, and SSR adoption all assume this
+    /// shape, so hostile graphs are rejected here before any execution or
+    /// traversal can follow them.
     fn validate_topology(&self, policy: &plec_ir::sink::TagPolicy) -> Result<(), &'static str> {
+        use crate::limits::MAX_NODE_GRAPH_DEPTH;
         let node_count = self.nodes.len();
         let parent_in_range =
             |parent: &Option<usize>| parent.map(|parent| parent < node_count).unwrap_or(true);
@@ -1256,17 +1335,25 @@ impl TypedApplication {
         }
         let mut owned = vec![false; node_count];
         let mut stack = Vec::new();
-        mark_owned_node(&mut owned, &mut stack, self.root_node)?;
+        // Depth is tracked alongside ownership so recursion-based consumers
+        // (mount, adoption, SSR rendering) only ever receive graphs within
+        // MAX_NODE_GRAPH_DEPTH; deeper chains must fail at the boundary
+        // instead of inside a traversal.
+        mark_owned_node(&mut owned, &mut stack, self.root_node, 1)?;
         for loop_def in &self.loops {
-            mark_owned_node(&mut owned, &mut stack, loop_def.row_template)?;
+            mark_owned_node(&mut owned, &mut stack, loop_def.row_template, 1)?;
         }
-        while let Some(index) = stack.pop() {
+        while let Some((index, depth)) = stack.pop() {
+            if depth > MAX_NODE_GRAPH_DEPTH {
+                return Err("node graph depth exceeds limit");
+            }
+            let child_depth = depth + 1;
             match &self.nodes[index] {
                 TypedNode::Element { children, .. }
                 | TypedNode::Component { children, .. }
                 | TypedNode::DynamicComponent { children, .. } => {
                     for child in children {
-                        mark_owned_node(&mut owned, &mut stack, *child)?;
+                        mark_owned_node(&mut owned, &mut stack, *child, child_depth)?;
                     }
                 }
                 TypedNode::Conditional {
@@ -1274,9 +1361,9 @@ impl TypedApplication {
                     alternate,
                     ..
                 } => {
-                    mark_owned_node(&mut owned, &mut stack, *consequent)?;
+                    mark_owned_node(&mut owned, &mut stack, *consequent, child_depth)?;
                     if let Some(alternate) = alternate {
-                        mark_owned_node(&mut owned, &mut stack, *alternate)?;
+                        mark_owned_node(&mut owned, &mut stack, *alternate, child_depth)?;
                     }
                 }
                 TypedNode::Text { .. }
@@ -2369,6 +2456,93 @@ mod tests {
         assert_eq!(
             app.validate_contract(),
             Err("node graph contains unrooted nodes")
+        );
+    }
+
+    fn linear_chain_nodes(depth: usize) -> Value {
+        let nodes: Vec<Value> = (0..depth)
+            .map(|index| {
+                serde_json::json!({
+                    "op": "element", "tag": 0,
+                    "parent": index.checked_sub(1),
+                    "children": if index + 1 < depth { vec![index + 1] } else { vec![] },
+                })
+            })
+            .collect();
+        Value::Array(nodes)
+    }
+
+    #[test]
+    fn topology_validation_rejects_deeper_than_depth_limit() {
+        // Mount, adoption, and SSR rendering recurse over this forest, so a
+        // graph deeper than MAX_NODE_GRAPH_DEPTH must fail at validation
+        // instead of inside a traversal.
+        let app = topology_application(
+            linear_chain_nodes(crate::limits::MAX_NODE_GRAPH_DEPTH + 1),
+            serde_json::json!([]),
+        );
+        assert_eq!(
+            app.validate_contract(),
+            Err("node graph depth exceeds limit")
+        );
+    }
+
+    #[test]
+    fn topology_validation_accepts_chain_at_depth_limit() {
+        // The ceiling must reject only pathological shapes: a chain exactly
+        // at MAX_NODE_GRAPH_DEPTH stays legitimate output.
+        let app = topology_application(
+            linear_chain_nodes(crate::limits::MAX_NODE_GRAPH_DEPTH),
+            serde_json::json!([]),
+        );
+        assert!(app.validate_contract().is_ok());
+    }
+
+    #[test]
+    fn component_call_graph_cycle_is_rejected() {
+        // Direct over the graph checker: TypedComponentApplication::validate
+        // surfaces errors as JsValue, which host test binaries cannot touch.
+        // The artifact-level wiring is covered by the wasm suite
+        // (load_application_rejects_component_call_cycle).
+        assert_eq!(
+            validate_component_call_graph_acyclic(vec![vec![1], vec![0]]),
+            Err("component call graph contains a cycle")
+        );
+        assert_eq!(
+            validate_component_call_graph_acyclic(vec![vec![0]]),
+            Err("component call graph contains a cycle")
+        );
+        assert!(validate_component_call_graph_acyclic(vec![vec![1], vec![2], vec![]]).is_ok());
+        // Host-resolved component props carry no static edge (the compiler
+        // excludes them from its recursion check the same way).
+        let app: TypedApplication = serde_json::from_value(serde_json::json!({
+            "version": "0.10", "rootNode": 0, "strings": ["Icon", "div"],
+            "nodes": [
+                {"op": "component", "component": 1, "parent": null, "props": [
+                    {"kind": "component", "name": 0, "component": 0,
+                     "host": {"provider": "lucide", "component": "House"}}
+                ], "children": []},
+                {"op": "element", "tag": 1, "parent": null}
+            ],
+            "parameters": [],
+            "expressions": [], "actions": []
+        }))
+        .unwrap();
+        let targets = component_call_targets(&app);
+        assert_eq!(targets, vec![1]);
+        assert!(validate_component_call_graph_acyclic(vec![targets, Vec::new()]).is_ok());
+    }
+
+    #[test]
+    fn action_frame_slots_beyond_limit_are_rejected() {
+        let action: TypedAction = serde_json::from_value(serde_json::json!({
+            "instructions": [],
+            "frameSlots": crate::limits::MAX_FRAME_SLOTS + 1,
+        }))
+        .unwrap();
+        assert_eq!(
+            validate_typed_action_contract(&action, 0, &[]),
+            Err("action frame slots exceed limit")
         );
     }
 

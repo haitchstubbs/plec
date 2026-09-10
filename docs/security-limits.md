@@ -33,7 +33,9 @@ in Beads `wasm-runtime-a08`.
 | Expression program              | 10,000 instructions (`MAX_EXPRESSION_INSTRUCTIONS`)                                                                                                                                                      |
 | Action program                  | 10,000 instructions (`MAX_ACTION_INSTRUCTIONS`)                                                                                                                                                          |
 | Constant runtime values         | depth 64 (`MAX_VALUE_DEPTH`), 100,000 nodes (`MAX_VALUE_NODES`), 1 MiB per string (`MAX_VALUE_STRING_BYTES`)                                                                                             |
-| Node graph topology             | every structural handle in range; ownership edges form a forest rooted at the graph root and loop row templates: acyclic, no node claimed twice, fully reachable (`TypedApplication::validate_topology`) |
+| Node graph topology             | every structural handle in range; ownership edges form a forest rooted at the graph root and loop row templates: acyclic, no node claimed twice, fully reachable, and no tree deeper than 128 (`MAX_NODE_GRAPH_DEPTH`) (`TypedApplication::validate_topology`) |
+| Component call graph            | acyclic over static `Component` nodes and component-valued props (`validate_component_call_graph_acyclic`); dynamic component targets resolve at runtime and are bounded by the mounted-region budget    |
+| Action frame slots              | 4,096 (`MAX_FRAME_SLOTS`) — `frameSlots` sizes the per-frame allocation directly and is capped before slot-index checks                                                                                   |
 | Expression control flow         | jump targets within the program, Filter/Map program handles in range (`validate_contract`)                                                                                                               |
 
 ## Runtime values (host inputs, rows, fetch bodies)
@@ -83,29 +85,27 @@ extend this to deep chains and file-count exhaustion.
 
 | Boundary              | Limit                                                                                     | Where                               |
 | --------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------- |
-| Expression evaluation | 100,000 shared steps (`MAX_EXPRESSION_STEPS`), Filter/Map nesting 32 (`MAX_EVAL_NESTING`) | `crates/plec-eval/src/eval.rs`      |
+| Expression evaluation | 100,000 shared steps (`MAX_EXPRESSION_STEPS`), Filter/Map nesting 32 (`MAX_EVAL_NESTING`), stack of at most 1,000 values / 8 MiB estimated bytes (`MAX_EVAL_STACK_VALUES`, `MAX_EVAL_STACK_BYTES`) | `crates/plec-eval/src/eval.rs` (SSR mirror in `crates/plec-server/src/ssr/render.rs`) |
 | Action continuations  | 1,000,000 steps (`MAX_ACTION_STEPS`), call depth 64 (`MAX_CALL_DEPTH`)                    | `crates/plec-client/src/vm.rs`      |
 | Reaction drain        | 10,000 executions (`MAX_REACTION_STEPS`), nesting 32 (`MAX_REACTION_DRAIN_DEPTH`)         | same                                |
 | Graph mount recursion | depth 128 (`MAX_MOUNT_DEPTH`), stack watermark 512 KiB (`MAX_MOUNT_STACK_BYTES`)          | `crates/plec-client/src/runtime.rs` |
+| SSR row adoption      | depth 128 + 512 KiB stack watermark (shared mount budgets)                                | `crates/plec-client/src/runtime.rs` (`adopt_row_node`) |
+| SSR render walk       | depth 256 (`MAX_SSR_RENDER_DEPTH`)                                                        | `crates/plec-server/src/ssr/render.rs` (`render_node`) |
 
-Mount recursion flows through one depth-guarded `instantiate_node` entry, so a
-validated acyclic chain up to `MAX_COMPONENT_COLLECTION_LEN` nodes deep fails
-with a `mount depth exceeds limit` diagnostic instead of overflowing the WASM
-stack. Because per-frame stack cost varies with node kind and build profile
-(debug frames are far larger than release frames), depth alone cannot
-guarantee native stack safety: the same entry records a stack watermark at the
-outermost frame and fails with a `mount stack budget exceeded` diagnostic once
-one mount chain consumes more than `MAX_MOUNT_STACK_BYTES` — half of the
-default 1 MiB wasm32 stack — regardless of frame sizes. Mount recursion itself
-is frame-dispatched per node kind, so a chain exactly at `MAX_MOUNT_DEPTH`
-mounts cleanly in every build profile.
-
-Fuel is shared across nested Filter/Map predicate evaluation, so crafted
-backward-jump loops and self-referential predicates exhaust a documented
-budget instead of pinning the tab, growing the heap, or overflowing the stack.
-Tail calls (`Call`/`CallFrame` without continuations) run inside the same
-continuation loop and its call-depth budget instead of native recursion, so
-chained or self-referential tail calls exhaust the same documented bound.
+Because validation caps node-graph depth at `MAX_NODE_GRAPH_DEPTH` (128), a
+validated graph can never push the recursive mount, adoption, or SSR render
+walks past their depth budgets; the runtime guards remain as defense in depth
+for native/WASM stack safety. Fuel is shared across nested Filter/Map
+predicate evaluation, so crafted backward-jump loops and self-referential
+predicates exhaust a documented budget instead of pinning the tab, growing
+the heap, or overflowing the stack. The expression value stack additionally
+tracks live value count and estimated bytes — a `Constant` instruction
+deep-clones whole constant-pool trees, so instruction fuel alone would bound
+steps but not the memory one step may enqueue; the SSR mirror enforces the
+same ceilings (failing soft to `null`). Tail calls (`Call`/`CallFrame`
+without continuations) run inside the same continuation loop and its
+call-depth budget instead of native recursion, so chained or
+self-referential tail calls exhaust the same documented bound.
 
 ## Amplification budgets
 
@@ -131,8 +131,10 @@ keys remain documented separately from these primary exhaustion defences.
 
 - `crates/plec-schema/src/typed.rs` — oversized collections, deep constants,
   oversized programs, oversized string pool entries, cyclic/self-child/shared
-  and unrooted node graphs, out-of-range structural handles, out-of-range
-  expression jump targets and Filter/Map program handles.
+  and unrooted node graphs, over-deep node graphs and chains exactly at the
+  depth limit, component-call-graph cycles, action frame-slot caps,
+  out-of-range structural handles, out-of-range expression jump targets and
+  Filter/Map program handles.
 - `crates/plec-ir/src/lib.rs` — snapshot loop-key/depth/size caps, manifest
   route count.
 - `crates/plec-compiler/src/read_source_graph.rs` — oversized source file,
@@ -140,8 +142,9 @@ keys remain documented separately from these primary exhaustion defences.
 - `crates/plec-runtime/tests/untrusted_input_limits.rs` — oversized and
   over-deep host inputs, artifacts, snapshots, nested JS Maps, undefined
   fields, expression/action loops, self-tail-call actions, self-child and
-  unrooted node graphs, deep linear node chains, reaction cycles, and
-  oversized/over-deep/structurally excessive snapshot input values plus
-  snapshot shape path limits at the WASM boundary.
+  unrooted node graphs, over-deep node graphs, component call cycles,
+  oversized `frameSlots`, expression stacks beyond the value/byte ceilings,
+  reaction cycles, and oversized/over-deep/structurally excessive snapshot
+  input values plus snapshot shape path limits at the WASM boundary.
 - `crates/plec-server/tests/server.rs` — oversized request body (413) and
   oversized artifact file (500).

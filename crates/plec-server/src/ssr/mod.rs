@@ -49,6 +49,10 @@ pub(crate) struct RenderState {
     /// The element-tag policy this render serializes under (mirror of the
     /// CSR runtime's policy; forbidden tags stay rejected everywhere).
     pub tag_policy: plec_ir::sink::TagPolicy,
+    /// Current `render_node` recursion depth (see
+    /// `limits::MAX_SSR_RENDER_DEPTH`): the native render walk must fail
+    /// closed before a deep (still acyclic) graph can overflow the stack.
+    pub render_depth: usize,
 }
 
 impl RenderState {
@@ -61,6 +65,7 @@ impl RenderState {
             loops: BTreeMap::new(),
             nested: BTreeMap::new(),
             tag_policy: plec_ir::sink::TagPolicy::default(),
+            render_depth: 0,
         }
     }
 }
@@ -130,6 +135,8 @@ pub(crate) enum RenderError {
     UnsafeTag(String),
     #[error("SSR dynamic component is unavailable at {0}:{1}")]
     DynamicComponentUnavailable(String, usize),
+    #[error("SSR render depth exceeds limit")]
+    RenderDepthExceeded,
 }
 
 impl From<RenderError> for crate::ServerError {
@@ -165,6 +172,7 @@ pub(crate) fn render_application(
         loops: BTreeMap::from([(ROOT_GRAPH_INSTANCE_ID.to_owned(), BTreeMap::new())]),
         nested: BTreeMap::new(),
         tag_policy: tag_policy.clone(),
+        render_depth: 0,
     };
     for child_graph in &child_graphs {
         state

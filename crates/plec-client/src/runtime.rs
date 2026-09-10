@@ -333,6 +333,14 @@ pub struct TypedRuntime {
     /// The logical depth budget cannot guarantee native stack safety on its
     /// own because per-frame cost varies with node kind and build profile.
     pub mount_stack_base: usize,
+    /// Current nested SSR row-adoption depth (see `limits::MAX_MOUNT_DEPTH`):
+    /// `adopt_row_node` recurses over element children and conditional
+    /// branches just like mount instantiation, so adoption shares the same
+    /// depth ceiling.
+    pub adopt_depth: usize,
+    /// Frame address recorded when the outermost `adopt_row_node` entered
+    /// (see `limits::MAX_MOUNT_STACK_BYTES`). Zero outside an adoption walk.
+    pub adopt_stack_base: usize,
     pub reaction_cleanups: Vec<Option<usize>>,
     pub collections: HashMap<usize, TypedCollection>,
     pub loops: HashMap<usize, TypedLoopRows>,
@@ -1093,6 +1101,8 @@ impl TypedRuntime {
             reaction_drain_depth: 0,
             mount_depth: 0,
             mount_stack_base: 0,
+            adopt_depth: 0,
+            adopt_stack_base: 0,
             reaction_cleanups,
             loops: HashMap::new(),
             conditionals: HashMap::new(),
@@ -1974,6 +1984,57 @@ impl TypedRuntime {
         regions: &mut HashMap<usize, TypedConditionalRegion>,
         skipped: &mut HashSet<usize>,
     ) -> Result<(Node, Option<Node>), JsValue> {
+        // Every recursive adoption path (element children and conditional
+        // branches) flows back through this wrapper, so adoption shares the
+        // mount contract: a validated graph is capped at
+        // `MAX_NODE_GRAPH_DEPTH`, and the wrapper fails closed on depth or
+        // native stack budget (`MAX_MOUNT_STACK_BYTES`) instead of
+        // overflowing the WASM stack.
+        let stack_pointer = Self::mount_stack_pointer();
+        if self.adopt_depth == 0 {
+            self.adopt_stack_base = stack_pointer;
+        }
+        if self.adopt_depth >= plec_ir::limits::MAX_MOUNT_DEPTH {
+            return Err(JsValue::from_str("adopt depth exceeds limit"));
+        }
+        if self.adopt_stack_base.saturating_sub(stack_pointer)
+            > plec_ir::limits::MAX_MOUNT_STACK_BYTES
+        {
+            return Err(JsValue::from_str("adopt stack budget exceeded"));
+        }
+        self.adopt_depth += 1;
+        let result = self.adopt_row_node_bounded(
+            index,
+            path,
+            row,
+            row_index,
+            row_context,
+            adoption_root,
+            markers,
+            local,
+            regions,
+            skipped,
+        );
+        self.adopt_depth -= 1;
+        if self.adopt_depth == 0 {
+            self.adopt_stack_base = 0;
+        }
+        result
+    }
+
+    fn adopt_row_node_bounded(
+        &mut self,
+        index: usize,
+        path: &str,
+        row: &HashMap<String, RuntimeValue>,
+        row_index: usize,
+        row_context: &TypedRowContext,
+        adoption_root: &Element,
+        markers: &TypedAdoptionIndex,
+        local: &mut HashMap<usize, Node>,
+        regions: &mut HashMap<usize, TypedConditionalRegion>,
+        skipped: &mut HashSet<usize>,
+    ) -> Result<(Node, Option<Node>), JsValue> {
         let node = self
             .app
             .nodes
@@ -2407,28 +2468,33 @@ impl TypedRuntime {
 
     /// Every graph handle that lives below `index`, mirroring the branch
     /// recursion used for claiming so a skipped side covers exactly the
-    /// nodes a fresh instantiation of that side would have created.
+    /// nodes a fresh instantiation of that side would have created. The
+    /// walk is iterative: it runs during adoption, where graph depth is
+    /// validated but native stack safety must not depend on that alone.
     fn collect_branch_handles(&self, index: usize, output: &mut HashSet<usize>) {
-        output.insert(index);
-        match self.app.nodes.get(index) {
-            Some(TypedNode::Element { children, .. })
-            | Some(TypedNode::Component { children, .. })
-            | Some(TypedNode::DynamicComponent { children, .. }) => {
-                for child in children {
-                    self.collect_branch_handles(*child, output);
-                }
+        let mut pending = vec![index];
+        while let Some(index) = pending.pop() {
+            if !output.insert(index) {
+                continue;
             }
-            Some(TypedNode::Conditional {
-                consequent,
-                alternate,
-                ..
-            }) => {
-                self.collect_branch_handles(*consequent, output);
-                if let Some(alternate) = alternate {
-                    self.collect_branch_handles(*alternate, output);
+            match self.app.nodes.get(index) {
+                Some(TypedNode::Element { children, .. })
+                | Some(TypedNode::Component { children, .. })
+                | Some(TypedNode::DynamicComponent { children, .. }) => {
+                    pending.extend(children.iter().copied());
                 }
+                Some(TypedNode::Conditional {
+                    consequent,
+                    alternate,
+                    ..
+                }) => {
+                    pending.push(*consequent);
+                    if let Some(alternate) = alternate {
+                        pending.push(*alternate);
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 
