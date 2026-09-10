@@ -19,6 +19,7 @@ pub struct ServeOptions {
 }
 
 pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
+    println!("➠          Starting Plec host...");
     let dir = std::path::absolute(&options.dir)?;
     let loaded = LoadedServerManifest::load(&dir)?;
 
@@ -46,9 +47,9 @@ pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
                 )
             });
             let runtime = Some(spawned.join().map_err(|_| -> Box<dyn std::error::Error> {
-                "sidecar startup thread panicked".into()
+                "➠          sidecar startup thread panicked!!!".into()
             })??);
-            println!("application runtime: node sidecar attached");
+            println!("➠          application node runtime up");
             runtime
         }
         // Without the runtime section, `/api/*` traffic has no executor and
@@ -57,7 +58,7 @@ pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
         // it as a wall of 404s.
         _ => {
             println!(
-                "application runtime: disabled (manifest carries no server bundle; /api/* will 404)"
+                "➠          application runtime: disabled (manifest carries no server bundle; /api/* will 404)"
             );
             None
         }
@@ -78,18 +79,46 @@ pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
             let listener = tokio::net::TcpListener::bind((host.as_str(), port))
                 .await
                 .map_err(|error| format!("cannot bind {host}:{port}: {error}"))?;
-            println!("Plec host listening on http://{host}:{port}");
-            let shutdown = async {
-                let _ = tokio::signal::ctrl_c().await;
-                println!("shutting down");
-            };
+
+            println!("➠          Plec host listening on http://{host}:{port}");
+
             axum::serve(listener, router)
-                .with_graceful_shutdown(shutdown)
+                .with_graceful_shutdown(shutdown_signal())
                 .await
                 .map_err(|error| format!("server failed: {error}"))?;
+
             if let Some(runtime) = runtime {
                 runtime.shutdown().await;
             }
+
+            println!("\u{270A}\u{FE0E}          Done, you rock!");
+
             Ok(())
         })
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+
+        tokio::select! {
+            _ = sigint.recv() => {}
+            _ = sigterm.recv() => {}
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl-C handler");
+    }
+
+    println!("\u{270B}\u{FE0E}          Shutting down");
 }

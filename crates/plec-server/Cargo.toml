@@ -19,6 +19,7 @@ http-body-util.workspace = true
 getrandom.workspace = true
 
 plec-ir = { path = "../plec-ir" }
+plec-schema = { path = "../plec-schema" }
 
 [dev-dependencies]
 tempfile.workspace = true

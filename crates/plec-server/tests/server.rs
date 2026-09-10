@@ -289,6 +289,86 @@ async fn publishes_matched_param_routes_with_their_params_in_the_snapshot_chain(
 }
 
 #[tokio::test]
+async fn renders_nested_route_chain_with_inherited_params_and_snapshot_structure() {
+    let dir = fixture_dir();
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": [
+                {"id": "projects", "path": "projects", "graphId": "projects", "outletId": "main"},
+                {"id": "project", "parentId": "projects", "path": "$projectId", "graphId": "project", "outletId": "main"},
+                {"id": "settings", "parentId": "project", "path": "settings", "graphId": "settings", "outletId": "main"}
+            ]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "root", true)},
+            {"graphId": "projects", "graph": page("projects", "section", "projects", true)},
+            {"graphId": "project", "graph": page("project", "article", "project", true)},
+            {"graphId": "settings", "graph": simple_page("settings", "p", "settings")}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+
+    let html = get_html(&options(dir.path()), "/projects/123/settings").await;
+    assert!(html.contains("root"), "{html}");
+    assert!(html.contains("projects"), "{html}");
+    assert!(html.contains("project"), "{html}");
+    assert!(html.contains("settings"), "{html}");
+    assert!(html.contains("\"routeId\":\"projects\""), "{html}");
+    assert!(html.contains("\"routeId\":\"project\""), "{html}");
+    assert!(html.contains("\"routeId\":\"settings\""), "{html}");
+    assert!(
+        html.contains("\"params\":{\"projectId\":\"123\"}"),
+        "{html}"
+    );
+    assert!(
+        html.contains("root/outlet:main/outlet:main/outlet:main"),
+        "{html}"
+    );
+    assert_valid_bootstrap(&html, &artifact, &artifact["manifest"]);
+}
+
+#[tokio::test]
+async fn executes_and_transfers_loader_outcomes_for_each_nested_route() {
+    let dir = fixture_dir();
+    let port = spawn_stub(200, r#"{"title":"ok"}"#).await;
+    let url = format!("http://127.0.0.1:{port}/api/data");
+    let mut projects = loader_graph(&url);
+    projects["components"][0]["id"] = json!("projects");
+    projects["components"][0]["routeOutlets"] = json!([{"id": "main", "node": 0}]);
+    let mut project = loader_graph(&url);
+    project["components"][0]["id"] = json!("project");
+    project["components"][0]["routeOutlets"] = json!([{"id": "main", "node": 0}]);
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": [
+                {"id": "projects", "path": "projects", "graphId": "projects", "outletId": "main", "loaderAction": 0},
+                {"id": "project", "parentId": "projects", "path": "$projectId", "graphId": "project", "outletId": "main", "loaderAction": 0},
+                {"id": "settings", "parentId": "project", "path": "settings", "graphId": "settings", "outletId": "main"}
+            ]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "", true)},
+            {"graphId": "projects", "graph": projects},
+            {"graphId": "project", "graph": project},
+            {"graphId": "settings", "graph": simple_page("settings", "p", "settings")}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+
+    let html = get_html(&options(dir.path()), "/projects/123/settings").await;
+    assert!(
+        html.contains("\"loaders\":[{\"graphId\":\"projects\",\"action\":0")
+            && html.contains("{\"graphId\":\"project\",\"action\":0"),
+        "{html}"
+    );
+    assert_valid_bootstrap(&html, &artifact, &artifact["manifest"]);
+}
+
+#[tokio::test]
 async fn gates_server_only_cookie_host_loads_out_of_markup_and_the_bootstrap() {
     let dir = fixture_dir();
     let root = json!({

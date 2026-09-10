@@ -1735,6 +1735,7 @@ dependencies = [
  "hyper-util",
  "indexmap 1.9.3",
  "plec-ir",
+ "plec-schema",
  "reqwest",
  "serde",
  "serde_json",

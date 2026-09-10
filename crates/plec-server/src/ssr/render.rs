@@ -20,7 +20,7 @@ use crate::{
     request::RequestContext,
 };
 
-use super::{NestedRecord, RenderError, RenderState};
+use super::{NestedRecord, RenderError, RenderState, RouteRender};
 
 /// A component-valued prop target: which application and component index a
 /// `dynamicComponent` resolves to.
@@ -36,7 +36,7 @@ pub(crate) struct ComponentTarget<'a> {
 pub(crate) struct Scope<'a> {
     pub request: &'a RequestContext,
     /// The route child graph rendered into this component's route outlet.
-    pub outlet: Option<&'a ComponentApplication>,
+    pub outlet: Option<&'a RouteRender<'a>>,
     pub path: String,
     pub props: Vec<Value>,
     pub component_props: HashMap<usize, ComponentTarget<'a>>,
@@ -104,6 +104,20 @@ pub(crate) fn render_component(
         .components
         .get(component_index)
         .ok_or(RenderError::MissingComponent(component_index))?;
+    if component_index == scope.root_component && scope.nested_key.is_none() {
+        if let Some(outlet) = scope.outlet {
+            if !component
+                .route_outlets
+                .iter()
+                .any(|entry| entry.id == outlet.route.outlet_id)
+            {
+                return Err(RenderError::RouteOutletMissing(
+                    outlet.route.id.clone(),
+                    outlet.route.outlet_id.clone(),
+                ));
+            }
+        }
+    }
     // State initializers observe an empty state table, exactly like the
     // runtime's fresh component mount.
     let initial_scope = Scope {
@@ -660,21 +674,23 @@ fn render_element(
         .iter()
         .find(|entry| entry.node == index);
     let outlet_html = match (outlet, scope.outlet) {
-        (Some(outlet), Some(outlet_app)) => render_component(
-            outlet_app,
-            outlet_app.root_component,
+        (Some(outlet), Some(route)) if outlet.id == route.route.outlet_id => render_component(
+            route.graph,
+            route.graph.root_component,
             // The outlet child composes its instance from the escaped parent
             // instance and the outlet id; its root component is the child
             // graph's own, so instance-level records address the child.
             &Scope {
-                outlet: None,
+                outlet: route.child.as_deref(),
                 path: format!("{}/outlet:{}", scope.path, outlet.id),
-                instance: format!(
-                    "{}/outlet:{}",
-                    super::escape_instance_segment(&scope.instance),
-                    super::escape_instance_segment(&outlet.id)
-                ),
-                root_component: outlet_app.root_component,
+                instance: route.instance.clone(),
+                root_component: route.graph.root_component,
+                loader_data: match route.loader.map(|loader| &loader.state) {
+                    Some(plec_ir::SsrLoaderState::Resolved { value }) => {
+                        crate::loader::snapshot_value_to_json(value)
+                    }
+                    _ => Value::Null,
+                },
                 ..scope.clone()
             },
             state,

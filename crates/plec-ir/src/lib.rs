@@ -239,7 +239,7 @@ pub struct SsrSnapshotReferences<'a> {
 pub struct SsrRouteInstance {
     /// A `RouteManifestEntry.id`.
     pub route_id: String,
-    /// Matched `$param` values for this entry's path segment.
+    /// Matched `$param` values accumulated through this entry's route branch.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub params: std::collections::BTreeMap<String, String>,
     /// Which phase graph the instance rendered.
@@ -443,6 +443,7 @@ impl PlecSsrSnapshot {
         if self.routes.is_empty() {
             return Err("ssr snapshot route chain is required".into());
         }
+        let mut declared_params = std::collections::BTreeSet::new();
         for (index, instance) in self.routes.iter().enumerate() {
             if instance.route_id.is_empty() {
                 return Err("ssr snapshot route instance id is required".into());
@@ -461,12 +462,12 @@ impl PlecSsrSnapshot {
                     ));
                 }
             }
-            let declared = route_path_param_names(&entry.path);
+            declared_params.extend(route_path_param_names(&entry.path));
             for (name, value) in &instance.params {
                 if name.is_empty() {
                     return Err("ssr snapshot route param name is required".into());
                 }
-                if !declared.contains(&name.as_str()) {
+                if !declared_params.contains(name.as_str()) {
                     return Err(format!(
                         "route param {name} is not declared by {}",
                         instance.route_id
@@ -1322,7 +1323,6 @@ pub enum ReturnOutcome {
     Failure,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "capability", content = "request", rename_all = "camelCase")]
 pub enum CapabilityRequest {
@@ -1802,6 +1802,25 @@ mod tests {
             }),
             "route param userId is not declared by app#Todo"
         );
+    }
+
+    #[test]
+    fn ssr_snapshot_accepts_params_inherited_from_parent_routes() {
+        let mut manifest = test_manifest();
+        manifest.routes[0].path = "$ownerId".into();
+        let mut snapshot = valid_snapshot();
+        snapshot.routes[0]
+            .params
+            .insert("ownerId".into(), "7".into());
+        snapshot.routes[1]
+            .params
+            .insert("ownerId".into(), "7".into());
+        snapshot
+            .validate(&SsrSnapshotReferences {
+                manifest: &manifest,
+                application: &test_application(true),
+            })
+            .expect("nested route snapshots retain parent params");
     }
 
     #[test]

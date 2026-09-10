@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 use plec_ir::{SsrSelectedBranch, ROOT_GRAPH_INSTANCE_ID};
 
 use crate::{
-    artifact::{ArtifactBundle, Route},
+    artifact::{ArtifactBundle, ComponentApplication, Route},
+    http::RouteExecution,
     request::RequestContext,
 };
 
@@ -72,7 +73,7 @@ pub(crate) struct RenderedApplication {
     pub branches: BTreeMap<String, BTreeMap<usize, SsrSelectedBranch>>,
     pub loops: BTreeMap<String, BTreeMap<usize, Vec<String>>>,
     pub nested: BTreeMap<String, NestedRecord>,
-    pub child_graph: Option<ChildGraph>,
+    pub child_graphs: Vec<ChildGraph>,
     pub gating: Vec<String>,
 }
 
@@ -82,10 +83,23 @@ pub(crate) struct ChildGraph {
     pub graph_id: String,
 }
 
+pub(crate) struct RouteRender<'a> {
+    route: &'a Route,
+    graph: &'a ComponentApplication,
+    graph_id: String,
+    loader: Option<&'a plec_ir::SsrLoaderOutcome>,
+    instance: String,
+    child: Option<Box<RouteRender<'a>>>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RenderError {
     #[error("root graph missing")]
     RootGraphMissing,
+    #[error("route graph missing for {0}")]
+    RouteGraphMissing(String),
+    #[error("route {0} parent does not declare outlet {1}")]
+    RouteOutletMissing(String, String),
     #[error("missing component {0}")]
     MissingComponent(usize),
     #[error("missing node {0}:{1}")]
@@ -124,15 +138,13 @@ impl From<RenderError> for crate::ServerError {
     }
 }
 
-/// SSR consumes exactly the executable component graph. It renders the root
-/// graph, the matched route's child graph into the root outlet (or the
-/// route's error graph when a loader rejected), and records the structural
-/// ownership the bootstrap snapshot transfers.
+/// SSR consumes exactly the executable component graph. It renders every
+/// matched route graph through its declared parent outlet and records the
+/// structural ownership the bootstrap snapshot transfers.
 pub(crate) fn render_application(
     bundle: &ArtifactBundle,
-    route: Option<&Route>,
+    routes: &[RouteExecution<'_>],
     request: &RequestContext,
-    loader: Option<&plec_ir::SsrLoaderOutcome>,
     tag_policy: &plec_ir::sink::TagPolicy,
     development: bool,
 ) -> Result<RenderedApplication, RenderError> {
@@ -142,39 +154,8 @@ pub(crate) fn render_application(
         .find(|entry| entry.graph_id == bundle.manifest.root_graph_id)
         .map(|entry| &entry.graph)
         .ok_or(RenderError::RootGraphMissing)?;
-    // A rejected loader rendered the route's error phase, so the outlet child
-    // is the error graph the browser will resume into.
-    let route_graph_id = match (loader, route) {
-        (Some(loader), Some(route))
-            if matches!(loader.state, plec_ir::SsrLoaderState::Rejected { .. }) =>
-        {
-            route.error_graph_id.as_ref().or(Some(&route.graph_id))
-        }
-        (_, Some(route)) => Some(&route.graph_id),
-        (_, None) => None,
-    };
-    let child = route_graph_id.and_then(|graph_id| {
-        bundle
-            .graphs
-            .iter()
-            .find(|entry| &entry.graph_id == graph_id)
-            .map(|entry| &entry.graph)
-    });
-    // Instance ids mirror graph_instance_id (crates/plec-runtime): the root
-    // graph always mounts at `root/outlet:main`; a route child composes its
-    // instance from the escaped parent instance and the outlet id. Branch
-    // records are keyed by these ids so the adopter finds its ownership cause
-    // verbatim.
-    let child_graph = child.zip(route).map(|(_, route)| ChildGraph {
-        instance: format!(
-            "{}/outlet:{}",
-            escape_instance_segment(ROOT_GRAPH_INSTANCE_ID),
-            escape_instance_segment(&route.outlet_id)
-        ),
-        graph_id: route_graph_id
-            .expect("child graph implies a graph id")
-            .clone(),
-    });
+    let route_tree = build_route_tree(bundle, routes, 0, ROOT_GRAPH_INSTANCE_ID)?;
+    let child_graphs = route_tree.as_deref().map(route_graphs).unwrap_or_default();
     let mut state = RenderState {
         gate: Some(Gate {
             development,
@@ -185,7 +166,7 @@ pub(crate) fn render_application(
         nested: BTreeMap::new(),
         tag_policy: tag_policy.clone(),
     };
-    if let Some(child_graph) = &child_graph {
+    for child_graph in &child_graphs {
         state
             .branches
             .insert(child_graph.instance.clone(), BTreeMap::new());
@@ -195,7 +176,7 @@ pub(crate) fn render_application(
     }
     let scope = Scope {
         request,
-        outlet: child,
+        outlet: route_tree.as_deref(),
         path: "root".to_owned(),
         props: Vec::new(),
         component_props: std::collections::HashMap::new(),
@@ -206,13 +187,7 @@ pub(crate) fn render_application(
         row_key: None,
         row_root: false,
         slot: None,
-        loader_data: match loader {
-            Some(plec_ir::SsrLoaderOutcome {
-                state: plec_ir::SsrLoaderState::Resolved { value },
-                ..
-            }) => crate::loader::snapshot_value_to_json(value),
-            _ => serde_json::Value::Null,
-        },
+        loader_data: serde_json::Value::Null,
         instance: ROOT_GRAPH_INSTANCE_ID.to_owned(),
         root_component: root.root_component,
         nested_key: None,
@@ -224,9 +199,57 @@ pub(crate) fn render_application(
         branches: state.branches,
         loops: state.loops,
         nested: state.nested,
-        child_graph,
+        child_graphs,
         gating: state.gate.map(|gate| gate.gated).unwrap_or_default(),
     })
+}
+
+fn build_route_tree<'a>(
+    bundle: &'a ArtifactBundle,
+    routes: &'a [RouteExecution<'a>],
+    index: usize,
+    parent_instance: &str,
+) -> Result<Option<Box<RouteRender<'a>>>, RenderError> {
+    let Some(execution) = routes.get(index) else {
+        return Ok(None);
+    };
+    let route = execution.route_match.route;
+    let graph_id = match execution.loader.as_ref().map(|loader| &loader.state) {
+        Some(plec_ir::SsrLoaderState::Rejected { .. }) => {
+            route.error_graph_id.as_deref().unwrap_or(&route.graph_id)
+        }
+        _ => &route.graph_id,
+    };
+    let graph = bundle
+        .graphs
+        .iter()
+        .find(|entry| entry.graph_id == graph_id)
+        .map(|entry| &entry.graph)
+        .ok_or_else(|| RenderError::RouteGraphMissing(route.id.clone()))?;
+    let instance = format!(
+        "{}/outlet:{}",
+        escape_instance_segment(parent_instance),
+        escape_instance_segment(&route.outlet_id)
+    );
+    Ok(Some(Box::new(RouteRender {
+        route,
+        graph,
+        graph_id: graph_id.to_owned(),
+        loader: execution.loader.as_ref(),
+        instance: instance.clone(),
+        child: build_route_tree(bundle, routes, index + 1, &instance)?,
+    })))
+}
+
+fn route_graphs(route: &RouteRender<'_>) -> Vec<ChildGraph> {
+    let mut graphs = vec![ChildGraph {
+        instance: route.instance.clone(),
+        graph_id: route.graph_id.clone(),
+    }];
+    if let Some(child) = route.child.as_deref() {
+        graphs.extend(route_graphs(child));
+    }
+    graphs
 }
 
 /// The bare render state a route loader evaluates in: no gate, no records.

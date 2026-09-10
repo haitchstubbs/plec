@@ -58,8 +58,38 @@ pub struct Route {
     pub error_graph_id: Option<String>,
     #[serde(default)]
     pub loader_action: Option<usize>,
+    #[serde(default = "default_pending_mode")]
+    pub pending_mode: String,
     #[serde(default)]
     pub meta: Option<plec_ir::RouteMetadata>,
+}
+
+fn default_pending_mode() -> String {
+    "replace".into()
+}
+
+impl Manifest {
+    pub(crate) fn routing_manifest(&self) -> plec_schema::routing::RouteManifest {
+        plec_schema::routing::RouteManifest {
+            version: None,
+            root_graph_id: self.root_graph_id.clone(),
+            routes: self
+                .routes
+                .iter()
+                .map(|route| plec_schema::routing::RouteManifestEntry {
+                    id: route.id.clone(),
+                    parent_id: route.parent_id.clone(),
+                    path: route.path.clone(),
+                    graph_id: route.graph_id.clone(),
+                    pending_graph_id: route.pending_graph_id.clone(),
+                    error_graph_id: route.error_graph_id.clone(),
+                    outlet_id: route.outlet_id.clone(),
+                    loader_action: route.loader_action,
+                    pending_mode: route.pending_mode.clone(),
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
