@@ -8,5 +8,4 @@ plec-parser = { path = "../plec-parser" }
 swc_common = { workspace = true }
 swc_ecma_ast = { workspace = true }
 
-
 [dev-dependencies]

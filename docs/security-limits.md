@@ -22,21 +22,21 @@ in Beads `wasm-runtime-a08`.
 
 ## Structural budgets (`TypedApplication::validate_contract`)
 
-| Boundary                        | Limit                                                                                                                                                                                                    |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Component definitions           | 65,536 (`MAX_COMPONENT_COUNT`); pathological-shape guard only                                                                                                                                            |
-| Any per-component IR collection | 100,000 entries (`MAX_COMPONENT_COLLECTION_LEN`)                                                                                                                                                         |
-| Total IR entries                | 1,000,000 (`MAX_TOTAL_IR_ENTRIES`)                                                                                                                                                                       |
-| Total instructions              | 1,000,000 (`MAX_TOTAL_INSTRUCTIONS`)                                                                                                                                                                     |
-| String pool                     | 1 MiB per entry / 8 MiB aggregate (`MAX_COMPONENT_STRING_BYTES`, `MAX_TOTAL_STRING_POOL_BYTES`)                                                                                                          |
-| Constant values                 | 1,000,000 aggregate nodes (`MAX_TOTAL_CONSTANT_NODES`)                                                                                                                                                   |
-| Expression program              | 10,000 instructions (`MAX_EXPRESSION_INSTRUCTIONS`)                                                                                                                                                      |
-| Action program                  | 10,000 instructions (`MAX_ACTION_INSTRUCTIONS`)                                                                                                                                                          |
-| Constant runtime values         | depth 64 (`MAX_VALUE_DEPTH`), 100,000 nodes (`MAX_VALUE_NODES`), 1 MiB per string (`MAX_VALUE_STRING_BYTES`)                                                                                             |
+| Boundary                        | Limit                                                                                                                                                                                                                                                          |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Component definitions           | 65,536 (`MAX_COMPONENT_COUNT`); pathological-shape guard only                                                                                                                                                                                                  |
+| Any per-component IR collection | 100,000 entries (`MAX_COMPONENT_COLLECTION_LEN`)                                                                                                                                                                                                               |
+| Total IR entries                | 1,000,000 (`MAX_TOTAL_IR_ENTRIES`)                                                                                                                                                                                                                             |
+| Total instructions              | 1,000,000 (`MAX_TOTAL_INSTRUCTIONS`)                                                                                                                                                                                                                           |
+| String pool                     | 1 MiB per entry / 8 MiB aggregate (`MAX_COMPONENT_STRING_BYTES`, `MAX_TOTAL_STRING_POOL_BYTES`)                                                                                                                                                                |
+| Constant values                 | 1,000,000 aggregate nodes (`MAX_TOTAL_CONSTANT_NODES`)                                                                                                                                                                                                         |
+| Expression program              | 10,000 instructions (`MAX_EXPRESSION_INSTRUCTIONS`)                                                                                                                                                                                                            |
+| Action program                  | 10,000 instructions (`MAX_ACTION_INSTRUCTIONS`)                                                                                                                                                                                                                |
+| Constant runtime values         | depth 64 (`MAX_VALUE_DEPTH`), 100,000 nodes (`MAX_VALUE_NODES`), 1 MiB per string (`MAX_VALUE_STRING_BYTES`)                                                                                                                                                   |
 | Node graph topology             | every structural handle in range; ownership edges form a forest rooted at the graph root and loop row templates: acyclic, no node claimed twice, fully reachable, and no tree deeper than 128 (`MAX_NODE_GRAPH_DEPTH`) (`TypedApplication::validate_topology`) |
-| Component call graph            | acyclic over static `Component` nodes and component-valued props (`validate_component_call_graph_acyclic`); dynamic component targets resolve at runtime and are bounded by the mounted-region budget    |
-| Action frame slots              | 4,096 (`MAX_FRAME_SLOTS`) — `frameSlots` sizes the per-frame allocation directly and is capped before slot-index checks                                                                                   |
-| Expression control flow         | jump targets within the program, Filter/Map program handles in range (`validate_contract`)                                                                                                               |
+| Component call graph            | acyclic over static `Component` nodes and component-valued props (`validate_component_call_graph_acyclic`); dynamic component targets resolve at runtime and are bounded by the mounted-region budget                                                          |
+| Action frame slots              | 4,096 (`MAX_FRAME_SLOTS`) — `frameSlots` sizes the per-frame allocation directly and is capped before slot-index checks                                                                                                                                        |
+| Expression control flow         | jump targets within the program, Filter/Map program handles in range (`validate_contract`)                                                                                                                                                                     |
 
 ## Runtime values (host inputs, rows, fetch bodies)
 
@@ -65,10 +65,15 @@ in Beads `wasm-runtime-a08`.
 
 ## Fetch responses
 
-| Boundary                   | Limit                              | Where                                                                                                                                                                 |
-| -------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Declared `content-length`  | 8 MiB (`MAX_FETCH_RESPONSE_BYTES`) | `declared_length_failure` in `crates/plec-client/src/fetch.rs`; rejected before the body is read                                                                      |
-| Body length / JSON payload | 8 MiB                              | post-read check and `bounded_response_value` (JS Map normalization + bounded JSON parse); native server route loaders enforce the same ceiling (`crates/plec-server`) |
+| Boundary                  | Limit                              | Where                                                                                                                                                                                                                                                                                |
+| ------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Declared `content-length` | 8 MiB (`MAX_FETCH_RESPONSE_BYTES`) | `declared_length_failure` in `crates/plec-client/src/fetch.rs`; rejected before the body is read. A fast path only: never trusted as the sole ceiling                                                                                                                                |
+| Streamed body bytes       | 8 MiB                              | enforced chunk-by-chunk before whole-body buffering; the stream is cancelled mid-flight when the budget is exceeded — `bounded_body_bytes` (client fetches), `boundedResponseBytes` (browser artifact/graph/runtime-JS loading), `read_bounded_stream` (native server route loaders) |
+| Decoded JSON payload      | 8 MiB                              | `bounded_response_value` (JS Map normalization + bounded JSON parse); native server route loaders parse the bounded text (`crates/plec-server`)                                                                                                                                      |
+
+Absent, forged, and lying `content-length` declarations therefore cannot
+buffer a response body past the ceiling: the byte budget is applied while
+the body streams, before any `text()`/`json()`-style whole-body read.
 
 ## Source modules and import graph (compiler)
 
@@ -83,14 +88,14 @@ extend this to deep chains and file-count exhaustion.
 
 ## Execution budgets
 
-| Boundary              | Limit                                                                                     | Where                               |
-| --------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------- |
+| Boundary              | Limit                                                                                                                                                                                              | Where                                                                                 |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | Expression evaluation | 100,000 shared steps (`MAX_EXPRESSION_STEPS`), Filter/Map nesting 32 (`MAX_EVAL_NESTING`), stack of at most 1,000 values / 8 MiB estimated bytes (`MAX_EVAL_STACK_VALUES`, `MAX_EVAL_STACK_BYTES`) | `crates/plec-eval/src/eval.rs` (SSR mirror in `crates/plec-server/src/ssr/render.rs`) |
-| Action continuations  | 1,000,000 steps (`MAX_ACTION_STEPS`), call depth 64 (`MAX_CALL_DEPTH`)                    | `crates/plec-client/src/vm.rs`      |
-| Reaction drain        | 10,000 executions (`MAX_REACTION_STEPS`), nesting 32 (`MAX_REACTION_DRAIN_DEPTH`)         | same                                |
-| Graph mount recursion | depth 128 (`MAX_MOUNT_DEPTH`), stack watermark 512 KiB (`MAX_MOUNT_STACK_BYTES`)          | `crates/plec-client/src/runtime.rs` |
-| SSR row adoption      | depth 128 + 512 KiB stack watermark (shared mount budgets)                                | `crates/plec-client/src/runtime.rs` (`adopt_row_node`) |
-| SSR render walk       | depth 256 (`MAX_SSR_RENDER_DEPTH`)                                                        | `crates/plec-server/src/ssr/render.rs` (`render_node`) |
+| Action continuations  | 1,000,000 steps (`MAX_ACTION_STEPS`), call depth 64 (`MAX_CALL_DEPTH`)                                                                                                                             | `crates/plec-client/src/vm.rs`                                                        |
+| Reaction drain        | 10,000 executions (`MAX_REACTION_STEPS`), nesting 32 (`MAX_REACTION_DRAIN_DEPTH`)                                                                                                                  | same                                                                                  |
+| Graph mount recursion | depth 128 (`MAX_MOUNT_DEPTH`), stack watermark 512 KiB (`MAX_MOUNT_STACK_BYTES`)                                                                                                                   | `crates/plec-client/src/runtime.rs`                                                   |
+| SSR row adoption      | depth 128 + 512 KiB stack watermark (shared mount budgets)                                                                                                                                         | `crates/plec-client/src/runtime.rs` (`adopt_row_node`)                                |
+| SSR render walk       | depth 256 (`MAX_SSR_RENDER_DEPTH`)                                                                                                                                                                 | `crates/plec-server/src/ssr/render.rs` (`render_node`)                                |
 
 Because validation caps node-graph depth at `MAX_NODE_GRAPH_DEPTH` (128), a
 validated graph can never push the recursive mount, adoption, or SSR render

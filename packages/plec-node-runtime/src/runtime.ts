@@ -61,42 +61,42 @@ const LOCALHOST_PRIVATE: string = '127.0.0.1';
 const TCP_PREFIX: string = 'tcp:';
 
 enum SIG {
-    TERM = 'SIGTERM',
-    INT = 'SIGINT',
+  TERM = 'SIGTERM',
+  INT = 'SIGINT',
 }
 
 enum ServerState {
-    Listening = 'listening',
-    Error = 'error',
-    Closed = 'closed',
+  Listening = 'listening',
+  Error = 'error',
+  Closed = 'closed',
 }
 
 enum BufferState {
-    Data = 'data',
-    End = 'end',
-    Error = 'error',
+  Data = 'data',
+  End = 'end',
+  Error = 'error',
 }
 
 enum HttpMethod {
-    GET = 'GET',
-    POST = 'POST',
-    PUT = 'PUT',
-    DELETE = 'DELETE',
-    PATCH = 'PATCH',
-    OPTIONS = 'OPTIONS',
-    HEAD = 'HEAD',
+  GET = 'GET',
+  POST = 'POST',
+  PUT = 'PUT',
+  DELETE = 'DELETE',
+  PATCH = 'PATCH',
+  OPTIONS = 'OPTIONS',
+  HEAD = 'HEAD',
 }
 
 enum Errors {
-    MissingDeps = 'plec-node-runtime requires PLEC_RUNTIME_SOCKET, PLEC_RUNTIME_BUNDLE, and PLEC_RUNTIME_TOKEN',
-    ImportFailure = 'server bundle failed to import',
-    ExportFailure = 'server entry does not export handleRequest(request, context)',
-    CookieEscapePercent = 'malformed percent escape in cookie data',
-    RuntimeFailure = 'plec-node-runteime failed',
-    InvalidTcpPort = 'invalid TCP port',
-    InvalidTcpSocket = 'invalid TCP socket',
-    InvalidUnixSocket = 'invalid Unix socket',
-    MissingTcpAddress = 'runtime TCP server did not expose a TCP address',
+  MissingDeps = 'plec-node-runtime requires PLEC_RUNTIME_SOCKET, PLEC_RUNTIME_BUNDLE, and PLEC_RUNTIME_TOKEN',
+  ImportFailure = 'server bundle failed to import',
+  ExportFailure = 'server entry does not export handleRequest(request, context)',
+  CookieEscapePercent = 'malformed percent escape in cookie data',
+  RuntimeFailure = 'plec-node-runteime failed',
+  InvalidTcpPort = 'invalid TCP port',
+  InvalidTcpSocket = 'invalid TCP socket',
+  InvalidUnixSocket = 'invalid Unix socket',
+  MissingTcpAddress = 'runtime TCP server did not expose a TCP address',
 }
 
 /**
@@ -110,9 +110,11 @@ export async function start({
 }: StartOptions): Promise<Server> {
   const application = await importApplication(bundle);
 
-  const server = createServer((incoming: IncomingMessage, outgoing: ServerResponse) => {
-    void serve(incoming, outgoing, application, token);
-  });
+  const server = createServer(
+    (incoming: IncomingMessage, outgoing: ServerResponse) => {
+      void serve(incoming, outgoing, application, token);
+    },
+  );
 
   const stop = (): void => {
     server.close(() => {
@@ -160,7 +162,10 @@ async function serve(
       return;
     }
 
-    if (incoming.method === HttpMethod.GET && incoming.url === HEALTH_PATH) {
+    if (
+      incoming.method === HttpMethod.GET &&
+      incoming.url === HEALTH_PATH
+    ) {
       outgoing.writeHead(204);
       outgoing.end();
       return;
@@ -240,10 +245,7 @@ function tokenMatches(
   const left = Buffer.from(received);
   const right = Buffer.from(expected);
 
-  return (
-    left.length === right.length &&
-    timingSafeEqual(left, right)
-  );
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 export async function toWebRequest(
@@ -251,11 +253,7 @@ export async function toWebRequest(
 ): Promise<Request> {
   const headers = new Headers();
 
-  for (
-    let index = 0;
-    index < incoming.rawHeaders.length;
-    index += 2
-  ) {
+  for (let index = 0; index < incoming.rawHeaders.length; index += 2) {
     const name = incoming.rawHeaders[index];
     const value = incoming.rawHeaders[index + 1];
 
@@ -292,17 +290,13 @@ export async function toWebRequest(
   });
 }
 
-function readBody(
-  incoming: IncomingMessage,
-): Promise<Buffer[]> {
+function readBody(incoming: IncomingMessage): Promise<Buffer[]> {
   return new Promise<Buffer[]>((resolve, reject) => {
     const chunks: Buffer[] = [];
 
     incoming.on(BufferState.Data, (chunk: Buffer | string) => {
       chunks.push(
-        typeof chunk === 'string'
-          ? Buffer.from(chunk)
-          : chunk,
+        typeof chunk === 'string' ? Buffer.from(chunk) : chunk,
       );
     });
 
@@ -329,9 +323,7 @@ export function buildContext(
       continue;
     }
 
-    headers[name] = Array.isArray(value)
-      ? value.join(',')
-      : value;
+    headers[name] = Array.isArray(value) ? value.join(',') : value;
   }
 
   const url =
@@ -356,10 +348,7 @@ function sendWebResponse(
   outgoing.statusCode = response.status;
 
   response.headers.forEach((value, name) => {
-    if (
-      name === 'set-cookie' ||
-      name === UNHANDLED_HEADER
-    ) {
+    if (name === 'set-cookie' || name === UNHANDLED_HEADER) {
       return;
     }
 
@@ -372,10 +361,7 @@ function sendWebResponse(
     outgoing.setHeader('set-cookie', cookies);
   }
 
-  if (
-    response.status === 204 ||
-    response.status === 304
-  ) {
+  if (response.status === 204 || response.status === 304) {
     outgoing.end();
     return;
   }
@@ -390,9 +376,7 @@ function sendWebResponse(
   );
 }
 
-export function parseCookies(
-  header = '',
-): Record<string, string> {
+export function parseCookies(header = ''): Record<string, string> {
   const cookies: Record<string, string> = {};
 
   for (const part of header.split(';')) {
@@ -404,9 +388,7 @@ export function parseCookies(
 
     const name = part.slice(0, index).trim();
 
-    let value = part
-      .slice(index + 1)
-      .trim();
+    let value = part.slice(index + 1).trim();
 
     try {
       value = decodeURIComponent(value);
@@ -420,28 +402,20 @@ export function parseCookies(
   return cookies;
 }
 
-export function parseQuery(
-  url: string,
-): Record<string, QueryValue> {
+export function parseQuery(url: string): Record<string, QueryValue> {
   const query: Record<string, QueryValue> = {};
   const { searchParams } = new URL(url);
 
   for (const key of new Set(searchParams.keys())) {
     const values = searchParams.getAll(key);
 
-    query[key] =
-      values.length === 1
-        ? values[0]!
-        : values;
+    query[key] = values.length === 1 ? values[0]! : values;
   }
 
   return query;
 }
 
-function listen(
-  server: Server,
-  socket: string,
-): Promise<void> {
+function listen(server: Server, socket: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => {
       server.off(ServerState.Listening, onListening);
@@ -457,10 +431,7 @@ function listen(
     server.once(ServerState.Listening, onListening);
 
     if (isTcpSocket(socket)) {
-      server.listen(
-        parseTcpPort(socket),
-        LOCALHOST_PRIVATE,
-      );
+      server.listen(parseTcpPort(socket), LOCALHOST_PRIVATE);
     } else {
       unlinkSyncIfPresent(socket);
       server.listen(socket);
@@ -468,62 +439,42 @@ function listen(
   });
 }
 
-function isTcpSocket(
-  socket: string,
-): boolean {
+function isTcpSocket(socket: string): boolean {
   return socket.startsWith(TCP_PREFIX);
 }
 
-function parseTcpPort(
-  socket: string,
-): number {
+function parseTcpPort(socket: string): number {
   const prefix = `${TCP_PREFIX}${LOCALHOST_PRIVATE}:`;
 
   if (!socket.startsWith(prefix)) {
-    throw new Error(
-      `${Errors.InvalidTcpSocket}: ${socket}`,
-    );
+    throw new Error(`${Errors.InvalidTcpSocket}: ${socket}`);
   }
 
   const value = socket.slice(prefix.length);
   const port = Number(value);
 
-  if (
-    !Number.isInteger(port) ||
-    port < 0 ||
-    port > 65_535
-  ) {
-    throw new Error(
-      `${Errors.InvalidTcpPort}: ${value}`,
-    );
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    throw new Error(`${Errors.InvalidTcpPort}: ${value}`);
   }
 
   return port;
 }
 
-function runtimeAddress(
-  server: Server,
-  socket: string,
-): string {
+function runtimeAddress(server: Server, socket: string): string {
   if (!isTcpSocket(socket)) {
     return socket;
   }
 
   const address = server.address();
 
-  if (
-    address === null ||
-    typeof address === 'string'
-  ) {
+  if (address === null || typeof address === 'string') {
     throw new Error(Errors.MissingTcpAddress);
   }
 
   return `tcp:127.0.0.1:${address.port}`;
 }
 
-function unlinkSyncIfPresent(
-  path: string,
-): void {
+function unlinkSyncIfPresent(path: string): void {
   try {
     unlinkSync(path);
   } catch {
@@ -531,9 +482,7 @@ function unlinkSyncIfPresent(
   }
 }
 
-function asError(
-  error: unknown,
-): Error {
+function asError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
   }
@@ -541,10 +490,7 @@ function asError(
   return new Error(String(error));
 }
 
-function formatError(
-  error: unknown,
-  includeStack = false,
-): string {
+function formatError(error: unknown, includeStack = false): string {
   if (error instanceof Error) {
     if (includeStack && error.stack) {
       return error.stack;
@@ -576,9 +522,7 @@ if (
     token,
   }).catch((error: unknown) => {
     if (error instanceof BundleError) {
-      process.stdout.write(
-        `PLEC_RUNTIME_ERROR ${error.message}\n`,
-      );
+      process.stdout.write(`PLEC_RUNTIME_ERROR ${error.message}\n`);
     } else {
       console.error(
         `${Errors.RuntimeFailure}: ${formatError(error, true)}`,

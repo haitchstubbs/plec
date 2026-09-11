@@ -490,7 +490,8 @@ fn self_referential_map_terminates_without_overflow() {
         ]}
     ]))
     .unwrap();
-    let error = typed_eval(&app, None, 0, &[], None, 0).expect_err("self-referential map must terminate");
+    let error =
+        typed_eval(&app, None, 0, &[], None, 0).expect_err("self-referential map must terminate");
     let message = error.as_string().unwrap_or_default();
     assert!(
         message.contains("execution budget exceeded") || message.contains("nesting exceeds limit"),
@@ -505,7 +506,8 @@ fn crafted_backward_jump_loop_exhausts_action_budget() {
         {"frameSlots": 0, "instructions": [{"op": "jump", "target": 0}]}
     ]))
     .unwrap();
-    let mut runtime = TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
+    let mut runtime =
+        TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
     let mut metrics = UpdateMetrics::default();
     let error = runtime
         .execute_action(0, &[], None, None, &mut metrics)
@@ -545,7 +547,8 @@ fn self_requeuing_reaction_terminates_within_drain_depth() {
     }"#,
     )
     .unwrap();
-    let mut runtime = TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
+    let mut runtime =
+        TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
     let mut metrics = UpdateMetrics::default();
     let error = runtime
         .execute_action(0, &[], None, None, &mut metrics)
@@ -560,7 +563,11 @@ fn self_requeuing_reaction_terminates_within_drain_depth() {
 
 #[wasm_bindgen_test]
 fn loop_projection_beyond_row_limit_is_rejected_before_mutation() {
-    let mut runtime = TypedRuntime::new(bounded_application(), std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
+    let mut runtime = TypedRuntime::new(
+        bounded_application(),
+        std::rc::Rc::new(std::cell::RefCell::new(None)),
+    )
+    .unwrap();
     let parent = web_sys::window()
         .unwrap()
         .document()
@@ -621,7 +628,9 @@ fn load_application_rejects_active_element_tags() {
     // A substituted artifact can otherwise pass topology validation, so the
     // element-tag policy must reject active elements at the load boundary
     // before CSR can reach Document.create_element with them.
-    for tag in ["script", "base", "object", "embed", "iframe", "link", "meta"] {
+    for tag in [
+        "script", "base", "object", "embed", "iframe", "link", "meta",
+    ] {
         let artifact = format!(
             r#"{{"version":"0.10","rootComponent":0,"components":[{{"id":"App","version":"0.10","rootNode":0,"strings":["div","{tag}"],"nodes":[{{"op":"element","tag":1,"parent":null,"children":[]}}]}}]}}"#
         );
@@ -763,7 +772,8 @@ fn node_chain_within_mount_depth_limit_still_mounts() {
     }}"#,
     ))
     .unwrap();
-    let mut runtime = TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
+    let mut runtime =
+        TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
     let root = web_sys::window()
         .unwrap()
         .document()
@@ -801,7 +811,8 @@ fn self_tail_call_action_terminates_within_call_depth() {
         {"frameSlots": 0, "instructions": [{"op": "call", "action": 0, "arguments": []}]}
     ]))
     .unwrap();
-    let mut runtime = TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
+    let mut runtime =
+        TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
     let mut metrics = UpdateMetrics::default();
     let error = runtime
         .execute_action(0, &[], None, None, &mut metrics)

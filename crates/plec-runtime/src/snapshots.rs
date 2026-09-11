@@ -50,9 +50,7 @@ fn validate_shape(shape: &SnapshotShape) -> Result<(), JsValue> {
     }
     for path in paths {
         if path.len() > MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS {
-            return Err(JsValue::from_str(
-                "snapshot shape path depth exceeds limit",
-            ));
+            return Err(JsValue::from_str("snapshot shape path depth exceeds limit"));
         }
     }
     Ok(())
@@ -455,7 +453,9 @@ mod tests {
             current = serde_json::json!([current]);
         }
         assert!(check_value_budget(&current).is_err());
-        let oversized = serde_json::json!((0..=MAX_VALUE_NODES).map(|i| i as u32).collect::<Vec<u32>>());
+        let oversized = serde_json::json!((0..=MAX_VALUE_NODES)
+            .map(|i| i as u32)
+            .collect::<Vec<u32>>());
         assert!(check_value_budget(&oversized).is_err());
         let long_string = "x".repeat(MAX_VALUE_STRING_BYTES + 1);
         assert!(check_value_budget(&serde_json::json!(long_string)).is_err());

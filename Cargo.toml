@@ -77,6 +77,9 @@ tower = "0.5"
 # 0.6 is the first series against http 1.x, which axum 0.8 requires.
 tower-http = { version = "0.6", features = ["fs"] }
 reqwest = { version = "0.11", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = [
+  "std",
+] }
 thiserror = "1"
 indexmap = "1"
 # Internal Rust→Node sidecar HTTP client (hyper 1.x over a private socket).

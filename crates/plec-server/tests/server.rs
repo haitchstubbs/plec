@@ -6,16 +6,16 @@
 use std::{path::Path, sync::Arc};
 
 use axum::{
-    Router,
     body::Body,
     http::{Request, Response, StatusCode},
+    Router,
 };
 use plec_ir::PlecSsrSnapshot;
 use plec_server::{
-    DocumentMetadata, PlecServerOptions, artifact::ArtifactBundle, create_plec_server,
-    runtime::AppRequestHandler,
+    artifact::ArtifactBundle, create_plec_server, runtime::AppRequestHandler, DocumentMetadata,
+    PlecServerOptions,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const BOOTSTRAP_OPEN: &str = "<script id=\"plec-bootstrap\" type=\"application/json\">";
@@ -648,6 +648,97 @@ async fn renders_the_error_phase_and_records_the_rejection_when_the_loader_fails
     ));
 }
 
+/// Spawns a stub route-loader target whose success response streams in
+/// chunks with no `content-length`; returns its ephemeral port.
+async fn spawn_chunked_stub(status: u16, chunks: Vec<Vec<u8>>) -> u16 {
+    let app = Router::new().route(
+        "/api/data",
+        axum::routing::get(move || async move {
+            let items: Vec<Result<Vec<u8>, std::convert::Infallible>> =
+                chunks.into_iter().map(Ok).collect();
+            (
+                StatusCode::from_u16(status).expect("valid status"),
+                [("content-type", "application/json")],
+                Body::from_stream(futures_util::stream::iter(items)),
+            )
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("stub listener");
+    let port = listener.local_addr().expect("stub address").port();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("stub server");
+    });
+    port
+}
+
+fn loader_route(error_graph: Option<&str>) -> Value {
+    let mut route = json!({
+        "id": "home",
+        "path": "",
+        "graphId": "home",
+        "outletId": "main",
+        "loaderAction": 0
+    });
+    if let Some(id) = error_graph {
+        route["errorGraphId"] = json!(id);
+    }
+    json!([route])
+}
+
+fn loader_fixture(dir: &Path, port: u16, error_graph: Option<&str>) {
+    let mut graphs = vec![
+        json!({"graphId": "root", "graph": page("root", "main", "", true)}),
+        json!({"graphId": "home", "graph": loader_graph(&format!("http://127.0.0.1:{port}/api/data"))}),
+    ];
+    if let Some(id) = error_graph {
+        graphs.push(json!({"graphId": id, "graph": simple_page(id, "p", "Server rendered")}));
+    }
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": loader_route(error_graph)
+        },
+        "graphs": graphs
+    });
+    write_artifact(dir, &artifact);
+}
+
+#[tokio::test]
+async fn a_chunked_loader_response_without_content_length_still_resolves() {
+    let dir = fixture_dir();
+    let port =
+        spawn_chunked_stub(200, vec![b"{\"title\":".to_vec(), b"\"chunked\"}".to_vec()]).await;
+    loader_fixture(dir.path(), port, None);
+    let html = get_html(&options(dir.path()), "/").await;
+    assert!(
+        html.contains("{\"title\":\"chunked\"}"),
+        "the chunked loader body decodes: {html}"
+    );
+    assert!(html.contains("\"state\":{\"kind\":\"resolved\","));
+}
+
+#[tokio::test]
+async fn a_chunked_loader_response_exceeding_the_byte_ceiling_is_rejected_while_streaming() {
+    let dir = fixture_dir();
+    let limit = plec_ir::limits::MAX_FETCH_RESPONSE_BYTES;
+    // Two chunks whose total passes the ceiling mid-stream: the second
+    // chunk crosses the budget, so the body must never buffer in full.
+    let chunks = vec![vec![b'x'; limit - 1], vec![b'y'; 2]];
+    let port = spawn_chunked_stub(200, chunks).await;
+    loader_fixture(dir.path(), port, Some("home-error"));
+    let html = get_html(&options(dir.path()), "/").await;
+    assert!(
+        html.contains("Server rendered"),
+        "the error phase graph renders: {html}"
+    );
+    assert!(html.contains(
+        "\"state\":{\"kind\":\"rejected\",\"message\":\"loader response exceeds byte limit\"}"
+    ));
+}
+
 #[tokio::test]
 async fn renders_keyed_loop_rows_with_row_scoped_component_props_and_records_keys() {
     let dir = fixture_dir();
@@ -1090,11 +1181,9 @@ async fn fails_the_render_closed_on_srcdoc_and_script_url_attribute_writes() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(
-        text_of(response)
-            .await
-            .contains("UNSAFE_URL_ATTRIBUTE:href")
-    );
+    assert!(text_of(response)
+        .await
+        .contains("UNSAFE_URL_ATTRIBUTE:href"));
 }
 
 /// Adversarial regression: a substituted artifact cannot smuggle markup
@@ -1157,7 +1246,10 @@ async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
         json!(["img src=x onerror=alert(1)"]),
     ))
     .await;
-    assert!(body.contains("UNSAFE_TAG:img src=x onerror=alert(1)"), "{body}");
+    assert!(
+        body.contains("UNSAFE_TAG:img src=x onerror=alert(1)"),
+        "{body}"
+    );
 
     // Attribute-name injection: whitespace breaks out of the attribute into
     // new markup-bearing syntax.
@@ -1167,8 +1259,7 @@ async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
         json!(["span", "x onerror=alert(1)"]),
     );
     component["constants"] = json!(["alert(1)"]);
-    component["propPrograms"] =
-        json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
+    component["propPrograms"] = json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
     let body = render_error(component).await;
     assert!(
         body.contains("UNSAFE_ATTRIBUTE:x onerror=alert(1)"),
@@ -1182,8 +1273,7 @@ async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
         json!(["span", "a\" onmouseover=\"alert(1)"]),
     );
     component["constants"] = json!(["x"]);
-    component["propPrograms"] =
-        json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
+    component["propPrograms"] = json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
     let body = render_error(component).await;
     // The JSON error body escapes the embedded quotes.
     assert!(
@@ -1195,13 +1285,9 @@ async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
     // its lowercase spelling; the script URL fails the render closed.
     let mut component = set(&component_base, "strings", json!(["a", "HREF"]));
     component["constants"] = json!(["JAVASCRIPT:alert(1)"]);
-    component["propPrograms"] =
-        json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
+    component["propPrograms"] = json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
     let body = render_error(component).await;
-    assert!(
-        body.contains("UNSAFE_URL_ATTRIBUTE:HREF"),
-        "{body}"
-    );
+    assert!(body.contains("UNSAFE_URL_ATTRIBUTE:HREF"), "{body}");
 
     // The reserved runtime namespace is rejected in any ASCII casing.
     let mut component = set(
@@ -1210,13 +1296,9 @@ async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
         json!(["span", "DATA-PLEC-NODE"]),
     );
     component["constants"] = json!(["forged"]);
-    component["propPrograms"] =
-        json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
+    component["propPrograms"] = json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
     let body = render_error(component).await;
-    assert!(
-        body.contains("RESERVED_ATTRIBUTE:DATA-PLEC-NODE"),
-        "{body}"
-    );
+    assert!(body.contains("RESERVED_ATTRIBUTE:DATA-PLEC-NODE"), "{body}");
 }
 
 /// Adversarial regression: a substituted artifact cannot activate active,
@@ -1225,7 +1307,9 @@ async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
 /// closed for every casing and namespace spelling.
 #[tokio::test]
 async fn fails_the_render_closed_on_active_element_tags() {
-    for tag in ["script", "SCRIPT", "base", "object", "embed", "iframe", "link", "meta"] {
+    for tag in [
+        "script", "SCRIPT", "base", "object", "embed", "iframe", "link", "meta",
+    ] {
         let dir = fixture_dir();
         let home = json!({
             "rootComponent": 0,

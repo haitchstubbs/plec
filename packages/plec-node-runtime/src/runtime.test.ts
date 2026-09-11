@@ -29,7 +29,9 @@ afterEach(async () => {
 });
 
 /** Spawns the real runtime script against an ephemeral loopback port. */
-async function startRuntime(applicationModule: string): Promise<string> {
+async function startRuntime(
+  applicationModule: string,
+): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), 'plec-node-runtime-'));
   const bundle = path.join(dir, 'app.mjs');
   await writeFile(bundle, applicationModule);
@@ -53,7 +55,11 @@ interface RequestOptions {
   body?: string;
 }
 
-function request(origin: string, target: string, options: RequestOptions = {}): Promise<Response> {
+function request(
+  origin: string,
+  target: string,
+  options: RequestOptions = {},
+): Promise<Response> {
   const { headers, ...rest } = options;
   return fetch(`${origin}${target}`, {
     ...rest,
@@ -85,7 +91,9 @@ describe('sidecar supervision', () => {
     `);
     const response = await request(origin, '/api/none');
     expect(response.status).toBe(404);
-    expect(response.headers.get('x-plec-runtime-result')).toBe('unhandled');
+    expect(response.headers.get('x-plec-runtime-result')).toBe(
+      'unhandled',
+    );
     expect(await response.text()).toBe('');
   });
 
@@ -139,11 +147,18 @@ describe('sidecar supervision', () => {
     const health = await request(origin, '/_plec-runtime/health');
     expect(health.status).toBe(204);
 
-    const response = await request(origin, '/api/todos?active=true&tag=a&tag=b', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', cookie: 'session=s%20id; other=x' },
-      body: JSON.stringify({ title: 'Ship Plec' }),
-    });
+    const response = await request(
+      origin,
+      '/api/todos?active=true&tag=a&tag=b',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          cookie: 'session=s%20id; other=x',
+        },
+        body: JSON.stringify({ title: 'Ship Plec' }),
+      },
+    );
     const payload = (await response.json()) as Record<string, any>;
     expect(payload.body).toEqual({ title: 'Ship Plec' });
     expect(payload.method).toBe('POST');
@@ -161,7 +176,9 @@ describe('sidecar supervision', () => {
     `);
     const response = await request(origin, '/api/todos');
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'database exploded' });
+    expect(await response.json()).toEqual({
+      error: 'database exploded',
+    });
   });
 
   it('fails loudly when the bundle does not export handleRequest', async () => {
@@ -173,7 +190,10 @@ describe('sidecar supervision', () => {
 
 describe('request translation helpers', () => {
   it('decodes cookies strictly and query state tolerantly', () => {
-    expect(parseCookies('a=1; b=s%20p; c')).toEqual({ a: '1', b: 's p' });
+    expect(parseCookies('a=1; b=s%20p; c')).toEqual({
+      a: '1',
+      b: 's p',
+    });
     expect(() => parseCookies('bad=%zz')).toThrow(/percent/);
 
     const query = parseQuery('http://x/p?a=1&a=2&b=hello+world&c');
@@ -186,14 +206,24 @@ describe('request translation helpers', () => {
     const incoming = {
       method: 'POST',
       url: '/x?y=1',
-      headers: { host: 'example.test', 'content-type': 'application/json' },
-      rawHeaders: ['Host', 'example.test', 'Content-Type', 'application/json'],
+      headers: {
+        host: 'example.test',
+        'content-type': 'application/json',
+      },
+      rawHeaders: [
+        'Host',
+        'example.test',
+        'Content-Type',
+        'application/json',
+      ],
       on: stream.on.bind(stream),
     } as any;
     const resolved = await toWebRequest(incoming);
     expect(resolved.url).toBe('http://example.test/x?y=1');
     expect(await resolved.json()).toEqual({ a: 1 });
-    expect(resolved.headers.get('content-type')).toBe('application/json');
+    expect(resolved.headers.get('content-type')).toBe(
+      'application/json',
+    );
   });
 
   it('builds the context the application handlers observe', () => {

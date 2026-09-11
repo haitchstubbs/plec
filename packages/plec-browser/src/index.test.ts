@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  boundedResponseBytes,
   markPlecTiming,
   adaptLiveCollection,
   registerPlecProviders,
@@ -7,6 +8,76 @@ import {
   wireRoutedInputs,
   type LiveCollectionChange,
 } from './index';
+
+describe('bounded streamed response decoding', () => {
+  const encoder = new TextEncoder();
+
+  function chunkedResponse(
+    chunks: (string | Uint8Array)[],
+    headers?: Record<string, string>,
+  ): Response {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(
+            typeof chunk === 'string' ? encoder.encode(chunk) : chunk,
+          );
+        }
+        controller.close();
+      },
+    });
+    return new Response(stream, { headers });
+  }
+
+  it('assembles chunked bodies without a declared length', async () => {
+    const bytes = await boundedResponseBytes(
+      chunkedResponse(['{"ok":', 'true}']),
+      1024,
+      'graph',
+    );
+    expect(new TextDecoder().decode(bytes)).toBe('{"ok":true}');
+  });
+
+  it('rejects forged declared lengths before streaming', async () => {
+    await expect(
+      boundedResponseBytes(
+        chunkedResponse(['tiny'], { 'content-length': '99999999' }),
+        1024,
+        'graph',
+      ),
+    ).rejects.toThrow('graph exceeds byte limit');
+  });
+
+  it('cancels chunked bodies that pass the ceiling mid-stream', async () => {
+    const chunk = new Uint8Array(700).fill(65);
+    await expect(
+      boundedResponseBytes(
+        chunkedResponse([chunk, chunk]),
+        1024,
+        'graph',
+      ),
+    ).rejects.toThrow('graph exceeds byte limit');
+  });
+
+  it('accepts bodies exactly at the ceiling', async () => {
+    const bytes = await boundedResponseBytes(
+      chunkedResponse([new Uint8Array(1024).fill(65)]),
+      1024,
+      'graph',
+    );
+    expect(bytes.byteLength).toBe(1024);
+  });
+
+  it('rejects bodies that cannot stream', async () => {
+    await expect(
+      boundedResponseBytes(
+        new Response(null, { status: 204 }),
+        1024,
+        'graph',
+      ),
+    ).rejects.toThrow('graph body is unreadable');
+  });
+});
 
 describe('ssr route chain gate', () => {
   const manifestRoutes = [
