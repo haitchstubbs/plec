@@ -22,3 +22,10 @@ packages/ir/src/index.js
 packages/ir/src/index.d.ts
 packages/ir/src/index.js.map
 packages/ir/src/index.d.ts.map
+
+# Cargo owns these: the lock rewrites one dependency per line on every
+# build, which prettier-plugin-toml would collapse and immediately unfix.
+Cargo.lock
+
+# Machine-written Beads state (bd rewrites without a trailing newline).
+.beads/

@@ -323,7 +323,9 @@ interface WasmRuntimeInstance {
     policy: PlecRouterMountOptions['cookiePolicy'] | null,
   ): void;
   set_fetch_policy(policy: PlecFetchPolicyGrant[] | null): void;
-  set_tag_policy(policy: PlecRouterMountOptions['tagPolicy'] | null): void;
+  set_tag_policy(
+    policy: PlecRouterMountOptions['tagPolicy'] | null,
+  ): void;
   initialize_input(inputId: string, rows: unknown): RuntimeMountMetrics;
   apply_delta(delta: unknown): CompiledUpdateMetrics;
   apply_deltas(deltas: unknown): CompiledUpdateMetrics;
@@ -484,21 +486,52 @@ const MAX_SNAPSHOT_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_RUNTIME_JS_BYTES = 16 * 1024 * 1024;
 const MAX_PROVIDER_MANIFEST_JSON_BYTES = 1024 * 1024;
 
-/** Fetches and parses a JSON response under a hard byte ceiling: the
- * declared content-length is rejected before reading, and the actual body
- * length is verified before parsing so hostile payloads fail predictably. */
+/** Decodes a streamed response body under a hard byte ceiling: the
+ * declared content-length is rejected before reading, and each chunk is
+ * accounted during streaming so an absent, forged, or lying declaration
+ * cannot buffer past the ceiling. Exported for transport-boundary tests. */
+export async function boundedResponseBytes(
+  response: Response,
+  maxBytes: number,
+  label: string,
+): Promise<Uint8Array> {
+  const declared = response.headers.get('content-length');
+  if (declared !== null && Number(declared) > maxBytes)
+    throw new Error(`${label} exceeds byte limit`);
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error(`${label} body is unreadable`);
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      received += value.byteLength;
+      if (received > maxBytes) {
+        await reader.cancel();
+        throw new Error(`${label} exceeds byte limit`);
+      }
+      chunks.push(value);
+    }
+  }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+/** Fetches and parses a JSON response under a hard byte ceiling enforced
+ * while the body streams, before any whole-body text buffering. */
 async function boundedResponseJson(
   response: Response,
   maxBytes: number,
   label: string,
 ): Promise<unknown> {
-  const declared = response.headers.get('content-length');
-  if (declared !== null && Number(declared) > maxBytes)
-    throw new Error(`${label} exceeds byte limit`);
-  const text = await response.text();
-  if (text.length > maxBytes)
-    throw new Error(`${label} exceeds byte limit`);
-  return JSON.parse(text);
+  const bytes = await boundedResponseBytes(response, maxBytes, label);
+  return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 export async function startPlecRouter(
@@ -989,11 +1022,13 @@ async function loadRuntimeModule(
     throw new Error(
       `Failed to load WASM runtime module: ${response.status}`,
     );
-  const text = await response.text();
-  if (text.length > MAX_RUNTIME_JS_BYTES)
-    throw new Error('WASM runtime module exceeds byte limit');
+  const bytes = await boundedResponseBytes(
+    response,
+    MAX_RUNTIME_JS_BYTES,
+    'WASM runtime module',
+  );
   const moduleUrl = URL.createObjectURL(
-    new Blob([text], { type: 'text/javascript' }),
+    new Blob([bytes as BlobPart], { type: 'text/javascript' }),
   );
   try {
     return (await import(

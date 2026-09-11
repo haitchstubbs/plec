@@ -116,7 +116,8 @@ pub(crate) async fn execute_route_loader(
     }
     // Byte ceilings for untrusted loader responses (mirrors the Rust decode
     // limits; see docs/security-limits.md). The declared length fails fast;
-    // the buffered length catches lying or absent declarations.
+    // the streamed accumulation below is the real ceiling, so absent,
+    // forged, or lying declarations cannot buffer the body first.
     if response
         .content_length()
         .is_some_and(|declared| declared > MAX_FETCH_RESPONSE_BYTES as u64)
@@ -125,20 +126,11 @@ pub(crate) async fn execute_route_loader(
             "loader response exceeds byte limit".to_owned(),
         )));
     }
-    let text = match response.text().await {
-        Ok(text) => text,
-        Err(error) => {
-            return Ok(Some(rejected(format!(
-                "fetch {} failed: {error}",
-                url.path()
-            ))));
-        }
+    let bytes = match read_bounded_stream(response, url.path()).await {
+        Ok(bytes) => bytes,
+        Err(message) => return Ok(Some(rejected(message))),
     };
-    if text.len() > MAX_FETCH_RESPONSE_BYTES {
-        return Ok(Some(rejected(
-            "loader response exceeds byte limit".to_owned(),
-        )));
-    }
+    let text = String::from_utf8_lossy(&bytes);
     let value: JsonValue = match serde_json::from_str(&text) {
         Ok(value) => value,
         Err(error) => {
@@ -171,6 +163,24 @@ fn find_fetch_request(program: &ActionProgram) -> Option<FetchRequest> {
         })
         .and_then(|instruction| instruction.get("request"))
         .and_then(|request| serde_json::from_value(request.clone()).ok())
+}
+
+/// Reads a response body chunk by chunk under a hard byte ceiling. The
+/// limit is enforced per chunk before accumulation, so a chunked response
+/// with an absent or forged `content-length` aborts as soon as it exceeds
+/// the budget instead of buffering first. The error is the final loader
+/// rejection message.
+async fn read_bounded_stream(response: reqwest::Response, path: &str) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    let mut stream = std::pin::pin!(response.bytes_stream());
+    while let Some(chunk) = futures_util::StreamExt::next(&mut stream).await {
+        let chunk = chunk.map_err(|error| format!("fetch {path} failed: {error}"))?;
+        if bytes.len() + chunk.len() > MAX_FETCH_RESPONSE_BYTES {
+            return Err("loader response exceeds byte limit".to_owned());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 /// Converts the evaluated transport value into the strict snapshot value.

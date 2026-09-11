@@ -18,6 +18,9 @@ fetch = [
   "web-sys/RequestInit",
   "web-sys/Response",
   "web-sys/Url",
+  "web-sys/ReadableStream",
+  "web-sys/ReadableStreamDefaultReader",
+  "web-sys/TextDecoder",
 ]
 
 [dependencies]

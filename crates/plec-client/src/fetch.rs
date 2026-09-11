@@ -2,7 +2,7 @@ use crate::prelude::*;
 use crate::runtime::*;
 use crate::vm::*;
 use plec_dom::platform::*;
-use web_sys::RequestCredentials;
+use web_sys::{ReadableStreamDefaultReader, RequestCredentials, TextDecoder};
 
 #[derive(Clone)]
 pub struct TypedPendingFetch {
@@ -99,20 +99,22 @@ async fn http_failure(response: Response, url: &str) -> RuntimeValue {
                 || (value.starts_with("application/") && value.ends_with("+json"))
         })
         .unwrap_or(false);
-    let body = match response.text().ok().map(JsFuture::from) {
-        Some(body) => match body
-            .await
+    let body = match bounded_body_bytes(&response, url).await {
+        Ok(bytes) if bytes.is_empty() => RuntimeValue::Null,
+        Ok(bytes) => decode_body_text(bytes, url)
             .ok()
-            .and_then(|value| value.as_string())
             .filter(|text| !text.is_empty())
-        {
-            Some(text) if is_json => {
-                serde_json::from_str(&text).unwrap_or(RuntimeValue::String(text))
-            }
-            Some(text) => RuntimeValue::String(text),
-            None => RuntimeValue::Null,
-        },
-        None => RuntimeValue::Null,
+            .map(|text| {
+                if is_json {
+                    serde_json::from_str(&text).unwrap_or(RuntimeValue::String(text))
+                } else {
+                    RuntimeValue::String(text)
+                }
+            })
+            .unwrap_or(RuntimeValue::Null),
+        // A rejected or unreadable error body stays `Null`: the failure the
+        // action observes is the HTTP status, never the supplementary body.
+        Err(_) => RuntimeValue::Null,
     };
     let mut record = match failure("http", format!("request failed ({status})"), url) {
         RuntimeValue::Record(record) => record,
@@ -157,6 +159,83 @@ fn declared_length_failure(response: &Response, url: &str) -> Option<RuntimeValu
         ));
     }
     None
+}
+
+fn body_limit_failure(url: &str) -> RuntimeValue {
+    failure(
+        "decode",
+        format!(
+            "response body exceeds the {} byte limit",
+            plec_ir::limits::MAX_FETCH_RESPONSE_BYTES
+        ),
+        url,
+    )
+}
+
+fn body_decode_failure(url: &str, message: &str) -> RuntimeValue {
+    failure("decode", message.to_owned(), url)
+}
+
+/// Streams a response body under a hard byte ceiling. Each chunk is
+/// accounted before accumulation and the stream is cancelled the moment the
+/// budget is exceeded, so an absent or forged `content-length` cannot
+/// buffer the whole body before rejection; `declared_length_failure` above
+/// stays only as the declared-length fast path.
+async fn bounded_body_bytes(response: &Response, url: &str) -> Result<Vec<u8>, RuntimeValue> {
+    let limit = plec_ir::limits::MAX_FETCH_RESPONSE_BYTES;
+    let stream = response
+        .body()
+        .ok_or_else(|| body_decode_failure(url, "response body unavailable"))?;
+    let reader: ReadableStreamDefaultReader = stream
+        .get_reader()
+        .dyn_into()
+        .map_err(|_| body_decode_failure(url, "response body unavailable"))?;
+    let mut bytes: Vec<u8> = Vec::new();
+    loop {
+        let result = JsFuture::from(reader.read()).await.map_err(|error| {
+            body_decode_failure(
+                url,
+                &error
+                    .as_string()
+                    .unwrap_or_else(|| "response body read failed".into()),
+            )
+        })?;
+        let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
+            .ok()
+            .and_then(|done| done.as_bool())
+            .unwrap_or(true);
+        if done {
+            return Ok(bytes);
+        }
+        let chunk: js_sys::Uint8Array = js_sys::Reflect::get(&result, &JsValue::from_str("value"))
+            .map_err(|_| body_decode_failure(url, "response body chunk was not bytes"))?
+            .dyn_into()
+            .map_err(|_| body_decode_failure(url, "response body chunk was not bytes"))?;
+        let chunk = chunk.to_vec();
+        if bytes.len() + chunk.len() > limit {
+            // Release the stream so the connection is not left half-read.
+            let _ = JsFuture::from(reader.cancel()).await;
+            return Err(body_limit_failure(url));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+}
+
+/// Decodes bounded body bytes as UTF-8 with replacement, matching the
+/// browser `response.text()` semantics the previous whole-body read used.
+fn decode_body_text(mut bytes: Vec<u8>, url: &str) -> Result<String, RuntimeValue> {
+    TextDecoder::new_with_label("utf-8")
+        .and_then(|decoder| decoder.decode_with_u8_array(&mut bytes))
+        .map_err(|_| body_decode_failure(url, "response text decode failed"))
+}
+
+/// Parses bounded body text as JSON through the engine's native
+/// `JSON.parse` (no WASM recursion) before the bounded runtime-value walk.
+fn parse_body_json(text: &str, url: &str) -> Result<RuntimeValue, RuntimeValue> {
+    match js_sys::JSON::parse(text) {
+        Ok(value) => bounded_response_value(value, url),
+        Err(_) => Err(body_decode_failure(url, "response JSON decode failed")),
+    }
 }
 
 /// Bounds a response body decoded through the JS engine: the value is
@@ -234,71 +313,24 @@ impl RuntimeState {
                             Err(rejected)
                         } else {
                             match pending.decode.as_str() {
-                                "empty" => match response.text() {
-                                    Ok(body) => JsFuture::from(body)
-                                        .await
-                                        .map(|_| RuntimeValue::Null)
-                                        .map_err(|error| {
-                                            failure(
-                                                "decode",
-                                                error.as_string().unwrap_or_else(|| {
-                                                    "response body drain failed".into()
-                                                }),
-                                                &pending.url,
-                                            )
-                                        }),
-                                    Err(error) => Err(failure(
-                                        "decode",
-                                        error
-                                            .as_string()
-                                            .unwrap_or_else(|| "response body unavailable".into()),
-                                        &pending.url,
-                                    )),
-                                },
-                                "text" => match response.text() {
-                                    Ok(body) => JsFuture::from(body)
-                                        .await
-                                        .map(|value| {
-                                            let text = value.as_string().unwrap_or_default();
-                                            if text.len()
-                                                > plec_ir::limits::MAX_FETCH_RESPONSE_BYTES
-                                            {
-                                                return Err(failure(
-                                                    "decode",
-                                                    format!(
-                                                        "response body exceeds the {} byte limit",
-                                                        plec_ir::limits::MAX_FETCH_RESPONSE_BYTES
-                                                    ),
-                                                    &pending.url,
-                                                ));
-                                            }
-                                            Ok(RuntimeValue::String(text))
-                                        })
-                                        .map_err(|error| {
-                                            failure(
-                                                "decode",
-                                                error.as_string().unwrap_or_else(|| {
-                                                    "response text decode failed".into()
-                                                }),
-                                                &pending.url,
-                                            )
-                                        })
-                                        .and_then(std::convert::identity),
-                                    Err(error) => Err(failure(
-                                        "decode",
-                                        error
-                                            .as_string()
-                                            .unwrap_or_else(|| "response text unavailable".into()),
-                                        &pending.url,
-                                    )),
-                                },
+                                // Every decode below streams the body through
+                                // `bounded_body_bytes`, so the byte ceiling is
+                                // enforced before any whole-body buffering.
+                                "empty" => bounded_body_bytes(&response, &pending.url)
+                                    .await
+                                    .map(|_| RuntimeValue::Null),
+                                "text" => bounded_body_bytes(&response, &pending.url)
+                                    .await
+                                    .and_then(|bytes| {
+                                        decode_body_text(bytes, &pending.url)
+                                            .map(RuntimeValue::String)
+                                    }),
                                 "responseJson" => {
                                     let ok = response.ok();
                                     let status = response.status();
                                     // 204/205 carry no body; `body` is null so
                                     // `{ok,status,body}` still reaches the action.
-                                    // Drain via text() so the browser never flags the
-                                    // request as abandoned mid-response.
+                                    // Their (empty) body needs no ceiling.
                                     if status == 204 || status == 205 {
                                         if let Ok(empty) = response.text() {
                                             let _ = JsFuture::from(empty).await;
@@ -309,67 +341,28 @@ impl RuntimeState {
                                             ("body".into(), RuntimeValue::Null),
                                         ])))
                                     } else {
-                                        match response.json() {
-                                            Ok(body) => JsFuture::from(body)
-                                                .await
-                                                .map_err(|error| {
-                                                    failure(
-                                                        "decode",
-                                                        error.as_string().unwrap_or_else(|| {
-                                                            "response JSON decode failed".into()
-                                                        }),
-                                                        &pending.url,
-                                                    )
-                                                })
-                                                .and_then(|value| {
-                                                    bounded_response_value(value, &pending.url)
-                                                        .map_err(std::convert::identity)
-                                                })
-                                                .map(|body| {
-                                                    RuntimeValue::Record(
-                                                        std::collections::HashMap::from([
-                                                            ("ok".into(), RuntimeValue::Bool(ok)),
-                                                            (
-                                                                "status".into(),
-                                                                RuntimeValue::Number(status as f64),
-                                                            ),
-                                                            ("body".into(), body),
-                                                        ]),
-                                                    )
-                                                }),
-                                            Err(error) => Err(failure(
-                                                "decode",
-                                                error.as_string().unwrap_or_else(|| {
-                                                    "response JSON unavailable".into()
-                                                }),
-                                                &pending.url,
-                                            )),
-                                        }
+                                        bounded_body_bytes(&response, &pending.url)
+                                            .await
+                                            .and_then(|bytes| decode_body_text(bytes, &pending.url))
+                                            .and_then(|text| parse_body_json(&text, &pending.url))
+                                            .map(|body| {
+                                                RuntimeValue::Record(
+                                                    std::collections::HashMap::from([
+                                                        ("ok".into(), RuntimeValue::Bool(ok)),
+                                                        (
+                                                            "status".into(),
+                                                            RuntimeValue::Number(status as f64),
+                                                        ),
+                                                        ("body".into(), body),
+                                                    ]),
+                                                )
+                                            })
                                     }
                                 }
-                                _ => match response.json() {
-                                    Ok(body) => JsFuture::from(body)
-                                        .await
-                                        .map_err(|error| {
-                                            failure(
-                                                "decode",
-                                                error.as_string().unwrap_or_else(|| {
-                                                    "response JSON decode failed".into()
-                                                }),
-                                                &pending.url,
-                                            )
-                                        })
-                                        .and_then(|value| {
-                                            bounded_response_value(value, &pending.url)
-                                        }),
-                                    Err(error) => Err(failure(
-                                        "decode",
-                                        error
-                                            .as_string()
-                                            .unwrap_or_else(|| "response JSON unavailable".into()),
-                                        &pending.url,
-                                    )),
-                                },
+                                _ => bounded_body_bytes(&response, &pending.url)
+                                    .await
+                                    .and_then(|bytes| decode_body_text(bytes, &pending.url))
+                                    .and_then(|text| parse_body_json(&text, &pending.url)),
                             }
                         }
                     }

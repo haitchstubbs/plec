@@ -36,6 +36,11 @@ export function setPlecFetchQueue(specs) {
     if (spec.reject) return Promise.reject(Object.assign(new Error(spec.reject), { name: spec.name || 'TypeError' }));
     const signal = input instanceof Request ? input.signal : init?.signal;
     if (spec.pending) return new Promise((_resolve, reject) => signal.addEventListener('abort', () => { aborts++; reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }));
+    if (spec.chunked) {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({ start(controller) { for (const part of spec.chunked) controller.enqueue(encoder.encode(part)); controller.close(); } });
+      return Promise.resolve(new Response(stream, { status: spec.status ?? 200, statusText: spec.statusText ?? '', headers: spec.headers ?? {} }));
+    }
     return Promise.resolve(new Response(spec.body ?? '', { status: spec.status ?? 200, statusText: spec.statusText ?? '', headers: spec.headers ?? {} }));
   };
 }
@@ -2068,6 +2073,109 @@ async fn typed_fetch_routes_http_decode_network_and_abort_failures() {
     click_fetch(&root);
     settle_fetch().await;
     assert_eq!(root.text_content().unwrap(), "teapotinner");
+}
+
+/// Chunked bodies with an absent `content-length` must still decode through
+/// every decode mode; the streamed ceiling is the only length signal.
+#[wasm_bindgen_test(async)]
+async fn typed_fetch_decodes_chunked_bodies_without_content_length() {
+    for (decode, chunks, expected) in [
+        ("json", r#"["{\"ok\":", "true}"]"#, r#"{"ok":true}inner"#),
+        ("text", r#"["pl", "ain"]"#, "plaininner"),
+        ("empty", r#"["ig", "nored"]"#, "inner"),
+    ] {
+        let spec = format!(
+            r#"[
+            {{"chunked":{chunks}}}
+        ]"#
+        );
+        let _fetch = install_plec_fetch_queue(&spec);
+        let runtime = PlecRuntime::new();
+        grant_fetch_policy(&runtime);
+        let root = mount_root();
+        load_and_mount(&runtime, fetch_artifact(decode, true, false), &root);
+        click_fetch(&root);
+        settle_fetch().await;
+        assert_eq!(root.text_content().unwrap(), expected, "decode {decode}");
+    }
+}
+
+/// A chunked body whose bytes pass the 8 MiB fetch ceiling mid-stream must
+/// reject through the decode failure path for JSON, text, and empty
+/// decoding — never buffer first.
+#[wasm_bindgen_test(async)]
+async fn typed_fetch_stream_ceiling_rejects_oversized_chunked_bodies() {
+    let big = "x".repeat(4 * 1024 * 1024);
+    let over = "y".repeat(4 * 1024 * 1024 + 1);
+    for decode in ["json", "text", "empty"] {
+        let spec = format!(r#"[{{"chunked":["{big}","{over}"]}}]"#);
+        let _fetch = install_plec_fetch_queue(&spec);
+        let runtime = PlecRuntime::new();
+        grant_fetch_policy(&runtime);
+        let root = mount_root();
+        load_and_mount(&runtime, fetch_artifact(decode, true, false), &root);
+        click_fetch(&root);
+        settle_fetch().await;
+        let output = root.text_content().unwrap();
+        assert!(
+            output.contains("\"kind\":\"decode\""),
+            "decode {decode}: {output}"
+        );
+        assert!(
+            output.contains("exceeds the 8388608 byte limit"),
+            "decode {decode}: {output}"
+        );
+    }
+}
+
+/// A forged `content-length` can neither smuggle an oversized body past the
+/// declared-length fast path (declared over limit) nor past the streamed
+/// ceiling (declared under limit, body lies).
+#[wasm_bindgen_test(async)]
+async fn typed_fetch_stream_ceiling_rejects_forged_content_length() {
+    for spec in [
+        r#"[{"body":"small","headers":{"content-length":"99999999"}}]"#.to_owned(),
+        format!(
+            r#"[{{"chunked":["{}", "{}"],"headers":{{"content-length":"10"}}}}]"#,
+            "x".repeat(4 * 1024 * 1024),
+            "y".repeat(4 * 1024 * 1024 + 1)
+        ),
+    ] {
+        let _fetch = install_plec_fetch_queue(&spec);
+        let runtime = PlecRuntime::new();
+        grant_fetch_policy(&runtime);
+        let root = mount_root();
+        load_and_mount(&runtime, fetch_artifact("json", true, false), &root);
+        click_fetch(&root);
+        settle_fetch().await;
+        let output = root.text_content().unwrap();
+        assert!(output.contains("\"kind\":\"decode\""), "{output}");
+        assert!(
+            output.contains("exceeds the 8388608 byte limit"),
+            "{output}"
+        );
+    }
+}
+
+/// A `requireOk` error response whose body itself exceeds the ceiling is
+/// bounded while streaming: the HTTP failure is still reported.
+#[wasm_bindgen_test(async)]
+async fn typed_fetch_stream_ceiling_bounds_require_ok_error_bodies() {
+    let spec = format!(
+        r#"[{{"status":500,"chunked":["{}", "{}"]}}]"#,
+        "x".repeat(4 * 1024 * 1024),
+        "y".repeat(4 * 1024 * 1024 + 1)
+    );
+    let _fetch = install_plec_fetch_queue(&spec);
+    let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
+    let root = mount_root();
+    load_and_mount(&runtime, fetch_artifact("json", true, false), &root);
+    click_fetch(&root);
+    settle_fetch().await;
+    let output = root.text_content().unwrap();
+    assert!(output.contains("\"kind\":\"http\""), "{output}");
+    assert!(output.contains("request failed (500)"), "{output}");
 }
 
 #[wasm_bindgen_test(async)]

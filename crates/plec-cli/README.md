@@ -168,12 +168,12 @@ This makes the CLI useful as a thin debugging surface over the canonical compile
 
 ## Commands at a glance
 
-| Command        | Input                | Output              | Purpose                            |
-| -------------- | -------------------- | ------------------- | ---------------------------------- |
-| `plec raw`     | Source entry         | Executable IR JSON  | Inspect complete compiler output   |
-| `plec inspect` | Source entry + query | Query result JSON   | Targeted inspection of compiled IR |
-| `plec routes`  | Source entry         | Route manifest JSON | Inspect router compilation         |
-| `plec workspace …`   | Workspace state      | Reports/captures    | Developer workflow helpers (below) |
+| Command            | Input                | Output              | Purpose                            |
+| ------------------ | -------------------- | ------------------- | ---------------------------------- |
+| `plec raw`         | Source entry         | Executable IR JSON  | Inspect complete compiler output   |
+| `plec inspect`     | Source entry + query | Query result JSON   | Targeted inspection of compiled IR |
+| `plec routes`      | Source entry         | Route manifest JSON | Inspect router compilation         |
+| `plec workspace …` | Workspace state      | Reports/captures    | Developer workflow helpers (below) |
 
 ---
 
