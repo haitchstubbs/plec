@@ -90,6 +90,26 @@ pub const MAX_IMPORT_DEPTH: usize = 128;
 /// Maximum number of modules in one compiled source graph.
 pub const MAX_MODULE_COUNT: usize = 4_096;
 
+/// Maximum aggregate bytes across every source module read for one compiled
+/// source graph. Without this, per-file caps alone admit roughly
+/// `MAX_MODULE_COUNT * MAX_SOURCE_FILE_BYTES` of source input.
+pub const MAX_TOTAL_SOURCE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Maximum number of workspace packages the compiler indexes from the
+/// repository `packages/` directory while resolving bare import specifiers.
+pub const MAX_WORKSPACE_PACKAGE_COUNT: usize = 1_024;
+
+/// Maximum total HIR nodes and expressions across one compiled application.
+/// Mirrors `MAX_TOTAL_IR_ENTRIES` at the artifact boundary so an oversized
+/// application fails in the compiler instead of growing compiler memory
+/// without bound before serialization.
+pub const MAX_TOTAL_HIR_ENTRIES: usize = 1_000_000;
+
+/// Maximum nesting depth of the compile-time component-call graph. The
+/// component walk in the HIR builder recurses per call target, so this bounds
+/// the compiler's own recursion depth independent of the component count.
+pub const MAX_COMPONENT_NESTING_DEPTH: usize = 128;
+
 /// Maximum interpreter steps for one typed expression evaluation
 /// (including nested Filter/Map predicate work).
 pub const MAX_EXPRESSION_STEPS: usize = 100_000;
@@ -209,6 +229,10 @@ mod tests {
         assert!(MAX_COMPONENT_COLLECTION_LEN >= 1_000);
         assert!(MAX_IMPORT_DEPTH >= 16);
         assert!(MAX_MODULE_COUNT >= 64);
+        assert!(MAX_TOTAL_SOURCE_BYTES >= 1024 * 1024);
+        assert!(MAX_WORKSPACE_PACKAGE_COUNT >= 64);
+        assert!(MAX_TOTAL_HIR_ENTRIES >= 100_000);
+        assert!(MAX_COMPONENT_NESTING_DEPTH >= 64);
         assert!(MAX_MOUNT_DEPTH >= 64);
         assert!(MAX_NODE_GRAPH_DEPTH >= 64);
         assert!(MAX_FRAME_SLOTS >= 64);

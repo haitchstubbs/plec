@@ -77,14 +77,52 @@ the body streams, before any `text()`/`json()`-style whole-body read.
 
 ## Source modules and import graph (compiler)
 
-| Boundary               | Limit                           | Where                                           |
-| ---------------------- | ------------------------------- | ----------------------------------------------- |
-| Source file size       | 2 MiB (`MAX_SOURCE_FILE_BYTES`) | `crates/plec-compiler/src/read_source_graph.rs` |
-| Import-chain depth     | 128 (`MAX_IMPORT_DEPTH`)        | same                                            |
-| Module count per graph | 4,096 (`MAX_MODULE_COUNT`)      | same                                            |
+| Boundary                 | Limit                           | Where                                           |
+| ------------------------ | ------------------------------- | ----------------------------------------------- |
+| Source file size         | 2 MiB (`MAX_SOURCE_FILE_BYTES`) | `crates/plec-compiler/src/read_source_graph.rs` |
+| Aggregate source size    | 32 MiB (`MAX_TOTAL_SOURCE_BYTES`) | same                                          |
+| Import-chain depth       | 128 (`MAX_IMPORT_DEPTH`)        | same                                            |
+| Module count per graph   | 4,096 (`MAX_MODULE_COUNT`)      | same                                            |
+| Workspace package count  | 1,024 (`MAX_WORKSPACE_PACKAGE_COUNT`) | same (`WorkspaceIndex::load`)             |
+| Workspace manifest bytes | 1 MiB (`MAX_MANIFEST_JSON_BYTES`) | same (`read_workspace_manifest`)              |
 
-Cycles are already rejected by the existing `seen` set; depth and count bounds
-extend this to deep chains and file-count exhaustion.
+Cycles are already rejected by the existing `seen` set; depth, count, and
+aggregate byte bounds extend this to deep chains and file-count/size
+exhaustion.
+
+Containment is scope-based, not repository-wide: relative imports may only
+reach sources beneath the application root (`root_dir` as passed by the
+build pipeline — the app directory), and workspace imports may only reach
+sources beneath the resolved package's own directory. One application can
+therefore never read another application's sources through the shared
+repository root, and a package cannot pull in its siblings' files.
+
+Source reads are also resistant to concurrent path replacement: the
+canonicalized path is opened and both the size accounting and the bytes are
+taken from the open file handle (fstat + read), then the original pathname
+must still canonicalize to the opened file or the compile fails
+(`read_bounded_source`). This narrows the symlink-swap window dramatically
+but cannot eliminate it against a hostile writer with arbitrary filesystem
+access; production builds must compile from an isolated, immutable
+workspace.
+
+## Compiler HIR and lowering budgets
+
+| Boundary                    | Limit                                       | Where                                        |
+| --------------------------- | ------------------------------------------- | -------------------------------------------- |
+| Nodes/expressions per HIR component | 100,000 (`MAX_COMPONENT_COLLECTION_LEN`) | `crates/plec-compiler/src/hir_builder.rs`  |
+| HIR nodes+expressions per application | 1,000,000 (`MAX_TOTAL_HIR_ENTRIES`) | same (`ensure_hir_aggregate_budgets`)      |
+| Component count             | 65,536 (`MAX_COMPONENT_COUNT`)              | `hir_builder.rs` and `plec-lowering`         |
+| Component nesting depth     | 128 (`MAX_COMPONENT_NESTING_DEPTH`)         | same                                         |
+| Entries per lowered component collection | 100,000 (`MAX_COMPONENT_COLLECTION_LEN`) | `crates/plec-lowering/src/application.rs` |
+| Total lowered IR entries    | 1,000,000 (`MAX_TOTAL_IR_ENTRIES`)          | same                                         |
+| Total lowered instructions  | 1,000,000 (`MAX_TOTAL_INSTRUCTIONS`)        | same (`component_budget_usage`)              |
+| Total string pool bytes     | 8 MiB (`MAX_TOTAL_STRING_POOL_BYTES`)       | same                                         |
+
+These mirror the artifact-boundary aggregates so a pathological application
+fails in the compiler instead of lowering and serializing without bound.
+Constant-value tree nodes remain bounded by `MAX_TOTAL_CONSTANT_NODES` at
+the artifact decode boundary.
 
 ## Execution budgets
 
@@ -143,7 +181,16 @@ keys remain documented separately from these primary exhaustion defences.
 - `crates/plec-ir/src/lib.rs` — snapshot loop-key/depth/size caps, manifest
   route count.
 - `crates/plec-compiler/src/read_source_graph.rs` — oversized source file,
-  over-deep import chain, chain just within the limit still compiles.
+  over-deep import chain, chain just within the limit still compiles,
+  cross-application relative-import traversal, package-scope relative
+  escape, symlink escape, symlink swap detected between canonicalization
+  and the post-read verification, aggregate source exhaustion, workspace
+  package-count and manifest-byte caps.
+- `crates/plec-compiler/src/hir_builder.rs` — per-component node budget,
+  component nesting beyond/within the depth budget, aggregate HIR entry and
+  component count budgets.
+- `crates/plec-lowering/src/lib.rs` — per-collection lowered budget,
+  aggregate IR entry exhaustion, lowered component count.
 - `crates/plec-runtime/tests/untrusted_input_limits.rs` — oversized and
   over-deep host inputs, artifacts, snapshots, nested JS Maps, undefined
   fields, expression/action loops, self-tail-call actions, self-child and

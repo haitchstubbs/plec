@@ -9,6 +9,10 @@ use plec_hir::{
     HirParameter, HirParameterSource, HirProp, HirReaction, HirRefSlot, HirSlot, HirState, HirStmt,
     HirTemplatePart, HirText, HirUnaryOp, HirValue, NodeId, SourceSpan,
 };
+use plec_ir::limits::{
+    MAX_COMPONENT_COLLECTION_LEN, MAX_COMPONENT_COUNT, MAX_COMPONENT_NESTING_DEPTH,
+    MAX_TOTAL_HIR_ENTRIES,
+};
 use plec_ir::sink::is_safe_attribute_value;
 use plec_model::{resolve_component, ComponentPropKind, SemanticGraph};
 use swc_common::{Span, Spanned};
@@ -316,6 +320,22 @@ pub fn lower_root_component_with_options(
         None => ctx.add_node(HirNode::Empty),
     };
 
+    // Per-component HIR budgets: bound one component's node/expression
+    // collections to the same ceilings the artifact boundary enforces, so an
+    // oversized component fails here instead of growing compiler memory.
+    if ctx.nodes.len() > MAX_COMPONENT_COLLECTION_LEN {
+        return Err(format!(
+            "Component '{}' exceeds the maximum node count of {MAX_COMPONENT_COLLECTION_LEN}",
+            root.symbol.local_name
+        ));
+    }
+    if ctx.expressions.len() > MAX_COMPONENT_COLLECTION_LEN {
+        return Err(format!(
+            "Component '{}' exceeds the maximum expression count of {MAX_COMPONENT_COLLECTION_LEN}",
+            root.symbol.local_name
+        ));
+    }
+
     Ok(HirComponent {
         id: ComponentId::new(&root.symbol.module_id, &root.symbol.local_name),
         parameters: ctx.parameters,
@@ -360,8 +380,15 @@ pub fn lower_application_with_options(
         custom_elements: &std::collections::BTreeSet<String>,
         visiting: &mut Vec<ComponentId>,
         components: &mut Vec<HirComponent>,
+        depth: usize,
     ) -> Result<(), String> {
         let id = ComponentId::new(&root.symbol.module_id, &root.symbol.local_name);
+        if depth > MAX_COMPONENT_NESTING_DEPTH {
+            return Err(format!(
+                "Component nesting exceeds the maximum depth of {MAX_COMPONENT_NESTING_DEPTH} at '{}'",
+                root.symbol.local_name
+            ));
+        }
         if visiting.contains(&id) {
             return Err(format!(
                 "Recursive component '{}' is unsupported",
@@ -395,6 +422,11 @@ pub fn lower_application_with_options(
                 _ => Vec::new(),
             })
             .collect::<Vec<_>>();
+        if components.len() >= MAX_COMPONENT_COUNT {
+            return Err(format!(
+                "Application exceeds the maximum component count of {MAX_COMPONENT_COUNT}"
+            ));
+        }
         components.push(component);
         for target in targets {
             let child = crate::discover_root_component(
@@ -411,6 +443,7 @@ pub fn lower_application_with_options(
                 custom_elements,
                 visiting,
                 components,
+                depth + 1,
             )?;
         }
         visiting.pop();
@@ -426,11 +459,39 @@ pub fn lower_application_with_options(
         custom_elements,
         &mut Vec::new(),
         &mut components,
+        0,
     )?;
+    ensure_hir_aggregate_budgets(&components)?;
     Ok(HirApplication {
         root: root_id,
         components,
     })
+}
+
+/// Enforce aggregate HIR budgets across one application.
+///
+/// Mirrors the artifact-boundary aggregates (`MAX_TOTAL_IR_ENTRIES`) so an
+/// application whose combined node/expression volume is pathological fails
+/// in the compiler instead of lowering and serializing without bound.
+fn ensure_hir_aggregate_budgets(components: &[HirComponent]) -> Result<(), String> {
+    if components.len() > MAX_COMPONENT_COUNT {
+        return Err(format!(
+            "Application exceeds the maximum component count of {MAX_COMPONENT_COUNT}"
+        ));
+    }
+    let mut total = 0usize;
+    for component in components {
+        total = total
+            .checked_add(component.nodes.len())
+            .and_then(|total| total.checked_add(component.expressions.len()))
+            .ok_or_else(|| "HIR entry accounting overflowed".to_string())?;
+        if total > MAX_TOTAL_HIR_ENTRIES {
+            return Err(format!(
+                "Application HIR exceeds the maximum total of {MAX_TOTAL_HIR_ENTRIES} nodes and expressions"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn lower_component_program(
@@ -4737,5 +4798,107 @@ mod tests {
             .nodes
             .iter()
             .any(|node| matches!(node, HirNode::Element(element) if element.tag == "circle")));
+    }
+
+    fn build_and_lower_application(source: &str) -> Result<plec_hir::HirApplication, String> {
+        let module = parse_module("test.tsx", source).expect("parse should succeed");
+        let modules = vec![module];
+        let semantic_graph =
+            build_semantic_graph(&modules, &HashMap::new()).expect("graph should build");
+        let root = discover_root_component(&modules, &semantic_graph, "test.tsx", None)
+            .map_err(|error| error.to_string())?;
+        lower_application(&modules, &root, &semantic_graph)
+    }
+
+    #[test]
+    fn rejects_components_beyond_per_component_node_budget() {
+        let count = MAX_COMPONENT_COLLECTION_LEN + 1;
+        let mut children = String::with_capacity(count * 8);
+        for _ in 0..count {
+            children.push_str("<div />");
+        }
+        let source = format!("export function App() {{ return <>{children}</>; }}");
+
+        let error = build_and_lower(&source).expect_err("over-wide component should be rejected");
+
+        assert!(error.contains("exceeds the maximum node count"), "{error}");
+    }
+
+    #[test]
+    fn rejects_component_nesting_beyond_depth_budget() {
+        let depth = MAX_COMPONENT_NESTING_DEPTH + 2;
+        let mut source = String::new();
+        for index in 0..depth {
+            source.push_str(&format!(
+                "function C{index}() {{ return <C{} />; }}\n",
+                index + 1
+            ));
+        }
+        source.push_str(&format!("function C{depth}() {{ return <div />; }}\n"));
+        source.push_str("export function App() { return <C0 />; }\n");
+
+        let error = build_and_lower_application(&source)
+            .expect_err("over-deep component nesting should be rejected");
+
+        assert!(error.contains("maximum depth"), "{error}");
+    }
+
+    #[test]
+    fn accepts_component_nesting_within_depth_budget() {
+        let depth = 32;
+        let mut source = String::new();
+        for index in 0..depth {
+            source.push_str(&format!(
+                "function C{index}() {{ return <C{} />; }}\n",
+                index + 1
+            ));
+        }
+        source.push_str(&format!("function C{depth}() {{ return <div />; }}\n"));
+        source.push_str("export function App() { return <C0 />; }\n");
+
+        let application = build_and_lower_application(&source)
+            .expect("nesting within the depth budget should compile");
+
+        // The default-root discovery picks the first JSX-returning function
+        // in source order (C0 here), so the chain components are the whole
+        // application.
+        assert_eq!(application.components.len(), depth + 1);
+    }
+
+    #[test]
+    fn rejects_applications_beyond_aggregate_hir_budget() {
+        let span = SourceSpan::new("t.tsx", 0, 0);
+        let per_component = MAX_TOTAL_HIR_ENTRIES / 2 + 1;
+        let components: Vec<HirComponent> = (0..2)
+            .map(|index| {
+                let id = ComponentId::new("t.tsx", &format!("C{index}"));
+                (0..per_component).fold(HirComponent::new(id, span.clone()), |component, _| {
+                    component.with_node(HirNode::Empty)
+                })
+            })
+            .collect();
+
+        let error = ensure_hir_aggregate_budgets(&components)
+            .expect_err("aggregate HIR exhaustion should be rejected");
+
+        assert!(error.contains("maximum total of"), "{error}");
+    }
+
+    #[test]
+    fn rejects_applications_beyond_component_count_budget() {
+        let span = SourceSpan::new("t.tsx", 0, 0);
+        let components: Vec<HirComponent> = (0..=MAX_COMPONENT_COUNT)
+            .map(|index| {
+                HirComponent::new(
+                    ComponentId::new("t.tsx", &format!("C{index}")),
+                    span.clone(),
+                )
+            })
+            .collect();
+
+        let error = ensure_hir_aggregate_budgets(&components)
+            .expect_err("component count exhaustion should be rejected");
+
+        assert!(error.contains("maximum component count"), "{error}");
     }
 }

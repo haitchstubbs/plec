@@ -220,5 +220,9 @@ pub(crate) fn lower_component(
         return Err(ctx.err("executable roots require exactly one node"));
     }
     ctx.app.root_node = ctx.node(component.root_nodes[0], None)?;
+    // Per-component collection and instruction budgets also guard the
+    // single-component entry points (route loaders); the application entry
+    // adds the cross-component aggregates on top.
+    crate::application::component_budget_usage(&ctx.app)?;
     Ok(ctx.app)
 }
