@@ -4,6 +4,8 @@ use crate::cookie::*;
 use crate::fetch::*;
 use crate::prelude::*;
 use crate::runtime::*;
+#[cfg(feature = "fetch")]
+use plec_action::{ActionError, ActionHost, Run};
 use plec_dom::platform::document;
 use plec_eval::eval::*;
 use plec_schema::typed::TypedCapabilityRequest;
@@ -13,6 +15,110 @@ use web_sys::HtmlElement;
 /// Result-slot sentinel for tail-call continuations: a tail call discards
 /// the callee result, so no caller frame slot receives it.
 const TAIL_CALL_NO_SLOT: usize = usize::MAX;
+
+/// Fully evaluated browser fetch request. Transport remains in `fetch.rs`;
+/// shared action execution only decides when capability suspension occurs.
+#[cfg(feature = "fetch")]
+#[derive(Clone)]
+pub struct TypedLoaderFetchRequest {
+    pub url: String,
+    pub method: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Option<String>,
+    pub decode: String,
+    pub require_ok: bool,
+}
+
+#[cfg(feature = "fetch")]
+struct TypedLoaderHost<'a> {
+    runtime: &'a mut TypedRuntime,
+}
+
+#[cfg(feature = "fetch")]
+impl ActionHost for TypedLoaderHost<'_> {
+    type Request = TypedLoaderFetchRequest;
+
+    fn evaluate(
+        &mut self,
+        expression: usize,
+        frame: &[RuntimeValue],
+    ) -> Result<RuntimeValue, ActionError> {
+        typed_eval_frame(
+            &self.runtime.app,
+            self.runtime.cookie_policy.borrow().as_ref(),
+            expression,
+            &self.runtime.states,
+            None,
+            0,
+            frame,
+            &[],
+        )
+        .map_err(|error| {
+            ActionError(
+                error
+                    .as_string()
+                    .unwrap_or_else(|| "action evaluation failed".into()),
+            )
+        })
+    }
+
+    fn prepare_capability(
+        &mut self,
+        request: &TypedCapabilityRequest,
+        frame: &[RuntimeValue],
+    ) -> Result<Self::Request, ActionError> {
+        let TypedCapabilityRequest::Fetch(request) = request else {
+            return Err(ActionError(
+                "unsupported route loader capability: cookie".into(),
+            ));
+        };
+        let url = typed_value_string(&self.evaluate(request.url, frame)?);
+        if url.is_empty() {
+            return Err(ActionError("fetch URL is empty".into()));
+        }
+        let headers = request
+            .headers
+            .iter()
+            .map(|header| {
+                let name = self
+                    .runtime
+                    .app
+                    .strings
+                    .get(header.name)
+                    .cloned()
+                    .ok_or_else(|| ActionError("header name handle out of range".into()))?;
+                Ok((
+                    name,
+                    typed_value_string(&self.evaluate(header.value, frame)?),
+                ))
+            })
+            .collect::<Result<Vec<_>, ActionError>>()?;
+        let body = request
+            .body
+            .map(|expression| {
+                let value = self.evaluate(expression, frame)?;
+                match value {
+                    RuntimeValue::String(value) => Ok(value),
+                    value => value.json_body().map_err(|error| {
+                        ActionError(
+                            error
+                                .as_string()
+                                .unwrap_or_else(|| "fetch body encoding failed".into()),
+                        )
+                    }),
+                }
+            })
+            .transpose()?;
+        Ok(TypedLoaderFetchRequest {
+            url,
+            method: request.method.clone(),
+            headers,
+            body,
+            decode: request.decode.clone(),
+            require_ok: request.require_ok,
+        })
+    }
+}
 
 #[derive(Clone)]
 pub struct TypedActionFrame {
@@ -78,6 +184,30 @@ impl ActionFetchAccounting {
 }
 
 impl TypedRuntime {
+    #[cfg(feature = "fetch")]
+    pub(crate) fn start_shared_route_loader(
+        &mut self,
+        action: usize,
+        frame: Vec<RuntimeValue>,
+    ) -> Result<Run<TypedLoaderFetchRequest>, JsValue> {
+        let actions = self.app.actions.clone();
+        let mut host = TypedLoaderHost { runtime: self };
+        plec_action::start(&actions, action, frame, &mut host)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    #[cfg(feature = "fetch")]
+    pub(crate) fn resume_shared_route_loader(
+        &mut self,
+        suspension: plec_action::Suspension<TypedLoaderFetchRequest>,
+        result: Result<RuntimeValue, RuntimeValue>,
+    ) -> Result<Run<TypedLoaderFetchRequest>, JsValue> {
+        let actions = self.app.actions.clone();
+        let mut host = TypedLoaderHost { runtime: self };
+        plec_action::resume(&actions, suspension, result, &mut host)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
     pub fn execute_action(
         &mut self,
         action: usize,
@@ -426,9 +556,7 @@ impl TypedRuntime {
                                 // instead of native recursion, so one shared
                                 // step budget and one call-depth bound cover
                                 // self-referential tail calls too.
-                                if continuation.callers.len()
-                                    >= plec_ir::limits::MAX_CALL_DEPTH
-                                {
+                                if continuation.callers.len() >= plec_ir::limits::MAX_CALL_DEPTH {
                                     return Err(JsValue::from_str(
                                         "action call depth exceeds limit",
                                     ));
@@ -537,9 +665,7 @@ impl TypedRuntime {
                             (None, None, None, None) => {
                                 // Tail call: same continuation-based bound as
                                 // the `Call` arm above.
-                                if continuation.callers.len()
-                                    >= plec_ir::limits::MAX_CALL_DEPTH
-                                {
+                                if continuation.callers.len() >= plec_ir::limits::MAX_CALL_DEPTH {
                                     return Err(JsValue::from_str(
                                         "action call depth exceeds limit",
                                     ));
@@ -897,7 +1023,11 @@ mod tests {
 
     #[test]
     fn call_frame_executes_action_handles_from_frame_slots_with_both_continuations() {
-        let mut runtime = TypedRuntime::new(call_frame_application(), std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
+        let mut runtime = TypedRuntime::new(
+            call_frame_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
         let mut metrics = UpdateMetrics::default();
 
         runtime
@@ -956,7 +1086,8 @@ mod tests {
             }]
         }))
         .unwrap();
-        let mut runtime = TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
+        let mut runtime =
+            TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
         let mut metrics = UpdateMetrics::default();
 
         runtime
@@ -1151,7 +1282,15 @@ impl TypedRuntime {
                     self.app.bindings.get(handle).cloned(),
                     self.nodes.get(&self.app.bindings[handle].target).cloned(),
                 ) {
-                    typed_apply_binding(&self.app, self.cookie_policy.borrow().as_ref(), &binding, &node, &self.states, None, 0)?;
+                    typed_apply_binding(
+                        &self.app,
+                        self.cookie_policy.borrow().as_ref(),
+                        &binding,
+                        &node,
+                        &self.states,
+                        None,
+                        0,
+                    )?;
                     metrics.dom_operations += 1;
                     metrics.bindings_touched += 1;
                 }
@@ -1160,9 +1299,14 @@ impl TypedRuntime {
                     if let Some(node) = self.nodes.get(&program.target).cloned() {
                         for write in program.writes {
                             let value = match write.expression {
-                                Some(expression) => {
-                                    typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, None, 0)?
-                                }
+                                Some(expression) => typed_eval(
+                                    &self.app,
+                                    self.cookie_policy.borrow().as_ref(),
+                                    expression,
+                                    &self.states,
+                                    None,
+                                    0,
+                                )?,
                                 None => write
                                     .constant
                                     .and_then(|index| self.app.constants.get(index))
@@ -1288,7 +1432,15 @@ impl TypedRuntime {
                             .and_then(|binding| self.nodes.get(&binding.target))
                             .cloned(),
                     ) {
-                        typed_apply_binding(&self.app, self.cookie_policy.borrow().as_ref(), &binding, &node, &self.states, None, 0)?;
+                        typed_apply_binding(
+                            &self.app,
+                            self.cookie_policy.borrow().as_ref(),
+                            &binding,
+                            &node,
+                            &self.states,
+                            None,
+                            0,
+                        )?;
                         metrics.dom_operations += 1;
                         metrics.bindings_touched += 1;
                     }
@@ -1300,7 +1452,14 @@ impl TypedRuntime {
                                 let value = write
                                     .expression
                                     .map(|expression| {
-                                        typed_eval(&self.app, self.cookie_policy.borrow().as_ref(), expression, &self.states, None, 0)
+                                        typed_eval(
+                                            &self.app,
+                                            self.cookie_policy.borrow().as_ref(),
+                                            expression,
+                                            &self.states,
+                                            None,
+                                            0,
+                                        )
                                     })
                                     .transpose()?
                                     .or_else(|| {

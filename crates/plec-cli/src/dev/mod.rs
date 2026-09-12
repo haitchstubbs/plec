@@ -15,6 +15,7 @@ pub mod cli;
 pub mod compile;
 pub mod contract;
 pub mod doctor;
+pub mod limits;
 pub mod repo;
 pub mod trace;
 pub mod wasm_section;
@@ -138,6 +139,21 @@ pub enum ContractCommand {
         check: bool,
 
         /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Generate and check browser resource-limit constants.
+    Limits {
+        /// Exit non-zero when the checked-in module differs from Rust.
+        #[arg(long)]
+        check: bool,
+
+        /// Rewrite the checked-in generated TypeScript module.
+        #[arg(long)]
+        write: bool,
+
+        /// Print the result as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -361,6 +377,7 @@ fn dispatch_contract(repo: &Repo, command: ContractCommand) -> Result<(), String
                 Ok(())
             }
         }
+        ContractCommand::Limits { check, write, json } => limits::run(repo, check, write, json),
     }
 }
 

@@ -10,6 +10,7 @@
 
 use std::path::Path;
 
+use plec_schema::typed::TypedAction;
 use serde::Deserialize;
 
 use crate::ServerError;
@@ -175,10 +176,10 @@ pub struct Component {
     pub parameters: Vec<Parameter>,
     #[serde(default)]
     pub expressions: Vec<ExpressionProgram>,
-    /// Loader-action subset only: the server executes route loaders, never
-    /// general actions (see `loader::execute_route_loader`).
+    /// The server executes only route-loader actions through shared typed
+    /// action semantics (see `loader::execute_route_loader`).
     #[serde(default)]
-    pub actions: Vec<ActionProgram>,
+    pub actions: Vec<TypedAction>,
     #[serde(default)]
     pub loops: Vec<Loop>,
     #[serde(default)]
@@ -442,18 +443,6 @@ pub enum ExpressionInstruction {
     /// TS host's switch fallthrough. SSR-path expressions never contain them.
     #[serde(other)]
     Unknown,
-}
-
-/// The server never runs general action programs; instructions stay as raw
-/// JSON so the loader executor can locate the single `fetch` capability
-/// request the compiler lowers route loaders into.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ActionProgram {
-    #[serde(default)]
-    pub route_loader: bool,
-    #[serde(default)]
-    pub instructions: Vec<JsonValue>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

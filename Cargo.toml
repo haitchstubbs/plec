@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/plec-action",
   "crates/plec-cli",
   "crates/plec-compiler",
   "crates/plec-eval",

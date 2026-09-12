@@ -2,6 +2,8 @@
 //! Shared by the router (navigation) and the action/fetch VMs, so these
 //! live below the router crate boundary.
 
+#[cfg(feature = "fetch")]
+use crate::fetch::TypedPendingLoaderFetch;
 use crate::prelude::*;
 use crate::runtime::*;
 
@@ -96,7 +98,7 @@ impl RuntimeState {
         }
         #[cfg(feature = "fetch")]
         {
-            let pending_graph =
+            let (run, pending_graph) =
                 {
                     let mut typed = self.typed.borrow_mut();
                     let instance = typed
@@ -135,15 +137,21 @@ impl RuntimeState {
                             ),
                         ]
                     };
-                    let mut metrics = UpdateMetrics::default();
-                    instance.runtime.execute_action_with_frame(
-                        action,
-                        &values,
-                        None,
-                        None,
-                        &mut metrics,
-                    )?;
-                    let pending = instance.runtime.take_pending_fetches();
+                    let action_def = instance
+                        .runtime
+                        .app
+                        .actions
+                        .get(action)
+                        .cloned()
+                        .ok_or_else(|| JsValue::from_str("typed route loader action is invalid"))?;
+                    let mut frame = vec![RuntimeValue::Null; action_def.frame_slots];
+                    for (slot, value) in &values {
+                        let target = frame
+                            .get_mut(*slot)
+                            .ok_or_else(|| JsValue::from_str("event frame slot out of range"))?;
+                        *target = value.clone();
+                    }
+                    let run = instance.runtime.start_shared_route_loader(action, frame)?;
                     let state = instance
                         .route_state
                         .as_mut()
@@ -165,29 +173,66 @@ impl RuntimeState {
                     );
                     state.phase = TypedRoutePhase::Loading;
                     (
-                        pending,
+                        run,
                         (state.pending_mode != "retain")
                             .then(|| state.pending_graph_id.clone())
                             .flatten(),
                     )
                 };
-            if let Some(graph_id) = pending_graph.1 {
+            if let Some(graph_id) = pending_graph {
                 self.show_typed_route_graph(id, &graph_id, true, None)?;
             }
-            for mut request in pending_graph.0 {
-                request.instance_id = id.into();
-                if self.start_typed_fetch(request).is_err() {
-                    self.show_typed_route_error(
-                        id,
-                        RuntimeValue::Record(HashMap::from([
-                            ("kind".into(), RuntimeValue::String("runtime".into())),
-                            (
-                                "message".into(),
-                                RuntimeValue::String("route loader failed".into()),
-                            ),
-                        ])),
-                    )?;
-                    break;
+            match run {
+                plec_action::Run::Suspended(suspension) => {
+                    let graph_generation = self
+                        .typed
+                        .borrow()
+                        .get(id)
+                        .and_then(|instance| instance.loader_runtime.as_ref())
+                        .map(|runtime| runtime.graph_generation)
+                        .or_else(|| {
+                            self.typed
+                                .borrow()
+                                .get(id)
+                                .map(|instance| instance.runtime.graph_generation)
+                        })
+                        .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
+                    if self
+                        .start_typed_loader_fetch(TypedPendingLoaderFetch {
+                            instance_id: id.into(),
+                            suspension,
+                            graph_generation,
+                            request_id: 0,
+                        })
+                        .is_err()
+                    {
+                        self.show_typed_route_error(
+                            id,
+                            RuntimeValue::Record(HashMap::from([
+                                ("kind".into(), RuntimeValue::String("runtime".into())),
+                                (
+                                    "message".into(),
+                                    RuntimeValue::String("route loader failed".into()),
+                                ),
+                            ])),
+                        )?;
+                    }
+                }
+                plec_action::Run::Complete(outcome) => {
+                    let graph_generation = self
+                        .typed
+                        .borrow()
+                        .get(id)
+                        .and_then(|instance| instance.loader_runtime.as_ref())
+                        .map(|runtime| runtime.graph_generation)
+                        .or_else(|| {
+                            self.typed
+                                .borrow()
+                                .get(id)
+                                .map(|instance| instance.runtime.graph_generation)
+                        })
+                        .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
+                    self.complete_shared_route_loader(id, graph_generation, outcome)?;
                 }
             }
             Ok(())

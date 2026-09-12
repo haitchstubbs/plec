@@ -37,6 +37,12 @@
         { "op": "loadState", "state": 0 },
         { "op": "return" }
       ]
+    },
+    {
+      "instructions": [
+        { "op": "loadFrame", "slot": 0 },
+        { "op": "return" }
+      ]
     }
   ],
   "actions": [
@@ -59,7 +65,7 @@
           "resultSlot": 0,
           "errorSlot": 1
         },
-        { "op": "return" },
+        { "op": "return", "value": 4 },
         { "op": "return", "outcome": "failure", "value": 2 }
       ]
     }

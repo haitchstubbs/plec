@@ -24,6 +24,7 @@ fetch = [
 ]
 
 [dependencies]
+plec-action = { path = "../plec-action" }
 js-sys = { workspace = true }
 plec-dom = { path = "../plec-dom" }
 plec-eval = { path = "../plec-eval" }

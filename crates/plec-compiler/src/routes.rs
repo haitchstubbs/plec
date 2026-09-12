@@ -403,6 +403,13 @@ fn attach_route_loader(
             ExpressionInstruction::Return,
         ],
     });
+    let error_expression = component.expressions.len();
+    component.expressions.push(ExpressionProgram {
+        instructions: vec![
+            ExpressionInstruction::LoadFrame { slot: 1 },
+            ExpressionInstruction::Return,
+        ],
+    });
     let null_constant = component.constants.len();
     component.constants.push(Value::Null);
     let null_expression = component.expressions.len();
@@ -418,6 +425,16 @@ fn attach_route_loader(
     component.state_slots.push(StateSlot {
         initial_expression: null_expression,
         frame_slot: loader_state,
+    });
+    // `responseJson` stays an action-local transport envelope. The shared
+    // client/server loader executor returns it, then each host exports `body`
+    // at its loader-data boundary.
+    let result_expression = component.expressions.len();
+    component.expressions.push(ExpressionProgram {
+        instructions: vec![
+            ExpressionInstruction::LoadFrame { slot: 0 },
+            ExpressionInstruction::Return,
+        ],
     });
     let loader_action = component.actions.len();
     component.actions.push(ActionProgram {
@@ -443,11 +460,11 @@ fn attach_route_loader(
             },
             ActionInstruction::Return {
                 outcome: ReturnOutcome::Success,
-                value: None,
+                value: Some(result_expression),
             },
             ActionInstruction::Return {
                 outcome: ReturnOutcome::Failure,
-                value: None,
+                value: Some(error_expression),
             },
         ],
     });

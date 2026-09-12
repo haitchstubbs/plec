@@ -1,3 +1,10 @@
+import {
+  MAX_ARTIFACT_JSON_BYTES,
+  MAX_PROVIDER_MANIFEST_JSON_BYTES,
+  MAX_RUNTIME_JS_BYTES,
+  MAX_SNAPSHOT_JSON_BYTES,
+} from './limits.generated';
+
 // The Rust runtime validates the complete manifest. Browser glue only needs
 // this field to decide which independently-produced graph to fetch.
 type PlecRouteManifest = { rootGraphId: string };
@@ -478,13 +485,6 @@ export function markPlecTiming(name: PlecTimingMark): void {
 
 /** Transport-only router bootstrap. It fetches immutable artifacts and hands
  * them to WASM; route matching, history and outlet ownership stay in Rust. */
-
-/** Byte ceilings for untrusted JSON payloads (must mirror the Rust decode
- * limits in crates/plec-ir/src/limits.rs; see docs/security-limits.md). */
-const MAX_ARTIFACT_JSON_BYTES = 16 * 1024 * 1024;
-const MAX_SNAPSHOT_JSON_BYTES = 4 * 1024 * 1024;
-const MAX_RUNTIME_JS_BYTES = 16 * 1024 * 1024;
-const MAX_PROVIDER_MANIFEST_JSON_BYTES = 1024 * 1024;
 
 /** Decodes a streamed response body under a hard byte ceiling: the
  * declared content-length is rejected before reading, and each chunk is

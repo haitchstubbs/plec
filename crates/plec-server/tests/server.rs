@@ -561,19 +561,18 @@ fn loader_graph(url: &str) -> Value {
             "routeOutlets": [],
             "expressions": [
                 {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
-                {"instructions": [{"op": "loadHost", "host": 0}, {"op": "return"}]}
+                {"instructions": [{"op": "loadHost", "host": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 1}, {"op": "return"}]}
             ],
             "actions": [{
                 "routeLoader": true,
-                "instructions": [{
-                    "op": "capabilityRequest",
-                    "capability": "fetch",
-                    "request": {"url": 0, "method": "GET", "decode": "responseJson", "requireOk": true},
-                    "successPc": 0,
-                    "failurePc": 1,
-                    "resultSlot": 0,
-                    "errorSlot": 1
-                }]
+                "frameSlots": 2,
+                "instructions": [
+                    {"op": "capabilityRequest", "capability": "fetch", "request": {"url": 0, "method": "GET", "decode": "responseJson", "requireOk": true}, "successPc": 1, "failurePc": 2, "resultSlot": 0, "errorSlot": 1},
+                    {"op": "return", "value": 2},
+                    {"op": "return", "outcome": "failure", "value": 3}
+                ]
             }]
         }]
     })

@@ -210,6 +210,7 @@ plec workspace compile [--profile p] [--features f] [--no-optimize]
 plec workspace test wasm [filters] [--failures]
 plec workspace test last [--failure <substr>]
 plec workspace contract ssr [--check]
+plec workspace contract limits [--write]
 plec workspace trace <symbol|error-code>
 plec workspace artifact provenance runtime
 plec workspace artifact stale

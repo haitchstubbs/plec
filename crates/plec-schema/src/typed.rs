@@ -218,9 +218,7 @@ impl TypedComponentApplication {
                 }
             }
         }
-        validate_component_call_graph_acyclic(
-            self.components.iter().map(component_call_targets),
-        )?;
+        validate_component_call_graph_acyclic(self.components.iter().map(component_call_targets))?;
         let mut total_entries = 0usize;
         let mut total_instructions = 0usize;
         let mut total_string_bytes = 0usize;
@@ -387,7 +385,9 @@ where
             in_degree[*target] += 1;
         }
     }
-    let mut queue: Vec<usize> = (0..edges.len()).filter(|index| in_degree[*index] == 0).collect();
+    let mut queue: Vec<usize> = (0..edges.len())
+        .filter(|index| in_degree[*index] == 0)
+        .collect();
     let mut cursor = 0usize;
     while let Some(index) = queue.get(cursor).copied() {
         cursor += 1;
@@ -546,7 +546,7 @@ pub struct TypedEventField {
     pub slot: usize,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TypedAction {
     pub instructions: Vec<TypedActionInstruction>,
@@ -561,7 +561,7 @@ pub struct TypedAction {
     pub route_retry: bool,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum TypedActionInstruction {
     Evaluate {
@@ -658,7 +658,7 @@ pub enum TypedActionInstruction {
     },
 }
 
-#[derive(Clone, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum TypedReturnOutcome {
     Success,
@@ -670,14 +670,14 @@ impl Default for TypedReturnOutcome {
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "capability", content = "request", rename_all = "camelCase")]
 pub enum TypedCapabilityRequest {
     Fetch(TypedFetchRequest),
     Cookie(TypedCookieRequest),
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TypedFetchRequest {
     pub url: usize,
@@ -690,13 +690,13 @@ pub struct TypedFetchRequest {
     pub require_ok: bool,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct TypedFetchHeader {
     pub name: usize,
     pub value: usize,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TypedCookieRequest {
     pub operation: String,
