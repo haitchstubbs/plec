@@ -15,6 +15,7 @@ pub mod cli;
 pub mod compile;
 pub mod contract;
 pub mod doctor;
+pub mod graph;
 pub mod limits;
 pub mod repo;
 pub mod trace;
@@ -78,6 +79,12 @@ pub enum WorkspaceCommand {
     Doctor {
         #[command(subcommand)]
         command: DoctorCommand,
+    },
+
+    /// Inspect compiled graph registry resolution and node structure.
+    Graph {
+        #[command(subcommand)]
+        command: GraphCommand,
     },
 }
 
@@ -185,6 +192,37 @@ pub enum DoctorCommand {
     },
 }
 
+#[derive(Subcommand)]
+pub enum GraphCommand {
+    /// Resolve a graph id through the runtime's registry rules.
+    Resolve {
+        /// Graph id to resolve.
+        graph_id: String,
+
+        /// Application source entry (default: the fullstack app).
+        #[arg(long)]
+        source: Option<PathBuf>,
+
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Print a resolved component's compact node structure.
+    Tree {
+        /// Graph id to resolve and render.
+        graph_id: String,
+
+        /// Application source entry (default: the fullstack app).
+        #[arg(long)]
+        source: Option<PathBuf>,
+
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 pub fn dispatch(command: WorkspaceCommand) -> Result<(), String> {
     let repo = Repo::discover()?;
 
@@ -231,6 +269,7 @@ pub fn dispatch(command: WorkspaceCommand) -> Result<(), String> {
             Ok(())
         }
         WorkspaceCommand::Doctor { command } => dispatch_doctor(&repo, command),
+        WorkspaceCommand::Graph { command } => dispatch_graph(&repo, command),
     }
 }
 
@@ -412,6 +451,61 @@ fn dispatch_doctor(repo: &Repo, command: DoctorCommand) -> Result<(), String> {
                 Ok(())
             } else {
                 Err("adoption doctor found problems".into())
+            }
+        }
+    }
+}
+
+fn dispatch_graph(repo: &Repo, command: GraphCommand) -> Result<(), String> {
+    match command {
+        GraphCommand::Resolve {
+            graph_id,
+            source,
+            json,
+        } => {
+            let report = graph::resolve(
+                repo,
+                &source.unwrap_or_else(|| repo.default_app_source()),
+                &graph_id,
+            )?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report)
+                        .map_err(|error| format!("serialize: {error}"))?
+                );
+            } else {
+                graph::print_resolve(&report);
+            }
+            if report.found() {
+                Ok(())
+            } else {
+                Err(format!("graph {graph_id:?} is not registered"))
+            }
+        }
+        GraphCommand::Tree {
+            graph_id,
+            source,
+            json,
+        } => {
+            let report = graph::tree(
+                repo,
+                &source.unwrap_or_else(|| repo.default_app_source()),
+                &graph_id,
+            )?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report)
+                        .map_err(|error| format!("serialize: {error}"))?
+                );
+            } else {
+                graph::print_tree(&report);
+            }
+            if report.found() {
+                Ok(())
+            } else {
+                Err(format!("graph {graph_id:?} is not registered"))
             }
         }
     }

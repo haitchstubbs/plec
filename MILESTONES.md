@@ -59,7 +59,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | wasm-runtime-b1i | Wire the native plec-server crate into dev/build workflows and retire packages/plec-server | closed | P2 | task |  |  |
 | wasm-runtime-b50 | Unify route matching and support nested route-chain SSR | closed | P2 | feature | haitchstubbs |  |
 | wasm-runtime-buy | Remove or implement crates/plec-diagnostics stub | open | P3 | chore |  |  |
-| wasm-runtime-ctb | plec dev graph resolve/tree: registry resolution debugger | in_progress | P2 | feature | haitchstubbs |  |
+| wasm-runtime-ctb | plec dev graph resolve/tree: registry resolution debugger | closed | P2 | feature | haitchstubbs |  |
 | wasm-runtime-d5q | Make loader error retry acceptance deterministic with SSR | closed | P2 | task | haitchstubbs |  |
 | wasm-runtime-dvs | plec dev context <domain>: condensed architecture packets for agents | open | P3 | feature |  |  |
 | wasm-runtime-e7f | Move WASM test orchestration under packages/plec-e2e Playwright ownership | open | P3 | chore |  |  |

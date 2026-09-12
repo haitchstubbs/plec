@@ -1,7 +1,10 @@
 use crate::dev;
 
 use clap::{Parser, Subcommand};
-use plec_build::{build, modules::host::resolve_custom_elements, modules::host::resolve_host_imports, BuildOptions};
+use plec_build::{
+    build, modules::host::resolve_custom_elements, modules::host::resolve_host_imports,
+    BuildOptions,
+};
 use plec_compiler::{
     compile_with_options, load_with_options, lower_route_manifest, lower_routes, CompilerOptions,
 };

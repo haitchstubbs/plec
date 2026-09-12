@@ -110,7 +110,10 @@ const SITES: &[SiteSpec] = &[
         mixed: true,
         force: None,
         fallback: Some(Kind::Snapshot),
-        allow: &[(1, "intentional legacy fixture"), (999, "version gate fixture")],
+        allow: &[
+            (1, "intentional legacy fixture"),
+            (999, "version gate fixture"),
+        ],
         exclude: &[],
     },
     SiteSpec {
@@ -195,12 +198,9 @@ pub fn scan(repo: &Repo) -> Result<Report, String> {
     // Bootstrap canonical: whatever the server producer currently emits.
     let bootstrap_canonical = first_bootstrap_version(repo)?;
     // Host-provider canonical: the named constant in the plec-build producer.
-    let host_provider_canonical = scan_definition(
-        repo,
-        HOST_PROVIDER_CANONICAL_FILE,
-        HOST_PROVIDER_DEFINITION,
-    )?
-    .map(|(value, _)| value);
+    let host_provider_canonical =
+        scan_definition(repo, HOST_PROVIDER_CANONICAL_FILE, HOST_PROVIDER_DEFINITION)?
+            .map(|(value, _)| value);
 
     let mut snapshot_rows = vec![snapshot_definition_row(compiled_snapshot, source_snapshot)];
     let mut bootstrap_rows = Vec::new();
@@ -331,9 +331,7 @@ pub fn scan(repo: &Repo) -> Result<Report, String> {
             canonical: host_provider_canonical,
             canonical_source: host_provider_canonical
                 .map(|value| {
-                    format!(
-                        "{HOST_PROVIDER_CANONICAL_FILE} ({HOST_PROVIDER_DEFINITION}: {value})"
-                    )
+                    format!("{HOST_PROVIDER_CANONICAL_FILE} ({HOST_PROVIDER_DEFINITION}: {value})")
                 })
                 .unwrap_or_else(|| "producer constant not found".into()),
             rows: host_provider_rows,
@@ -578,11 +576,7 @@ fn collect_dir_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 
 /// A `const NAME: u32 = N;` initializer as written in the given source file —
 /// guards against a stale constant disagreeing with a consumer elsewhere.
-fn scan_definition(
-    repo: &Repo,
-    file: &str,
-    needle: &str,
-) -> Result<Option<(u32, usize)>, String> {
+fn scan_definition(repo: &Repo, file: &str, needle: &str) -> Result<Option<(u32, usize)>, String> {
     let content = read_repo_file(repo, file)?;
 
     for (index, line) in content.lines().enumerate() {
