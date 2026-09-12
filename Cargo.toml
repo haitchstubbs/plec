@@ -17,6 +17,8 @@ members = [
   "crates/plec-dom",
   "crates/plec-build",
   "crates/plec-server",
+  "crates/plec-query-core",
+  "crates/plec-query-node",
 ]
 
 [workspace.package]
@@ -93,3 +95,17 @@ hyper-util = { version = "0.1", default-features = false, features = [
 ] }
 http-body-util = "0.1"
 getrandom = "0.4"
+napi = { version = "3", features = ["serde-json"] }
+napi-derive = "3"
+rmp-serde = "1"
+once_cell = "1"
+blake3 = "1"
+dashmap = "6"
+lru = "0.12"
+parking_lot = "0.12"
+smallvec = "1"
+rstest = "0.25"
+insta = { version = "1", features = ["json"] }
+pretty_assertions = "1"
+proptest = "1"
+criterion = "0.8.2"

@@ -508,6 +508,8 @@ fn mount_typed_graph(
         state.effective_tag_policy(),
     )?;
     runtime.set_component_definitions(graph.components);
+    runtime.host_registry = state.host_registry.clone();
+    runtime.host_dispatch = Some(state.clone());
     runtime.set_host_inputs(state.typed_host_inputs.borrow().clone())?;
     runtime.graph_generation = state.next_typed_generation();
     // Fresh client mounts use the exact structural address the server
@@ -571,6 +573,8 @@ fn adopt_typed_graph(
         state.effective_tag_policy(),
     )?;
     runtime.set_component_definitions(graph.components);
+    runtime.host_registry = state.host_registry.clone();
+    runtime.host_dispatch = Some(state.clone());
     runtime.ssr_imported = *state.typed_ssr_imported.borrow();
     // Adopted instances keep emitting addresses under the claimed path:
     // branch flips and delta rows must match the server grammar.
