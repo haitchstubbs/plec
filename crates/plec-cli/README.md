@@ -339,6 +339,26 @@ DOCUMENTED BY
   docs/ssr-architecture.md:81  > **Contract evolution:** …
 ```
 
+## `plec workspace graph resolve` / `plec workspace graph tree`
+
+Compile an application through the route-artifact pipeline and inspect graph
+registry resolution without reconstructing runtime lifecycle rules. Resolution
+first checks a direct registry key, then searches component ids in registered
+applications. Missing graph ids report the runtime's fail-closed outcome and
+exit non-zero.
+
+```bash
+plec workspace graph resolve app
+plec workspace graph resolve Panel --source apps/fullstack/src/router.tsx
+plec workspace graph tree app
+plec workspace graph tree Panel --json
+```
+
+`tree` renders only the resolved component's local node program: elements,
+conditional branches, keyed loop row templates, component calls and call-site
+children, plus dynamic, host, and slot boundaries. Invalid handles or cycles
+are reported in output instead of crashing the debugger.
+
 ## `plec workspace doctor adoption`
 
 Health check for the SSR adoption pipeline, composing the checks above plus

@@ -37,6 +37,8 @@ not, the binary on PATH is the release frontend.
 | Is the built/staged WASM current?                  | `plec workspace artifact stale`                            |
 | Full artifact identity + protocol report           | `plec workspace artifact provenance runtime`               |
 | Why is SSR adoption failing?                       | `plec workspace doctor adoption [--html f] [--snapshot f]` |
+| How does a graph id resolve?                       | `plec workspace graph resolve <graph-id>`                  |
+| What nodes does a component own?                   | `plec workspace graph tree <graph-id>`                     |
 
 All commands accept `--json`.
 
@@ -95,6 +97,18 @@ Matches are categorized: DEFINED IN / PRODUCED BY / ASSERTED BY / DOCUMENTED
 BY, with a RELATED CONTRACT row for known adoption codes. This answers
 "where can this come from and which tests expect it?" without opening five
 files.
+
+### When investigating graph registration or component structure
+
+```bash
+plec workspace graph resolve Panel
+plec workspace graph tree Panel
+```
+
+`resolve` reports direct registry-key resolution, registered-application
+component fallback, or a fail-closed miss. `tree` prints the resolved
+component's local structure, including conditional branches, keyed loop row
+templates, component calls, call-site children, and host/slot boundaries.
 
 ## Extending the CLI
 

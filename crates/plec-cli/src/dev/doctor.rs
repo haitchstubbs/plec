@@ -7,7 +7,7 @@ use plec_compiler::{
     lower_route_artifacts_with_options, lower_routes, read_source_graph_with_options,
     CompilerOptions,
 };
-use plec_ir::{ComponentApplication, Node, RouteManifest};
+use plec_ir::{ComponentApplication, ExecutableComponent, Node, RouteManifest};
 use plec_model::build_semantic_graph;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -59,7 +59,7 @@ pub struct DoctorReport {
 /// The compiled application exactly as the build pipeline emits it: one
 /// manifest plus a registry of graphs keyed by graph id — the same shape the
 /// browser hands to `runtime.register_graph`.
-pub struct CompiledApp {
+pub(crate) struct CompiledApp {
     pub manifest: RouteManifest,
     /// graph_id → application, in registry order.
     pub registry: BTreeMap<String, ComponentApplication>,
@@ -138,7 +138,7 @@ pub fn run(repo: &Repo, options: &DoctorOptions) -> Result<DoctorReport, String>
     })
 }
 
-fn compile_application(repo: &Repo, source: &Path) -> Result<CompiledApp, String> {
+pub(crate) fn compile_application(repo: &Repo, source: &Path) -> Result<CompiledApp, String> {
     let source = if source.is_absolute() {
         source.to_path_buf()
     } else {
@@ -179,9 +179,13 @@ fn compile_application(repo: &Repo, source: &Path) -> Result<CompiledApp, String
             .map_err(|error| format!("semantic graph: {error}"))?;
     let routes = lower_routes(&source_graph.modules, &semantic_graph)
         .map_err(|error| format!("routes: {error}"))?;
-    let bundle =
-        lower_route_artifacts_with_options(&source_graph.modules, &semantic_graph, &routes, &custom_elements)
-            .map_err(|error| format!("route artifacts: {error}"))?;
+    let bundle = lower_route_artifacts_with_options(
+        &source_graph.modules,
+        &semantic_graph,
+        &routes,
+        &custom_elements,
+    )
+    .map_err(|error| format!("route artifacts: {error}"))?;
 
     let mut registry = BTreeMap::new();
     for artifact in &bundle.graphs {
@@ -229,32 +233,25 @@ fn resolve_graphs(
     let mut rows = Vec::new();
 
     for target in &targets {
+        let resolution = resolve_graph(compiled, target);
         rows.push(ResolutionRow {
             target: target.clone(),
-            status: if compiled.registry.contains_key(target) {
-                "✓ direct registry key".into()
-            } else {
-                "✗ manifest references a graph that is not registered".into()
-            },
+            status: resolution_status(&resolution),
         });
     }
 
     // Component ids: nested components are not registry keys — they resolve
     // through the registered application that owns them, which is exactly
     // the fallback the runtime performs.
-    for (graph_id, application) in &compiled.registry {
-        for (index, component) in application.components.iter().enumerate() {
+    for application in compiled.registry.values() {
+        for component in &application.components {
             if compiled.registry.contains_key(&component.id) {
                 continue;
             }
-            let status = if component.id == application.components[application.root_component].id {
-                "✓ graph root".into()
-            } else {
-                format!("✓ via registered app {graph_id} → component[{index}]")
-            };
+            let resolution = resolve_graph(compiled, &component.id);
             rows.push(ResolutionRow {
                 target: component.id.clone(),
-                status,
+                status: resolution_status(&resolution),
             });
         }
     }
@@ -340,7 +337,7 @@ fn resolve_snapshot(
     }
 
     for (instance, graph_id) in graph_refs {
-        let status = resolve_one(compiled, &graph_id);
+        let status = resolution_status(&resolve_graph(compiled, &graph_id));
         rows.push(ResolutionRow {
             target: format!("{instance} → {graph_id}"),
             status,
@@ -350,22 +347,92 @@ fn resolve_snapshot(
     Ok(rows)
 }
 
-fn resolve_one(compiled: &CompiledApp, graph_id: &str) -> String {
-    if compiled.registry.contains_key(graph_id) {
-        return "✓ direct registry key".into();
+/// Resolution path used by the runtime graph registry. A registered graph
+/// selects its application's root component; component ids otherwise resolve
+/// by searching registered applications in registry order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub(crate) enum GraphResolution {
+    Direct {
+        registry_key: String,
+        component_index: usize,
+        component_id: String,
+    },
+    RegisteredComponent {
+        registry_key: String,
+        component_index: usize,
+        component_id: String,
+    },
+    Missing,
+}
+
+pub(crate) fn resolve_graph(compiled: &CompiledApp, graph_id: &str) -> GraphResolution {
+    if let Some(application) = compiled.registry.get(graph_id) {
+        if let Some(component) = application.components.get(application.root_component) {
+            return GraphResolution::Direct {
+                registry_key: graph_id.into(),
+                component_index: application.root_component,
+                component_id: component.id.clone(),
+            };
+        }
+        return GraphResolution::Missing;
     }
 
-    for application in compiled.registry.values() {
-        if let Some(index) = application
+    for (registry_key, application) in &compiled.registry {
+        if let Some((component_index, component)) = application
             .components
             .iter()
-            .position(|component| component.id == graph_id)
+            .enumerate()
+            .find(|(_, component)| component.id == graph_id)
         {
-            return format!("✓ via registered app → component[{index}]");
+            return GraphResolution::RegisteredComponent {
+                registry_key: registry_key.clone(),
+                component_index,
+                component_id: component.id.clone(),
+            };
         }
     }
 
-    "✗ unknown ssr snapshot graph (would fail closed)".into()
+    GraphResolution::Missing
+}
+
+pub(crate) fn resolved_component<'a>(
+    compiled: &'a CompiledApp,
+    resolution: &GraphResolution,
+) -> Option<&'a ExecutableComponent> {
+    let (registry_key, component_index) = match resolution {
+        GraphResolution::Direct {
+            registry_key,
+            component_index,
+            ..
+        }
+        | GraphResolution::RegisteredComponent {
+            registry_key,
+            component_index,
+            ..
+        } => (registry_key, component_index),
+        GraphResolution::Missing => return None,
+    };
+    compiled
+        .registry
+        .get(registry_key)
+        .and_then(|application| application.components.get(*component_index))
+}
+
+pub(crate) fn resolution_status(resolution: &GraphResolution) -> String {
+    match resolution {
+        GraphResolution::Direct { .. } => "✓ direct registry key".into(),
+        GraphResolution::RegisteredComponent {
+            registry_key,
+            component_index,
+            ..
+        } => format!("✓ via registered app {registry_key} → component[{component_index}]"),
+        GraphResolution::Missing => "✗ unknown ssr snapshot graph (would fail closed)".into(),
+    }
 }
 
 /// Which execution state a snapshot v2 must record per component:
