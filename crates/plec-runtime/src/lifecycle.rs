@@ -66,6 +66,8 @@ impl PlecRuntime {
                 tag_policy,
             )?;
             typed.set_component_definitions(application.components.clone());
+            typed.host_registry = self.state.host_registry.clone();
+            typed.host_dispatch = Some((*self.state).clone());
             typed.set_host_inputs(self.state.typed_host_inputs.borrow().clone())?;
             typed.graph_generation = self.state.next_typed_generation();
             self.dispose_typed_instances();
@@ -519,7 +521,16 @@ impl PlecRuntime {
         for (_, mut instance) in self.state.typed.borrow_mut().drain() {
             instance.runtime.invalidate_fetches();
             instance.runtime.clear_listeners();
+            // Provider handles must drain before the DOM they own is
+            // cleared; disposal is scoped to this runtime's instances only.
+            instance.runtime.dispose_host_components();
             instance.runtime.clear_host_refs();
+            if let Some(mut loader) = instance.loader_runtime {
+                loader.invalidate_fetches();
+                loader.clear_listeners();
+                loader.dispose_host_components();
+                loader.clear_host_refs();
+            }
             if let Some(root) = instance.runtime.root {
                 root.set_inner_html("");
             }
@@ -610,5 +621,17 @@ impl PlecRuntime {
     /// never be enabled. Must be set before loading or registering graphs.
     pub fn set_tag_policy(&self, policy: JsValue) -> Result<(), JsValue> {
         self.state.set_tag_policy(policy)
+    }
+
+    /// Installs this runtime's host provider registry: a JS object exposing
+    /// `resolve(provider, component)` returning the component lifecycle
+    /// (`{ mount, update?, dispose? }`) or `undefined` when unknown. `null`
+    /// removes provider capability. The registry is scoped to this runtime;
+    /// no process-global bridge is consulted. Every graph instance this
+    /// runtime creates (routes, loaders, nested components) resolves against
+    /// the same registry, and each mount captures its lifecycle so later
+    /// registry mutation cannot redirect update/dispose.
+    pub fn set_host_registry(&self, registry: JsValue) -> Result<(), JsValue> {
+        self.state.set_host_registry(registry)
     }
 }

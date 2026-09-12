@@ -22,9 +22,8 @@ const REGISTRY_JS: &str = r#"
       element.setAttribute(key === 'className' ? 'class' : key, String(value));
     }
   };
-  globalThis.__test_host_calls = calls;
-  globalThis.__plec_host_components = {
-    mount: (provider, component, boundary, props) => {
+  const lifecycle = {
+    mount: (boundary, props) => {
       calls.mountProps = props;
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       apply(svg, props);
@@ -42,11 +41,21 @@ const REGISTRY_JS: &str = r#"
     },
     dispose: () => {},
   };
+  globalThis.__test_host_calls = calls;
+  globalThis.__test_host_registry = {
+    resolve: (provider, component) =>
+      provider === 'lucide' && component === 'Beaker' ? lifecycle : undefined,
+  };
 })()
 "#;
 
-fn install_recording_provider() {
+fn install_recording_provider(runtime: &PlecRuntime) {
     js_sys::eval(REGISTRY_JS).expect("provider registry snippet must evaluate");
+    let registry = js_sys::Reflect::get(&js_sys::global(), &"__test_host_registry".into())
+        .expect("registry object installed");
+    runtime
+        .set_host_registry(registry)
+        .expect("runtime-local registry installs");
 }
 
 fn calls() -> js_sys::Object {
@@ -102,8 +111,8 @@ fn icon_artifact() -> JsValue {
 
 #[wasm_bindgen_test]
 fn host_props_reach_the_provider_as_plain_objects_on_mount_and_update() {
-    install_recording_provider();
     let runtime = PlecRuntime::new();
+    install_recording_provider(&runtime);
     runtime
         .load_application(icon_artifact())
         .expect("artifact with a host component must load");

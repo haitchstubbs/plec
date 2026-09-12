@@ -19,7 +19,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.2 | Rename internal plec dev group to plec workspace | closed | P2 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.3 | Out-of-repo plec build: runtime staging + esbuild from the app's node_modules | closed | P1 | feature |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.4 | bin shim: plec command owned by packages/plec | closed | P2 | task | haitchstubbs |  |
-| &nbsp;&nbsp;↳ wasm-runtime-1wj.5 | plec init + application template | open | P1 | feature |  |  |
+| &nbsp;&nbsp;↳ wasm-runtime-1wj.5 | plec init + application template | in_progress | P1 | feature | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.6 | plec dev — consumer watch + serve loop | open | P1 | feature |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.7 | Docs: install-from-source workflow for the release package | open | P2 | task |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.8 | apps/fullstack as the canonical example built from real release assets | open | P1 | task |  |  |
@@ -50,8 +50,8 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | wasm-runtime-a08 | Generate TypeScript resource-limit constants from Rust | closed | P2 | task | haitchstubbs |  |
 | **wasm-runtime-a2n** | **Deferred host-renderer capabilities** | open | P2 | epic |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-a2n.1 | Configure host import bindings | closed | P2 | task | haitchstubbs |  |
-| &nbsp;&nbsp;↳ wasm-runtime-a2n.2 | Add SSR-capable host providers | open | P2 | task |  |  |
-| &nbsp;&nbsp;↳ wasm-runtime-a2n.3 | Support callback and event props in host components | in_progress | P2 | task | haitchstubbs |  |
+| &nbsp;&nbsp;↳ wasm-runtime-a2n.2 | Add SSR-capable host providers | in_progress | P2 | task | haitchstubbs |  |
+| &nbsp;&nbsp;↳ wasm-runtime-a2n.3 | Support callback and event props in host components | closed | P2 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-a2n.4 | Scope host provider capability registries to Plec runtime instances | closed | P2 | task | haitchstubbs |  |
 | wasm-runtime-a7h | Bound JS normalization width before JSON stringify | closed | P2 | bug | haitchstubbs |  |
 | wasm-runtime-ahw | Client-side route navigation never seeds loader data into the mounted graph (notes page renders empty after graph swap) | closed | P2 | bug | haitchstubbs |  |
