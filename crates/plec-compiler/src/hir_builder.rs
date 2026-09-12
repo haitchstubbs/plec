@@ -2043,6 +2043,10 @@ fn lower_jsx_element_with_consumed_key(
         Some(HirComponentTarget::Static(target)) => Some(target),
         _ => None,
     };
+    let host_target = matches!(
+        target.as_ref(),
+        Some(HirComponentTarget::Host { .. })
+    );
     let selector_target = ctx.component_selectors.get(&tag_name).cloned();
 
     let mut props = Vec::new();
@@ -2074,7 +2078,14 @@ fn lower_jsx_element_with_consumed_key(
                     return Err("intrinsic elements support one ref".into());
                 }
             } else {
-                lower_jsx_attr(attr, ctx, &mut props, static_target, &mut events)?;
+                lower_jsx_attr(
+                    attr,
+                    ctx,
+                    &mut props,
+                    static_target,
+                    host_target,
+                    &mut events,
+                )?;
                 if router_link && jsx_attr_name(attr).as_deref() == Some("to") {
                     if let Some(prop) = props.last_mut() {
                         match prop {
@@ -2247,6 +2258,7 @@ fn lower_jsx_attr(
     ctx: &mut HirLoweringCtx<'_>,
     props: &mut Vec<HirProp>,
     component_target: Option<&ComponentId>,
+    host_target: bool,
     events: &mut Vec<HirEventBinding>,
 ) -> Result<(), String> {
     let name = jsx_attr_name(attr).expect("JSX attribute has a name");
@@ -2256,7 +2268,7 @@ fn lower_jsx_attr(
             "Reserved Plec DOM attribute '{name}' is owned by the runtime and cannot be authored in JSX (docs/dom-address-protocol.md)"
         ));
     }
-    if component_target.is_none() {
+    if component_target.is_none() && !host_target {
         reject_hostile_intrinsic_attr(&name)?;
     }
     if name == "key" {
@@ -2264,7 +2276,7 @@ fn lower_jsx_attr(
             "JSX key is only supported on the direct root of a .map() callback".to_string(),
         );
     }
-    if component_target.is_some() && name == "children" {
+    if (component_target.is_some() || host_target) && name == "children" {
         return Err("component children must use JSX child syntax".to_string());
     }
 
@@ -2276,7 +2288,8 @@ fn lower_jsx_attr(
                 .as_str()
                 .map(|s| s.to_string())
                 .unwrap_or_default();
-            if component_target.is_none() && !is_safe_attribute_value(&name, &value) {
+            if component_target.is_none() && !host_target && !is_safe_attribute_value(&name, &value)
+            {
                 return Err(format!(
                     "JSX attribute '{name}' value uses an unsafe URL scheme and cannot be authored in Plec (crates/plec-ir/src/sink.rs)"
                 ));
@@ -2291,7 +2304,7 @@ fn lower_jsx_attr(
                 let span = source_span_from_swc(container.span, ctx.module_id);
 
                 // Check if this is a DOM event binding (only for intrinsic elements)
-                if component_target.is_none() {
+                if component_target.is_none() && !host_target {
                     if let Some(event_name) = normalize_event_name(&name) {
                         // For DOM events, all valid expressions are treated as callables
                         if let Some(callable) =
@@ -2307,16 +2320,41 @@ fn lower_jsx_attr(
                     }
                 }
 
-                let callable = match component_target.and_then(|target| {
-                    ctx.semantic_graph
-                        .get_module(&target.module_id)
-                        .and_then(|module| module.component_props.get(&target.local_name))
-                        .and_then(|props| props.get(&name))
-                }) {
-                    Some(ComponentPropKind::Callable) => {
+                let callable = if host_target {
+                    // Host provider components accept callback props
+                    // without a declared prop table: inline callables always
+                    // bind as callbacks, and identifier references bind only
+                    // when the resolved binding is itself callable.
+                    let ident_callable = match expr.as_ref() {
+                        Expr::Ident(ident) => ctx
+                            .resolve_binding(&ident.sym)
+                            .map(|binding| {
+                                matches!(
+                                    ctx.bindings[binding.0 as usize].kind,
+                                    HirBindingKind::Callable
+                                        | HirBindingKind::Parameter { callable: true }
+                                )
+                            })
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    if ident_callable {
                         lower_callable(expr, CallablePolicy::CallableValue, ctx)?
+                    } else {
+                        lower_callable(expr, CallablePolicy::InlineOnly, ctx)?
                     }
-                    _ => lower_callable(expr, CallablePolicy::InlineOnly, ctx)?,
+                } else {
+                    match component_target.and_then(|target| {
+                        ctx.semantic_graph
+                            .get_module(&target.module_id)
+                            .and_then(|module| module.component_props.get(&target.local_name))
+                            .and_then(|props| props.get(&name))
+                    }) {
+                        Some(ComponentPropKind::Callable) => {
+                            lower_callable(expr, CallablePolicy::CallableValue, ctx)?
+                        }
+                        _ => lower_callable(expr, CallablePolicy::InlineOnly, ctx)?,
+                    }
                 };
                 if let Some(callable) = callable {
                     props.push(HirProp::Callable {
@@ -2364,7 +2402,10 @@ fn lower_jsx_attr(
     // An intrinsic `on*` prop that survived the value match never became a
     // declared event (string handlers, non-callable expressions), so it would
     // reach the runtime as a script-sink attribute. Fail the compile closed.
+    // Host provider props travel to provider code as data, not DOM
+    // attributes, so the same names stay allowed there.
     if component_target.is_none()
+        && !host_target
         && name.to_ascii_lowercase().starts_with("on")
         && events.len() == events_before
     {

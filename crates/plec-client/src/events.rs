@@ -1,4 +1,7 @@
 use crate::prelude::*;
+use crate::cookie::TypedPendingCookie;
+#[cfg(feature = "fetch")]
+use crate::fetch::TypedPendingFetch;
 use crate::runtime::TypedRoutePhase;
 use plec_schema::typed::TypedActionInstruction;
 
@@ -497,6 +500,7 @@ impl RuntimeState {
         if route_retry {
             return self.retry_typed_route(instance_id);
         }
+        #[cfg(feature = "fetch")]
         let (pending, cookies) = {
             let Ok(mut typed) = self.typed.try_borrow_mut() else {
                 return Ok(());
@@ -513,36 +517,105 @@ impl RuntimeState {
                 runtime.take_pending_cookies(),
             )
         };
-        self.dispatch_typed_callbacks(instance_id)?;
+        #[cfg(feature = "fetch")]
+        return self.complete_typed_action(
+            instance_id.into(),
+            pending,
+            cookies,
+            event.type_() == "keydown",
+        );
+
+        #[cfg(not(feature = "fetch"))]
+        {
+            let cookies = {
+                let Ok(mut typed) = self.typed.try_borrow_mut() else {
+                    return Ok(());
+                };
+                let mut metrics = UpdateMetrics::default();
+                typed
+                    .get_mut(instance_id)
+                    .unwrap()
+                    .runtime
+                    .execute_action_with_frame(action, &values, row, Some(&event), &mut metrics)?;
+                typed
+                    .get_mut(instance_id)
+                    .unwrap()
+                    .runtime
+                    .take_pending_cookies()
+            };
+            self.complete_typed_action(instance_id.into(), cookies, event.type_() == "keydown")
+        }
+    }
+
+    /// Shared post-action pipeline for every synchronous action entry point
+    /// (typed DOM events and host provider callbacks): drain component
+    /// callbacks, start pending fetches/cookies, flush queued component
+    /// work, and install newly-requested listeners. `defer_listener_install`
+    /// mirrors the keydown exception in the event path, where an action may
+    /// replace the very listeners installation would target.
+    #[cfg(feature = "fetch")]
+    pub(crate) fn complete_typed_action(
+        &self,
+        instance_id: String,
+        pending: Vec<TypedPendingFetch>,
+        cookies: Vec<TypedPendingCookie>,
+        defer_listener_install: bool,
+    ) -> Result<(), JsValue> {
+        self.dispatch_typed_callbacks(&instance_id)?;
         let has_pending_fetch = !pending.is_empty();
         #[cfg(feature = "fetch")]
         for mut request in pending {
-            request.instance_id = instance_id.into();
+            request.instance_id = instance_id.clone();
             request.graph_generation = self
                 .typed
                 .borrow()
-                .get(instance_id)
+                .get(&instance_id)
                 .unwrap()
                 .runtime
                 .graph_generation;
             self.start_typed_fetch(request)?;
         }
-        for mut request in cookies {
-            request.instance_id = instance_id.into();
-            self.start_typed_cookie(request)?;
+        for mut cookie in cookies {
+            cookie.instance_id = instance_id.clone();
+            self.start_typed_cookie(cookie)?;
         }
         self.flush_component_work()?;
         #[cfg(not(feature = "fetch"))]
-        if !pending.is_empty() {
+        if has_pending_fetch {
             return Err(JsValue::from_str("fetch capability is disabled"));
         }
         let install_listeners = self
             .typed
             .borrow()
-            .get(instance_id)
+            .get(&instance_id)
             .map(|typed| !typed.runtime.listener_requests.is_empty())
             .unwrap_or(false);
-        if install_listeners && !has_pending_fetch && event.type_() != "keydown" {
+        if install_listeners && !has_pending_fetch && !defer_listener_install {
+            self.install_typed_event_listeners()?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "fetch"))]
+    pub(crate) fn complete_typed_action(
+        &self,
+        instance_id: String,
+        cookies: Vec<TypedPendingCookie>,
+        defer_listener_install: bool,
+    ) -> Result<(), JsValue> {
+        self.dispatch_typed_callbacks(&instance_id)?;
+        for mut cookie in cookies {
+            cookie.instance_id = instance_id.clone();
+            self.start_typed_cookie(cookie)?;
+        }
+        self.flush_component_work()?;
+        let install_listeners = self
+            .typed
+            .borrow()
+            .get(&instance_id)
+            .map(|typed| !typed.runtime.listener_requests.is_empty())
+            .unwrap_or(false);
+        if install_listeners && !defer_listener_install {
             self.install_typed_event_listeners()?;
         }
         Ok(())

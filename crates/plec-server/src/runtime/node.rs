@@ -12,7 +12,7 @@ use std::{
 
 use axum::{
     body::Body,
-    http::{Request, Response, StatusCode},
+    http::{Method, Request, Response, StatusCode},
 };
 use tokio::{
     io::AsyncBufReadExt,
@@ -26,7 +26,7 @@ use super::{
 };
 use crate::{
     request::{read_bounded_body, RequestContext},
-    runtime::ApplicationDispatch,
+    runtime::{ApplicationDispatch, HostRenderDispatch, HostRenderRequest},
     ApplicationRuntime, PlecServerOptions, ServerError,
 };
 
@@ -122,6 +122,15 @@ impl NodeApplicationRuntime {
             .arg(&options.script)
             .env("PLEC_RUNTIME_SOCKET", &socket_env)
             .env("PLEC_RUNTIME_BUNDLE", &options.bundle)
+            .env(
+                "PLEC_RUNTIME_PROVIDER_MANIFEST",
+                options
+                    .bundle
+                    .parent()
+                    .and_then(std::path::Path::parent)
+                    .map(|dir| dir.join("public/host-providers.json"))
+                    .unwrap_or_else(|| std::path::PathBuf::from("host-providers.json")),
+            )
             .env("PLEC_RUNTIME_TOKEN", &token)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -345,6 +354,54 @@ impl ApplicationRuntime for NodeApplicationRuntime {
                 .expect("status and body cannot fail");
             *response.headers_mut() = internal.headers;
             Ok(Some(response))
+        })
+    }
+
+    fn render_host<'a>(&'a self, request: HostRenderRequest) -> HostRenderDispatch<'a> {
+        Box::pin(async move {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "provider": request.provider,
+                "component": request.component,
+                "props": request.props,
+            }))
+            .map_err(|error| ServerError::message(format!("host render request serialization failed: {error}")))?;
+            let internal = dispatch_internal(
+                &self.process.address,
+                &self.process.token,
+                InternalRequest {
+                    method: Method::POST,
+                    uri: protocol::HOST_RENDER_PATH
+                        .parse()
+                        .expect("host render path is a valid URI"),
+                    headers: Default::default(),
+                    body: body.into(),
+                },
+            )
+            .await
+            .map_err(|error| self.process.failed(error))?;
+            if internal.status == StatusCode::NO_CONTENT {
+                return Ok(None);
+            }
+            if internal.status != StatusCode::OK {
+                return Err(self.process.failed(format!(
+                    "host render returned {}",
+                    internal.status
+                )));
+            }
+            #[derive(serde::Deserialize)]
+            struct HostRenderResponse {
+                html: String,
+            }
+            let response: HostRenderResponse = serde_json::from_slice(&internal.body).map_err(|_| {
+                self.process
+                    .failed("host render returned an invalid response")
+            })?;
+            if response.html.len() > plec_ir::limits::MAX_PROVIDER_MANIFEST_JSON_BYTES {
+                return Err(self
+                    .process
+                    .failed("host render response exceeds byte limit"));
+            }
+            Ok(Some(response.html))
         })
     }
 }

@@ -159,13 +159,14 @@ describe('compiled browser adapter', () => {
         async () =>
           new Response(
             JSON.stringify({
-              version: 1,
+              version: 2,
               revision: 'revision-1',
               providers: [
                 {
                   id: 'lucide',
                   module: 'https://attacker.test/provider.js',
                   components: ['House'],
+                  ssr: false,
                 },
               ],
             }),

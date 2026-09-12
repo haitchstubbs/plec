@@ -76,3 +76,83 @@ pub fn compile_with_options(
 
     Ok(lower_application_to_executable(&hir)?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use plec_ir::{ComponentProp, Node};
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn lowers_host_callback_props_into_runtime_callable_handles() {
+        let temp = tempdir().expect("temporary app");
+        let entry = temp.path().join("App.tsx");
+        fs::write(
+            &entry,
+            r#"
+                import { Widget } from "host-widget";
+
+                export function App() {
+                  const [count, setCount] = useState(0);
+                  return <Widget className="control" onActivate={() => setCount(count + 1)} />;
+                }
+            "#,
+        )
+        .expect("source writes");
+        let options = CompilerOptions {
+            host_imports: BTreeMap::from([("host-widget".into(), "test".into())]),
+            custom_elements: Default::default(),
+        };
+
+        let source_graph = read_source_graph_with_options(
+            &entry,
+            temp.path(),
+            temp.path(),
+            &options,
+        )
+        .expect("host source graph resolves");
+        let semantic_graph = plec_model::build_semantic_graph(
+            &source_graph.modules,
+            &source_graph.resolved_imports,
+        )
+        .expect("semantic graph builds");
+        let root = discover_root_component(
+            &source_graph.modules,
+            &semantic_graph,
+            &source_graph.modules[0].id,
+            None,
+        )
+        .expect("root component resolves");
+        let hir = lower_application_with_options(
+            &source_graph.modules,
+            &root,
+            &semantic_graph,
+            &options.custom_elements,
+        )
+        .expect("host callback HIR lowers");
+        let application = lower_application_to_executable(&hir).expect("host callback compiles");
+        let component = &application.components[application.root_component];
+        let Node::HostComponent {
+            provider,
+            component: host_component,
+            props,
+            ..
+        } = component
+            .nodes
+            .iter()
+            .find(|node| matches!(node, Node::HostComponent { .. }))
+            .expect("host component lowers")
+        else {
+            unreachable!("matched host component")
+        };
+        assert_eq!(provider, "test");
+        assert_eq!(host_component, "Widget");
+        assert!(props.iter().any(|prop| {
+            matches!(prop, ComponentProp::Value { name, .. } if component.strings[*name] == "__plec_props")
+        }));
+        assert!(props.iter().any(|prop| {
+            matches!(prop, ComponentProp::Callable { name, action } if component.strings[*name] == "onActivate" && *action < component.actions.len())
+        }));
+    }
+}

@@ -26,8 +26,11 @@ pub(crate) const READY_PREFIX: &str = "➠︎          Plec Ready: ";
 pub(crate) const ERROR_PREFIX: &str = "PLEC_RUNTIME_ERROR ";
 
 /// The sidecar protocol version carried in the READY payload.
-pub(crate) const SIDECAR_PROTOCOL_VERSION: u32 = 1;
+pub(crate) const SIDECAR_PROTOCOL_VERSION: u32 = 2;
 
 /// A reserved internal path the sidecar answers itself; applications never
 /// see requests for it.
 pub(crate) const HEALTH_PATH: &str = "/_plec-runtime/health";
+/// Private SSR provider-render endpoint. Never forwarded to application
+/// `handleRequest`; only the Rust host calls it over the authenticated socket.
+pub(crate) const HOST_RENDER_PATH: &str = "/_plec-runtime/host-render";

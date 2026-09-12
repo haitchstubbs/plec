@@ -367,6 +367,17 @@ pub struct TypedRuntime {
     /// Defaults to strict; hosts widen it only through the explicit
     /// `RuntimeState::set_tag_policy` capability channel.
     pub tag_policy: plec_ir::sink::TagPolicy,
+    /// Host provider registry shared with every runtime created by the same
+    /// `RuntimeState` (routes, loaders, nested components). Resolved
+    /// lifecycle functions are captured per mount in `HostInstance`, so a
+    /// registry mutated after mount never redirects update/dispose.
+    pub host_registry: Rc<RefCell<Option<JsValue>>>,
+    /// The owning controller state, used only to execute host callback
+    /// props. Same sharing pattern as typed event listeners: closures
+    /// capture this clone so a provider-initiated callback reaches the
+    /// action pipeline. `None` only in direct-construction unit tests;
+    /// callback props fail closed there.
+    pub host_dispatch: Option<RuntimeState>,
     /// Component indices in a 0.10 node are local to its graph artifact.
     pub component_definitions: Option<Vec<TypedApplication>>,
     pub pending_cookies: Vec<TypedPendingCookie>,
@@ -396,6 +407,43 @@ pub struct HostInstance {
     pub call: Option<usize>,
     pub provider: String,
     pub component: String,
+    /// Lifecycle object and the `update`/`dispose` functions resolved from
+    /// the runtime-local registry at mount time. Capturing them here is the
+    /// ownership boundary: a registry replaced after mount can no longer
+    /// redirect lifecycle calls away from the implementation that produced
+    /// `handle`.
+    pub lifecycle: JsValue,
+    pub update: Option<js_sys::Function>,
+    pub dispose: Option<js_sys::Function>,
+    /// Callback props handed to the provider as plain functions. Function
+    /// identity is stable across prop refreshes so providers may
+    /// register/unregister them in DOM listeners.
+    pub callbacks: Vec<HostCallbackHandle>,
+    /// Liveness and row scope shared between the instance and every callback
+    /// closure it handed out. Disposal flips `alive`, after which any
+    /// retained callback rejects instead of executing.
+    pub callback_state: Rc<HostCallbackState>,
+}
+
+/// Shared scope for one host instance's callbacks.
+pub struct HostCallbackState {
+    pub alive: Cell<bool>,
+    /// Controller action dispatcher while this host instance remains live.
+    /// Disposal clears it before retaining stale callback functions, breaking
+    /// their strong reference cycle with the typed instance forest.
+    pub dispatch: RefCell<Option<RuntimeState>>,
+    /// Owning keyed row (`loop_index`, `row_key`, `row_generation`), resolved live at
+    /// invocation like typed event listeners so row updates are always
+    /// observed with their current values.
+    pub row_owner: Option<(usize, String, u64)>,
+}
+
+/// One callback prop: the JS function handed to the provider plus the
+/// closure backing it, kept alive by the owning `HostInstance`.
+pub struct HostCallbackHandle {
+    pub name: String,
+    pub function: JsValue,
+    pub closure: Closure<dyn Fn(JsValue) -> Result<(), JsValue>>,
 }
 
 /** Mutable typed graph ownership. Definitions live in `typed_component_registry`; this
@@ -763,6 +811,8 @@ impl RuntimeState {
                     self.effective_tag_policy(),
                 )?;
                 runtime.set_component_definitions(definitions);
+                runtime.host_registry = self.host_registry.clone();
+                runtime.host_dispatch = Some(self.clone());
                 runtime.path = request.path.clone();
                 runtime.callbacks = runtime
                     .app
@@ -1126,6 +1176,8 @@ impl TypedRuntime {
             next_component_instance: 0,
             cookie_policy,
             tag_policy,
+            host_registry: Rc::new(RefCell::new(None)),
+            host_dispatch: None,
             #[cfg(feature = "fetch")]
             pending_fetches: Vec::new(),
             #[cfg(feature = "fetch")]
@@ -1138,39 +1190,45 @@ impl TypedRuntime {
     }
 }
 
-fn host_registry() -> Result<JsValue, JsValue> {
-    let registry = js_sys::Reflect::get(
-        &js_sys::global(),
-        &JsValue::from_str("__plec_host_components"),
-    )?;
-    if registry.is_undefined() || registry.is_null() {
-        return Err(JsValue::from_str(
-            "host component registry is not installed",
-        ));
-    }
-    Ok(registry)
+/// One provider component lifecycle resolved from the runtime-local
+/// registry. The lifecycle object is kept as the JS `this` for every call
+/// so provider methods observe identical binding at mount, update, and
+/// dispose.
+struct ResolvedHostLifecycle {
+    lifecycle: JsValue,
+    mount: js_sys::Function,
+    update: Option<js_sys::Function>,
+    dispose: Option<js_sys::Function>,
 }
 
-fn host_call(method: &str, args: &[JsValue]) -> Result<JsValue, JsValue> {
-    let registry = host_registry()?;
-    let function = js_sys::Reflect::get(&registry, &JsValue::from_str(method))?
+fn host_lifecycle_function(
+    lifecycle: &JsValue,
+    method: &str,
+    provider: &str,
+    component: &str,
+) -> Result<Option<js_sys::Function>, JsValue> {
+    let value = js_sys::Reflect::get(lifecycle, &JsValue::from_str(method))?;
+    if value.is_undefined() || value.is_null() {
+        return Ok(None);
+    }
+    value
         .dyn_into::<js_sys::Function>()
-        .map_err(|_| JsValue::from_str("host component registry method is not callable"))?;
-    let arguments = js_sys::Array::new();
-    for argument in args {
-        arguments.push(argument);
-    }
-    function.apply(&registry, &arguments).map_err(|error| error)
+        .map(Some)
+        .map_err(|_| {
+            JsValue::from_str(&format!(
+                "host component {method} is not callable: {provider}/{component}"
+            ))
+        })
 }
 
-fn evaluate_host_props(
+fn evaluate_host_prop_values(
     app: &TypedApplication,
     cookie_policy: Option<&plec_dom::cookie::CookiePolicyMap>,
     props: &[TypedComponentProp],
     states: &[RuntimeValue],
     row: Option<&HashMap<String, RuntimeValue>>,
     row_index: usize,
-) -> Result<JsValue, JsValue> {
+) -> Result<HashMap<String, RuntimeValue>, JsValue> {
     let mut values = HashMap::new();
     for prop in props {
         let TypedComponentProp::Value { name, expression } = prop else {
@@ -1191,7 +1249,7 @@ fn evaluate_host_props(
             values.insert(name.clone(), value);
         }
     }
-    host_value_to_js(&RuntimeValue::Record(values))
+    Ok(values)
 }
 
 /// Serializes a runtime value crossing into a host provider as a JSON-plain
@@ -1205,6 +1263,20 @@ fn host_value_to_js(value: &RuntimeValue) -> Result<JsValue, JsValue> {
     value
         .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
         .map_err(error)
+}
+
+/// Converts a provider callback payload into a runtime value through the
+/// same bounded JSON normalization host inputs use, so a hostile or cyclic
+/// payload fails predictably instead of overflowing the stack. The callback
+/// contract is plain-JSON payloads; providers extract event fields
+/// themselves before invoking.
+fn host_payload_to_runtime(value: &JsValue) -> Result<RuntimeValue, JsValue> {
+    let normalized = normalize_json_value(value, 0)?;
+    let text = js_sys::JSON::stringify(&normalized)
+        .map_err(|_| JsValue::from_str("host callback payload is not serializable"))?;
+    let text: String = text.into();
+    serde_json::from_str(&text)
+        .map_err(|_| JsValue::from_str("host callback payload is not serializable"))
 }
 
 fn host_identity(node: &TypedNode) -> Result<(String, String), JsValue> {
@@ -1248,10 +1320,64 @@ impl TypedRuntime {
             .get("__plec_props")
             .cloned()
             .unwrap_or_else(|| RuntimeValue::Record(props.clone()));
-        let props = host_value_to_js(&values)?;
-        self.update_host(&self.host_instances[index].boundary.clone(), props)
+        let props_object = host_value_to_js(&values)?;
+        let instance = &mut self.host_instances[index];
+        // Callback props keep their function identity across refreshes
+        // (providers may diff or re-register them); row values resolve live
+        // at invocation, so nothing here needs refreshing beyond the values.
+        for handle in &instance.callbacks {
+            js_sys::Reflect::set(
+                &props_object,
+                &JsValue::from_str(&handle.name),
+                &handle.function,
+            )?;
+        }
+        let boundary = instance.boundary.clone();
+        self.update_host(&boundary, props_object)
     }
 
+    /// Resolves a provider component against this runtime's registry. The
+    /// clone out of the `RefCell` keeps the borrow short: the JS call may
+    /// reenter the runtime.
+    fn resolve_host_lifecycle(
+        &self,
+        provider: &str,
+        component: &str,
+    ) -> Result<ResolvedHostLifecycle, JsValue> {
+        let registry = self
+            .host_registry
+            .borrow()
+            .clone()
+            .ok_or_else(|| JsValue::from_str("host component registry is not installed"))?;
+        let resolve = js_sys::Reflect::get(&registry, &JsValue::from_str("resolve"))?
+            .dyn_into::<js_sys::Function>()
+            .map_err(|_| {
+                JsValue::from_str("host component registry resolve is not callable")
+            })?;
+        let arguments = js_sys::Array::new();
+        arguments.push(&JsValue::from_str(provider));
+        arguments.push(&JsValue::from_str(component));
+        let lifecycle = resolve.apply(&registry, &arguments)?;
+        if lifecycle.is_undefined() || lifecycle.is_null() {
+            return Err(JsValue::from_str(&format!(
+                "unknown host component: {provider}/{component}"
+            )));
+        }
+        let mount =
+            host_lifecycle_function(&lifecycle, "mount", provider, component)?.ok_or_else(|| {
+                JsValue::from_str(&format!(
+                    "host component mount is not callable: {provider}/{component}"
+                ))
+            })?;
+        let update = host_lifecycle_function(&lifecycle, "update", provider, component)?;
+        let dispose = host_lifecycle_function(&lifecycle, "dispose", provider, component)?;
+        Ok(ResolvedHostLifecycle {
+            lifecycle,
+            mount,
+            update,
+            dispose,
+        })
+    }
     fn mount_host(
         &mut self,
         boundary: Element,
@@ -1259,24 +1385,253 @@ impl TypedRuntime {
         component: &str,
         props: JsValue,
         call: Option<usize>,
+        callback_scope: Rc<HostCallbackState>,
     ) -> Result<(), JsValue> {
-        let handle = host_call(
-            "mount",
-            &[
-                JsValue::from_str(provider),
-                JsValue::from_str(component),
-                boundary.clone().into(),
-                props,
-            ],
-        )?;
+        let resolved = self.resolve_host_lifecycle(provider, component)?;
+        let arguments = js_sys::Array::new();
+        arguments.push(&boundary.clone().into());
+        arguments.push(&props);
+        let handle = resolved.mount.apply(&resolved.lifecycle, &arguments)?;
         self.host_instances.push(HostInstance {
             boundary,
             handle,
             call,
             provider: provider.into(),
             component: component.into(),
+            lifecycle: resolved.lifecycle,
+            update: resolved.update,
+            dispose: resolved.dispose,
+            callbacks: Vec::new(),
+            callback_state: callback_scope,
         });
         Ok(())
+    }
+
+    /// Evaluates a host node's props (values plus callable props) and mounts
+    /// the provider component. Callable props become runtime-owned functions
+    /// in the props object; each closure routes back into this runtime's
+    /// action pipeline and rejects once its instance is disposed or its
+    /// graph generation is replaced.
+    #[allow(clippy::too_many_arguments)]
+    fn mount_host_node(
+        &mut self,
+        boundary: Element,
+        provider: &str,
+        component: &str,
+        props: &[TypedComponentProp],
+        row: Option<&HashMap<String, RuntimeValue>>,
+        row_index: usize,
+        row_context: Option<&TypedRowContext>,
+        call: Option<usize>,
+    ) -> Result<(), JsValue> {
+        let values = evaluate_host_prop_values(
+            &self.app,
+            self.cookie_policy.borrow().as_ref(),
+            props,
+            &self.states,
+            row,
+            row_index,
+        )?;
+        let props_object = host_value_to_js(&RuntimeValue::Record(values))?;
+        let callback_scope = Rc::new(HostCallbackState {
+            alive: Cell::new(true),
+            dispatch: RefCell::new(self.host_dispatch.clone()),
+            // Row insertion/adoption assigns `next_generation` immediately
+            // after instantiating its nodes, so this is the generation the
+            // pending row record will own.
+            row_owner: row_context.map(|context| {
+                (context.loop_index, context.row_key.clone(), self.next_generation)
+            }),
+        });
+        let mut handles = Vec::new();
+        for prop in props {
+            let TypedComponentProp::Callable { name, action } = prop else {
+                continue;
+            };
+            let name = self
+                .app
+                .strings
+                .get(*name)
+                .ok_or_else(|| JsValue::from_str("host component prop name out of range"))?;
+            if name == "__plec_props" {
+                return Err(JsValue::from_str(
+                    "host component callback prop cannot be named __plec_props",
+                ));
+            }
+            if callback_scope.dispatch.borrow().is_none() {
+                return Err(JsValue::from_str(
+                    "host component callback props require a mounted runtime controller",
+                ));
+            }
+            let handle = self.host_callback_handle(name.clone(), *action, &callback_scope)?;
+            js_sys::Reflect::set(&props_object, &JsValue::from_str(name), &handle.function)?;
+            handles.push(handle);
+        }
+        self.mount_host(
+            boundary,
+            provider,
+            component,
+            props_object,
+            call,
+            callback_scope,
+        )?;
+        if let Some(instance) = self.host_instances.last_mut() {
+            instance.callbacks = handles;
+        }
+        Ok(())
+    }
+
+    /// Builds one runtime-owned callback function. The closure captures the
+    /// controller state, the owning runtime's graph generation, and the
+    /// shared callback scope; the action runs against the instance whose
+    /// generation still matches, mirroring the stale-listener discipline.
+    fn host_callback_handle(
+        &self,
+        name: String,
+        action: usize,
+        scope: &Rc<HostCallbackState>,
+    ) -> Result<HostCallbackHandle, JsValue> {
+        let generation = self.graph_generation;
+        let scope_for_closure = Rc::clone(scope);
+        let callback_name = name.clone();
+        let closure = Closure::wrap(Box::new(move |payload: JsValue| -> Result<(), JsValue> {
+            if !scope_for_closure.alive.get() {
+                return Err(JsValue::from_str(&format!(
+                    "stale host callback: {callback_name}"
+                )));
+            }
+            let state = scope_for_closure
+                .dispatch
+                .borrow()
+                .clone()
+                .ok_or_else(|| JsValue::from_str(&format!(
+                    "stale host callback: {callback_name}"
+                )))?;
+            let payload = host_payload_to_runtime(&payload)?;
+            #[cfg(feature = "fetch")]
+            let (instance_id, pending_fetches, pending_cookies) = {
+                let Ok(mut typed) = state.typed.try_borrow_mut() else {
+                    // Same policy as typed event listeners: an event fired
+                    // while the runtime is mutating is dropped, never
+                    // re-entrant.
+                    return Ok(());
+                };
+                let Some((instance_id, runtime)) = typed
+                    .iter_mut()
+                    .find_map(|(id, instance)| {
+                        instance
+                            .runtime_for_generation_mut(generation)
+                            .map(|runtime| (id.clone(), runtime))
+                    })
+                else {
+                    return Err(JsValue::from_str(&format!(
+                        "stale host callback: {callback_name}"
+                    )));
+                };
+                // Row values resolve live, with the same generation guard
+                // typed event listeners apply: a replaced or removed row
+                // rejects the callback instead of executing with stale data.
+                let row = match scope_for_closure.row_owner.as_ref() {
+                    None => None,
+                    Some((loop_index, row_key, row_generation)) => {
+                        let Some(row) = runtime
+                            .loops
+                            .get(loop_index)
+                            .and_then(|rows| rows.rows.get(row_key))
+                        else {
+                            return Err(JsValue::from_str(&format!(
+                                "stale host callback: {callback_name}"
+                            )));
+                        };
+                        if row.generation != *row_generation {
+                            return Err(JsValue::from_str(&format!(
+                                "stale host callback: {callback_name}"
+                            )));
+                        }
+                        Some(row.values.clone())
+                    }
+                };
+                let mut metrics = UpdateMetrics::default();
+                runtime.execute_action_with_frame(
+                    action,
+                    &[(0, payload)],
+                    row,
+                    None,
+                    &mut metrics,
+                )?;
+                (
+                    instance_id,
+                    runtime.take_pending_fetches(),
+                    runtime.take_pending_cookies(),
+                )
+            };
+            #[cfg(not(feature = "fetch"))]
+            let (instance_id, pending_cookies) = {
+                let Ok(mut typed) = state.typed.try_borrow_mut() else {
+                    return Ok(());
+                };
+                let Some((instance_id, runtime)) = typed
+                    .iter_mut()
+                    .find_map(|(id, instance)| {
+                        instance
+                            .runtime_for_generation_mut(generation)
+                            .map(|runtime| (id.clone(), runtime))
+                    })
+                else {
+                    return Err(JsValue::from_str(&format!(
+                        "stale host callback: {callback_name}"
+                    )));
+                };
+                let row = match scope_for_closure.row_owner.as_ref() {
+                    None => None,
+                    Some((loop_index, row_key, row_generation)) => {
+                        let Some(row) = runtime
+                            .loops
+                            .get(loop_index)
+                            .and_then(|rows| rows.rows.get(row_key))
+                        else {
+                            return Err(JsValue::from_str(&format!(
+                                "stale host callback: {callback_name}"
+                            )));
+                        };
+                        if row.generation != *row_generation {
+                            return Err(JsValue::from_str(&format!(
+                                "stale host callback: {callback_name}"
+                            )));
+                        }
+                        Some(row.values.clone())
+                    }
+                };
+                let mut metrics = UpdateMetrics::default();
+                runtime.execute_action_with_frame(
+                    action,
+                    &[(0, payload)],
+                    row,
+                    None,
+                    &mut metrics,
+                )?;
+                (instance_id, runtime.take_pending_cookies())
+            };
+            #[cfg(feature = "fetch")]
+            {
+                return state.complete_typed_action(
+                    instance_id,
+                    pending_fetches,
+                    pending_cookies,
+                    false,
+                );
+            }
+            #[cfg(not(feature = "fetch"))]
+            {
+                state.complete_typed_action(instance_id, pending_cookies, false)
+            }
+        })
+            as Box<dyn Fn(JsValue) -> Result<(), JsValue>>);
+        Ok(HostCallbackHandle {
+            name,
+            function: closure.as_ref().clone(),
+            closure,
+        })
     }
 
     fn update_host(&mut self, boundary: &Element, props: JsValue) -> Result<(), JsValue> {
@@ -1285,7 +1640,15 @@ impl TypedRuntime {
             .iter()
             .find(|instance| instance.boundary.is_same_node(Some(boundary)))
             .ok_or_else(|| JsValue::from_str("host component instance missing"))?;
-        host_call("update", &[instance.handle.clone(), props]).map(|_| ())
+        // A lifecycle without `update` is a no-op by contract, matching the
+        // optional-method semantics providers were authored against.
+        if let Some(update) = &instance.update {
+            let arguments = js_sys::Array::new();
+            arguments.push(&instance.handle);
+            arguments.push(&props);
+            update.apply(&instance.lifecycle, &arguments)?;
+        }
+        Ok(())
     }
 
     fn dispose_host_boundary(&mut self, node: &Node) -> Result<(), JsValue> {
@@ -1294,15 +1657,35 @@ impl TypedRuntime {
             .iter()
             .position(|instance| instance.boundary.is_same_node(node.dyn_ref()))
         {
-            let instance = self.host_instances.swap_remove(index);
-            host_call("dispose", &[instance.handle])?;
+            let mut instance = self.host_instances.swap_remove(index);
+            self.dispose_instance(&mut instance)?;
+        }
+        Ok(())
+    }
+
+    fn dispose_instance(&self, instance: &mut HostInstance) -> Result<(), JsValue> {
+        // Callback closures may still be referenced by the provider; the
+        // shared alive flag is what turns later calls into rejections.
+        instance.callback_state.alive.set(false);
+        instance.callback_state.dispatch.borrow_mut().take();
+        if let Some(dispatch) = &self.host_dispatch {
+            dispatch
+                .retired_host_callbacks
+                .borrow_mut()
+                .extend(std::mem::take(&mut instance.callbacks));
+        }
+        if let Some(dispose) = &instance.dispose {
+            let arguments = js_sys::Array::new();
+            arguments.push(&instance.handle);
+            dispose.apply(&instance.lifecycle, &arguments)?;
         }
         Ok(())
     }
 
     pub fn dispose_host_components(&mut self) {
-        for instance in self.host_instances.drain(..) {
-            let _ = host_call("dispose", &[instance.handle]);
+        let instances = std::mem::take(&mut self.host_instances);
+        for mut instance in instances {
+            let _ = self.dispose_instance(&mut instance);
         }
     }
 }
@@ -1533,16 +1916,23 @@ impl TypedRuntime {
                     let boundary = markers.element(&marker)?;
                     let (provider, component) = host_identity(&self.app.nodes[index])?;
                     validate_host_boundary(&boundary, &provider, &component, &marker)?;
+                    // SSR-capable providers own only this boundary's
+                    // contents. Preserve boundary identity but clear their
+                    // server fragment before the normal client lifecycle
+                    // mounts, preventing append-style providers from
+                    // duplicating server markup.
+                    boundary.set_inner_html("");
                     let dom_node: Node = boundary.clone().into();
-                    let values = evaluate_host_props(
-                        &self.app,
-                        self.cookie_policy.borrow().as_ref(),
+                    self.mount_host_node(
+                        boundary,
+                        &provider,
+                        &component,
                         &props,
-                        &self.states,
                         None,
                         0,
+                        None,
+                        Some(index),
                     )?;
-                    self.mount_host(boundary, &provider, &component, values, Some(index))?;
                     self.nodes.insert(index, dom_node);
                 }
                 TypedNode::Text { .. } => {
@@ -1640,19 +2030,15 @@ impl TypedRuntime {
                             &target.component,
                             &marker,
                         )?;
-                        let values = evaluate_host_props(
-                            &self.app,
-                            self.cookie_policy.borrow().as_ref(),
-                            &props,
-                            &self.states,
-                            None,
-                            0,
-                        )?;
-                        self.mount_host(
+                        boundary.set_inner_html("");
+                        self.mount_host_node(
                             boundary.clone(),
                             &target.provider,
                             &target.component,
-                            values,
+                            &props,
+                            None,
+                            0,
+                            None,
                             Some(index),
                         )?;
                         self.nodes.insert(index, boundary.into());
@@ -2086,16 +2472,18 @@ impl TypedRuntime {
                 let boundary = markers.element(&marker)?;
                 let (provider, component) = host_identity(&self.app.nodes[index])?;
                 validate_host_boundary(&boundary, &provider, &component, &marker)?;
+                boundary.set_inner_html("");
                 let dom_node: Node = boundary.clone().into();
-                let values = evaluate_host_props(
-                    &self.app,
-                    self.cookie_policy.borrow().as_ref(),
+                self.mount_host_node(
+                    boundary,
+                    &provider,
+                    &component,
                     &props,
-                    &self.states,
                     Some(row),
                     row_index,
+                    Some(row_context),
+                    Some(index),
                 )?;
-                self.mount_host(boundary, &provider, &component, values, Some(index))?;
                 local.insert(index, dom_node.clone());
                 Ok((dom_node, None))
             }
@@ -2276,20 +2664,16 @@ impl TypedRuntime {
                         &target.component,
                         &marker,
                     )?;
+                    boundary.set_inner_html("");
                     let dom_node: Node = boundary.clone().into();
-                    let values = evaluate_host_props(
-                        &self.app,
-                        self.cookie_policy.borrow().as_ref(),
-                        &props,
-                        &self.states,
-                        Some(row),
-                        row_index,
-                    )?;
-                    self.mount_host(
+                    self.mount_host_node(
                         boundary,
                         &target.provider,
                         &target.component,
-                        values,
+                        &props,
+                        Some(row),
+                        row_index,
+                        Some(row_context),
                         Some(index),
                     )?;
                     local.insert(index, dom_node.clone());
@@ -3343,15 +3727,16 @@ impl TypedRuntime {
         let address = self.address_path(row_context)?.into_owned();
         element.set_attribute("data-plec-node", &format!("{address}/node:{index}"))?;
         element.set_attribute("data-plec-host", &format!("{provider}:{component}"))?;
-        let values = evaluate_host_props(
-            &self.app,
-            self.cookie_policy.borrow().as_ref(),
+        self.mount_host_node(
+            element.clone(),
+            &provider,
+            &component,
             &props,
-            &self.states,
             row,
             row_index,
+            row_context,
+            Some(index),
         )?;
-        self.mount_host(element.clone(), &provider, &component, values, Some(index))?;
         let node: Node = element.into();
         if let Some(parent) = parent {
             if let Err(error) = parent.append_child(&node) {
@@ -3476,19 +3861,14 @@ impl TypedRuntime {
                 "data-plec-host",
                 &format!("{}:{}", target.provider, target.component),
             )?;
-            let values = evaluate_host_props(
-                &self.app,
-                self.cookie_policy.borrow().as_ref(),
-                &props,
-                &self.states,
-                row,
-                row_index,
-            )?;
-            self.mount_host(
+            self.mount_host_node(
                 boundary.clone(),
                 &target.provider,
                 &target.component,
-                values,
+                &props,
+                row,
+                row_index,
+                row_context,
                 Some(index),
             )?;
             if let Err(error) = parent.insert_before(&boundary, Some(&end)) {

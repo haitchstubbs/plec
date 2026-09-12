@@ -6,6 +6,7 @@ pub(crate) mod snapshot;
 use std::collections::BTreeMap;
 
 use plec_ir::{SsrSelectedBranch, ROOT_GRAPH_INSTANCE_ID};
+use serde_json::Value;
 
 use crate::{
     artifact::{ArtifactBundle, ComponentApplication, Route},
@@ -53,6 +54,10 @@ pub(crate) struct RenderState {
     /// `limits::MAX_SSR_RENDER_DEPTH`): the native render walk must fail
     /// closed before a deep (still acyclic) graph can overflow the stack.
     pub render_depth: usize,
+    /// Explicit Node-sidecar render requests for opted-in host providers.
+    /// Rust evaluates props and owns the boundary/marker; provider code only
+    /// supplies the fragment that fills the boundary placeholder.
+    pub host_renders: Vec<HostRender>,
 }
 
 impl RenderState {
@@ -66,6 +71,7 @@ impl RenderState {
             nested: BTreeMap::new(),
             tag_policy: plec_ir::sink::TagPolicy::default(),
             render_depth: 0,
+            host_renders: Vec::new(),
         }
     }
 }
@@ -80,6 +86,15 @@ pub(crate) struct RenderedApplication {
     pub nested: BTreeMap<String, NestedRecord>,
     pub child_graphs: Vec<ChildGraph>,
     pub gating: Vec<String>,
+    pub host_renders: Vec<HostRender>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct HostRender {
+    pub placeholder: String,
+    pub provider: String,
+    pub component: String,
+    pub props: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +148,8 @@ pub(crate) enum RenderError {
     UnsafeUrlAttribute(String),
     #[error("UNSAFE_TAG:{0}")]
     UnsafeTag(String),
+    #[error("host component props must be a record")]
+    HostPropsNotRecord,
     #[error("SSR dynamic component is unavailable at {0}:{1}")]
     DynamicComponentUnavailable(String, usize),
     #[error("SSR render depth exceeds limit")]
@@ -173,6 +190,7 @@ pub(crate) fn render_application(
         nested: BTreeMap::new(),
         tag_policy: tag_policy.clone(),
         render_depth: 0,
+        host_renders: Vec::new(),
     };
     for child_graph in &child_graphs {
         state
@@ -209,6 +227,7 @@ pub(crate) fn render_application(
         nested: state.nested,
         child_graphs,
         gating: state.gate.map(|gate| gate.gated).unwrap_or_default(),
+        host_renders: state.host_renders,
     })
 }
 

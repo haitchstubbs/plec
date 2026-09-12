@@ -70,6 +70,10 @@ struct CompilerSection {
 struct HostImportBinding {
     provider: String,
     adapter: String,
+    /// Explicitly permits this adapter to load in the private Node sidecar
+    /// for SSR. Browser-only providers stay inert on the server.
+    #[serde(default)]
+    ssr: bool,
 }
 
 /// Host configuration resolved from `plec.toml` merged with explicit build
@@ -83,6 +87,7 @@ pub struct HostConfig {
     pub preloads: Vec<String>,
     pub host_imports: BTreeMap<String, String>,
     pub host_adapters: BTreeMap<String, String>,
+    pub host_ssr_providers: BTreeSet<String>,
     pub custom_elements: std::collections::BTreeSet<String>,
 }
 
@@ -122,6 +127,18 @@ pub fn resolve_host_config(
     let custom_elements = config
         .as_ref()
         .map(|config| config.compiler.custom_elements.clone())
+        .unwrap_or_default();
+    let host_ssr_providers = config
+        .as_ref()
+        .map(|config| {
+            config
+                .compiler
+                .host_imports
+                .values()
+                .filter(|binding| binding.ssr)
+                .map(|binding| binding.provider.clone())
+                .collect()
+        })
         .unwrap_or_default();
 
     Ok(HostConfig {
@@ -166,6 +183,7 @@ pub fn resolve_host_config(
         },
         host_imports,
         host_adapters,
+        host_ssr_providers,
         custom_elements,
     })
 }
@@ -228,7 +246,7 @@ fn read_app_config(config_path: &Path) -> Result<Option<AppConfig>, BuildError> 
     toml::from_str(&text).map(Some).map_err(|error| {
         BuildError::with_source(
             Stage::ServerManifest,
-            format!("invalid {}", config_path.display()),
+            format!("invalid {}: {error}", config_path.display()),
             error,
         )
     })
@@ -315,7 +333,7 @@ struct ManifestRuntimeSection {
 /// the pair. The manifest versions independently of the SSR snapshot and
 /// bootstrap wrappers: producer and consumer ship in the same build, so it
 /// never rides a snapshot version bump.
-pub(crate) const PROVIDER_MANIFEST_VERSION: u32 = 1;
+pub(crate) const PROVIDER_MANIFEST_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -331,6 +349,7 @@ struct ProviderManifestEntry<'a> {
     id: &'a str,
     module: String,
     components: Vec<&'a str>,
+    ssr: bool,
 }
 
 /// Emits `dist/public/host-providers.json` for `registerPlecProviders` in
@@ -339,6 +358,7 @@ struct ProviderManifestEntry<'a> {
 pub fn emit_provider_manifest(
     public_dir: &Path,
     providers: &BTreeMap<String, BTreeSet<String>>,
+    ssr_providers: &BTreeSet<String>,
     revision: &str,
 ) -> Result<(), BuildError> {
     let manifest = ProviderManifest {
@@ -353,6 +373,7 @@ pub fn emit_provider_manifest(
                     super::id::sanitize(id)
                 ),
                 components: components.iter().map(String::as_str).collect(),
+                ssr: ssr_providers.contains(id),
             })
             .collect(),
     };
@@ -480,7 +501,7 @@ styles = "/assets/styles.css"
 preloads = ["/a.woff2", "/b.woff2"]
 
 [compiler.host-imports]
-"lucide" = { provider = "lucide", adapter = "@wasm-runtime/lucide-plec" }
+"lucide" = { provider = "lucide", adapter = "@wasm-runtime/lucide-plec", ssr = true }
 "#,
         )
         .expect("toml write");
@@ -508,6 +529,7 @@ preloads = ["/a.woff2", "/b.woff2"]
             config.host_adapters.get("lucide"),
             Some(&String::from("@wasm-runtime/lucide-plec"))
         );
+        assert!(config.host_ssr_providers.contains("lucide"));
     }
 
     #[test]
@@ -521,6 +543,7 @@ preloads = ["/a.woff2", "/b.woff2"]
             preloads: vec!["/assets/files/a.woff2".into()],
             host_imports: BTreeMap::new(),
             host_adapters: BTreeMap::new(),
+            host_ssr_providers: BTreeSet::new(),
             custom_elements: Default::default(),
         };
         emit_server_manifest(dir.path(), &config, true).expect("manifest");
@@ -550,6 +573,7 @@ preloads = ["/a.woff2", "/b.woff2"]
             preloads: Vec::new(),
             host_imports: BTreeMap::new(),
             host_adapters: BTreeMap::new(),
+            host_ssr_providers: BTreeSet::new(),
             custom_elements: Default::default(),
         };
         emit_server_manifest(dir.path(), &config, false).expect("manifest");
@@ -570,7 +594,13 @@ preloads = ["/a.woff2", "/b.woff2"]
             BTreeSet::from([String::from("House"), String::from("Beaker")]),
         )]);
 
-        emit_provider_manifest(&public_dir, &providers, "revision-1").expect("manifest");
+        emit_provider_manifest(
+            &public_dir,
+            &providers,
+            &BTreeSet::from([String::from("lucide")]),
+            "revision-1",
+        )
+        .expect("manifest");
 
         let json: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(public_dir.join("host-providers.json"))

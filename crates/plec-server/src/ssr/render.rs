@@ -20,7 +20,7 @@ use crate::{
     request::RequestContext,
 };
 
-use super::{NestedRecord, RenderError, RenderState, RouteRender};
+use super::{HostRender, NestedRecord, RenderError, RenderState, RouteRender};
 
 /// A component-valued prop target: which application and component index a
 /// `dynamicComponent` resolves to.
@@ -300,7 +300,15 @@ fn render_node_bounded(
             children,
         } => {
             if let Some(target) = scope.host_component_props.get(prop) {
-                return render_host_node(index, target, scope);
+                return render_host_node(
+                    app,
+                    component_index,
+                    index,
+                    target,
+                    props,
+                    scope,
+                    state,
+                );
             }
             let target = scope.component_props.get(prop).copied();
             render_component_node(
@@ -322,14 +330,18 @@ fn render_node_bounded(
         Node::HostComponent {
             provider,
             component,
-            ..
+            props,
         } => render_host_node(
+            app,
+            component_index,
             index,
             &HostComponentTarget {
                 provider: provider.clone(),
                 component: component.clone(),
             },
+            props,
             scope,
+            state,
         ),
 
         // Unknown ops render as nothing, mirroring the TS host.
@@ -569,12 +581,48 @@ fn render_component_node(
 }
 
 fn render_host_node(
+    app: &ComponentApplication,
+    component_index: usize,
     index: usize,
     target: &HostComponentTarget,
+    props: &[ComponentProp],
     scope: &Scope<'_>,
+    state: &mut RenderState,
 ) -> Result<String, RenderError> {
+    let component = app
+        .components
+        .get(component_index)
+        .ok_or(RenderError::MissingComponent(component_index))?;
+    let mut values = serde_json::Map::new();
+    for prop in props {
+        let ComponentProp::Value { name, expression } = prop else {
+            // Callback/event props are client-only handles. They never cross
+            // the sidecar boundary and cannot be serialized into SSR markup.
+            continue;
+        };
+        let name = component
+            .strings
+            .get(*name)
+            .ok_or(RenderError::MissingString(component_index, *name))?;
+        let value = evaluate(component, *expression, scope, state);
+        if name == "__plec_props" {
+            let Value::Object(record) = value else {
+                return Err(RenderError::HostPropsNotRecord);
+            };
+            values.extend(record);
+        } else {
+            values.insert(name.clone(), value);
+        }
+    }
+    let placeholder = format!("plec:host-render:{}", state.host_renders.len());
+    state.host_renders.push(HostRender {
+        placeholder: placeholder.clone(),
+        provider: target.provider.clone(),
+        component: target.component.clone(),
+        props: Value::Object(values),
+    });
     Ok(format!(
-        "<span data-plec-node=\"{}\" data-plec-host=\"{}:{}\"></span>",
+        "<span data-plec-node=\"{}\" data-plec-host=\"{}:{}\"><!--{placeholder}--></span>",
         escape_attribute(&format!("{}/node:{index}", scope.path)),
         escape_attribute(&target.provider),
         escape_attribute(&target.component),

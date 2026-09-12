@@ -1,5 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import {
   createServer,
   type IncomingMessage,
@@ -30,6 +32,21 @@ export interface ApplicationModule {
   handleRequest: HandleRequest;
 }
 
+type PlecHostComponentLifecycle = {
+  render?(props: Record<string, unknown>): string;
+};
+
+type PlecHostProvider = Record<string, PlecHostComponentLifecycle>;
+
+type HostProviderManifest = {
+  version: 2;
+  providers: Array<{
+    id: string;
+    module: string;
+    ssr: boolean;
+  }>;
+};
+
 export interface StartOptions {
   /**
    * Absolute Unix socket path, or `tcp:127.0.0.1:<port>`.
@@ -45,6 +62,10 @@ export interface StartOptions {
    * Internal authentication token shared with the Rust supervisor.
    */
   token: string;
+
+  /** Build-owned provider manifest. Only entries explicitly marked `ssr`
+   * load in Node; browser-only providers stay inert on the server. */
+  providerManifest?: string;
 }
 
 interface RuntimeReady {
@@ -52,13 +73,79 @@ interface RuntimeReady {
   address: string;
 }
 
-const PROTOCOL_VERSION: number = 1;
+const PROTOCOL_VERSION: number = 2;
 const INTERNAL_TOKEN_HEADER: string = 'x-plec-internal-token';
 const UNHANDLED_HEADER: string = 'x-plec-runtime-result';
 const UNHANDLED_VALUE: string = 'unhandled';
 const HEALTH_PATH: string = '/_plec-runtime/health';
+const HOST_RENDER_PATH: string = '/_plec-runtime/host-render';
+const MAX_HOST_RENDER_BYTES: number = 1024 * 1024;
 const LOCALHOST_PRIVATE: string = '127.0.0.1';
 const TCP_PREFIX: string = 'tcp:';
+
+async function loadSsrProviders(
+  manifestPath: string | undefined,
+): Promise<Map<string, PlecHostProvider>> {
+  if (!manifestPath) return new Map();
+  const parsed = JSON.parse(await readFile(manifestPath, 'utf8')) as unknown;
+  if (!isHostProviderManifest(parsed))
+    throw new BundleError('invalid host provider manifest');
+  const publicDir = resolve(manifestPath, '..');
+  const providers = new Map<string, PlecHostProvider>();
+  for (const entry of parsed.providers) {
+    if (!entry.ssr) continue;
+    const url = new URL(entry.module, 'http://plec.internal');
+    const modulePath = resolve(publicDir, `.${url.pathname}`);
+    const providerDir = resolve(publicDir, 'assets/providers');
+    if (!modulePath.startsWith(`${providerDir}/`))
+      throw new BundleError(`invalid host provider module for ${entry.id}`);
+    const imported = await import(pathToFileURL(modulePath).href);
+    if (typeof imported.default !== 'function')
+      throw new BundleError(`host provider ${entry.id} has no default factory`);
+    providers.set(entry.id, (imported.default as () => PlecHostProvider)());
+  }
+  return providers;
+}
+
+function isHostProviderManifest(value: unknown): value is HostProviderManifest {
+  if (!value || typeof value !== 'object') return false;
+  const manifest = value as Partial<HostProviderManifest>;
+  return (
+    manifest.version === 2 &&
+    Array.isArray(manifest.providers) &&
+    manifest.providers.every(
+      (entry) =>
+        entry &&
+        typeof entry.id === 'string' &&
+        typeof entry.module === 'string' &&
+        typeof entry.ssr === 'boolean',
+    )
+  );
+}
+
+async function renderHostProvider(
+  request: Request,
+  providers: Map<string, PlecHostProvider>,
+): Promise<string | undefined> {
+  const value: unknown = await request.json();
+  if (!value || typeof value !== 'object')
+    throw new Error('invalid host render request');
+  const { provider, component, props } = value as Record<string, unknown>;
+  if (
+    typeof provider !== 'string' ||
+    typeof component !== 'string' ||
+    !props ||
+    typeof props !== 'object' ||
+    Array.isArray(props)
+  )
+    throw new Error('invalid host render request');
+  const render = providers.get(provider)?.[component]?.render;
+  if (!render) return undefined;
+  const html = await render(props as Record<string, unknown>);
+  if (typeof html !== 'string' || Buffer.byteLength(html) > MAX_HOST_RENDER_BYTES)
+    throw new Error('invalid host render response');
+  return html;
+}
 
 enum SIG {
   TERM = 'SIGTERM',
@@ -107,12 +194,14 @@ export async function start({
   socket,
   bundle,
   token,
+  providerManifest,
 }: StartOptions): Promise<Server> {
   const application = await importApplication(bundle);
+  const providers = await loadSsrProviders(providerManifest);
 
   const server = createServer(
     (incoming: IncomingMessage, outgoing: ServerResponse) => {
-      void serve(incoming, outgoing, application, token);
+      void serve(incoming, outgoing, application, providers, token);
     },
   );
 
@@ -153,6 +242,7 @@ async function serve(
   incoming: IncomingMessage,
   outgoing: ServerResponse,
   application: ApplicationModule,
+  providers: Map<string, PlecHostProvider>,
   token: string,
 ): Promise<void> {
   try {
@@ -168,6 +258,24 @@ async function serve(
     ) {
       outgoing.writeHead(204);
       outgoing.end();
+      return;
+    }
+
+    if (
+      incoming.method === HttpMethod.POST &&
+      incoming.url === HOST_RENDER_PATH
+    ) {
+      const request = await toWebRequest(incoming);
+      const html = await renderHostProvider(request, providers);
+      if (html === undefined) {
+        outgoing.writeHead(204);
+        outgoing.end();
+        return;
+      }
+      outgoing.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+      });
+      outgoing.end(JSON.stringify({ html }));
       return;
     }
 
@@ -509,6 +617,7 @@ if (
   const socket = process.env.PLEC_RUNTIME_SOCKET;
   const bundle = process.env.PLEC_RUNTIME_BUNDLE;
   const token = process.env.PLEC_RUNTIME_TOKEN;
+  const providerManifest = process.env.PLEC_RUNTIME_PROVIDER_MANIFEST;
 
   if (!socket || !bundle || !token) {
     console.error(Errors.MissingDeps);
@@ -520,6 +629,7 @@ if (
     socket,
     bundle,
     token,
+    providerManifest,
   }).catch((error: unknown) => {
     if (error instanceof BundleError) {
       process.stdout.write(`PLEC_RUNTIME_ERROR ${error.message}\n`);

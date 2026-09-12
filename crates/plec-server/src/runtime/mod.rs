@@ -31,12 +31,32 @@ pub use node::{NodeApplicationRuntime, NodeRuntimeOptions};
 pub type ApplicationDispatch<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Response<Body>>, ServerError>> + Send + 'a>>;
 
+/// One explicit SSR request for provider-owned markup. Props are evaluated by
+/// Rust from executable IR; Node executes only the opted-in provider render
+/// hook and returns an HTML fragment for the already-owned boundary.
+#[derive(Debug, Clone)]
+pub struct HostRenderRequest {
+    pub provider: String,
+    pub component: String,
+    pub props: serde_json::Value,
+}
+
+/// `None` means the provider is inert on the server. Render errors are not
+/// document errors: the SSR caller preserves the inert boundary so CSR can
+/// mount the provider normally.
+pub type HostRenderDispatch<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<String>, ServerError>> + Send + 'a>>;
+
 pub trait ApplicationRuntime: Send + Sync + 'static {
     fn dispatch<'a>(
         &'a self,
         request: Request<Body>,
         context: RequestContext,
     ) -> ApplicationDispatch<'a>;
+
+    fn render_host<'a>(&'a self, _request: HostRenderRequest) -> HostRenderDispatch<'a> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 /// The closure shape for in-process application handlers (tests, embedders

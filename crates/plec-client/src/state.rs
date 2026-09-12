@@ -9,7 +9,7 @@ use plec_schema::routing::RouteManifest;
 use plec_schema::typed::TypedComponentApplication;
 use std::cell::Cell;
 
-use crate::runtime::{SsrNestedRecords, TypedGraphInstance};
+use crate::runtime::{HostCallbackHandle, SsrNestedRecords, TypedGraphInstance};
 
 /// Shared live-resource accounting for every graph instance in one runtime.
 /// Slots own their reservation and release exactly once when dropped.
@@ -199,6 +199,17 @@ pub struct RuntimeState {
     /// widen executable-IR element instantiation beyond the standard
     /// allowlists, and it never un-forbids forbidden tags.
     pub tag_policy: Rc<RefCell<Option<plec_ir::sink::TagPolicy>>>,
+    /// Runtime-local host provider registry (`None` = no provider may
+    /// mount). The registry is a JS object exposing
+    /// `resolve(provider, component)` returning that component's lifecycle
+    /// (`{ mount, update?, dispose? }`). Scoped per runtime so two Plec
+    /// runtimes may register different implementations under the same
+    /// provider id; the process-global bridge is not consulted.
+    pub host_registry: Rc<RefCell<Option<JsValue>>>,
+    /// Disposed provider callbacks stay callable through the owning facade's
+    /// lifetime so retained JS references reach their explicit stale guard
+    /// instead of wasm-bindgen's generic "closure dropped" failure.
+    pub retired_host_callbacks: Rc<RefCell<Vec<HostCallbackHandle>>>,
 }
 
 /// One host-owned fetch grant. Authority comes only from grants published
@@ -258,6 +269,31 @@ impl RuntimeState {
     pub fn effective_tag_policy(&self) -> plec_ir::sink::TagPolicy {
         self.tag_policy.borrow().clone().unwrap_or_default()
     }
+
+    /// Installs the runtime-local host provider registry. `null` removes
+    /// provider capability; any other value must be an object whose
+    /// `resolve` is callable, so an invalid grant fails here instead of at
+    /// the first host mount.
+    pub fn set_host_registry(&self, registry: JsValue) -> Result<(), JsValue> {
+        if registry.is_null() {
+            *self.host_registry.borrow_mut() = None;
+            return Ok(());
+        }
+        if registry.is_undefined() {
+            return Err(JsValue::from_str(
+                "host component registry is not an object",
+            ));
+        }
+        let resolve = js_sys::Reflect::get(&registry, &JsValue::from_str("resolve"))
+            .map_err(|_| JsValue::from_str("host component registry is not an object"))?;
+        if !resolve.is_instance_of::<js_sys::Function>() {
+            return Err(JsValue::from_str(
+                "host component registry resolve is not callable",
+            ));
+        }
+        *self.host_registry.borrow_mut() = Some(registry);
+        Ok(())
+    }
 }
 
 impl RuntimeState {
@@ -283,6 +319,8 @@ impl RuntimeState {
             cookie_policy: Rc::new(RefCell::new(None)),
             fetch_policy: Rc::new(RefCell::new(None)),
             tag_policy: Rc::new(RefCell::new(None)),
+            host_registry: Rc::new(RefCell::new(None)),
+            retired_host_callbacks: Rc::new(RefCell::new(Vec::new())),
         }
     }
 

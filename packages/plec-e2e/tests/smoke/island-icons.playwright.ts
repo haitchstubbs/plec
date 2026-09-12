@@ -4,11 +4,13 @@ import { waitForMount } from '../support/helpers';
 test('host icons adopt through stable boundaries and never resize', async ({
   page,
 }) => {
-  // SSR owns the host boundary, not the provider-owned SVG descendants.
+  // SSR retains the runtime-owned boundary while the sidecar supplies the
+  // provider fragment before hydration.
   const html = await (await page.request.get('/')).text();
   expect(
     html.match(/data-plec-host="lucide:[^"]+"/g)?.length ?? 0,
   ).toBeGreaterThan(0);
+  expect(html).toMatch(/data-plec-host="lucide:[^"]+"><svg /);
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   const boundaries = page.locator('[data-plec-host^="lucide:"]');

@@ -11,6 +11,7 @@ use crate::{
     artifact::{self, Manifest, Route},
     assets, loader,
     request::RequestContext,
+    runtime::HostRenderRequest,
     ssr, DocumentMetadata, PlecServerOptions, ServerError, ServerState,
 };
 
@@ -165,6 +166,12 @@ async fn render_document_inner(
         &tag_policy,
         state.options.development,
     )?;
+    let body = resolve_host_renders(
+        &rendered.body,
+        &rendered.host_renders,
+        state.options.application_runtime.as_deref(),
+    )
+    .await;
     let payload = ssr::bootstrap_payload(&bundle, &executions, context, &rendered);
     // No bootstrap means nothing to resume: the browser mounts fresh.
     let bootstrap = payload.map(|payload| {
@@ -188,10 +195,45 @@ async fn render_document_inner(
     Ok(send_html(
         &state.options,
         &document,
-        &rendered.body,
+        &body,
         bootstrap.as_deref(),
         &gating,
     ))
+}
+
+/// Resolves provider fragments only through the private application runtime.
+/// A missing/inert provider — or any sidecar failure — leaves an empty owned
+/// boundary, preserving the prior CSR mount contract instead of failing the
+/// whole document. Replacements run in reverse marker order so one trusted
+/// provider fragment cannot contain a later placeholder that is accidentally
+/// substituted as another provider's result.
+async fn resolve_host_renders(
+    body: &str,
+    renders: &[ssr::HostRender],
+    runtime: Option<&dyn crate::ApplicationRuntime>,
+) -> String {
+    let mut fragments = Vec::with_capacity(renders.len());
+    for render in renders {
+        let fragment = match runtime {
+            Some(runtime) => runtime
+                .render_host(HostRenderRequest {
+                    provider: render.provider.clone(),
+                    component: render.component.clone(),
+                    props: render.props.clone(),
+                })
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
+        fragments.push(fragment);
+    }
+    let mut body = body.to_owned();
+    for (render, fragment) in renders.iter().zip(fragments).rev() {
+        let marker = format!("<!--{}-->", render.placeholder);
+        body = body.replacen(&marker, fragment.as_deref().unwrap_or(""), 1);
+    }
+    body
 }
 
 /// Application route matching is not HTTP routing: it resolves the compiled
