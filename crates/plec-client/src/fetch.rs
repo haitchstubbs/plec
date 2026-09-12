@@ -1,6 +1,7 @@
 use crate::prelude::*;
 use crate::runtime::*;
 use crate::vm::*;
+use plec_action::{charge_response_bytes, ActionOutcome, Run, Suspension};
 use plec_dom::platform::*;
 use web_sys::{ReadableStreamDefaultReader, RequestCredentials, TextDecoder};
 
@@ -24,6 +25,14 @@ pub struct TypedPendingFetch {
     pub request_id: u64,
 }
 
+#[derive(Clone)]
+pub struct TypedPendingLoaderFetch {
+    pub instance_id: String,
+    pub suspension: Suspension<TypedLoaderFetchRequest>,
+    pub graph_generation: u64,
+    pub request_id: u64,
+}
+
 fn fetch_origin(url: &str) -> Option<String> {
     let base = web_sys::window()?.location().href().ok()?;
     web_sys::Url::new_with_base(url, &base)
@@ -32,6 +41,184 @@ fn fetch_origin(url: &str) -> Option<String> {
 }
 
 impl RuntimeState {
+    pub fn start_typed_loader_fetch(
+        &self,
+        mut pending: TypedPendingLoaderFetch,
+    ) -> Result<(), JsValue> {
+        let request = pending.suspension.request.clone();
+        let credentials =
+            match self.authorize_fetch(&request.url, &request.method, &request.headers) {
+                Ok(credentials) => credentials,
+                Err(message) => {
+                    return self.complete_typed_loader_fetch(
+                        pending,
+                        Err(failure("policy", message, &request.url)),
+                    );
+                }
+            };
+        let controller = AbortController::new()?;
+        let init = RequestInit::new();
+        init.set_method(&request.method);
+        init.set_signal(Some(&controller.signal()));
+        init.set_credentials(if credentials {
+            RequestCredentials::Include
+        } else {
+            RequestCredentials::Omit
+        });
+        let headers = web_sys::Headers::new()?;
+        for (name, value) in &request.headers {
+            headers.set(name, value)?;
+        }
+        init.set_headers(&headers);
+        if let Some(body) = &request.body {
+            init.set_body(&JsValue::from_str(body));
+        }
+        let browser = window()?;
+        {
+            let mut typed = self.typed.borrow_mut();
+            let instance = typed
+                .get_mut(&pending.instance_id)
+                .ok_or_else(|| JsValue::from_str("typed application missing"))?;
+            let Some(runtime) = instance.runtime_for_generation_mut(pending.graph_generation)
+            else {
+                return Ok(());
+            };
+            self.region_tracker.acquire_fetch()?;
+            runtime.next_fetch_id += 1;
+            pending.request_id = runtime.next_fetch_id;
+            runtime
+                .abort_controllers
+                .insert(pending.request_id, controller.clone());
+        }
+        let browser_request = browser.fetch_with_str_and_init(&request.url, &init);
+        let runtime = self.clone();
+        spawn_local(async move {
+            let result = match JsFuture::from(browser_request).await {
+                Ok(value) => match value.dyn_into::<Response>() {
+                    Ok(response) if request.require_ok && !response.ok() => {
+                        Err(http_failure(response, &request.url).await)
+                    }
+                    Ok(response) => {
+                        if let Some(rejected) = declared_length_failure(&response, &request.url) {
+                            Err(rejected)
+                        } else {
+                            match request.decode.as_str() {
+                                "empty" => bounded_body_bytes(&response, &request.url)
+                                    .await
+                                    .map(|_| RuntimeValue::Null),
+                                "text" => bounded_body_bytes(&response, &request.url)
+                                    .await
+                                    .and_then(|bytes| {
+                                        decode_body_text(bytes, &request.url)
+                                            .map(RuntimeValue::String)
+                                    }),
+                                "responseJson" => {
+                                    let ok = response.ok();
+                                    let status = response.status();
+                                    if status == 204 || status == 205 {
+                                        if let Ok(empty) = response.text() {
+                                            let _ = JsFuture::from(empty).await;
+                                        }
+                                        Ok(RuntimeValue::Record(std::collections::HashMap::from([
+                                            ("ok".into(), RuntimeValue::Bool(ok)),
+                                            ("status".into(), RuntimeValue::Number(status as f64)),
+                                            ("body".into(), RuntimeValue::Null),
+                                        ])))
+                                    } else {
+                                        bounded_body_bytes(&response, &request.url)
+                                            .await
+                                            .and_then(|bytes| decode_body_text(bytes, &request.url))
+                                            .and_then(|text| parse_body_json(&text, &request.url))
+                                            .map(|body| {
+                                                RuntimeValue::Record(
+                                                    std::collections::HashMap::from([
+                                                        ("ok".into(), RuntimeValue::Bool(ok)),
+                                                        (
+                                                            "status".into(),
+                                                            RuntimeValue::Number(status as f64),
+                                                        ),
+                                                        ("body".into(), body),
+                                                    ]),
+                                                )
+                                            })
+                                    }
+                                }
+                                _ => bounded_body_bytes(&response, &request.url)
+                                    .await
+                                    .and_then(|bytes| decode_body_text(bytes, &request.url))
+                                    .and_then(|text| parse_body_json(&text, &request.url)),
+                            }
+                        }
+                    }
+                    Err(error) => Err(js_failure(error, &request.url)),
+                },
+                Err(error) => Err(js_failure(error, &request.url)),
+            };
+            if let Err(error) = runtime.complete_typed_loader_fetch(pending, result) {
+                web_sys::console::error_1(&error);
+            }
+        });
+        Ok(())
+    }
+
+    fn complete_typed_loader_fetch(
+        &self,
+        mut pending: TypedPendingLoaderFetch,
+        result: Result<RuntimeValue, RuntimeValue>,
+    ) -> Result<(), JsValue> {
+        let result = match result {
+            Ok(value) => {
+                let bytes = value.json_body().map(|body| body.len()).map_err(|error| {
+                    failure(
+                        "decode",
+                        error.as_string().unwrap_or_default(),
+                        &pending.suspension.request.url,
+                    )
+                });
+                match bytes.and_then(|bytes| {
+                    charge_response_bytes(&mut pending.suspension, bytes).map_err(|error| {
+                        failure("limit", error.to_string(), &pending.suspension.request.url)
+                    })
+                }) {
+                    Ok(()) => Ok(value),
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) => Err(error),
+        };
+        let run = {
+            let mut typed = self.typed.borrow_mut();
+            let Some(instance) = typed.get_mut(&pending.instance_id) else {
+                return Ok(());
+            };
+            let Some(runtime) = instance.runtime_for_generation_mut(pending.graph_generation)
+            else {
+                return Ok(());
+            };
+            if runtime
+                .abort_controllers
+                .remove(&pending.request_id)
+                .is_some()
+            {
+                self.region_tracker.release_fetch();
+            }
+            runtime.resume_shared_route_loader(pending.suspension, result)?
+        };
+        match run {
+            Run::Suspended(suspension) => self.start_typed_loader_fetch(TypedPendingLoaderFetch {
+                instance_id: pending.instance_id,
+                suspension,
+                graph_generation: pending.graph_generation,
+                request_id: 0,
+            }),
+            Run::Complete(outcome) => self.complete_shared_route_loader(
+                &pending.instance_id,
+                pending.graph_generation,
+                outcome,
+            ),
+        }
+    }
+
     /// Authorizes a queued fetch against the host policy. Returns whether the
     /// request may carry credentials, or a denial message. No grant exists:
     /// deny, regardless of what the artifact declares.
@@ -619,6 +806,72 @@ impl RuntimeState {
                 self.install_typed_event_listeners()?;
             }
         }
+        Ok(())
+    }
+
+    pub(crate) fn complete_shared_route_loader(
+        &self,
+        instance_id: &str,
+        graph_generation: u64,
+        outcome: ActionOutcome,
+    ) -> Result<(), JsValue> {
+        let ActionOutcome::Success(value) = outcome else {
+            let ActionOutcome::Failure(error) = outcome else {
+                unreachable!();
+            };
+            if self.typed.borrow().contains_key(instance_id) {
+                self.show_typed_route_error(instance_id, error)?;
+                self.install_typed_event_listeners()?;
+            }
+            return Ok(());
+        };
+        let exported = match &value {
+            RuntimeValue::Record(record)
+                if record.len() == 3
+                    && record.contains_key("ok")
+                    && record.contains_key("status")
+                    && record.contains_key("body") =>
+            {
+                record.get("body").cloned().unwrap_or(value)
+            }
+            _ => value,
+        };
+        self.typed_host_inputs
+            .borrow_mut()
+            .insert("loaderData".into(), exported.clone());
+        let restore = {
+            let mut typed = self.typed.borrow_mut();
+            let instance = typed
+                .get_mut(instance_id)
+                .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
+            let restore = instance.loader_runtime.is_some();
+            let runtime = instance
+                .runtime_for_generation_mut(graph_generation)
+                .ok_or_else(|| JsValue::from_str("typed route loader runtime is stale"))?;
+            let state = runtime
+                .app
+                .actions
+                .iter()
+                .find(|action| action.route_loader)
+                .and_then(|action| action.loader_result_state)
+                .ok_or_else(|| JsValue::from_str("typed route loader result state missing"))?;
+            if state >= runtime.states.len() {
+                return Err(JsValue::from_str("loader state handle out of range"));
+            }
+            if !restore {
+                runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+                runtime.apply_static_bindings()?;
+                runtime.queue_static_component_refreshes()?;
+            }
+            runtime.states[state] = exported;
+            runtime.refresh_state(state, &mut UpdateMetrics::default())?;
+            restore
+        };
+        if restore {
+            self.restore_typed_route_normal(instance_id)?;
+        }
+        self.flush_component_work()?;
+        self.install_typed_event_listeners()?;
         Ok(())
     }
 }

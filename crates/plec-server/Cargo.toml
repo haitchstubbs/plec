@@ -21,6 +21,7 @@ getrandom.workspace = true
 
 plec-ir = { path = "../plec-ir" }
 plec-schema = { path = "../plec-schema" }
+plec-action = { path = "../plec-action" }
 
 [dev-dependencies]
 tempfile.workspace = true

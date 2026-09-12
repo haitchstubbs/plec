@@ -2624,8 +2624,9 @@ async fn remount_and_typed_route_replacement_abort_stale_fetches() {
     route_root["actions"][0]["routeLoader"] = serde_json::json!(true);
     route_root["actions"][0]["loaderResultState"] = serde_json::json!(0);
     route_root["actions"][0]["instructions"] = serde_json::json!([
-        {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":1,"finallyPc":null,"resultSlot":1,"errorSlot":2},
-        {"op":"return"}
+        {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":2,"finallyPc":null,"resultSlot":1,"errorSlot":2},
+        {"op":"return","value":8},
+        {"op":"return","outcome":"failure","value":9}
     ]);
     runtime
         .register_graph(
@@ -2828,12 +2829,9 @@ async fn typed_route_loader_writes_its_declared_result_state() {
     route["actions"][0]["routeLoader"] = serde_json::json!(true);
     route["actions"][0]["loaderResultState"] = serde_json::json!(0);
     route["actions"][0]["instructions"] = serde_json::json!([
-        {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":1,"finallyPc":null,"resultSlot":1,"errorSlot":2},
-        {"op":"return"}
-    ]);
-    route["actions"][0]["instructions"] = serde_json::json!([
-        {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":1,"finallyPc":null,"resultSlot":1,"errorSlot":2},
-        {"op":"return"}
+        {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":2,"finallyPc":null,"resultSlot":1,"errorSlot":2},
+        {"op":"return","value":8},
+        {"op":"return","outcome":"failure","value":9}
     ]);
     runtime
         .register_graph(
@@ -2972,7 +2970,9 @@ fn loader_host_state_page_artifact() -> serde_json::Value {
             "expressions": [
                 {"instructions": [{"op": "loadHost", "host": 0}, {"op": "field", "field": 2}, {"op": "return"}]},
                 {"instructions": [{"op": "constant", "constant": 1}, {"op": "return"}]},
-                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]}
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 1}, {"op": "return"}]}
             ],
             "actions": [{
                 "frameSlots": 2,
@@ -2980,8 +2980,8 @@ fn loader_host_state_page_artifact() -> serde_json::Value {
                 "routeLoader": true,
                 "instructions": [
                     {"op": "capabilityRequest", "capability": "fetch", "request": {"url": 2, "method": "GET", "decode": "responseJson", "requireOk": true}, "successPc": 1, "failurePc": 2, "resultSlot": 0, "errorSlot": 1},
-                    {"op": "return"},
-                    {"op": "return", "outcome": "failure"}
+                    {"op": "return", "value": 3},
+                    {"op": "return", "outcome": "failure", "value": 4}
                 ]
             }],
             "loops": [],
@@ -3118,8 +3118,9 @@ async fn typed_route_error_receives_fetch_failure_and_retry_reloads() {
     route["actions"][0]["routeLoader"] = serde_json::json!(true);
     route["actions"][0]["loaderResultState"] = serde_json::json!(0);
     route["actions"][0]["instructions"] = serde_json::json!([
-        {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":1,"finallyPc":null,"resultSlot":1,"errorSlot":2},
-        {"op":"return"}
+        {"op":"capabilityRequest","capability":"fetch","request":{"url":7,"method":"GET","decode":"text","requireOk":true},"successPc":1,"failurePc":2,"finallyPc":null,"resultSlot":1,"errorSlot":2},
+        {"op":"return","value":8},
+        {"op":"return","outcome":"failure","value":9}
     ]);
     runtime
         .register_graph(
@@ -5822,7 +5823,9 @@ fn loader_page_artifact() -> serde_json::Value {
             "expressions": [
                 {"instructions": [{"op": "loadHost", "host": 0}, {"op": "return"}]},
                 {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
-                {"instructions": [{"op": "constant", "constant": 1}, {"op": "return"}]}
+                {"instructions": [{"op": "constant", "constant": 1}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 1}, {"op": "return"}]}
             ],
             "actions": [{
                 "frameSlots": 2,
@@ -5830,8 +5833,8 @@ fn loader_page_artifact() -> serde_json::Value {
                 "routeLoader": true,
                 "instructions": [
                     {"op": "capabilityRequest", "capability": "fetch", "request": {"url": 2, "method": "GET", "decode": "responseJson", "requireOk": true}, "successPc": 1, "failurePc": 2, "resultSlot": 0, "errorSlot": 1},
-                    {"op": "return"},
-                    {"op": "return", "outcome": "failure"}
+                    {"op": "return", "value": 3},
+                    {"op": "return", "outcome": "failure", "value": 4}
                 ]
             }],
             "loops": [],

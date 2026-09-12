@@ -1,7 +1,8 @@
 use plec_hir::{HirBindingKind, HirComponent, HirNode};
 use plec_ir::{
-    ActionInstruction, ActionProgram, ComponentParameter, ExecutableApplication, HostRef, Input,
-    Listener, Reaction, RefSlot, RouteOutlet, StateSlot,
+    ActionInstruction, ActionProgram, ComponentParameter, ExecutableApplication,
+    ExpressionInstruction, ExpressionProgram, HostRef, Input, Listener, Reaction, RefSlot,
+    RouteOutlet, StateSlot,
 };
 
 use crate::{ComponentTargets, Ctx, LoweringError};
@@ -29,25 +30,84 @@ pub fn lower_route_loader_to_executable(
         .iter()
         .position(|state| component.bindings[state.value.0 as usize].name == result_state_name)
         .ok_or_else(|| LoweringError("route loader result state missing".into()))?;
-    let action = app
-        .actions
-        .get_mut(loader)
-        .ok_or_else(|| LoweringError("route loader action missing".into()))?;
-    let mut fetches = 0;
-    for instruction in &mut action.instructions {
-        if let ActionInstruction::CapabilityRequest {
-            request: plec_ir::CapabilityRequest::Fetch { require_ok, .. },
-            ..
-        } = instruction
-        {
-            *require_ok = true;
-            fetches += 1;
+    let (fetches, result_slot, error_slot) = {
+        let action = app
+            .actions
+            .get_mut(loader)
+            .ok_or_else(|| LoweringError("route loader action missing".into()))?;
+        let mut fetches = 0;
+        let mut result_slot = None;
+        let mut error_slot = None;
+        for instruction in &mut action.instructions {
+            if let ActionInstruction::CapabilityRequest {
+                request: plec_ir::CapabilityRequest::Fetch { require_ok, .. },
+                result_slot: result,
+                error_slot: error,
+                ..
+            } = instruction
+            {
+                *require_ok = true;
+                fetches += 1;
+                result_slot.get_or_insert(*result);
+                error_slot.get_or_insert(*error);
+            }
         }
-    }
+        (fetches, result_slot, error_slot)
+    };
     if fetches == 0 {
         return Err(LoweringError(
             "route loader requires return await fetch(url)".into(),
         ));
+    }
+    let result_slot = result_slot.expect("route loader fetch counted without result slot");
+    let error_slot = error_slot.expect("route loader fetch counted without error slot");
+    let (needs_result, needs_error) = app.actions[loader].instructions.iter().fold(
+        (false, false),
+        |(result, error), instruction| match instruction {
+            ActionInstruction::Return {
+                outcome: plec_ir::ReturnOutcome::Success,
+                value: None,
+            } => (true, error),
+            ActionInstruction::Return {
+                outcome: plec_ir::ReturnOutcome::Failure,
+                value: None,
+            } => (result, true),
+            _ => (result, error),
+        },
+    );
+    let result_expression = needs_result.then(|| {
+        let expression = app.expressions.len();
+        app.expressions.push(ExpressionProgram {
+            instructions: vec![
+                ExpressionInstruction::LoadFrame { slot: result_slot },
+                ExpressionInstruction::Return,
+            ],
+        });
+        expression
+    });
+    let error_expression = needs_error.then(|| {
+        let expression = app.expressions.len();
+        app.expressions.push(ExpressionProgram {
+            instructions: vec![
+                ExpressionInstruction::LoadFrame { slot: error_slot },
+                ExpressionInstruction::Return,
+            ],
+        });
+        expression
+    });
+    let action = app
+        .actions
+        .get_mut(loader)
+        .expect("route loader action checked above");
+    for instruction in &mut action.instructions {
+        if let ActionInstruction::Return { outcome, value } = instruction {
+            if value.is_none() {
+                *value = match outcome {
+                    plec_ir::ReturnOutcome::Success => result_expression,
+                    plec_ir::ReturnOutcome::Failure => error_expression,
+                };
+            }
+        }
     }
     action.route_loader = true;
     action.loader_result_state = Some(state);

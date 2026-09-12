@@ -1,34 +1,131 @@
-//! Executes the narrow server loader subset: the compiler lowers a route
-//! loader to one `routeLoader` action whose only capability is a static-URL
-//! GET fetch with JSON decoding, so running exactly that program gives SSR
-//! the same outcome the browser loader would observe.
+//! Server route-loader host for shared typed action execution.
 
+use plec_action::{
+    charge_response_bytes, resume, start, ActionError, ActionHost, ActionOutcome, Run,
+};
 use plec_ir::{
     limits::MAX_FETCH_RESPONSE_BYTES, SsrLoaderOutcome, SsrLoaderState, SsrSnapshotValue,
 };
+use plec_schema::{delta::RuntimeValue, typed::TypedCapabilityRequest};
 
 use crate::{
-    artifact::{ActionProgram, ArtifactBundle, JsonValue, Route},
+    artifact::{ArtifactBundle, Component, JsonValue, Route},
     request::RequestContext,
     ssr, ServerError,
 };
 
-/// The decoded `capabilityRequest::Fetch` payload a route loader carries.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FetchRequest {
-    #[serde(default)]
-    url: usize,
-    #[serde(default)]
+#[derive(Clone)]
+struct LoaderFetch {
+    url: String,
     method: String,
-    #[serde(default)]
+    headers: Vec<(String, String)>,
+    body: Option<String>,
     decode: String,
-    #[serde(default)]
     require_ok: bool,
 }
 
-/// One executed route loader. The shape is `SsrLoaderOutcome` itself, so the
-/// snapshot and its validation share the `plec-ir` contract by construction.
+struct LoaderHost<'a> {
+    component: &'a Component,
+    context: &'a RequestContext,
+    states: Vec<JsonValue>,
+}
+
+impl<'a> LoaderHost<'a> {
+    fn new(component: &'a Component, context: &'a RequestContext) -> Self {
+        let mut states = Vec::with_capacity(component.state_slots.len());
+        for state in &component.state_slots {
+            let scope = ssr::Scope {
+                states: states.clone(),
+                ..ssr::loader_scope(context)
+            };
+            states.push(ssr::evaluate(
+                component,
+                state.initial_expression,
+                &scope,
+                &mut ssr::RenderState::bare(),
+            ));
+        }
+        Self {
+            component,
+            context,
+            states,
+        }
+    }
+}
+
+impl ActionHost for LoaderHost<'_> {
+    type Request = LoaderFetch;
+
+    fn evaluate(
+        &mut self,
+        expression: usize,
+        frame: &[RuntimeValue],
+    ) -> Result<RuntimeValue, ActionError> {
+        let scope = ssr::Scope {
+            frame: frame.iter().cloned().map(runtime_to_json).collect(),
+            states: self.states.clone(),
+            ..ssr::loader_scope(self.context)
+        };
+        Ok(json_to_runtime(ssr::evaluate(
+            self.component,
+            expression,
+            &scope,
+            &mut ssr::RenderState::bare(),
+        )))
+    }
+
+    fn prepare_capability(
+        &mut self,
+        request: &TypedCapabilityRequest,
+        frame: &[RuntimeValue],
+    ) -> Result<Self::Request, ActionError> {
+        let TypedCapabilityRequest::Fetch(request) = request else {
+            return Err(ActionError(
+                "unsupported route loader capability: cookie".into(),
+            ));
+        };
+        let url = value_string(&self.evaluate(request.url, frame)?);
+        if url.is_empty() {
+            return Err(ActionError("fetch URL is empty".into()));
+        }
+        let headers = request
+            .headers
+            .iter()
+            .map(|header| {
+                let name = self
+                    .component
+                    .strings
+                    .get(header.name)
+                    .cloned()
+                    .ok_or_else(|| ActionError("header name handle out of range".into()))?;
+                Ok((name, value_string(&self.evaluate(header.value, frame)?)))
+            })
+            .collect::<Result<Vec<_>, ActionError>>()?;
+        let body = request
+            .body
+            .map(|expression| {
+                let value = self.evaluate(expression, frame)?;
+                match value {
+                    RuntimeValue::String(value) => Ok(value),
+                    value => serde_json::to_string(&value).map_err(|error| {
+                        ActionError(format!("fetch body encoding failed: {error}"))
+                    }),
+                }
+            })
+            .transpose()?;
+        Ok(LoaderFetch {
+            url,
+            method: request.method.clone(),
+            headers,
+            body,
+            decode: request.decode.clone(),
+            require_ok: request.require_ok,
+        })
+    }
+}
+
+/// One executed route loader. The snapshot sees only its terminal action
+/// outcome: `responseJson` remains an internal capability envelope.
 pub(crate) async fn execute_route_loader(
     bundle: &ArtifactBundle,
     route: &Route,
@@ -44,132 +141,162 @@ pub(crate) async fn execute_route_loader(
         .find(|entry| entry.graph_id == route.graph_id)
         .map(|entry| &entry.graph);
     let component = graph.and_then(|graph| graph.components.get(graph.root_component));
-    let program = component.and_then(|component| component.actions.get(action));
-    let fetch_request = program
-        .filter(|program| program.route_loader)
-        .and_then(find_fetch_request);
-    let (Some(component), Some(fetch_request)) = (component, fetch_request) else {
+    let Some(component) = component else {
         return Err(ServerError::message(format!(
             "route loader action is invalid for {}",
             route.id
         )));
     };
+    let program = component
+        .actions
+        .get(action)
+        .filter(|program| program.route_loader);
+    let Some(program) = program else {
+        return Err(ServerError::message(format!(
+            "route loader action is invalid for {}",
+            route.id
+        )));
+    };
+    if program.instructions.is_empty() {
+        return Err(ServerError::message(format!(
+            "route loader action is invalid for {}",
+            route.id
+        )));
+    }
+    let mut host = LoaderHost::new(component, context);
+    let mut run = start(
+        &component.actions,
+        action,
+        vec![RuntimeValue::Null; program.frame_slots],
+        &mut host,
+    )
+    .map_err(loader_program_error)?;
+    loop {
+        match run {
+            Run::Complete(outcome) => return Ok(Some(loader_outcome(route, action, outcome))),
+            Run::Suspended(mut suspension) => {
+                let result = execute_fetch(&suspension.request, context, client).await;
+                if let Ok((value, _)) = &result {
+                    // Browser accounting measures the decoded runtime value
+                    // after envelope creation. Keep SSR's action-wide budget
+                    // on that same representation; raw stream limits remain
+                    // enforced in `read_bounded_stream` below.
+                    let bytes = serde_json::to_vec(value).map_or(0, |value| value.len());
+                    if let Err(error) = charge_response_bytes(&mut suspension, bytes) {
+                        run = resume(
+                            &component.actions,
+                            suspension,
+                            Err(loader_failure(error.0)),
+                            &mut host,
+                        )
+                        .map_err(loader_program_error)?;
+                        continue;
+                    }
+                }
+                run = resume(
+                    &component.actions,
+                    suspension,
+                    result.map(|(value, _)| value),
+                    &mut host,
+                )
+                .map_err(loader_program_error)?;
+            }
+        }
+    }
+}
 
-    let raw_url = ssr::evaluate(
-        component,
-        fetch_request.url,
-        &ssr::loader_scope(context),
-        &mut ssr::RenderState::bare(),
-    );
+fn loader_program_error(error: ActionError) -> ServerError {
+    ServerError::message(format!("route loader action is invalid: {error}"))
+}
+
+fn loader_outcome(route: &Route, action: usize, outcome: ActionOutcome) -> SsrLoaderOutcome {
+    let state = match outcome {
+        ActionOutcome::Success(value) => SsrLoaderState::Resolved {
+            value: to_snapshot_value(unwrap_response_body(value)),
+        },
+        ActionOutcome::Failure(error) => SsrLoaderState::Rejected {
+            message: failure_message(&error),
+        },
+    };
+    SsrLoaderOutcome {
+        graph_id: route.graph_id.clone(),
+        action,
+        state,
+    }
+}
+
+async fn execute_fetch(
+    fetch: &LoaderFetch,
+    context: &RequestContext,
+    client: &reqwest::Client,
+) -> Result<(RuntimeValue, usize), RuntimeValue> {
+    if fetch.decode != "responseJson" {
+        return Err(loader_failure(format!(
+            "unsupported route loader decode {}",
+            fetch.decode
+        )));
+    }
     let base: reqwest::Url = context
         .url
         .parse()
-        .map_err(|_| ServerError::message("request url is not a valid fetch base"))?;
+        .map_err(|_| loader_failure("request url is not a valid fetch base"))?;
     let url = reqwest::Url::options()
         .base_url(Some(&base))
-        .parse(&js_string(&raw_url))
-        .map_err(|error| ServerError::message(format!("invalid loader url: {error}")))?;
-
-    let rejected = |message: String| SsrLoaderOutcome {
-        graph_id: route.graph_id.clone(),
-        action,
-        state: SsrLoaderState::Rejected { message },
+        .parse(&fetch.url)
+        .map_err(|error| loader_failure(format!("invalid loader url: {error}")))?;
+    let method = if fetch.method.is_empty() {
+        reqwest::Method::GET
+    } else {
+        reqwest::Method::from_bytes(fetch.method.as_bytes())
+            .map_err(|error| loader_failure(format!("invalid loader method: {error}")))?
     };
-
-    // Loader failures are total outcomes, not server errors: a rejected
-    // loader renders the route's error phase and transfers the rejection in
-    // the snapshot. Only an invalid loader program above fails the request.
-    let response = match client
-        .request(
-            if fetch_request.method.is_empty() {
-                reqwest::Method::GET
-            } else {
-                reqwest::Method::from_bytes(fetch_request.method.as_bytes()).map_err(|error| {
-                    ServerError::message(format!("invalid loader method: {error}"))
-                })?
-            },
-            url.clone(),
-        )
+    let mut request = client.request(method, url.clone());
+    for (name, value) in &fetch.headers {
+        request = request.header(name, value);
+    }
+    if let Some(body) = &fetch.body {
+        request = request.body(body.clone());
+    }
+    let response = request
         .send()
         .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            return Ok(Some(rejected(format!(
-                "fetch {} failed: {error}",
-                url.path()
-            ))));
-        }
-    };
-    if fetch_request.require_ok && !response.status().is_success() {
-        return Ok(Some(rejected(format!(
+        .map_err(|error| loader_failure(format!("fetch {} failed: {error}", url.path())))?;
+    if fetch.require_ok && !response.status().is_success() {
+        return Err(loader_failure(format!(
             "fetch {} failed with status {}",
             url.path(),
             response.status().as_u16()
-        ))));
+        )));
     }
-    if fetch_request.decode != "responseJson" {
-        return Ok(Some(rejected(format!(
-            "unsupported route loader decode {}",
-            fetch_request.decode
-        ))));
-    }
-    // Byte ceilings for untrusted loader responses (mirrors the Rust decode
-    // limits; see docs/security-limits.md). The declared length fails fast;
-    // the streamed accumulation below is the real ceiling, so absent,
-    // forged, or lying declarations cannot buffer the body first.
     if response
         .content_length()
         .is_some_and(|declared| declared > MAX_FETCH_RESPONSE_BYTES as u64)
     {
-        return Ok(Some(rejected(
-            "loader response exceeds byte limit".to_owned(),
-        )));
+        return Err(loader_failure("loader response exceeds byte limit"));
     }
-    let bytes = match read_bounded_stream(response, url.path()).await {
-        Ok(bytes) => bytes,
-        Err(message) => return Ok(Some(rejected(message))),
+    let ok = response.status().is_success();
+    let status = response.status().as_u16();
+    let bytes = read_bounded_stream(response, url.path())
+        .await
+        .map_err(loader_failure)?;
+    let body = if status == 204 || status == 205 {
+        RuntimeValue::Null
+    } else {
+        let value: JsonValue = serde_json::from_slice(&bytes)
+            .map_err(|error| loader_failure(format!("fetch {} failed: {error}", url.path())))?;
+        json_to_runtime(value)
     };
-    let text = String::from_utf8_lossy(&bytes);
-    let value: JsonValue = match serde_json::from_str(&text) {
-        Ok(value) => value,
-        Err(error) => {
-            return Ok(Some(rejected(format!(
-                "fetch {} failed: {error}",
-                url.path()
-            ))));
-        }
-    };
-    Ok(Some(SsrLoaderOutcome {
-        graph_id: route.graph_id.clone(),
-        action,
-        state: SsrLoaderState::Resolved {
-            value: to_snapshot_value(value),
-        },
-    }))
+    Ok((
+        RuntimeValue::Record(std::collections::HashMap::from([
+            ("ok".into(), RuntimeValue::Bool(ok)),
+            ("status".into(), RuntimeValue::Number(status as f64)),
+            ("body".into(), body),
+        ])),
+        bytes.len(),
+    ))
 }
 
-fn find_fetch_request(program: &ActionProgram) -> Option<FetchRequest> {
-    program
-        .instructions
-        .iter()
-        .filter_map(|instruction| instruction.as_object())
-        .find(|instruction| {
-            instruction.get("op").and_then(|op| op.as_str()) == Some("capabilityRequest")
-                && instruction
-                    .get("capability")
-                    .and_then(|capability| capability.as_str())
-                    == Some("fetch")
-        })
-        .and_then(|instruction| instruction.get("request"))
-        .and_then(|request| serde_json::from_value(request.clone()).ok())
-}
-
-/// Reads a response body chunk by chunk under a hard byte ceiling. The
-/// limit is enforced per chunk before accumulation, so a chunked response
-/// with an absent or forged `content-length` aborts as soon as it exceeds
-/// the budget instead of buffering first. The error is the final loader
-/// rejection message.
+/// Reads under a hard ceiling before body buffering.
 async fn read_bounded_stream(response: reqwest::Response, path: &str) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     let mut stream = std::pin::pin!(response.bytes_stream());
@@ -183,20 +310,45 @@ async fn read_bounded_stream(response: reqwest::Response, path: &str) -> Result<
     Ok(bytes)
 }
 
-/// Converts the evaluated transport value into the strict snapshot value.
-/// JSON cannot carry non-finite numbers, so `as_f64` cannot lose here.
-fn to_snapshot_value(value: JsonValue) -> SsrSnapshotValue {
-    match value {
-        JsonValue::Null => SsrSnapshotValue::Null,
-        JsonValue::Bool(value) => SsrSnapshotValue::Bool(value),
-        JsonValue::Number(value) => {
-            SsrSnapshotValue::Number(value.as_f64().expect("json numbers are finite"))
+fn unwrap_response_body(value: RuntimeValue) -> RuntimeValue {
+    match &value {
+        RuntimeValue::Record(record)
+            if record.len() == 3
+                && record.contains_key("ok")
+                && record.contains_key("status")
+                && record.contains_key("body") =>
+        {
+            record.get("body").cloned().unwrap_or(value)
         }
-        JsonValue::String(value) => SsrSnapshotValue::String(value),
-        JsonValue::Array(values) => {
+        _ => value,
+    }
+}
+
+fn loader_failure(message: impl Into<String>) -> RuntimeValue {
+    RuntimeValue::Record(std::collections::HashMap::from([(
+        "message".into(),
+        RuntimeValue::String(message.into()),
+    )]))
+}
+
+fn failure_message(value: &RuntimeValue) -> String {
+    value
+        .record()
+        .and_then(|record| record.get("message"))
+        .map(value_string)
+        .unwrap_or_else(|| value_string(value))
+}
+
+fn to_snapshot_value(value: RuntimeValue) -> SsrSnapshotValue {
+    match value {
+        RuntimeValue::Null => SsrSnapshotValue::Null,
+        RuntimeValue::Bool(value) => SsrSnapshotValue::Bool(value),
+        RuntimeValue::Number(value) => SsrSnapshotValue::Number(value),
+        RuntimeValue::String(value) => SsrSnapshotValue::String(value),
+        RuntimeValue::Array(values) => {
             SsrSnapshotValue::Array(values.into_iter().map(to_snapshot_value).collect())
         }
-        JsonValue::Object(fields) => SsrSnapshotValue::Record(
+        RuntimeValue::Record(fields) => SsrSnapshotValue::Record(
             fields
                 .into_iter()
                 .map(|(name, value)| (name, to_snapshot_value(value)))
@@ -205,9 +357,6 @@ fn to_snapshot_value(value: JsonValue) -> SsrSnapshotValue {
     }
 }
 
-/// The reverse of `to_snapshot_value`: loader outcomes transfer through the
-/// strict snapshot type and feed back into SSR evaluation as transport
-/// values (`loadHost loaderData`).
 pub(crate) fn snapshot_value_to_json(value: &SsrSnapshotValue) -> JsonValue {
     match value {
         SsrSnapshotValue::Null => JsonValue::Null,
@@ -228,18 +377,52 @@ pub(crate) fn snapshot_value_to_json(value: &SsrSnapshotValue) -> JsonValue {
     }
 }
 
-/// `String(value)` coercion for the loader URL, mirroring the TS host's
-/// plain JavaScript `String()` (not the DOM-sink `typed_value_string`).
-fn js_string(value: &JsonValue) -> String {
+fn json_to_runtime(value: JsonValue) -> RuntimeValue {
     match value {
-        JsonValue::String(value) => value.clone(),
-        JsonValue::Null => "null".to_owned(),
-        JsonValue::Bool(value) => value.to_string(),
-        JsonValue::Number(value) => value
-            .as_f64()
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "NaN".to_owned()),
-        JsonValue::Array(values) => values.iter().map(js_string).collect::<Vec<_>>().join(","),
-        JsonValue::Object(_) => "[object Object]".to_owned(),
+        JsonValue::Null => RuntimeValue::Null,
+        JsonValue::Bool(value) => RuntimeValue::Bool(value),
+        JsonValue::Number(value) => RuntimeValue::Number(value.as_f64().unwrap_or(0.0)),
+        JsonValue::String(value) => RuntimeValue::String(value),
+        JsonValue::Array(values) => {
+            RuntimeValue::Array(values.into_iter().map(json_to_runtime).collect())
+        }
+        JsonValue::Object(values) => RuntimeValue::Record(
+            values
+                .into_iter()
+                .map(|(name, value)| (name, json_to_runtime(value)))
+                .collect(),
+        ),
+    }
+}
+
+fn runtime_to_json(value: RuntimeValue) -> JsonValue {
+    match value {
+        RuntimeValue::Null => JsonValue::Null,
+        RuntimeValue::Bool(value) => JsonValue::Bool(value),
+        RuntimeValue::Number(value) => serde_json::Number::from_f64(value)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null),
+        RuntimeValue::String(value) => JsonValue::String(value),
+        RuntimeValue::Array(values) => {
+            JsonValue::Array(values.into_iter().map(runtime_to_json).collect())
+        }
+        RuntimeValue::Record(values) => JsonValue::Object(
+            values
+                .into_iter()
+                .map(|(name, value)| (name, runtime_to_json(value)))
+                .collect(),
+        ),
+    }
+}
+
+fn value_string(value: &RuntimeValue) -> String {
+    match value {
+        RuntimeValue::String(value) => value.clone(),
+        RuntimeValue::Null => String::new(),
+        RuntimeValue::Bool(value) => value.to_string(),
+        RuntimeValue::Number(value) => value.to_string(),
+        RuntimeValue::Array(_) | RuntimeValue::Record(_) => {
+            serde_json::to_string(value).unwrap_or_default()
+        }
     }
 }

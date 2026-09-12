@@ -13,13 +13,18 @@
 /// graph payload decoded at the WASM boundary.
 pub const MAX_ARTIFACT_JSON_BYTES: usize = 16 * 1024 * 1024;
 
-/// Maximum JSON byte length of a route manifest decoded at the WASM
-/// boundary.
+/// Maximum JSON byte length of a workspace manifest read by the compiler.
 pub const MAX_MANIFEST_JSON_BYTES: usize = 1024 * 1024;
 
 /// Maximum JSON byte length of an SSR bootstrap snapshot decoded at the
 /// WASM boundary.
 pub const MAX_SNAPSHOT_JSON_BYTES: usize = 4 * 1024 * 1024;
+
+/// Maximum JavaScript byte length of the browser runtime module.
+pub const MAX_RUNTIME_JS_BYTES: usize = 16 * 1024 * 1024;
+
+/// Maximum JSON byte length of the browser host-provider manifest.
+pub const MAX_PROVIDER_MANIFEST_JSON_BYTES: usize = 1024 * 1024;
 
 /// Maximum JSON byte length of host inputs supplied by the embedding host.
 pub const MAX_HOST_INPUT_JSON_BYTES: usize = 1024 * 1024;
@@ -225,6 +230,8 @@ mod tests {
         // The compiled demo application is far below every cap; if a limit
         // ever shrinks below real output, this guards the floor.
         assert!(MAX_ARTIFACT_JSON_BYTES >= 1024 * 1024);
+        assert!(MAX_RUNTIME_JS_BYTES >= 1024 * 1024);
+        assert!(MAX_PROVIDER_MANIFEST_JSON_BYTES >= 1024 * 1024);
         assert!(MAX_COMPONENT_COUNT >= 64);
         assert!(MAX_COMPONENT_COLLECTION_LEN >= 1_000);
         assert!(MAX_IMPORT_DEPTH >= 16);
