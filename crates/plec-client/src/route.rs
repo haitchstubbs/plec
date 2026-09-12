@@ -265,6 +265,8 @@ impl RuntimeState {
             self.effective_tag_policy(),
         )?;
         next.set_component_definitions(graph.components);
+        next.host_registry = self.host_registry.clone();
+        next.host_dispatch = Some(self.clone());
         next.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
         next.graph_generation = self.next_typed_generation();
         if let Some(error) = error {

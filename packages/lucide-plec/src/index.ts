@@ -50,6 +50,45 @@ function attributeNames(props: Record<string, unknown>) {
   );
 }
 
+function escapeHtml(value: unknown): string {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderAttributes(props: Record<string, unknown>): string {
+  return Object.entries(props)
+    .filter(
+      ([key, value]) =>
+        key !== 'children' &&
+        value != null &&
+        typeof value !== 'function' &&
+        /^[A-Za-z_:][A-Za-z0-9:._-]*$/.test(key) &&
+        !key.toLowerCase().startsWith('on'),
+    )
+    .map(([key, value]) =>
+      ` ${key === 'className' ? 'class' : key}="${escapeHtml(value)}"`,
+    )
+    .join('');
+}
+
+/** Node-safe SVG serialization used only by an SSR-opted-in provider. */
+function renderIcon(
+  definition: IconDefinition,
+  props: Record<string, unknown>,
+): string {
+  const attributes = { ...defaultAttributes, ...props };
+  const children = definition
+    .map(([tag, childAttributes]) =>
+      `<${tag}${renderAttributes(childAttributes)}></${tag}>`,
+    )
+    .join('');
+  return `<svg${renderAttributes(attributes)}>${children}</svg>`;
+}
+
 function mountIcon(
   definition: IconDefinition,
   boundary: Element,
@@ -85,6 +124,7 @@ export function createLucideHostProvider(
       ): HostHandle;
       update(handle: HostHandle, props: Record<string, unknown>): void;
       dispose(handle: HostHandle): void;
+      render(props: Record<string, unknown>): string;
     }
   > = {};
   for (const [name, definition] of Object.entries(definitions)) {
@@ -102,6 +142,7 @@ export function createLucideHostProvider(
         handle.attributes = nextNames;
       },
       dispose: ({ element }) => element.remove(),
+      render: (props) => renderIcon(definition, props),
     };
   }
   return components;

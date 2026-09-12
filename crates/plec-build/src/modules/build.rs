@@ -214,7 +214,12 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
             .join(format!("{}.js", super::id::sanitize(provider)))
     }));
     let revision = assets::revision(&revision_paths)?;
-    host::emit_provider_manifest(&public_dir, &automatic_providers, &revision)?;
+    host::emit_provider_manifest(
+        &public_dir,
+        &automatic_providers,
+        &host_config.host_ssr_providers,
+        &revision,
+    )?;
     assets::brotli(&client_path)?;
 
     // The native host imports this application bundle through its Node

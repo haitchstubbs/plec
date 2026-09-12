@@ -13,6 +13,9 @@ export interface PlecHostComponentLifecycle {
   mount(boundary: Element, props: Record<string, unknown>): unknown;
   update?(handle: unknown, props: Record<string, unknown>): void;
   dispose?(handle: unknown): void;
+  /** Server-only renderer. The private Node sidecar invokes this explicit
+   * opt-in hook; browser mount/update semantics never run in Rust. */
+  render?(props: Record<string, unknown>): string;
 }
 
 export type PlecHostProvider = Record<
@@ -20,79 +23,54 @@ export type PlecHostProvider = Record<
   PlecHostComponentLifecycle
 >;
 
-type PlecHostHandle = {
-  provider: string;
-  component: string;
-  value: unknown;
-};
-
-type PlecHostRegistry = {
-  mount(
+/** Registry contract the WASM runtime resolves provider mounts against.
+ * Returning `undefined` for an unknown provider/component is a
+ * deterministic mount failure. */
+export type PlecHostRegistry = {
+  resolve(
     provider: string,
     component: string,
-    boundary: Element,
-    props: Record<string, unknown>,
-  ): PlecHostHandle;
-  update(handle: PlecHostHandle, props: Record<string, unknown>): void;
-  dispose(handle: PlecHostHandle): void;
+  ): PlecHostComponentLifecycle | undefined;
 };
 
 const hostProviders = new Map<string, PlecHostProvider>();
 let providerRegistration: Promise<void> | undefined;
 
 type HostProviderManifest = {
-  version: 1;
+  version: 2;
   revision: string;
   providers: {
     id: string;
     module: string;
     components: string[];
+    ssr: boolean;
   }[];
 };
 
 type HostProviderAdapter = () => PlecHostProvider;
 
-function hostRegistry(): PlecHostRegistry {
+/** Builds the registry bridge the WASM runtime resolves against. The source
+ * map is captured by closure, so a controller's registry is an immutable
+ * snapshot: replacing the module map after mount cannot redirect mounted
+ * lifecycles. */
+export function hostRegistry(
+  providers: ReadonlyMap<string, PlecHostProvider>,
+): PlecHostRegistry {
   return {
-    mount(provider, component, boundary, props) {
-      const lifecycle = hostProviders.get(provider)?.[component];
-      if (!lifecycle)
-        throw new Error(
-          `Unknown host component: ${provider}/${component}`,
-        );
-      return {
-        provider,
-        component,
-        value: lifecycle.mount(boundary, props),
-      };
-    },
-    update(handle, props) {
-      hostProviders
-        .get(handle.provider)
-        ?.[handle.component]?.update?.(handle.value, props);
-    },
-    dispose(handle) {
-      hostProviders
-        .get(handle.provider)
-        ?.[handle.component]?.dispose?.(handle.value);
+    resolve(provider, component) {
+      return providers.get(provider)?.[component];
     },
   };
 }
 
-function installHostRegistry() {
-  (
-    globalThis as typeof globalThis & {
-      __plec_host_components?: PlecHostRegistry;
-    }
-  ).__plec_host_components = hostRegistry();
-}
-
+/** Registers provider components in the module-level map consumed by
+ * `startPlecRouter` when no explicit `providers` option is supplied. No
+ * global bridge is installed; provider authority is runtime-local. */
 export function registerPlecHostProvider(
   provider: string,
   components: PlecHostProvider,
 ): () => void {
   hostProviders.set(provider, components);
-  installHostRegistry();
   return () => {
     if (hostProviders.get(provider) === components)
       hostProviders.delete(provider);
@@ -147,7 +125,6 @@ async function loadPlecProviders() {
   // Keep the registry unavailable until every configured adapter loads.
   for (const [provider, components] of loaded)
     hostProviders.set(provider, components);
-  installHostRegistry();
 }
 
 function isHostProviderManifest(
@@ -156,7 +133,7 @@ function isHostProviderManifest(
   if (!value || typeof value !== 'object') return false;
   const manifest = value as Partial<HostProviderManifest>;
   if (
-    manifest.version !== 1 ||
+    manifest.version !== 2 ||
     typeof manifest.revision !== 'string' ||
     manifest.revision.length === 0 ||
     !Array.isArray(manifest.providers)
@@ -167,7 +144,8 @@ function isHostProviderManifest(
     if (
       !entry ||
       typeof entry.id !== 'string' ||
-      typeof entry.module !== 'string' ||
+        typeof entry.module !== 'string' ||
+        typeof entry.ssr !== 'boolean' ||
       !Array.isArray(entry.components) ||
       !/^[A-Za-z0-9_-]+$/.test(entry.id) ||
       seen.has(entry.id)
@@ -333,6 +311,7 @@ interface WasmRuntimeInstance {
   set_tag_policy(
     policy: PlecRouterMountOptions['tagPolicy'] | null,
   ): void;
+  set_host_registry(registry: PlecHostRegistry | null): void;
   initialize_input(inputId: string, rows: unknown): RuntimeMountMetrics;
   apply_delta(delta: unknown): CompiledUpdateMetrics;
   apply_deltas(deltas: unknown): CompiledUpdateMetrics;
@@ -386,6 +365,16 @@ export interface PlecRouterMountOptions {
    * before graphs load.
    */
   tagPolicy?: { customElements?: string[] } | null;
+  /**
+   * Provider implementations this controller's runtime resolves against.
+   * Omitted: a snapshot of every provider registered through
+   * `registerPlecHostProvider` / `registerPlecProviders` at start time.
+   * Supply an explicit map to scope providers to one controller — two
+   * simultaneous runtimes may then use the same provider id with different
+   * implementations. The selected registry serves every graph instance the
+   * controller creates; no process-global bridge exists.
+   */
+  providers?: ReadonlyMap<string, PlecHostProvider>;
   /** Host-owned reactive inputs for routed compiled graphs. */
   inputs?: Record<string, CompiledInputProducer<any>>;
   onQueryUpdate?: (update: CompiledQueryUpdate) => void;
@@ -571,6 +560,9 @@ export async function startPlecRouter(
   if (options.tagPolicy !== undefined) {
     runtime.set_tag_policy(options.tagPolicy ?? null);
   }
+  runtime.set_host_registry(
+    hostRegistry(options.providers ?? new Map(hostProviders)),
+  );
   const routedInputs = options.inputs ?? {};
   const hostInputs: Record<string, unknown> = {
     'location.pathname': window.location.pathname,

@@ -48,9 +48,9 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | wasm-runtime-8yy | Design file-based API routes (apps/fullstack/api) like Next's app/api | open | P3 | feature |  |  |
 | wasm-runtime-96v | Rework router listener closures to drop raw-pointer state capture | closed | P3 | task |  |  |
 | wasm-runtime-a08 | Generate TypeScript resource-limit constants from Rust | closed | P2 | task | haitchstubbs |  |
-| **wasm-runtime-a2n** | **Deferred host-renderer capabilities** | open | P2 | epic |  |  |
+| **wasm-runtime-a2n** | **Deferred host-renderer capabilities** | closed | P2 | epic |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-a2n.1 | Configure host import bindings | closed | P2 | task | haitchstubbs |  |
-| &nbsp;&nbsp;↳ wasm-runtime-a2n.2 | Add SSR-capable host providers | in_progress | P2 | task | haitchstubbs |  |
+| &nbsp;&nbsp;↳ wasm-runtime-a2n.2 | Add SSR-capable host providers | closed | P2 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-a2n.3 | Support callback and event props in host components | closed | P2 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-a2n.4 | Scope host provider capability registries to Plec runtime instances | closed | P2 | task | haitchstubbs |  |
 | wasm-runtime-a7h | Bound JS normalization width before JSON stringify | closed | P2 | bug | haitchstubbs |  |

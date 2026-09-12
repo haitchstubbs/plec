@@ -216,18 +216,42 @@ impl Ctx<'_> {
                     component,
                 } = &call.target
                 {
+                    // Callback/event props cross as runtime-owned handles
+                    // alongside the value record; value props keep the
+                    // single `__plec_props` record channel.
+                    let mut record_props = Vec::new();
+                    let mut callable_props = Vec::new();
+                    for prop in &call.props {
+                        match prop {
+                            HirProp::Callable { name, callable } => {
+                                if name == "__plec_props" {
+                                    return Err(self.err(
+                                        "host component callback prop cannot be named __plec_props",
+                                    ));
+                                }
+                                let action = self.callable(callable)?;
+                                callable_props.push(ComponentProp::Callable {
+                                    name: self.string(name),
+                                    action,
+                                });
+                            }
+                            other => record_props.push(other.clone()),
+                        }
+                    }
                     let (expression, dependencies) =
-                        self.component_props_record(&call.props, self.active_loop.is_some())?;
+                        self.component_props_record(&record_props, self.active_loop.is_some())?;
                     let index = self.app.nodes.len();
                     let props_name = self.string("__plec_props");
+                    let mut props = vec![ComponentProp::Value {
+                        name: props_name,
+                        expression,
+                    }];
+                    props.extend(callable_props);
                     self.app.nodes.push(Node::HostComponent {
                         provider: provider.clone(),
                         component: component.clone(),
                         parent,
-                        props: vec![ComponentProp::Value {
-                            name: props_name,
-                            expression,
-                        }],
+                        props,
                     });
                     self.edges(dependencies, "hostComponent", index);
                     self.prop_edges(expression, "hostComponent", index);
