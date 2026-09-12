@@ -221,3 +221,7 @@ const markdown = [
 ].join("\n");
 
 writeFileSync("MILESTONES.md", markdown);
+
+run("git", ["add", "--", "MILESTONES.md"], {
+    stdio: "inherit",
+});
