@@ -100,7 +100,11 @@ pub(crate) fn test_reset_build_execution_count() {
 pub(crate) fn test_build_execution_count_for_handle(handle: &str) -> Result<usize, String> {
     let key = registry_parse_handle(handle)?;
 
-    let count = BUILD_EXECUTION_COUNTS.lock().get(&key).copied().unwrap_or(0);
+    let count = BUILD_EXECUTION_COUNTS
+        .lock()
+        .get(&key)
+        .copied()
+        .unwrap_or(0);
 
     Ok(count)
 }
