@@ -46,8 +46,8 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | wasm-runtime-8or | Fullstack client bundle imports the whole lucide icon set | closed | P2 | task | haitchstubbs |  |
 | wasm-runtime-8vi | Stream-limit fetched and loader response bodies | closed | P2 | bug | haitchstubbs |  |
 | wasm-runtime-8yy | Design file-based API routes (apps/fullstack/api) like Next's app/api | open | P3 | feature |  |  |
-| wasm-runtime-96v | Rework router listener closures to drop raw-pointer state capture | open | P3 | task |  |  |
-| wasm-runtime-a08 | Generate TypeScript resource-limit constants from Rust | open | P2 | task |  |  |
+| wasm-runtime-96v | Rework router listener closures to drop raw-pointer state capture | closed | P3 | task |  |  |
+| wasm-runtime-a08 | Generate TypeScript resource-limit constants from Rust | closed | P2 | task | haitchstubbs |  |
 | **wasm-runtime-a2n** | **Deferred host-renderer capabilities** | open | P2 | epic |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-a2n.1 | Configure host import bindings | closed | P2 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-a2n.2 | Add SSR-capable host providers | open | P2 | task |  |  |
@@ -59,7 +59,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | wasm-runtime-b1i | Wire the native plec-server crate into dev/build workflows and retire packages/plec-server | closed | P2 | task |  |  |
 | wasm-runtime-b50 | Unify route matching and support nested route-chain SSR | closed | P2 | feature | haitchstubbs |  |
 | wasm-runtime-buy | Remove or implement crates/plec-diagnostics stub | open | P3 | chore |  |  |
-| wasm-runtime-ctb | plec dev graph resolve/tree: registry resolution debugger | open | P2 | feature |  |  |
+| wasm-runtime-ctb | plec dev graph resolve/tree: registry resolution debugger | in_progress | P2 | feature | haitchstubbs |  |
 | wasm-runtime-d5q | Make loader error retry acceptance deterministic with SSR | closed | P2 | task | haitchstubbs |  |
 | wasm-runtime-dvs | plec dev context <domain>: condensed architecture packets for agents | open | P3 | feature |  |  |
 | wasm-runtime-e7f | Move WASM test orchestration under packages/plec-e2e Playwright ownership | open | P3 | chore |  |  |
@@ -99,7 +99,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | &nbsp;&nbsp;↳ wasm-runtime-moq.7 | Conditional structural ownership: adopt the instantiated branch | closed | P2 | feature | haitchstubbs | rust, server, ssr |
 | &nbsp;&nbsp;↳ wasm-runtime-moq.8 | Keyed loop structural ownership: server renders rows, runtime claims them | closed | P2 | feature | haitchstubbs | rust, server, ssr |
 | &nbsp;&nbsp;↳ wasm-runtime-moq.9 | SSR adoption contract test matrix + divergence diagnostics | closed | P2 | task | haitchstubbs | ssr, testing |
-| wasm-runtime-n2l | Execute route loaders through shared Rust action semantics | open | P2 | task |  |  |
+| wasm-runtime-n2l | Execute route loaders through shared Rust action semantics | closed | P2 | task | haitchstubbs |  |
 | **wasm-runtime-omk** | **Security hardening for executable runtime** | open | P1 | epic |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-omk.1 | Constrain executable DOM binding sinks | closed | P1 | bug | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-omk.10 | Restrict executable IR element tags | closed | P1 | bug | haitchstubbs |  |
