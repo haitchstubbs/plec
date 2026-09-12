@@ -58,3 +58,4 @@ playwright-report/
 .beads/proxieddb/
 
 .vscode
+.yarn

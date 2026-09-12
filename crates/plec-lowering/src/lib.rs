@@ -74,4 +74,91 @@ mod tests {
         assert_eq!(executable.route_outlets[0].id, "main");
         assert_eq!(executable.route_outlets[0].node, 0);
     }
+
+    fn fanout_component(name: &str, children: usize) -> HirComponent {
+        let span = SourceSpan::new("test.tsx", 0, 0);
+        let child_ids: Vec<NodeId> = (1..=children).map(|id| NodeId(id as u32)).collect();
+        let component = (0..=children).fold(
+            HirComponent::new(ComponentId::new("test.tsx", name), span.clone()),
+            |component, id| {
+                let node = if id == 0 {
+                    HirNode::Element(HirElement {
+                        id: NodeId(0),
+                        tag: "div".into(),
+                        props: vec![],
+                        events: vec![],
+                        host_ref: None,
+                        route_outlet: None,
+                        children: child_ids.clone(),
+                        span: span.clone(),
+                    })
+                } else {
+                    HirNode::Element(HirElement {
+                        id: NodeId(id as u32),
+                        tag: "span".into(),
+                        props: vec![],
+                        events: vec![],
+                        host_ref: None,
+                        route_outlet: None,
+                        children: vec![],
+                        span: span.clone(),
+                    })
+                };
+                component.with_node(node)
+            },
+        );
+        component.with_root_node(NodeId(0))
+    }
+
+    #[test]
+    fn rejects_lowered_components_beyond_per_collection_budget() {
+        let component = fanout_component("Big", plec_ir::limits::MAX_COMPONENT_COLLECTION_LEN + 1);
+
+        let error = lower_component_to_executable(&component)
+            .expect_err("over-wide component should be rejected");
+
+        assert!(
+            error
+                .0
+                .contains("exceeds the maximum length"),
+            "{}",
+            error.0
+        );
+    }
+
+    #[test]
+    fn rejects_lowered_applications_beyond_aggregate_entry_budget() {
+        let components: Vec<HirComponent> = (0..12)
+            .map(|index| fanout_component(&format!("C{index}"), 90_000))
+            .collect();
+        let application = plec_hir::HirApplication {
+            root: ComponentId::new("test.tsx", "C0"),
+            components,
+        };
+
+        let error = super::lower_application_to_executable(&application)
+            .expect_err("aggregate IR exhaustion should be rejected");
+
+        assert!(error.0.contains("maximum total IR entries"), "{}", error.0);
+    }
+
+    #[test]
+    fn rejects_lowered_applications_beyond_component_count_budget() {
+        let components: Vec<HirComponent> = (0..=plec_ir::limits::MAX_COMPONENT_COUNT)
+            .map(|index| fanout_component(&format!("C{index}"), 0))
+            .collect();
+        let application = plec_hir::HirApplication {
+            root: ComponentId::new("test.tsx", "C0"),
+            components,
+        };
+
+        let error = super::lower_application_to_executable(&application)
+            .expect_err("component count exhaustion should be rejected");
+
+        assert!(
+            error.0.contains("maximum component count"),
+            "{}",
+            error.0
+        );
+    }
 }
