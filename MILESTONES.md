@@ -51,14 +51,14 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | **wasm-runtime-a2n** | **Deferred host-renderer capabilities** | open | P2 | epic |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-a2n.1 | Configure host import bindings | closed | P2 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-a2n.2 | Add SSR-capable host providers | open | P2 | task |  |  |
-| &nbsp;&nbsp;↳ wasm-runtime-a2n.3 | Support callback and event props in host components | open | P2 | task |  |  |
-| &nbsp;&nbsp;↳ wasm-runtime-a2n.4 | Scope host provider capability registries to Plec runtime instances | open | P2 | task |  |  |
+| &nbsp;&nbsp;↳ wasm-runtime-a2n.3 | Support callback and event props in host components | in_progress | P2 | task | haitchstubbs |  |
+| &nbsp;&nbsp;↳ wasm-runtime-a2n.4 | Scope host provider capability registries to Plec runtime instances | closed | P2 | task | haitchstubbs |  |
 | wasm-runtime-a7h | Bound JS normalization width before JSON stringify | closed | P2 | bug | haitchstubbs |  |
 | wasm-runtime-ahw | Client-side route navigation never seeds loader data into the mounted graph (notes page renders empty after graph swap) | closed | P2 | bug | haitchstubbs |  |
 | wasm-runtime-ayk | Bound runtime amplification and aggregate application budgets | closed | P2 | bug | haitchstubbs |  |
 | wasm-runtime-b1i | Wire the native plec-server crate into dev/build workflows and retire packages/plec-server | closed | P2 | task |  |  |
 | wasm-runtime-b50 | Unify route matching and support nested route-chain SSR | closed | P2 | feature | haitchstubbs |  |
-| wasm-runtime-buy | Remove or implement crates/plec-diagnostics stub | open | P3 | chore |  |  |
+| wasm-runtime-buy | Remove or implement crates/plec-diagnostics stub | closed | P3 | chore |  |  |
 | wasm-runtime-ctb | plec dev graph resolve/tree: registry resolution debugger | closed | P2 | feature | haitchstubbs |  |
 | wasm-runtime-d5q | Make loader error retry acceptance deterministic with SSR | closed | P2 | task | haitchstubbs |  |
 | wasm-runtime-dvs | plec dev context <domain>: condensed architecture packets for agents | open | P3 | feature |  |  |
@@ -100,7 +100,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | &nbsp;&nbsp;↳ wasm-runtime-moq.8 | Keyed loop structural ownership: server renders rows, runtime claims them | closed | P2 | feature | haitchstubbs | rust, server, ssr |
 | &nbsp;&nbsp;↳ wasm-runtime-moq.9 | SSR adoption contract test matrix + divergence diagnostics | closed | P2 | task | haitchstubbs | ssr, testing |
 | wasm-runtime-n2l | Execute route loaders through shared Rust action semantics | closed | P2 | task | haitchstubbs |  |
-| **wasm-runtime-omk** | **Security hardening for executable runtime** | open | P1 | epic |  |  |
+| **wasm-runtime-omk** | **Security hardening for executable runtime** | closed | P1 | epic |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-omk.1 | Constrain executable DOM binding sinks | closed | P1 | bug | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-omk.10 | Restrict executable IR element tags | closed | P1 | bug | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-omk.11 | Apply bounded decoding to snapshot facade APIs | closed | P2 | bug | haitchstubbs |  |
@@ -115,7 +115,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | &nbsp;&nbsp;↳ wasm-runtime-omk.7 | Harden SSR tag and attribute serialization | closed | P1 | bug | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-omk.8 | Escape build metadata and verify staged runtime assets | closed | P2 | bug | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-omk.9 | Isolate synchronous cookie grants per runtime | closed | P1 | bug | haitchstubbs |  |
-| wasm-runtime-pp1 | Author and enforce shared, server, and client execution ownership | open | P2 | epic |  |  |
+| wasm-runtime-pp1 | Author and enforce shared, server, and client execution ownership | closed | P2 | epic |  |  |
 | wasm-runtime-r0l | Compiler SSR drops island component props: SVG icons paint at 24px unclassed, then resize to 16px after adoption | closed | P2 | bug | haitchstubbs |  |
 | wasm-runtime-rz7 | Anchor-click interception intermittently falls through to a full page navigation during client-side route swaps | closed | P2 | bug | haitchstubbs |  |
 | wasm-runtime-sum | Fix chromedriver/playwright Chromium version drift breaking test harness | closed | P1 | bug | haitchstubbs |  |
