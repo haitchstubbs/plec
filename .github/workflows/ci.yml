@@ -85,6 +85,8 @@ jobs:
         run: yarn install:build-tools
       - name: Verify browser toolchain
         run: yarn toolchain:verify:browser
+      - name: Install Plec CLI
+        run: yarn install:plec-cli
       - name: Test
         run: yarn test
       - name: Test WASM
