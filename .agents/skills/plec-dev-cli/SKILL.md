@@ -37,6 +37,7 @@ not, the binary on PATH is the release frontend.
 | Is the built/staged WASM current?                  | `plec workspace artifact stale`                            |
 | Full artifact identity + protocol report           | `plec workspace artifact provenance runtime`               |
 | Why is SSR adoption failing?                       | `plec workspace doctor adoption [--html f] [--snapshot f]` |
+| Run every adoption validation gate                  | `plec workspace verify adoption`                           |
 | How does a graph id resolve?                       | `plec workspace graph resolve <graph-id>`                  |
 | What nodes does a component own?                   | `plec workspace graph tree <graph-id>`                     |
 | What architecture does a domain use?              | `plec workspace context <domain>`                          |
@@ -85,6 +86,17 @@ resolution (unresolved graph reference — note the `✗ unknown ssr snapshot
 graph` rows), Nested execution (what snapshot v2 must record), DOM markers
 (pass `--html <file>` with the rendered page or fixture), Artifact
 provenance (stale WASM). Follow the printed hints.
+
+### Before handing off an adoption change
+
+```bash
+plec workspace verify adoption
+plec workspace test last
+```
+
+The verify command runs Rust, WASM, browser unit, typecheck, adoption E2E, and
+artifact freshness gates. It keeps going after a failed stage and preserves
+the WASM capture for later inspection.
 
 ### When investigating a symbol or error code
 

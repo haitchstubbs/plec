@@ -20,6 +20,7 @@ pub mod graph;
 pub mod limits;
 pub mod repo;
 pub mod trace;
+pub mod verify;
 pub mod wasm_section;
 pub mod wasmtest;
 
@@ -91,6 +92,12 @@ pub enum WorkspaceCommand {
     Doctor {
         #[command(subcommand)]
         command: DoctorCommand,
+    },
+
+    /// Run the complete SSR adoption validation matrix.
+    Verify {
+        #[command(subcommand)]
+        command: VerifyCommand,
     },
 
     /// Inspect compiled graph registry resolution and node structure.
@@ -205,6 +212,16 @@ pub enum DoctorCommand {
 }
 
 #[derive(Subcommand)]
+pub enum VerifyCommand {
+    /// Run Rust, WASM, browser, typecheck, E2E, and artifact gates.
+    Adoption {
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum GraphCommand {
     /// Resolve a graph id through the runtime's registry rules.
     Resolve {
@@ -294,7 +311,30 @@ pub fn dispatch(command: WorkspaceCommand) -> Result<(), String> {
             Ok(())
         }
         WorkspaceCommand::Doctor { command } => dispatch_doctor(&repo, command),
+        WorkspaceCommand::Verify { command } => dispatch_verify(&repo, command),
         WorkspaceCommand::Graph { command } => dispatch_graph(&repo, command),
+    }
+}
+
+fn dispatch_verify(repo: &Repo, command: VerifyCommand) -> Result<(), String> {
+    match command {
+        VerifyCommand::Adoption { json } => {
+            let report = verify::run(repo);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report)
+                        .map_err(|error| format!("serialize: {error}"))?
+                );
+            } else {
+                verify::print_report(&report);
+            }
+            if report.ok {
+                Ok(())
+            } else {
+                Err("adoption verification failed".into())
+            }
+        }
     }
 }
 

@@ -282,6 +282,23 @@ app staged                 STALE
 
 Both commands exit non-zero on problems, so they gate scripts.
 
+## `plec workspace verify adoption`
+
+Run the complete adoption validation matrix in one command. The command runs
+the runtime compile and unit gates, WASM browser tests, browser package tests,
+browser typecheck, adoption E2E specs, and the staged-artifact freshness gate.
+It continues through every stage so one run exposes the complete failure set.
+
+```bash
+plec workspace verify adoption       # concise stage report
+plec workspace verify adoption --json
+```
+
+WASM output remains captured in `.cache/plec/test-wasm/`, so
+`plec workspace test last` still works after verification. Failed stages print
+matching adoption error codes when available and the final report points to
+`plec workspace doctor adoption` for structural diagnosis.
+
 ## `plec workspace contract ssr`
 
 The SSR protocol has three versioned boundaries — snapshot
