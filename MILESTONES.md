@@ -11,7 +11,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 
 | ID | Title | Status | Priority | Type | Contributor | Labels |
 | --- | --- | --- | --- | --- | --- | --- |
-| wasm-runtime-0yt | Global typed_host_inputs loaderData slot goes stale across route navigations | open | P3 | bug |  |  |
+| wasm-runtime-0yt | Global typed_host_inputs loaderData slot goes stale across route navigations | closed | P3 | bug | haitchstubbs |  |
 | wasm-runtime-1nw | Bound mount recursion depth for deep acyclic node graphs | closed | P2 | task | haitchstubbs |  |
 | **wasm-runtime-1wj** | **packages/plec: the release package — source-buildable CLI + framework toolkit** | open | P1 | epic |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.1 | packages/plec release-package layout: self-contained artifact build | closed | P1 | task | haitchstubbs |  |

@@ -270,6 +270,19 @@ impl RuntimeState {
         self.tag_policy.borrow().clone().unwrap_or_default()
     }
 
+    pub fn typed_host_inputs_for(
+        &self,
+        loader_data: Option<&RuntimeValue>,
+    ) -> HashMap<String, RuntimeValue> {
+        let mut inputs = self.typed_host_inputs.borrow().clone();
+        if let Some(value) = loader_data {
+            inputs.insert("loaderData".into(), value.clone());
+        } else {
+            inputs.remove("loaderData");
+        }
+        inputs
+    }
+
     /// Installs the runtime-local host provider registry. `null` removes
     /// provider capability; any other value must be an object whose
     /// `resolve` is callable, so an invalid grant fails here instead of at

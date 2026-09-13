@@ -81,6 +81,7 @@ impl PlecRuntime {
                     route_id: None,
                     match_key: None,
                     route_state: None,
+                    loader_data: None,
                     loader_runtime: None,
                     component_call: None,
                     component_start: None,
