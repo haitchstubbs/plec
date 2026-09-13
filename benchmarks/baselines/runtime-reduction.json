@@ -19,9 +19,9 @@
   "artifacts": [
     {
       "path": "packages/plec/dist/runtime/runtime_bg.wasm",
-      "raw": 1850365,
-      "gzip": 547757,
-      "brotliQ11": 379533
+      "raw": 1856070,
+      "gzip": 549934,
+      "brotliQ11": 380589
     },
     {
       "path": "packages/plec/dist/runtime/runtime.js",
@@ -31,9 +31,9 @@
     },
     {
       "path": "apps/fullstack/dist/public/runtime/runtime_bg.wasm",
-      "raw": 1850365,
-      "gzip": 547757,
-      "brotliQ11": 379533
+      "raw": 1856070,
+      "gzip": 549934,
+      "brotliQ11": 380589
     },
     {
       "path": "apps/fullstack/dist/public/runtime/runtime.js",
@@ -44,8 +44,8 @@
     {
       "path": "apps/fullstack/dist/public/route-manifest.json",
       "raw": 2429,
-      "gzip": 597,
-      "brotliQ11": 513
+      "gzip": 600,
+      "brotliQ11": 516
     },
     {
       "path": "apps/fullstack/dist/public/graphs/src--components--about.tsx--AboutPage.json",

@@ -138,6 +138,9 @@ pub fn lower_routes(
             }
         }
     }
+    // Source graph traversal may discover modules in different equivalent
+    // orders. Keep manifest and phase artifact output stable across processes.
+    routes.sort_unstable_by(|left, right| left.id.cmp(&right.id));
     let root = routes
         .iter()
         .find(|route| route.parent.is_none())
@@ -218,6 +221,11 @@ pub fn lower_route_artifacts_with_options(
         phases.extend(route.pending_component.clone());
         phases.extend(route.error_component.clone());
     }
+    phases.sort_by(|left, right| {
+        left.module_id
+            .cmp(&right.module_id)
+            .then_with(|| left.local_name.cmp(&right.local_name))
+    });
     phases.dedup();
 
     let mut artifacts = Vec::new();
@@ -475,7 +483,11 @@ fn stable_revision(artifacts: &[RouteArtifact]) -> String {
     // FNV-1a is intentionally small and deterministic; this is a cache-bust
     // revision, not a security digest.
     let mut hash = 0xcbf29ce484222325_u64;
-    for artifact in artifacts {
+    // Route phase discovery can produce equivalent artifacts in different
+    // orders. Hash by graph identity so revision does not depend on that order.
+    let mut ordered = artifacts.iter().collect::<Vec<_>>();
+    ordered.sort_unstable_by(|left, right| left.graph_id.cmp(&right.graph_id));
+    for artifact in ordered {
         let json = serde_json::to_vec(artifact).expect("route artifacts serialize");
         for byte in json {
             hash ^= u64::from(byte);
@@ -826,5 +838,11 @@ mod tests {
             "main"
         );
         assert!(artifacts.manifest.revision.starts_with("rust-route-"));
+        let reversed = artifacts.graphs.iter().rev().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            artifacts.manifest.revision,
+            stable_revision(&reversed),
+            "route revision must not depend on artifact ordering"
+        );
     }
 }

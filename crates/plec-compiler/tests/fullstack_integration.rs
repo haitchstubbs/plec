@@ -106,6 +106,14 @@ fn lowers_fullstack_route_tree_to_a_rust_manifest() {
     );
     assert_eq!(manifest.version, 3);
     assert_eq!(manifest.routes.len(), 7);
+    let route_ids = manifest
+        .routes
+        .iter()
+        .map(|route| route.id.clone())
+        .collect::<Vec<_>>();
+    let mut sorted_route_ids = route_ids.clone();
+    sorted_route_ids.sort();
+    assert_eq!(route_ids, sorted_route_ids);
     assert!(manifest
         .routes
         .iter()
