@@ -2,7 +2,7 @@
 
 import { Tooltip as TooltipPrimitive } from '@base-ui/react/tooltip';
 
-import { cn } from '@wasm-runtime/ui/lib/utils';
+import { cn } from 'plec-ui/lib/utils';
 
 function TooltipProvider({
   delay = 0,

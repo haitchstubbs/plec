@@ -64,7 +64,7 @@ workflows, tests, and documentation for each supported domain.
 ## Dev loop
 
 ```sh
-yarn workspace @wasm-runtime/fullstack dev
+yarn workspace fullstack dev
 ```
 
 This rebuilds and then runs `plec serve dist`. The native server listens on
@@ -80,7 +80,7 @@ After changing the runtime crate (`crates/plec-runtime`):
 
 ```sh
 yarn workspace plec build:wasm   # wasm-pack -> packages/plec/dist/runtime
-yarn workspace @wasm-runtime/fullstack build   # copies wasm into the app and regenerates brotli
+yarn workspace fullstack build   # copies wasm into the app and regenerates brotli
 ```
 
 Verify what you just built (and what the app stages) before testing:
@@ -131,7 +131,7 @@ yarn test                                        # turbo: all workspaces
 yarn workspace plec test:runtime                 # cargo test --lib
 yarn workspace plec test:runtime:core            # cargo test --no-default-features
 yarn workspace plec test:wasm                    # plec-e2e browser harness
-yarn workspace @wasm-runtime/fullstack test      # vitest + check:no-react
+yarn workspace fullstack test      # vitest + check:no-react
 yarn test:e2e                                    # Playwright smoke gate (E2E_PORT, default 3216)
 yarn test:acceptance                             # Playwright full behavioral suites — opt-in
 ```

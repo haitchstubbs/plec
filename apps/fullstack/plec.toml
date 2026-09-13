@@ -18,4 +18,4 @@ preloads = [
 ]
 
 [compiler.host-imports]
-lucide = { provider = "lucide", adapter = "@wasm-runtime/lucide-plec", ssr = true }
+lucide = { provider = "lucide", adapter = "plec-lucide", ssr = true }

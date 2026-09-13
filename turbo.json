@@ -19,7 +19,7 @@
       ],
       "outputs": ["dist/**"]
     },
-    "@wasm-runtime/fullstack#build": {
+    "fullstack#build": {
       "cache": false,
       "dependsOn": ["plec#build"],
       "outputs": ["dist/**"]
@@ -30,20 +30,20 @@
     "test:e2e": {
       "cache": false,
       "persistent": false,
-      "dependsOn": ["@wasm-runtime/fullstack#build"],
+      "dependsOn": ["fullstack#build"],
       "env": ["E2E_PORT"],
       "outputs": []
     },
     "test:acceptance": {
       "cache": false,
       "persistent": false,
-      "dependsOn": ["@wasm-runtime/fullstack#build"],
+      "dependsOn": ["fullstack#build"],
       "env": ["E2E_PORT"],
       "outputs": []
     },
     "bench": {
       "cache": false,
-      "dependsOn": ["@wasm-runtime/fullstack#build"],
+      "dependsOn": ["fullstack#build"],
       "env": [
         "E2E_PORT",
         "PLEC_BENCH_SAMPLES",
