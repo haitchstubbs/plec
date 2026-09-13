@@ -67,7 +67,7 @@ yarn workspace plec build:wasm         # WASM publish only
 yarn workspace plec dev:wasm           # watch and republish
 yarn workspace plec test:runtime       # cargo test --lib
 yarn workspace plec test:runtime:core  # cargo test --no-default-features
-yarn workspace plec test:wasm          # browser harness
+yarn workspace plec test:wasm          # plec-e2e browser harness
 ```
 
 WASM builds use a temporary release directory, verify hashes, Brotli sidecars,

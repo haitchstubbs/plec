@@ -6,15 +6,13 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-/// The WASM browser suite is run through `scripts/browser-harness.mjs`, which
-/// single-sources ChromeDriver/Chrome resolution for wasm-pack.
+/// The WASM browser suite is run through the canonical `plec-e2e` runner,
+/// which single-sources ChromeDriver/Chrome resolution for wasm-pack.
 ///
-/// Breadcrumb: per the e2e policy in AGENTS.md, Playwright owns long-running
-/// browser processes for tests. When wasm-bindgen test orchestration moves
-/// under `packages/plec-e2e`, this spawn should be replaced with that runner —
-/// the capture/parse layer here is intentionally independent of how the suite
-/// is invoked so only this function changes.
-const HARNESS_PATH: &str = "scripts/browser-harness.mjs";
+/// Per the e2e policy in AGENTS.md, browser tooling is owned by
+/// `packages/plec-e2e`; the capture/parse layer here stays independent of how
+/// the suite is invoked.
+const HARNESS_PATH: &str = "packages/plec-e2e/scripts/wasm-harness.mjs";
 
 const CAPTURE_DIR: &str = "test-wasm";
 

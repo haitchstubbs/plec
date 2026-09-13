@@ -17,6 +17,7 @@ pub mod context;
 pub mod contract;
 pub mod doctor;
 pub mod graph;
+pub mod impact;
 pub mod limits;
 pub mod markers;
 pub mod repo;
@@ -82,6 +83,16 @@ pub enum WorkspaceCommand {
     /// Categorized search for a symbol or adoption error code.
     Trace {
         /// Symbol, error code, or identifier to trace.
+        query: String,
+
+        /// Emit the full result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Change-impact report for a protocol constant or symbol.
+    Impact {
+        /// Symbol, protocol constant, or error code to plan a change for.
         query: String,
 
         /// Emit the full result as JSON.
@@ -341,6 +352,19 @@ pub fn dispatch(command: WorkspaceCommand) -> Result<(), String> {
                 );
             } else {
                 trace::print_report(&report);
+            }
+            Ok(())
+        }
+        WorkspaceCommand::Impact { query, json } => {
+            let report = impact::impact(&repo, &query);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report)
+                        .map_err(|error| format!("serialize: {error}"))?
+                );
+            } else {
+                impact::print_report(&report);
             }
             Ok(())
         }

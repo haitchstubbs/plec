@@ -212,6 +212,7 @@ plec workspace test last [--failure <substr>]
 plec workspace contract ssr [--check]
 plec workspace contract limits [--write]
 plec workspace trace <symbol|error-code>
+plec workspace impact <symbol|protocol-constant>
 plec workspace artifact provenance runtime
 plec workspace artifact stale
 plec workspace doctor adoption [--html f] [--snapshot f] [--route p]

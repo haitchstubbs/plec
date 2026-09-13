@@ -221,7 +221,7 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// Known adoption error codes and symbols map to the contract they belong to.
 /// The value is read from the compiled workspace so it stays current.
-fn related_contract(query: &str) -> Option<String> {
+pub(super) fn related_contract(query: &str) -> Option<String> {
     let snapshot_value = plec_ir::SSR_SNAPSHOT_VERSION;
 
     let contract = if query == "SSR_SNAPSHOT_VERSION" || query.contains("ssr-snapshot-version") {

@@ -124,7 +124,7 @@ shell `PATH`, or set `PLEC_BIN` to force a binary.
 yarn test                                        # turbo: all workspaces
 yarn workspace plec test:runtime                 # cargo test --lib
 yarn workspace plec test:runtime:core            # cargo test --no-default-features
-yarn workspace plec test:wasm                    # browser harness (wasm-pack test --headless --chrome)
+yarn workspace plec test:wasm                    # plec-e2e browser harness
 yarn workspace @wasm-runtime/fullstack test      # vitest + check:no-react
 yarn test:e2e                                    # Playwright smoke gate (E2E_PORT, default 3216)
 yarn test:acceptance                             # Playwright full behavioral suites — opt-in
