@@ -18,6 +18,7 @@ pub mod contract;
 pub mod doctor;
 pub mod graph;
 pub mod limits;
+pub mod markers;
 pub mod repo;
 pub mod trace;
 pub mod verify;
@@ -104,6 +105,33 @@ pub enum WorkspaceCommand {
     Graph {
         #[command(subcommand)]
         command: GraphCommand,
+    },
+
+    /// Explain and validate executable DOM marker addresses.
+    Markers {
+        #[command(subcommand)]
+        command: MarkersCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum MarkersCommand {
+    /// Explain structural descent encoded by an address.
+    Explain {
+        address: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compare HTML markers with markers required by a compiled graph.
+    Validate {
+        #[arg(long)]
+        graph: String,
+        #[arg(long)]
+        html: PathBuf,
+        #[arg(long)]
+        source: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -313,6 +341,50 @@ pub fn dispatch(command: WorkspaceCommand) -> Result<(), String> {
         WorkspaceCommand::Doctor { command } => dispatch_doctor(&repo, command),
         WorkspaceCommand::Verify { command } => dispatch_verify(&repo, command),
         WorkspaceCommand::Graph { command } => dispatch_graph(&repo, command),
+        WorkspaceCommand::Markers { command } => dispatch_markers(&repo, command),
+    }
+}
+
+fn dispatch_markers(repo: &Repo, command: MarkersCommand) -> Result<(), String> {
+    match command {
+        MarkersCommand::Explain { address, json } => {
+            let report = markers::explain(&address)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+                );
+            } else {
+                markers::print_explain(&report);
+            }
+            Ok(())
+        }
+        MarkersCommand::Validate {
+            graph,
+            html,
+            source,
+            json,
+        } => {
+            let report = markers::validate(
+                repo,
+                &source.unwrap_or_else(|| repo.default_app_source()),
+                &graph,
+                &html,
+            )?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+                );
+            } else {
+                markers::print_validation(&report);
+            }
+            if report.ok {
+                Ok(())
+            } else {
+                Err("marker validation failed".into())
+            }
+        }
     }
 }
 

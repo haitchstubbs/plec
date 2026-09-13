@@ -376,6 +376,17 @@ conditional branches, keyed loop row templates, component calls and call-site
 children, plus dynamic, host, and slot boundaries. Invalid handles or cycles
 are reported in output instead of crashing the debugger.
 
+## `plec workspace markers`
+
+Explain structural addresses or validate required markers against a compiled
+graph. Validation reports the first missing or duplicate adoption marker.
+
+```bash
+plec workspace markers explain root/outlet:main/component:1/node:0
+plec workspace markers validate --graph app --html page.html
+plec workspace markers validate --graph app --html page.html --source apps/fullstack/src/router.tsx --json
+```
+
 ## `plec workspace context <domain>`
 
 Emit a compact architecture packet for a recurring workspace domain. Packets
