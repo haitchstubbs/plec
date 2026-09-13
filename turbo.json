@@ -58,10 +58,6 @@
       "dependsOn": ["^typecheck"],
       "outputs": []
     },
-    "bench": {
-      "dependsOn": ["build"],
-      "outputs": ["benchmarks/results/**"]
-    },
     "clean": {
       "cache": false
     }

@@ -13,35 +13,75 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  required:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
+          cache: yarn
+          cache-dependency-path: yarn.lock
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.0
-      - name: Install OS prerequisites
-        run: sudo apt-get update && sudo apt-get install --yes unzip
       - name: Enable Corepack
         run: corepack enable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ hashFiles('Cargo.lock', 'cli-tools.json') }}
+          cache-bin: true
+      - name: Install dependencies
+        run: yarn install --immutable
+      - name: Check formatting
+        run: yarn format:check
+      - name: Typecheck
+        run: yarn typecheck
+
+  required:
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: yarn
+          cache-dependency-path: yarn.lock
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+      - name: Enable Corepack
+        run: corepack enable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ hashFiles('Cargo.lock', 'cli-tools.json') }}
+          cache-bin: true
+      - name: Restore pinned tools and browser assets
+        uses: actions/cache@v4
+        with:
+          path: |
+            .tools
+            .cache/ms-playwright
+          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cli-tools.json') }}
+      - name: Restore Turbo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
       - name: Install dependencies
         run: yarn install --immutable
       - name: Install build tools
         run: yarn install:build-tools
       - name: Verify browser toolchain
         run: yarn toolchain:verify:browser
-      - name: Check formatting
-        run: yarn format:check
-      - name: Typecheck
-        run: yarn typecheck
       - name: Test
         run: yarn test
       - name: Test WASM
         run: yarn test:wasm
-      - name: Build
-        run: yarn build
-      - name: Test E2E
-        run: yarn test:e2e
+      - name: Build and test E2E
+        run: yarn turbo run build test:e2e

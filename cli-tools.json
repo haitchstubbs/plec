@@ -4,6 +4,22 @@
     "wasm-tools": "1.258.0",
     "wasm-bindgen-cli": "0.2.128"
   },
+  "prebuilt-build-tools": {
+    "linux-x64": {
+      "wasm-pack": {
+        "target": "x86_64-unknown-linux-musl",
+        "sha256": "c539d91ccab2591a7e975bcf82c82e1911b03335c80aa83d67ad25ed2ad06539"
+      },
+      "wasm-tools": {
+        "target": "x86_64-linux",
+        "sha256": "b52d14eb74a4852cc249369bd4480c2b2fdd876145f41db51ff52269ded240ce"
+      },
+      "wasm-bindgen-cli": {
+        "target": "x86_64-unknown-linux-musl",
+        "sha256": "b51f0208fdff83515a787bd8ab9ac5865ed84dabb66d0c709957bb59793c645f"
+      }
+    }
+  },
   "runtime": {
     "node": "24.20.0",
     "rust": "1.98.0",
