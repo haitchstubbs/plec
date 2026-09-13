@@ -26,7 +26,7 @@ export const baseURL = `http://127.0.0.1:${e2ePort}`;
 
 // The native Axum host owns the public listener and spawns the Node sidecar
 // for application-owned `/api/*` handlers.
-const startCommand = 'yarn workspace fullstack start';
+const startCommand = 'yarn workspace fullstack exec plec serve dist';
 
 // Playwright owns the fullstack server: turbo builds it, webServer starts
 // the native host, waits for HTTP readiness, and kills the process group

@@ -85,11 +85,13 @@ jobs:
         run: yarn install:build-tools
       - name: Verify browser toolchain
         run: yarn toolchain:verify:browser
-      - name: Install Plec CLI
-        run: yarn install:plec-cli
+      - name: Build development Plec CLI
+        run: cargo build --locked -p plec-cli
       - name: Test
         run: yarn test
       - name: Test WASM
+        env:
+          PLEC_BIN: ${{ github.workspace }}/target/debug/plec
         run: yarn test:wasm
       - name: Build and test E2E
         run: yarn turbo run build test:e2e
