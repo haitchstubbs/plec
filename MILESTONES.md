@@ -86,7 +86,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | &nbsp;&nbsp;↳ wasm-runtime-ixk.6 | Test and document the SSR text-marker adjacency invariant | closed | P3 | task | haitchstubbs | dom-runtime, ssr, testing |
 | &nbsp;&nbsp;↳ wasm-runtime-ixk.7 | Isolate and document the legacy 0.8/0.9 marker and adoption schemes | closed | P3 | chore | haitchstubbs | dom-runtime, ssr, tech-debt |
 | wasm-runtime-jfd | plec-e2e: pre-existing tsc strict errors in tests | closed | P3 | task | haitchstubbs |  |
-| wasm-runtime-lcy | plec dev markers explain/validate: executable DOM address protocol | open | P2 | feature |  |  |
+| wasm-runtime-lcy | plec dev markers explain/validate: executable DOM address protocol | in_progress | P2 | feature | haitchstubbs |  |
 | **wasm-runtime-moq** | **Plec SSR execution/adoption contract: resumable HTML + typed execution snapshot** | closed | P1 | epic |  | ssr |
 | &nbsp;&nbsp;↳ wasm-runtime-moq.1 | Freeze typed SSR snapshot contract v1 in plec-ir (Rust-owned schema + validation) | closed | P1 | feature | haitchstubbs | rust, ssr |
 | &nbsp;&nbsp;↳ wasm-runtime-moq.10 | Retire fallback-only SSR assumptions superseded by the execution contract | closed | P3 | task | haitchstubbs | cleanup, ssr |
