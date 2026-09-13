@@ -207,6 +207,8 @@ const markdown = [
 
 writeFileSync('MILESTONES.md', markdown);
 
+run('yarn', ['prettier', 'MILESTONES.md', '--write'])
+
 run('git', ['add', '--', 'MILESTONES.md'], {
   stdio: 'inherit',
 });
