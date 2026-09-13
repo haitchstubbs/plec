@@ -71,6 +71,22 @@ enum Command {
         runtime_source: RuntimeSourceArg,
     },
 
+    /// Build and serve an application, rebuilding when source files change.
+    Dev {
+        #[arg(default_value = "src/router.tsx")]
+        source: PathBuf,
+        #[arg(short, long, default_value = "dist")]
+        out_dir: PathBuf,
+        #[arg(long, default_value = "src/client.tsx")]
+        client_entry: PathBuf,
+        #[arg(long, default_value = "src/server.ts")]
+        server_entry: PathBuf,
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+    },
+
     /// Serve a built Plec application with the native host.
     ///
     /// Reads `plec-server.json` from the build output; every path inside
@@ -160,6 +176,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 result.out_dir.display()
             );
         }
+
+        Command::Dev {
+            source,
+            out_dir,
+            client_entry,
+            server_entry,
+            host,
+            port,
+        } => crate::dev_loop::run(crate::dev_loop::DevOptions {
+            source,
+            out_dir,
+            client_entry,
+            server_entry,
+            host,
+            port,
+        })?,
 
         Command::Serve {
             dir,
