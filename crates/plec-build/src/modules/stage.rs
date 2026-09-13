@@ -1,9 +1,9 @@
 //! Stage the prebuilt Plec runtime assets into the application output.
 //!
-//! Runtime assets come from the installed `plec` package
-//! (`<nearest node_modules>/plec/dist/runtime`), resolved npm-style by walking
-//! up from the application directory. This keeps monorepo applications on the
-//! same release artifact surface as external consumers.
+//! Runtime assets resolve from the workspace in Auto mode, then from the
+//! installed `plec` package (`<nearest node_modules>/plec/dist/runtime`) by
+//! walking up from the application directory. Package mode always selects the
+//! installed release surface.
 //!
 //! The selected directory's runtime asset tree is a supply-chain boundary:
 //! every staged file is canonicalized and must resolve inside the selected
@@ -27,12 +27,21 @@ struct Provenance {
     wasm_sha256: String,
 }
 
+use super::build::RuntimeSource;
+
 pub fn stage(
     app_dir: &Path,
+    repo_root: &Path,
     out_dir: &Path,
+    runtime_source: RuntimeSource,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let source_dir = if let Some(packaged) = packaged_runtime_dir(app_dir) {
-        packaged
+    let source_dir = if runtime_source == RuntimeSource::Auto {
+        workspace_runtime_dir(repo_root).or_else(|| packaged_runtime_dir(app_dir))
+    } else {
+        packaged_runtime_dir(app_dir)
+    };
+    let source_dir = if let Some(source_dir) = source_dir {
+        source_dir
     } else {
         return Err(format!(
             "Plec runtime artifact not found — looked in:\n  \
@@ -124,6 +133,11 @@ fn packaged_runtime_dir(app_dir: &Path) -> Option<PathBuf> {
                 .join("runtime")
         })
         .find(|candidate| has_runtime_binaries(candidate))
+}
+
+fn workspace_runtime_dir(repo_root: &Path) -> Option<PathBuf> {
+    let candidate = repo_root.join("packages/plec-runtime/dist/runtime");
+    has_runtime_binaries(&candidate).then_some(candidate)
 }
 
 /// Read a runtime asset only after confirming that its fully resolved path
@@ -245,7 +259,8 @@ mod tests {
 
         let out = tempfile::tempdir().expect("out dir");
 
-        stage(app.path(), out.path()).expect("staging succeeds");
+        stage(app.path(), app.path(), out.path(), RuntimeSource::Package)
+            .expect("staging succeeds");
 
         let staged = out.path().join("runtime");
         assert_eq!(
@@ -258,6 +273,31 @@ mod tests {
         );
         assert!(staged.join("runtime.js.br").is_file());
         assert!(!staged.join("runtime_bg.wasm.br").is_file());
+    }
+
+    #[test]
+    fn auto_prefers_workspace_runtime_over_installed_package() {
+        let root = tempfile::tempdir().expect("repo dir");
+        let app = root.path().join("apps/fullstack");
+        fs::create_dir_all(&app).expect("app dir");
+        write_runtime_source(&app, "package runtime", b"package wasm");
+        let workspace = root.path().join("packages/plec-runtime/dist/runtime");
+        fs::create_dir_all(&workspace).expect("workspace runtime dir");
+        fs::write(workspace.join("runtime.js"), "workspace runtime").expect("workspace js");
+        fs::write(workspace.join("runtime_bg.wasm"), b"workspace wasm").expect("workspace wasm");
+        let provenance = format!(
+            r#"{{"jsSha256":"{}","wasmSha256":"{}"}}"#,
+            sha256_hex(b"workspace runtime"),
+            sha256_hex(b"workspace wasm"),
+        );
+        fs::write(workspace.join("provenance.json"), provenance).expect("provenance");
+
+        let out = tempfile::tempdir().expect("out dir");
+        stage(&app, root.path(), out.path(), RuntimeSource::Auto).expect("staging succeeds");
+        assert_eq!(
+            fs::read_to_string(out.path().join("runtime/runtime.js")).expect("staged js"),
+            "workspace runtime"
+        );
     }
 
     #[test]
@@ -289,7 +329,8 @@ mod tests {
 
         let out = tempfile::tempdir().expect("out dir");
 
-        let error = stage(app.path(), out.path()).expect_err("must fail");
+        let error = stage(app.path(), app.path(), out.path(), RuntimeSource::Package)
+            .expect_err("must fail");
         let message = error.to_string();
         assert!(
             message.contains("outside the selected runtime directory"),
@@ -318,7 +359,8 @@ mod tests {
 
         let out = tempfile::tempdir().expect("out dir");
 
-        let error = stage(app.path(), out.path()).expect_err("must fail");
+        let error = stage(app.path(), app.path(), out.path(), RuntimeSource::Package)
+            .expect_err("must fail");
         let message = error.to_string();
         assert!(
             message.contains("provenance record not found"),
@@ -341,7 +383,8 @@ mod tests {
 
         let out = tempfile::tempdir().expect("out dir");
 
-        let error = stage(app.path(), out.path()).expect_err("must fail");
+        let error = stage(app.path(), app.path(), out.path(), RuntimeSource::Package)
+            .expect_err("must fail");
         let message = error.to_string();
         assert!(
             message.contains("provenance hash mismatch for runtime_bg.wasm"),
@@ -371,7 +414,8 @@ mod tests {
 
         let out = tempfile::tempdir().expect("out dir");
 
-        let error = stage(app.path(), out.path()).expect_err("must fail");
+        let error = stage(app.path(), app.path(), out.path(), RuntimeSource::Package)
+            .expect_err("must fail");
         let message = error.to_string();
         assert!(
             message.contains("does not match the verified runtime.js bytes"),

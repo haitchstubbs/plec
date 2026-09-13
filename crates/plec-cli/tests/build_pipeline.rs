@@ -143,21 +143,13 @@ fn revision_derives_from_emitted_client_artifact() {
     let first = emitted_revision(&first_dir);
 
     // Same inputs, deterministic revision.
-    let output = run_build(
-        &app,
-        &output_dir("revision-repeat"),
-        &[],
-    );
+    let output = run_build(&app, &output_dir("revision-repeat"), &[]);
     assert_success(&output);
     let repeated = emitted_revision(&output_dir("revision-repeat"));
     assert_eq!(first, repeated, "revision should be deterministic");
 
     // A different client entry emits different bytes and a different revision.
-    let output = run_build(
-        &app,
-        &second_dir,
-        &["--client-entry", "src/client-alt.tsx"],
-    );
+    let output = run_build(&app, &second_dir, &["--client-entry", "src/client-alt.tsx"]);
     assert_success(&output);
     let second = emitted_revision(&second_dir);
 

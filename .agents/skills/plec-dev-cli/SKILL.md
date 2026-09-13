@@ -39,6 +39,7 @@ not, the binary on PATH is the release frontend.
 | Why is SSR adoption failing?                       | `plec workspace doctor adoption [--html f] [--snapshot f]` |
 | How does a graph id resolve?                       | `plec workspace graph resolve <graph-id>`                  |
 | What nodes does a component own?                   | `plec workspace graph tree <graph-id>`                     |
+| What architecture does a domain use?              | `plec workspace context <domain>`                          |
 
 All commands accept `--json`.
 
@@ -109,6 +110,20 @@ plec workspace graph tree Panel
 component fallback, or a fail-closed miss. `tree` prints the resolved
 component's local structure, including conditional branches, keyed loop row
 templates, component calls, call-site children, and host/slot boundaries.
+
+### When starting work in a workspace domain
+
+```bash
+plec workspace context ssr-adoption
+plec workspace context routing
+plec workspace context typed-events
+plec workspace context cookies
+plec workspace context artifacts
+```
+
+Packets provide verified entry points, live protocol values, invariants,
+workflow commands, relevant tests, and source documentation. The command
+fails if curated file or line references become stale.
 
 ## Extending the CLI
 

@@ -6,4 +6,4 @@
 
 pub mod modules;
 
-pub use modules::build::{build, BuildError, BuildOptions, BuildResult, Stage};
+pub use modules::build::{build, BuildError, BuildOptions, BuildResult, RuntimeSource, Stage};

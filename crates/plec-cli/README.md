@@ -359,6 +359,23 @@ conditional branches, keyed loop row templates, component calls and call-site
 children, plus dynamic, host, and slot boundaries. Invalid handles or cycles
 are reported in output instead of crashing the debugger.
 
+## `plec workspace context <domain>`
+
+Emit a compact architecture packet for a recurring workspace domain. Packets
+combine curated entry points, invariants, workflows, tests, and documentation
+with live protocol values and source-location checks. Supported domains are
+`ssr-adoption`, `routing`, `typed-events`, `cookies`, and `artifacts`.
+
+```bash
+plec workspace context ssr-adoption
+plec workspace context routing
+plec workspace context artifacts --json
+```
+
+The command fails when a curated source location disappears. This keeps the
+packet useful for new sessions instead of allowing stale architecture notes to
+silently spread.
+
 ## `plec workspace doctor adoption`
 
 Health check for the SSR adoption pipeline, composing the checks above plus

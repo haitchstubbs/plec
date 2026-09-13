@@ -121,9 +121,9 @@ pub fn lower_application_to_executable(
         total_entries = total_entries
             .checked_add(entries)
             .ok_or_else(|| LoweringError("lowered IR entry accounting overflowed".into()))?;
-        total_instructions = total_instructions.checked_add(instructions).ok_or_else(|| {
-            LoweringError("lowered instruction accounting overflowed".into())
-        })?;
+        total_instructions = total_instructions
+            .checked_add(instructions)
+            .ok_or_else(|| LoweringError("lowered instruction accounting overflowed".into()))?;
         total_string_bytes = total_string_bytes
             .checked_add(string_bytes)
             .ok_or_else(|| LoweringError("string pool accounting overflowed".into()))?;
@@ -217,22 +217,20 @@ pub(crate) fn component_budget_usage(
             )));
         }
     }
-    let entries = collections
-        .iter()
-        .try_fold(0usize, |total, len| {
-            total.checked_add(*len).ok_or_else(|| {
-                LoweringError("lowered IR entry accounting overflowed".into())
-            })
-        })?;
+    let entries = collections.iter().try_fold(0usize, |total, len| {
+        total
+            .checked_add(*len)
+            .ok_or_else(|| LoweringError("lowered IR entry accounting overflowed".into()))
+    })?;
     let instructions = app
         .expressions
         .iter()
         .map(|program| program.instructions.len())
         .chain(app.actions.iter().map(|program| program.instructions.len()))
         .try_fold(0usize, |total, len| {
-            total.checked_add(len).ok_or_else(|| {
-                LoweringError("lowered instruction accounting overflowed".into())
-            })
+            total
+                .checked_add(len)
+                .ok_or_else(|| LoweringError("lowered instruction accounting overflowed".into()))
         })?;
     if instructions > MAX_TOTAL_INSTRUCTIONS {
         return Err(LoweringError(format!(
@@ -244,9 +242,9 @@ pub(crate) fn component_budget_usage(
         .iter()
         .map(String::len)
         .try_fold(0usize, |total, len| {
-            total.checked_add(len).ok_or_else(|| {
-                LoweringError("string pool accounting overflowed".into())
-            })
+            total
+                .checked_add(len)
+                .ok_or_else(|| LoweringError("string pool accounting overflowed".into()))
         })?;
     Ok((entries, instructions, string_bytes))
 }

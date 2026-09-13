@@ -858,8 +858,14 @@ pub struct ComponentParameter {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ComponentProp {
-    Value { name: usize, expression: usize },
-    Callable { name: usize, action: usize },
+    Value {
+        name: usize,
+        expression: usize,
+    },
+    Callable {
+        name: usize,
+        action: usize,
+    },
     Component {
         name: usize,
         component: usize,

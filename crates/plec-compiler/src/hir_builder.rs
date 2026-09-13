@@ -2043,10 +2043,7 @@ fn lower_jsx_element_with_consumed_key(
         Some(HirComponentTarget::Static(target)) => Some(target),
         _ => None,
     };
-    let host_target = matches!(
-        target.as_ref(),
-        Some(HirComponentTarget::Host { .. })
-    );
+    let host_target = matches!(target.as_ref(), Some(HirComponentTarget::Host { .. }));
     let selector_target = ctx.component_selectors.get(&tag_name).cloned();
 
     let mut props = Vec::new();

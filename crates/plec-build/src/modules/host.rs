@@ -482,6 +482,7 @@ pub fn emit_node_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RuntimeSource;
 
     #[test]
     fn plec_toml_resolves_with_cli_flags_winning() {
@@ -515,6 +516,7 @@ preloads = ["/a.woff2", "/b.woff2"]
             description: Some("cli description".into()),
             styles_href: None,
             preloads: Vec::new(),
+            runtime_source: RuntimeSource::Auto,
         };
         let config = resolve_host_config(dir.path(), &options).expect("config");
         assert_eq!(config.title, "From toml");

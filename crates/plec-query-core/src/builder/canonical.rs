@@ -387,7 +387,11 @@ pub(crate) fn canonical_ir_for_parts(parts: &QueryParts) -> Result<CanonicalQuer
         where_clauses: clauses_to_canonical(&normalized.where_clauses),
         group_by: normalized.group_by.iter().cloned().collect(),
         having_clauses: clauses_to_canonical(&normalized.having_clauses),
-        order_by: normalized.order_by.iter().map(canonical_sql_query).collect(),
+        order_by: normalized
+            .order_by
+            .iter()
+            .map(canonical_sql_query)
+            .collect(),
         pagination: CanonicalPaginationState {
             limit: normalized.pagination.limit,
             offset: normalized.pagination.offset,

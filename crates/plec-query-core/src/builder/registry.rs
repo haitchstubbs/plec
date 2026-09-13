@@ -106,9 +106,7 @@ pub fn registry_try_get_cached(id: &str) -> Option<Arc<SqlQuery>> {
 }
 
 pub fn registry_try_get_cached_key(key: u64) -> Option<Arc<SqlQuery>> {
-    REGISTRY
-        .get(&key)
-        .and_then(|p| p.cached_query.clone())
+    REGISTRY.get(&key).and_then(|p| p.cached_query.clone())
 }
 
 pub fn registry_set_cached(id: &str, query: Arc<SqlQuery>) {
@@ -130,7 +128,6 @@ pub fn registry_try_get_structural_cached(fingerprint: u64) -> Option<Arc<SqlQue
 pub fn registry_set_structural_cached(fingerprint: u64, query: Arc<SqlQuery>) {
     STRUCTURAL_CACHE.lock().put(fingerprint, query);
 }
-
 
 pub fn registry_insert(parts: QueryParts) -> String {
     let mut parts = parts;

@@ -1218,14 +1218,11 @@ fn host_lifecycle_function(
     if value.is_undefined() || value.is_null() {
         return Ok(None);
     }
-    value
-        .dyn_into::<js_sys::Function>()
-        .map(Some)
-        .map_err(|_| {
-            JsValue::from_str(&format!(
-                "host component {method} is not callable: {provider}/{component}"
-            ))
-        })
+    value.dyn_into::<js_sys::Function>().map(Some).map_err(|_| {
+        JsValue::from_str(&format!(
+            "host component {method} is not callable: {provider}/{component}"
+        ))
+    })
 }
 
 fn evaluate_host_prop_values(
@@ -1358,9 +1355,7 @@ impl TypedRuntime {
             .ok_or_else(|| JsValue::from_str("host component registry is not installed"))?;
         let resolve = js_sys::Reflect::get(&registry, &JsValue::from_str("resolve"))?
             .dyn_into::<js_sys::Function>()
-            .map_err(|_| {
-                JsValue::from_str("host component registry resolve is not callable")
-            })?;
+            .map_err(|_| JsValue::from_str("host component registry resolve is not callable"))?;
         let arguments = js_sys::Array::new();
         arguments.push(&JsValue::from_str(provider));
         arguments.push(&JsValue::from_str(component));
@@ -1370,12 +1365,13 @@ impl TypedRuntime {
                 "unknown host component: {provider}/{component}"
             )));
         }
-        let mount =
-            host_lifecycle_function(&lifecycle, "mount", provider, component)?.ok_or_else(|| {
+        let mount = host_lifecycle_function(&lifecycle, "mount", provider, component)?.ok_or_else(
+            || {
                 JsValue::from_str(&format!(
                     "host component mount is not callable: {provider}/{component}"
                 ))
-            })?;
+            },
+        )?;
         let update = host_lifecycle_function(&lifecycle, "update", provider, component)?;
         let dispose = host_lifecycle_function(&lifecycle, "dispose", provider, component)?;
         Ok(ResolvedHostLifecycle {
@@ -1447,7 +1443,11 @@ impl TypedRuntime {
             // after instantiating its nodes, so this is the generation the
             // pending row record will own.
             row_owner: row_context.map(|context| {
-                (context.loop_index, context.row_key.clone(), self.next_generation)
+                (
+                    context.loop_index,
+                    context.row_key.clone(),
+                    self.next_generation,
+                )
             }),
         });
         let mut handles = Vec::new();
@@ -1507,13 +1507,9 @@ impl TypedRuntime {
                     "stale host callback: {callback_name}"
                 )));
             }
-            let state = scope_for_closure
-                .dispatch
-                .borrow()
-                .clone()
-                .ok_or_else(|| JsValue::from_str(&format!(
-                    "stale host callback: {callback_name}"
-                )))?;
+            let state = scope_for_closure.dispatch.borrow().clone().ok_or_else(|| {
+                JsValue::from_str(&format!("stale host callback: {callback_name}"))
+            })?;
             let payload = host_payload_to_runtime(&payload)?;
             #[cfg(feature = "fetch")]
             let (instance_id, pending_fetches, pending_cookies) = {
@@ -1523,14 +1519,11 @@ impl TypedRuntime {
                     // re-entrant.
                     return Ok(());
                 };
-                let Some((instance_id, runtime)) = typed
-                    .iter_mut()
-                    .find_map(|(id, instance)| {
-                        instance
-                            .runtime_for_generation_mut(generation)
-                            .map(|runtime| (id.clone(), runtime))
-                    })
-                else {
+                let Some((instance_id, runtime)) = typed.iter_mut().find_map(|(id, instance)| {
+                    instance
+                        .runtime_for_generation_mut(generation)
+                        .map(|runtime| (id.clone(), runtime))
+                }) else {
                     return Err(JsValue::from_str(&format!(
                         "stale host callback: {callback_name}"
                     )));
@@ -1577,14 +1570,11 @@ impl TypedRuntime {
                 let Ok(mut typed) = state.typed.try_borrow_mut() else {
                     return Ok(());
                 };
-                let Some((instance_id, runtime)) = typed
-                    .iter_mut()
-                    .find_map(|(id, instance)| {
-                        instance
-                            .runtime_for_generation_mut(generation)
-                            .map(|runtime| (id.clone(), runtime))
-                    })
-                else {
+                let Some((instance_id, runtime)) = typed.iter_mut().find_map(|(id, instance)| {
+                    instance
+                        .runtime_for_generation_mut(generation)
+                        .map(|runtime| (id.clone(), runtime))
+                }) else {
                     return Err(JsValue::from_str(&format!(
                         "stale host callback: {callback_name}"
                     )));
@@ -1632,8 +1622,7 @@ impl TypedRuntime {
             {
                 state.complete_typed_action(instance_id, pending_cookies, false)
             }
-        })
-            as Box<dyn Fn(JsValue) -> Result<(), JsValue>>);
+        }) as Box<dyn Fn(JsValue) -> Result<(), JsValue>>);
         Ok(HostCallbackHandle {
             name,
             function: closure.as_ref().clone(),

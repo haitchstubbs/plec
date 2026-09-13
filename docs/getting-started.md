@@ -50,6 +50,17 @@ compiler (`cargo run -p plec-compiler --bin plec-route-manifest`), emits
 `src/client.tsx` and `src/server.ts` with esbuild, and enforces that no
 compiler/zod/typescript code leaks into the browser bundle.
 
+For fast architecture lookup, use the dev CLI context packets:
+
+```sh
+plec workspace context ssr-adoption
+plec workspace context routing
+plec workspace context artifacts --json
+```
+
+Packets list verified source entry points, live protocol values, invariants,
+workflows, tests, and documentation for each supported domain.
+
 ## Dev loop
 
 ```sh

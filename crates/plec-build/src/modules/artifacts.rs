@@ -13,7 +13,7 @@ use super::id::sanitize;
 use super::json::out;
 use super::stage::stage;
 
-use super::build::{BuildError, Stage};
+use super::build::{BuildError, RuntimeSource, Stage};
 
 pub struct ArtifactOutput {
     pub host_components: BTreeMap<String, BTreeSet<String>>,
@@ -31,6 +31,7 @@ pub fn emit(
     public_dir: &Path,
     host_imports: &std::collections::BTreeMap<String, String>,
     custom_elements: &std::collections::BTreeSet<String>,
+    runtime_source: RuntimeSource,
 ) -> Result<ArtifactOutput, BuildError> {
     let stage = Stage::Compile;
 
@@ -86,7 +87,7 @@ pub fn emit(
         .map_err(|error| BuildError::with_source(stage, "failed to write route artifact", error))?;
 
     let host_components = collect_host_components(&bundle);
-    stage_runtime(app_dir, public_dir)?;
+    stage_runtime(app_dir, repo_root, public_dir, runtime_source)?;
     Ok(ArtifactOutput { host_components })
 }
 
@@ -135,8 +136,13 @@ fn collect_host_components(
 }
 
 /// Stage the prebuilt WASM runtime next to the compiler artifacts.
-fn stage_runtime(app_dir: &Path, public_dir: &Path) -> Result<(), BuildError> {
-    stage(app_dir, public_dir).map_err(|error| {
+fn stage_runtime(
+    app_dir: &Path,
+    repo_root: &Path,
+    public_dir: &Path,
+    runtime_source: RuntimeSource,
+) -> Result<(), BuildError> {
+    stage(app_dir, repo_root, public_dir, runtime_source).map_err(|error| {
         BuildError::new(
             Stage::Compile,
             format!("failed to stage Plec runtime: {error}"),

@@ -53,12 +53,14 @@ impl ValidationCache {
 
         match init() {
             Ok(()) => {
-                self.status.store(VALIDATION_STATUS_VALID, Ordering::Release);
+                self.status
+                    .store(VALIDATION_STATUS_VALID, Ordering::Release);
                 Ok(())
             }
             Err(err) => {
                 let stored_error = self.error.get_or_init(|| err).clone();
-                self.status.store(VALIDATION_STATUS_INVALID, Ordering::Release);
+                self.status
+                    .store(VALIDATION_STATUS_INVALID, Ordering::Release);
                 Err(stored_error)
             }
         }
