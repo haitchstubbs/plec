@@ -33,6 +33,7 @@ enum Command {
     /// Compile a routed Plec application into deployable artifacts.
     Build {
         /// Route source entry (e.g. src/router.tsx).
+        #[arg(default_value = "src/router.tsx")]
         source: PathBuf,
 
         /// Build output root; Plec artifacts are emitted under `public/`.
@@ -85,6 +86,17 @@ enum Command {
         host: Option<String>,
         #[arg(long)]
         port: Option<u16>,
+    },
+
+    /// Create a minimal Plec application.
+    Init {
+        /// Directory to create.
+        #[arg(default_value = ".")]
+        directory: PathBuf,
+
+        /// Allow initialization in a non-empty directory.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Serve a built Plec application with the native host.
@@ -192,6 +204,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             host,
             port,
         })?,
+
+        Command::Init { directory, force } => crate::app::init::run(directory, force)?,
 
         Command::Serve {
             dir,
