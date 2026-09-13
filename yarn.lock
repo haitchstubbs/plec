@@ -3204,6 +3204,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@wasm-runtime/fullstack@workspace:apps/fullstack"
   dependencies:
+    "@fontsource-variable/outfit": "npm:^5.3.0"
+    "@fontsource-variable/raleway": "npm:^5.3.0"
     "@tailwindcss/cli": "npm:^4.3.3"
     "@wasm-runtime/lucide-plec": "workspace:*"
     "@wasm-runtime/ui": "workspace:*"

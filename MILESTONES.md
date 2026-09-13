@@ -23,7 +23,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.6 | plec dev — consumer watch + serve loop | in_progress | P1 | feature | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.7 | Docs: install-from-source workflow for the release package | open | P2 | task |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.8 | apps/fullstack as the canonical example built from real release assets | closed | P1 | task | haitchstubbs |  |
-| &nbsp;&nbsp;↳ wasm-runtime-1wj.9 | Eliminate the plec-runtime staging workspace package | in_progress | P1 | task | haitchstubbs |  |
+| &nbsp;&nbsp;↳ wasm-runtime-1wj.9 | Eliminate the plec-runtime staging workspace package | closed | P1 | task | haitchstubbs |  |
 | wasm-runtime-2fl | Sync cookie policy denial silently falls back to host inputs | closed | P1 | bug | haitchstubbs |  |
 | wasm-runtime-43g | Split plec-runtime into plec-dom/plec-eval/plec-client/plec-router crates | closed | P1 | task |  |  |
 | wasm-runtime-472 | plec dev impact: change-impact report for protocol constants and symbols | open | P2 | feature |  |  |
@@ -119,6 +119,6 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | wasm-runtime-r0l | Compiler SSR drops island component props: SVG icons paint at 24px unclassed, then resize to 16px after adoption | closed | P2 | bug | haitchstubbs |  |
 | wasm-runtime-rz7 | Anchor-click interception intermittently falls through to a full page navigation during client-side route swaps | closed | P2 | bug | haitchstubbs |  |
 | wasm-runtime-sum | Fix chromedriver/playwright Chromium version drift breaking test harness | closed | P1 | bug | haitchstubbs |  |
-| wasm-runtime-tfk | plec dev verify adoption: one-shot validation pipeline | open | P2 | feature |  |  |
+| wasm-runtime-tfk | plec dev verify adoption: one-shot validation pipeline | closed | P2 | feature | haitchstubbs |  |
 | wasm-runtime-ujj | Investigate runtime baseline nondeterminism | open | P2 | bug |  |  |
 | wasm-runtime-vdd | Wire the native plec-server crate into dev/build workflows and retire packages/plec-server | closed | P2 | task |  |  |
