@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "commands": [
     "yarn workspace plec build:wasm",
-    "yarn workspace @wasm-runtime/fullstack build"
+    "yarn workspace fullstack build"
   ],
   "toolchain": {
     "node": "v24.20.0",

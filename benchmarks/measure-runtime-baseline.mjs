@@ -60,7 +60,7 @@ async function collect() {
   // These are intentionally the same release commands developers and CI use.
   await mkdir(wasmTemp, { recursive: true });
   run('yarn', ['workspace', 'plec', 'build:wasm']);
-  run('yarn', ['workspace', '@wasm-runtime/fullstack', 'build']);
+  run('yarn', ['workspace', 'fullstack', 'build']);
   const artifacts = await Promise.all([
     bytes('packages/plec/dist/runtime/runtime_bg.wasm'),
     bytes('packages/plec/dist/runtime/runtime.js'),
@@ -126,7 +126,7 @@ const report = {
   schemaVersion: 1,
   commands: [
     'yarn workspace plec build:wasm',
-    'yarn workspace @wasm-runtime/fullstack build',
+    'yarn workspace fullstack build',
   ],
   toolchain: {
     node: process.version,

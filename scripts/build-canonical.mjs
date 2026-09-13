@@ -42,7 +42,7 @@ const packageWasmHash = await sha256(
 if (packageWasmHash !== provenance.wasmSha256)
   throw new Error('release runtime hash differs from provenance.json');
 
-run(yarn, ['workspace', '@wasm-runtime/fullstack', 'build']);
+run(yarn, ['workspace', 'fullstack', 'build']);
 
 const staged = path.join(root, 'apps/fullstack/dist/public/runtime');
 const stagedWasmHash = await sha256(

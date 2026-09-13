@@ -1,7 +1,7 @@
 # plec-e2e
 
 Canonical Playwright runner for the monorepo. Playwright owns the fullstack
-server: turbo builds `@wasm-runtime/fullstack`, the `webServer` entry starts
+server: turbo builds `fullstack`, the `webServer` entry starts
 `plec serve dist`, waits for HTTP readiness, and kills the process group
 afterwards. Never spawn the server manually.
 

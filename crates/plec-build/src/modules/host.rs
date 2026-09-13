@@ -535,7 +535,7 @@ styles = "/assets/styles.css"
 preloads = ["/a.woff2", "/b.woff2"]
 
 [compiler.host-imports]
-"lucide" = { provider = "lucide", adapter = "@wasm-runtime/lucide-plec", ssr = true }
+"lucide" = { provider = "lucide", adapter = "plec-lucide", ssr = true }
 "#,
         )
         .expect("toml write");
@@ -562,7 +562,7 @@ preloads = ["/a.woff2", "/b.woff2"]
         );
         assert_eq!(
             config.host_adapters.get("lucide"),
-            Some(&String::from("@wasm-runtime/lucide-plec"))
+            Some(&String::from("plec-lucide"))
         );
         assert!(config.host_ssr_providers.contains("lucide"));
     }

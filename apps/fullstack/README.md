@@ -1,4 +1,4 @@
-# `@wasm-runtime/fullstack`
+# `fullstack`
 
 The demo full-stack Plec application: typed TSX routes compiled by the Rust
 compiler into a route manifest + graphs, executed in the browser by the WASM
@@ -14,7 +14,7 @@ test, and typecheck time.
 
 ```sh
 yarn workspace plec build:runtime             # once: build the WASM runtime
-yarn workspace @wasm-runtime/fullstack dev    # build + plec serve dist
+yarn workspace fullstack dev    # build + plec serve dist
 ```
 
 Serves on `PORT` (default `3000`). TSX edits require a rebuild — the Rust
@@ -23,7 +23,7 @@ compiler emits graphs at build time; there is no HMR.
 ## Test
 
 ```sh
-yarn workspace @wasm-runtime/fullstack test  # vitest + check:no-react
+yarn workspace fullstack test  # vitest + check:no-react
 yarn test:e2e                                # Playwright smoke gate (repo root)
 yarn test:acceptance                         # Playwright full behavioral suites
 ```

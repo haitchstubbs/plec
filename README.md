@@ -64,7 +64,7 @@ troubleshooting live in [docs/getting-started.md](docs/getting-started.md).
 yarn install
 yarn workspace plec build:runtime   # cargo check + wasm-pack -> packages/plec/dist/runtime
 yarn build                          # turbo: compile routes, bundle, brotli
-yarn workspace @wasm-runtime/fullstack dev
+yarn workspace fullstack dev
 ```
 
 The demo app serves on `http://localhost:3000` (override with `PORT`).

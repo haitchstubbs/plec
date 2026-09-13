@@ -3200,58 +3200,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@wasm-runtime/fullstack@workspace:apps/fullstack":
-  version: 0.0.0-use.local
-  resolution: "@wasm-runtime/fullstack@workspace:apps/fullstack"
-  dependencies:
-    "@fontsource-variable/outfit": "npm:^5.3.0"
-    "@fontsource-variable/raleway": "npm:^5.3.0"
-    "@tailwindcss/cli": "npm:^4.3.3"
-    "@wasm-runtime/lucide-plec": "workspace:*"
-    "@wasm-runtime/ui": "workspace:*"
-    esbuild: "npm:^0.27.4"
-    lucide: "npm:^1.31.0"
-    plec: "workspace:*"
-    plec-browser: "workspace:*"
-    tailwindcss: "npm:^4.3.3"
-    typescript: "npm:^7.0.2"
-    vitest: "npm:^3.2.4"
-  languageName: unknown
-  linkType: soft
-
-"@wasm-runtime/lucide-plec@workspace:*, @wasm-runtime/lucide-plec@workspace:packages/lucide-plec":
-  version: 0.0.0-use.local
-  resolution: "@wasm-runtime/lucide-plec@workspace:packages/lucide-plec"
-  dependencies:
-    "@types/react": "npm:^19.2.18"
-    lucide: "npm:^1.31.0"
-    plec: "workspace:*"
-  languageName: unknown
-  linkType: soft
-
-"@wasm-runtime/ui@workspace:*, @wasm-runtime/ui@workspace:packages/ui":
-  version: 0.0.0-use.local
-  resolution: "@wasm-runtime/ui@workspace:packages/ui"
-  dependencies:
-    "@base-ui/react": "npm:^1.7.0"
-    "@fontsource-variable/outfit": "npm:^5.3.0"
-    "@fontsource-variable/raleway": "npm:^5.3.0"
-    "@hugeicons/core-free-icons": "npm:^4.2.3"
-    "@hugeicons/react": "npm:^1.1.9"
-    class-variance-authority: "npm:^0.7.1"
-    clsx: "npm:^2.1.1"
-    react: "npm:^19.2.0"
-    react-dom: "npm:^19.2.0"
-    shadcn: "npm:^4.16.2"
-    tailwind-merge: "npm:^3.6.0"
-    tailwindcss: "npm:^4.1.18"
-    tw-animate-css: "npm:^1.4.0"
-  peerDependencies:
-    react: ^19.2.0
-    react-dom: ^19.2.0
-  languageName: unknown
-  linkType: soft
-
 "abbrev@npm:^5.0.0":
   version: 5.0.0
   resolution: "abbrev@npm:5.0.0"
@@ -5005,6 +4953,25 @@ __metadata:
   languageName: node
   linkType: hard
 
+"fullstack@workspace:apps/fullstack":
+  version: 0.0.0-use.local
+  resolution: "fullstack@workspace:apps/fullstack"
+  dependencies:
+    "@fontsource-variable/outfit": "npm:^5.3.0"
+    "@fontsource-variable/raleway": "npm:^5.3.0"
+    "@tailwindcss/cli": "npm:^4.3.3"
+    esbuild: "npm:^0.27.4"
+    lucide: "npm:^1.31.0"
+    plec: "workspace:*"
+    plec-browser: "workspace:*"
+    plec-lucide: "workspace:*"
+    plec-ui: "workspace:*"
+    tailwindcss: "npm:^4.3.3"
+    typescript: "npm:^7.0.2"
+    vitest: "npm:^3.2.4"
+  languageName: unknown
+  linkType: soft
+
 "function-bind@npm:^1.1.2":
   version: 1.1.2
   resolution: "function-bind@npm:1.1.2"
@@ -6432,6 +6399,16 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"plec-lucide@workspace:*, plec-lucide@workspace:packages/lucide-plec":
+  version: 0.0.0-use.local
+  resolution: "plec-lucide@workspace:packages/lucide-plec"
+  dependencies:
+    "@types/react": "npm:^19.2.18"
+    lucide: "npm:^1.31.0"
+    plec: "workspace:*"
+  languageName: unknown
+  linkType: soft
+
 "plec-node-runtime@workspace:packages/plec-node-runtime":
   version: 0.0.0-use.local
   resolution: "plec-node-runtime@workspace:packages/plec-node-runtime"
@@ -6461,11 +6438,51 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"plec-ui@workspace:*, plec-ui@workspace:packages/ui":
+  version: 0.0.0-use.local
+  resolution: "plec-ui@workspace:packages/ui"
+  dependencies:
+    "@base-ui/react": "npm:^1.7.0"
+    "@fontsource-variable/outfit": "npm:^5.3.0"
+    "@fontsource-variable/raleway": "npm:^5.3.0"
+    "@hugeicons/core-free-icons": "npm:^4.2.3"
+    "@hugeicons/react": "npm:^1.1.9"
+    class-variance-authority: "npm:^0.7.1"
+    clsx: "npm:^2.1.1"
+    react: "npm:^19.2.0"
+    react-dom: "npm:^19.2.0"
+    shadcn: "npm:^4.16.2"
+    tailwind-merge: "npm:^3.6.0"
+    tailwindcss: "npm:^4.1.18"
+    tw-animate-css: "npm:^1.4.0"
+  peerDependencies:
+    react: ^19.2.0
+    react-dom: ^19.2.0
+  languageName: unknown
+  linkType: soft
+
 "plec@workspace:*, plec@workspace:packages/plec":
   version: 0.0.0-use.local
   resolution: "plec@workspace:packages/plec"
   bin:
     plec: ./bin/plec.js
+  languageName: unknown
+  linkType: soft
+
+"plecjs@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "plecjs@workspace:."
+  dependencies:
+    "@puppeteer/browsers": "npm:3.2.2"
+    "@types/node": "npm:^24.4.0"
+    beads-ui: "npm:^0.12.6"
+    binaryen: "npm:^131.0.0"
+    dotenv-cli: "npm:^11.0.0"
+    prettier: "npm:^3.9.6"
+    prettier-plugin-toml: "npm:^2.0.6"
+    turbo: "npm:^2.5.6"
+    typescript: "npm:^7.0.2"
+    vitest: "npm:^3.2.4"
   languageName: unknown
   linkType: soft
 
@@ -7775,23 +7792,6 @@ __metadata:
   checksum: 10c0/4eb7a63a1d62b88c425bcbc609835055a5644a1994d6f47605fe396dddf732e3c0277c9ec89a028fe81557dc4051dd15fc15b9eba6a51d1466cd5c682ddc1261
   languageName: node
   linkType: hard
-
-"wasm-runtime@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "wasm-runtime@workspace:."
-  dependencies:
-    "@puppeteer/browsers": "npm:3.2.2"
-    "@types/node": "npm:^24.4.0"
-    beads-ui: "npm:^0.12.6"
-    binaryen: "npm:^131.0.0"
-    dotenv-cli: "npm:^11.0.0"
-    prettier: "npm:^3.9.6"
-    prettier-plugin-toml: "npm:^2.0.6"
-    turbo: "npm:^2.5.6"
-    typescript: "npm:^7.0.2"
-    vitest: "npm:^3.2.4"
-  languageName: unknown
-  linkType: soft
 
 "which@npm:^2.0.1":
   version: 2.0.2

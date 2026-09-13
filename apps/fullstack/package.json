@@ -1,5 +1,5 @@
 {
-  "name": "@wasm-runtime/fullstack",
+  "name": "fullstack",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "copy:fonts": "yarn copy:fonts:outfit && yarn copy:fonts:raleway",
     "build:plec": "plec build src/app.tsx --out-dir dist",
     "build:css": "tailwindcss -i src/styles.css -o dist/public/assets/styles.css",
-    "dev:rebuild": "yarn check:no-react && yarn --cwd ../.. exec turbo run build --filter=@wasm-runtime/fullstack && yarn start",
+    "dev:rebuild": "yarn check:no-react && yarn --cwd ../.. exec turbo run build --filter=fullstack && yarn start",
     "build": "yarn check:no-react && yarn build:plec && yarn copy:fonts && yarn build:css",
     "test": "yarn check:no-react && vitest run",
     "typecheck": "yarn check:no-react && cargo check -p plec-compiler",
@@ -22,11 +22,11 @@
   "dependencies": {
     "@fontsource-variable/outfit": "^5.3.0",
     "@fontsource-variable/raleway": "^5.3.0",
-    "@wasm-runtime/lucide-plec": "workspace:*",
-    "@wasm-runtime/ui": "workspace:*",
     "lucide": "^1.31.0",
     "plec": "workspace:*",
-    "plec-browser": "workspace:*"
+    "plec-browser": "workspace:*",
+    "plec-lucide": "workspace:*",
+    "plec-ui": "workspace:*"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.3",

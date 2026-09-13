@@ -1,5 +1,5 @@
 {
-  "name": "@wasm-runtime/lucide-plec",
+  "name": "plec-lucide",
   "version": "0.0.0",
   "private": true,
   "type": "module",
