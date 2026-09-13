@@ -7,7 +7,7 @@
  * - compiled JS (tsc) plus bundled `./server` / `./browser` entries
  *   (the browser package's built output is inlined so no bare workspace
  *   specifier survives)
- * - staged WASM runtime assets from packages/plec-runtime/dist/runtime
+ * - validated WASM runtime assets published into dist/runtime
  * - the cargo-built release-variant CLI binary (PLEC_CLI_VERSION=release,
  *   the public-build variant per `.env.plec` semantics)
  *
@@ -49,15 +49,16 @@ ensureBuilt(
   'plec-browser',
   'build',
 );
+console.log('Cleaning previous plec artifact...');
+fs.rmSync(distDir, { recursive: true, force: true });
 ensureBuilt(
   'plec-runtime WASM',
-  'packages/plec-runtime/dist/runtime/runtime_bg.wasm',
-  'plec-runtime',
+  'packages/plec/dist/runtime/runtime_bg.wasm',
+  'plec',
   'build:wasm',
 );
 
 console.log('Compiling plec (tsc)...');
-fs.rmSync(distDir, { recursive: true, force: true });
 run('yarn', ['exec', 'tsc', '-p', 'packages/plec/tsconfig.json']);
 
 const bundleEntries = [
@@ -94,13 +95,6 @@ console.log('Staging self-contained type declarations...');
 fs.copyFileSync(
   path.join(repoRoot, 'packages/plec-browser/dist/index.d.ts'),
   path.join(distDir, 'browser.d.ts'),
-);
-
-console.log('Staging WASM runtime assets...');
-fs.cpSync(
-  path.join(repoRoot, 'packages/plec-runtime/dist/runtime'),
-  path.join(distDir, 'runtime'),
-  { recursive: true },
 );
 
 console.log(
@@ -149,6 +143,7 @@ for (const required of [
   'runtime/runtime_bg.wasm.br',
   'runtime/runtime.js',
   'runtime/runtime.js.br',
+  'runtime/provenance.json',
   `bin/${binaryName}`,
 ]) {
   if (!fs.existsSync(path.join(distDir, required)))

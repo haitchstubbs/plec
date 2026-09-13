@@ -9,7 +9,7 @@ use std::process::Command;
 ///
 /// ```text
 /// crates/plec-runtime (source)
-///     → wasm-pack → packages/plec-runtime/dist/runtime (package dist)
+///     → wasm-pack → temporary release directory → packages/plec/dist/runtime
 ///     → staged copy → apps/fullstack/dist/runtime (what the app serves)
 /// ```
 ///
@@ -308,7 +308,7 @@ pub fn print_provenance(report: &ProvenanceReport, repo: &Repo) -> bool {
     } else {
         println!("\npackage dist provenance");
         println!(
-            "  provenance.json       missing — rebuild (yarn workspace plec-runtime build:wasm)"
+            "  provenance.json       missing — rebuild (yarn workspace plec build:wasm)"
         );
     }
 

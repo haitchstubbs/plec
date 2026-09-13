@@ -40,7 +40,7 @@ first. Source of truth: `apps/fullstack/scripts/build.mjs`.
 ```sh
 yarn install --immutable
 yarn install:build-tools
-yarn workspace plec-runtime build   # cargo check + wasm-pack into packages/plec-runtime/dist/runtime
+yarn workspace plec build:runtime   # cargo check + wasm-pack into packages/plec/dist/runtime
 yarn build                          # turbo: compile routes via plec-route-manifest, esbuild client/server, copy wasm, brotli
 ```
 
@@ -68,7 +68,7 @@ script does that before restarting the server.
 After changing the runtime crate (`crates/plec-runtime`):
 
 ```sh
-yarn workspace plec-runtime build:wasm   # wasm-pack -> packages/plec-runtime/dist/runtime
+yarn workspace plec build:wasm   # wasm-pack -> packages/plec/dist/runtime
 yarn workspace @wasm-runtime/fullstack build   # copies wasm into the app and regenerates brotli
 ```
 
@@ -84,7 +84,7 @@ client sends `accept-encoding: br`. If you hand-copy fresh `runtime.js` /
 regenerating the `.br` files, the browser silently runs the old code. Delete
 the `.br` files or re-run the fullstack build instead of hand-copying.
 
-For continuous rebuilds: `yarn workspace plec-runtime dev:wasm`.
+For continuous rebuilds: `yarn workspace plec dev:wasm`.
 
 **Silent failures:** some browser-side wasm failure paths early-return
 without logging (for example generation mismatches in typed fetch). When a
@@ -111,9 +111,9 @@ shell `PATH`, or set `PLEC_BIN` to force a binary.
 
 ```sh
 yarn test                                        # turbo: all workspaces
-yarn workspace plec-runtime test                 # cargo test --lib
-yarn workspace plec-runtime test:core            # cargo test --no-default-features
-yarn workspace plec-runtime test:wasm            # browser harness (wasm-pack test --headless --chrome)
+yarn workspace plec test:runtime                 # cargo test --lib
+yarn workspace plec test:runtime:core            # cargo test --no-default-features
+yarn workspace plec test:wasm                    # browser harness (wasm-pack test --headless --chrome)
 yarn workspace @wasm-runtime/fullstack test      # vitest + check:no-react
 yarn test:e2e                                    # Playwright smoke gate (E2E_PORT, default 3216)
 yarn test:acceptance                             # Playwright full behavioral suites — opt-in

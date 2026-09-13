@@ -43,7 +43,7 @@ Important existing files:
 * `scripts/browser-harness.mjs`
 * `scripts/watch-wasm.mjs`
 * root `package.json`
-* `packages/plec-runtime/package.json`
+* `packages/plec/package.json`
 * `packages/plec/scripts/build-artifact.mjs`
 * root `turbo.json`
 
@@ -68,7 +68,7 @@ Existing hardening already present:
 
 * root `Cargo.lock` is committed
 * `verify-toolchain.mjs` runs `cargo metadata --locked`
-* `plec-runtime` cargo check/test commands use `--locked`
+* `plec` runtime cargo check/test commands use `--locked`
 * `scripts/build-wasm.mjs` forwards `--locked` through `wasm-pack`
 
 Known gaps:
@@ -549,7 +549,7 @@ However, account for direct package entrypoints.
 A developer can currently run things such as:
 
 ```bash
-yarn workspace plec-runtime build
+yarn workspace plec build:runtime
 ```
 
 without going through root `yarn build`.
@@ -564,7 +564,7 @@ Be conscious of existing duplication in:
 
 ```text
 verify-toolchain
-plec-runtime build
+plec build:runtime
 build:wasm
 ```
 
@@ -628,7 +628,7 @@ This already forwards `--locked`.
 
 Preserve it.
 
-## `packages/plec-runtime/package.json`
+## `packages/plec/package.json`
 
 Existing `cargo check` and `cargo test` commands already use `--locked`.
 
@@ -796,7 +796,7 @@ scripts/check-rust-deps.mjs            new
 scripts/build-wasm.mjs                 maybe path plumbing only
 scripts/browser-harness.mjs
 package.json
-packages/plec-runtime/package.json
+packages/plec/package.json
 packages/plec/scripts/build-artifact.mjs
 ```
 

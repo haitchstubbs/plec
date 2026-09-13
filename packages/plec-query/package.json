@@ -19,7 +19,10 @@
       "import": "./dist/zod/index.js"
     }
   },
-  "files": ["dist", "native"],
+  "files": [
+    "dist",
+    "native"
+  ],
   "imports": {
     "#core": "./dist/core/index.js",
     "#main": "./dist/main/index.js",

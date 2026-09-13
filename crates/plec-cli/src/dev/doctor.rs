@@ -101,7 +101,7 @@ pub fn run(repo: &Repo, options: &DoctorOptions) -> Result<DoctorReport, String>
     }
     if !artifacts.ok {
         hints.push(
-            "stale/missing WASM — rebuild with: yarn workspace plec-runtime build:wasm, then \
+            "stale/missing WASM — rebuild with: yarn workspace plec build:wasm, then \
              rebuild the app (turbo run build --filter=@wasm-runtime/fullstack)"
                 .into(),
         );

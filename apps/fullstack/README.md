@@ -13,7 +13,7 @@ test, and typecheck time.
 ## Run
 
 ```sh
-yarn workspace plec-runtime build             # once: build the WASM runtime
+yarn workspace plec build:runtime             # once: build the WASM runtime
 yarn workspace @wasm-runtime/fullstack dev    # build + plec serve dist
 ```
 

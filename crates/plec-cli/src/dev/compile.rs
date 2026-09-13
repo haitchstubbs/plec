@@ -1,10 +1,10 @@
 //! Compile the Plec-owned runtime WASM artifact.
 //!
 //! The WASM runtime is a Plec asset, not a consumer asset: applications stage
-//! whatever `packages/plec-runtime/dist/runtime` contains and never compile it
+//! whatever `packages/plec/dist/runtime` contains and never compile it
 //! themselves. The build pipeline itself stays in `scripts/build-wasm.mjs`
 //! (wasm-pack → wasm-tools strip → protocol stamp → brotli sidecars →
-//! provenance); this command is its CLI entry point so the workflow does not
+//! provenance → release-package publish); this command is its CLI entry point so the workflow does not
 //! depend on remembering a yarn incantation. It stays behind the dev frontend
 //! because shipping a release app must not require the WASM toolchain — the
 //! app build (`plec build`) stages the prebuilt artifact and fails loudly when
@@ -62,9 +62,7 @@ pub struct CompileReport {
 /// would silently build the wrong thing.
 fn build_script_args(options: &CompileOptions) -> Vec<String> {
     let mut args = vec![
-        "scripts/build-wasm.mjs".to_string(),
-        "crates/plec-runtime".to_string(),
-        "packages/plec-runtime/dist/runtime".to_string(),
+        "packages/plec/scripts/build-runtime.mjs".to_string(),
         "--profile".to_string(),
         options.profile.as_str().to_string(),
     ];
@@ -208,9 +206,7 @@ mod tests {
         assert_eq!(
             build_script_args(&options(CompileProfile::Full, None, false)),
             vec![
-                "scripts/build-wasm.mjs",
-                "crates/plec-runtime",
-                "packages/plec-runtime/dist/runtime",
+                "packages/plec/scripts/build-runtime.mjs",
                 "--profile",
                 "full",
             ]
@@ -218,9 +214,7 @@ mod tests {
         assert_eq!(
             build_script_args(&options(CompileProfile::Fetch, Some("fetch"), true)),
             vec![
-                "scripts/build-wasm.mjs",
-                "crates/plec-runtime",
-                "packages/plec-runtime/dist/runtime",
+                "packages/plec/scripts/build-runtime.mjs",
                 "--profile",
                 "fetch",
                 "--features",

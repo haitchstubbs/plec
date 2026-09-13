@@ -42,9 +42,9 @@ impl Repo {
         Ok(dir)
     }
 
-    /// wasm-pack output for the runtime package.
+    /// Published runtime assets carried by the release package.
     pub fn runtime_dist_dir(&self) -> PathBuf {
-        self.root.join("packages/plec-runtime/dist/runtime")
+        self.root.join("packages/plec/dist/runtime")
     }
 
     /// Runtime artifacts staged into the fullstack application build

@@ -30,7 +30,15 @@
   },
   "scripts": {
     "build": "node scripts/build-artifact.mjs",
-    "test": "yarn --cwd ../.. exec vitest run packages/plec/src --passWithNoTests",
+    "build:runtime": "cargo check --locked --manifest-path ../../crates/plec-runtime/Cargo.toml && yarn build:wasm",
+    "build:wasm": "node scripts/build-runtime.mjs",
+    "dev:wasm": "cd ../.. && node scripts/watch-wasm.mjs",
+    "test": "yarn test:ts && yarn test:runtime",
+    "test:ts": "yarn --cwd ../.. exec vitest run packages/plec/src --passWithNoTests",
+    "test:runtime": "node ../../scripts/verify-toolchain.mjs && cargo test --locked --manifest-path ../../crates/plec-runtime/Cargo.toml --lib",
+    "test:runtime:core": "node ../../scripts/verify-toolchain.mjs && cargo test --locked --manifest-path ../../crates/plec-runtime/Cargo.toml --no-default-features",
+    "test:wasm": "cd ../.. && node scripts/browser-harness.mjs",
+    "clean:runtime": "cargo clean --manifest-path ../../crates/plec-runtime/Cargo.toml",
     "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec/tsconfig.json --noEmit"
   }
 }
