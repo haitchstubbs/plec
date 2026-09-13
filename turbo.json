@@ -58,6 +58,10 @@
       "dependsOn": ["^typecheck"],
       "outputs": []
     },
+    "plec#typecheck": {
+      "dependsOn": ["^typecheck", "plec-browser#build"],
+      "outputs": []
+    },
     "clean": {
       "cache": false
     }
