@@ -5,11 +5,13 @@ import { createHash } from 'node:crypto';
 import { brotliCompress, constants as zlibConstants } from 'node:zlib';
 import { promisify } from 'node:util';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findInPath, isWindows } from './utils.js';
 import { wasmBindgenBinPath, wasmPackCachePath } from './toolchain.mjs';
 
 const brotliCompressAsync = promisify(brotliCompress);
+const require = createRequire(import.meta.url);
 /**
  * Get relative path from one directory to another.
  *
@@ -39,7 +41,7 @@ function relativePath(from, to) {
  * @property {string} [outName='runtime'] - Name for the output WASM file
  * @property {string[]} [features] - Optional features to build
  * @property {'full'|'core'|'router'|'fetch'} [profile='full'] - Feature profile
- * @property {boolean} [optimize=true] - Whether to run wasm-opt/wasm-tools strip
+ * @property {boolean} [optimize=true] - Whether to run Binaryen and strip metadata
  */
 
 const repoRoot = path.resolve(
@@ -166,29 +168,52 @@ export async function buildWasm({
 }
 
 /**
- * Optimize WASM file using wasm-tools strip.
+ * Optimize WASM with Binaryen, then remove metadata sections.
  *
  * @param {string} outDir - Output directory containing WASM file
  * @param {string} outName - Name of the WASM file (without extension)
  */
 async function optimizeWasm(outDir, outName) {
+  const wasmOpt = await findWasmOpt();
   const wasmTools = await findWasmTools();
 
+  if (!wasmOpt) {
+    throw new Error(
+      'wasm-opt is required by the pinned binaryen dependency; run yarn install',
+    );
+  }
   if (!wasmTools) {
     throw new Error('wasm-tools is required by the pinned toolchain');
   }
 
   const wasmPath = path.join(outDir, `${outName}_bg.wasm`);
+  const optimizedWasmPath = path.join(
+    outDir,
+    `${outName}_bg.optimized.wasm`,
+  );
   const strippedWasmPath = path.join(
     outDir,
     `${outName}_bg.stripped.wasm`,
   );
 
-  console.log(`Optimizing WASM with wasm-tools...`);
+  console.log(`Optimizing WASM with wasm-opt -Oz...`);
+  execFileSync(
+    wasmOpt,
+    [
+      '-Oz',
+      '--strip-debug',
+      '--strip-producers',
+      wasmPath,
+      '-o',
+      optimizedWasmPath,
+    ],
+    { cwd: repoRoot, stdio: 'inherit' },
+  );
 
+  console.log(`Stripping WASM metadata with wasm-tools...`);
   execFileSync(
     wasmTools,
-    ['strip', '--all', wasmPath, '-o', strippedWasmPath],
+    ['strip', '--all', optimizedWasmPath, '-o', strippedWasmPath],
     {
       cwd: repoRoot,
       stdio: 'inherit',
@@ -196,6 +221,7 @@ async function optimizeWasm(outDir, outName) {
   );
 
   await rm(wasmPath, { force: true });
+  await rm(optimizedWasmPath, { force: true });
 
   // Rename stripped version back to original name
   await renameFile(strippedWasmPath, wasmPath);
@@ -204,6 +230,25 @@ async function optimizeWasm(outDir, outName) {
     fs.stat(wasmPath),
   );
   console.log(`Optimized WASM size: ${stats.size} bytes`);
+}
+
+/**
+ * Find Binaryen's wasm-opt, including the executable shipped by the Yarn
+ * dependency when Plug'n'Play is enabled.
+ *
+ * @returns {Promise<string|null>} Path to wasm-opt or null if not found
+ */
+async function findWasmOpt() {
+  const exeName = isWindows() ? 'wasm-opt.exe' : 'wasm-opt';
+  const inPath = await findInPath(exeName);
+  if (inPath) return inPath;
+
+  try {
+    const binaryenEntry = require.resolve('binaryen');
+    return path.join(path.dirname(binaryenEntry), 'bin', exeName);
+  } catch {
+    return null;
+  }
 }
 
 /**

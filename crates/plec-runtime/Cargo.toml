@@ -11,11 +11,6 @@ default = ["router", "fetch"]
 router = []
 fetch = ["plec-client/fetch"]
 
-# The benchmark already instruments unoptimised runtime behaviour. Avoid the
-# external wasm-opt binary so builds remain reproducible on locked-down hosts.
-[package.metadata.wasm-pack.profile.release]
-wasm-opt = false
-
 [dependencies]
 plec-client = { path = "../plec-client" }
 plec-dom = { path = "../plec-dom" }

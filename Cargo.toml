@@ -25,6 +25,14 @@ members = [
 version = "0.1.0"
 edition = "2021"
 
+# Keep the browser runtime small. This profile is used by wasm-pack's release
+# builds and also benefits any other workspace crate shipped as WASM.
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
 [workspace.dependencies]
 swc_common = "26.0.0"
 swc_ecma_ast = "29.0.0"
