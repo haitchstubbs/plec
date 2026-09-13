@@ -1,8 +1,8 @@
 # Getting started
 
-This is the internal walkthrough: prerequisites, the first build, the dev
-loop, the WASM rebuild loop, and how to test and benchmark. The quickstart
-version lives in the root [README](../README.md).
+Contributor and developer documentation for prerequisites, the first build,
+the development loop, WASM runtime rebuilds, validation, and benchmarks. The
+short version lives in the root [README](../README.md).
 
 ## Prerequisites
 
@@ -33,33 +33,21 @@ either binary themselves.
 
 ## First build
 
-Build order matters: the fullstack build copies pre-built WASM artifacts and
-invokes the Rust route compiler, so the runtime and toolchain must exist
-first. Source of truth: `apps/fullstack/scripts/build.mjs`.
+Build the runtime before the application so the required runtime assets are
+available to the fullstack build. The fullstack scripts in
+`apps/fullstack/package.json` are authoritative.
 
 ```sh
 yarn install --immutable
 yarn install:build-tools
 yarn workspace plec build:runtime   # cargo check + wasm-pack into packages/plec/dist/runtime
-yarn build                          # turbo: compile routes via plec-route-manifest, esbuild client/server, copy wasm, brotli
+yarn build
 ```
 
-`yarn build` for the fullstack app compiles the app's TSX with the **Rust**
-compiler (`cargo run -p plec-compiler --bin plec-route-manifest`), emits
-`dist/public/route-manifest.json` and `dist/public/graphs/*.json`, bundles
-`src/client.tsx` and `src/server.ts` with esbuild, and enforces that no
-compiler/zod/typescript code leaks into the browser bundle.
-
-For fast architecture lookup, use the dev CLI context packets:
-
-```sh
-plec workspace context ssr-adoption
-plec workspace context routing
-plec workspace context artifacts --json
-```
-
-Packets list verified source entry points, live protocol values, invariants,
-workflows, tests, and documentation for each supported domain.
+The fullstack build runs `plec build src/app.tsx --out-dir dist`, then stages
+the application's fonts and generated CSS in `dist/public`. `plec build`
+owns compilation and application artifact generation; the app owns its CSS
+and font assets.
 
 ## Dev loop
 
@@ -67,8 +55,8 @@ workflows, tests, and documentation for each supported domain.
 yarn workspace fullstack dev
 ```
 
-This rebuilds and then runs `plec serve dist`. The native server listens on
-`PORT` (default `3000`).
+This rebuilds the application and runs its `start` script, which launches
+`plec serve dist`. The native server listens on `PORT` (default `3000`).
 
 There is no vite/HMR: the Rust compiler emits the route manifest and graphs
 at build time. TSX edits require re-running the fullstack build — the `dev`
@@ -80,7 +68,7 @@ After changing the runtime crate (`crates/plec-runtime`):
 
 ```sh
 yarn workspace plec build:wasm   # wasm-pack -> packages/plec/dist/runtime
-yarn workspace fullstack build   # copies wasm into the app and regenerates brotli
+yarn workspace fullstack build   # regenerates the application artifact and staged assets
 ```
 
 Verify what you just built (and what the app stages) before testing:
@@ -127,13 +115,15 @@ contracts, never bumped by it).
 ## Tests
 
 ```sh
-yarn test                                        # turbo: all workspaces
-yarn workspace plec test:runtime                 # cargo test --lib
-yarn workspace plec test:runtime:core            # cargo test --no-default-features
-yarn workspace plec test:wasm                    # plec-e2e browser harness
-yarn workspace fullstack test      # vitest + check:no-react
-yarn test:e2e                                    # Playwright smoke gate (E2E_PORT, default 3216)
-yarn test:acceptance                             # Playwright full behavioral suites — opt-in
+yarn toolchain:verify          # pinned Rust and WASM toolchain
+yarn toolchain:verify:browser  # includes pinned browser tooling
+yarn format:check
+yarn typecheck
+yarn test                      # unit and workspace tests
+yarn test:wasm                 # WASM browser test suite
+yarn test:e2e                  # Playwright smoke gate (E2E_PORT, default 3216)
+yarn test:acceptance           # larger opt-in behavioral suite
+yarn build
 ```
 
 `packages/plec-e2e` is the canonical end-to-end runner. Playwright owns the
@@ -144,7 +134,7 @@ comes from `E2E_PORT` in `.env.devports` (the canonical port registry);
 override it per run with `E2E_PORT=…`. Specs are named `*.playwright.ts`.
 See `packages/plec-e2e/README.md` and the E2E section of `AGENTS.md`.
 
-Type checking: `yarn typecheck` (turbo). For the fullstack app this also
+`yarn typecheck` runs the workspace type checks. The fullstack typecheck also
 runs `cargo check -p plec-compiler`.
 
 ## Benchmarks

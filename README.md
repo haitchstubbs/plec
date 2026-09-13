@@ -44,12 +44,14 @@ mutations, without re-rendering a component subtree.
 apps/
   fullstack/          Demo full-stack Plec application (the runnable example)
 packages/
-  plec/               Framework runtime: jsx-runtime, state hooks, router
-  plec-ir/            Shared IR schema (Zod) and validation
-  plec-browser/       Browser glue: startPlecRouter, graph loading
-  plec/               Release package and Rust -> WASM runtime assets
-  ui/                 React/shadcn UI kit used by tooling pages
-  lucide-plec/        Generated Lucide icon components for Plec
+  plec/               Framework APIs, CLI shim, and runtime assets
+  plec-browser/       Browser host glue and artifact loading
+  plec-e2e/           Canonical Playwright E2E runner
+  plec-eslint-config/ Shared ESLint configuration
+  plec-node-runtime/  Node application-runtime sidecar
+  plec-query/         Query authoring APIs
+  lucide-plec/        Generated Plec icon components
+  ui/                 React/shadcn UI package for tooling
 crates/               Rust compiler workspace (parser -> sema -> HIR -> IR)
 docs/                 Working notes, contracts, and guides
 ```
@@ -61,9 +63,10 @@ Prerequisites: Node.js with yarn 4, a Rust toolchain with the
 troubleshooting live in [docs/getting-started.md](docs/getting-started.md).
 
 ```sh
-yarn install
+yarn install --immutable
+yarn install:build-tools
 yarn workspace plec build:runtime   # cargo check + wasm-pack -> packages/plec/dist/runtime
-yarn build                          # turbo: compile routes, bundle, brotli
+yarn build
 yarn workspace fullstack dev
 ```
 

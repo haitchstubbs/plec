@@ -22,6 +22,7 @@
     "fullstack#build": {
       "cache": false,
       "dependsOn": ["plec#build"],
+      "env": ["PLEC_BIN"],
       "outputs": ["dist/**"]
     },
     "test": {
@@ -31,7 +32,7 @@
       "cache": false,
       "persistent": false,
       "dependsOn": ["fullstack#build"],
-      "env": ["E2E_PORT"],
+      "env": ["E2E_PORT", "PLEC_BIN"],
       "outputs": []
     },
     "test:acceptance": {
@@ -58,9 +59,9 @@
       "dependsOn": ["^typecheck"],
       "outputs": []
     },
-    "bench": {
-      "dependsOn": ["build"],
-      "outputs": ["benchmarks/results/**"]
+    "plec#typecheck": {
+      "dependsOn": ["^typecheck", "plec-browser#build"],
+      "outputs": []
     },
     "clean": {
       "cache": false

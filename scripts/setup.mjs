@@ -3,9 +3,11 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -27,12 +29,108 @@ const { 'build-tools': buildTools } = cliToolsConfig;
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptsDir, '..');
 
+function cargoBinPath(name) {
+  return path.join(
+    process.env.CARGO_HOME ?? path.join(process.env.HOME, '.cargo'),
+    'bin',
+    `${name}${process.platform === 'win32' ? '.exe' : ''}`,
+  );
+}
+
 function run(command, args, options = {}) {
   return spawnSync(command, args, {
     stdio: 'inherit',
     shell: false,
     ...options,
   });
+}
+
+function prebuiltTool(name) {
+  return cliToolsConfig['prebuilt-build-tools']?.[
+    `${process.platform}-${process.arch}`
+  ]?.[name];
+}
+
+function releaseAssetUrl(name, version, target) {
+  const asset = {
+    'wasm-pack': {
+      repository: 'wasm-bindgen/wasm-pack',
+      tag: `v${version}`,
+      filename: `wasm-pack-v${version}-${target}.tar.gz`,
+    },
+    'wasm-tools': {
+      repository: 'bytecodealliance/wasm-tools',
+      tag: `v${version}`,
+      filename: `wasm-tools-${version}-${target}.tar.gz`,
+    },
+    'wasm-bindgen-cli': {
+      repository: 'wasm-bindgen/wasm-bindgen',
+      tag: version,
+      filename: `wasm-bindgen-${version}-${target}.tar.gz`,
+    },
+  }[name];
+
+  return `https://github.com/${asset.repository}/releases/download/${asset.tag}/${asset.filename}`;
+}
+
+function installPrebuiltTool({ name, version, root }) {
+  const asset = prebuiltTool(name);
+  if (!asset) {
+    if (process.env.CI) {
+      throw new Error(
+        `No pinned prebuilt ${name} release is configured for ${process.platform}/${process.arch}.`,
+      );
+    }
+    return false;
+  }
+
+  const archive = path.join(
+    repoRoot,
+    '.cache',
+    `${name}-${version}.tar.gz`,
+  );
+  mkdirSync(path.dirname(archive), { recursive: true });
+  mkdirSync(root, { recursive: true });
+
+  console.log(`Downloading pinned ${name} ${version} release...`);
+  const download = run('curl', [
+    '--fail',
+    '--location',
+    '--silent',
+    '--show-error',
+    '--output',
+    archive,
+    releaseAssetUrl(name, version, asset.target),
+  ]);
+  if (download.error || download.status !== 0) {
+    throw new Error(`Failed to download pinned ${name} ${version}.`);
+  }
+
+  const actual = createHash('sha256')
+    .update(readFileSync(archive))
+    .digest('hex');
+  if (actual !== asset.sha256) {
+    rmSync(archive, { force: true });
+    throw new Error(
+      `Pinned ${name} checksum mismatch: expected ${asset.sha256}, found ${actual}.`,
+    );
+  }
+
+  const extract = run('tar', [
+    '--extract',
+    '--gzip',
+    '--file',
+    archive,
+    '--strip-components=1',
+    '--directory',
+    root,
+  ]);
+  rmSync(archive, { force: true });
+  if (extract.error || extract.status !== 0) {
+    throw new Error(`Failed to extract pinned ${name} ${version}.`);
+  }
+
+  return true;
 }
 
 function ensureTool({ name, version }) {
@@ -50,7 +148,18 @@ function ensureTool({ name, version }) {
     return;
   }
 
-  console.log(`Installing pinned ${name} ${version}...`);
+  if (
+    installPrebuiltTool({
+      name,
+      version,
+      root: path.dirname(cargoBinPath(name)),
+    })
+  ) {
+    console.log(`${name} ${version} installed from a pinned release.`);
+    return;
+  }
+
+  console.log(`Installing pinned ${name} ${version} from source...`);
 
   const install = run('cargo', [
     'install',
@@ -92,8 +201,22 @@ function ensureWasmBindgenCli() {
     return;
   }
 
+  rmSync(wasmBindgenToolRoot(), { recursive: true, force: true });
+  if (
+    installPrebuiltTool({
+      name: 'wasm-bindgen-cli',
+      version,
+      root: path.join(wasmBindgenToolRoot(), 'bin'),
+    })
+  ) {
+    console.log(
+      `wasm-bindgen-cli ${version} installed from a pinned release.`,
+    );
+    return;
+  }
+
   console.log(
-    `Installing pinned wasm-bindgen-cli ${version} locally...`,
+    `Installing pinned wasm-bindgen-cli ${version} locally from source...`,
   );
   const install = run('cargo', [
     'install',

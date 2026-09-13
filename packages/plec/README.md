@@ -44,8 +44,8 @@ a file dependency (`"plec": "file:../path/to/packages/plec"`): yarn links
 bin. Calling `node <artifact>/bin/plec.js …` directly works too.
 
 If no binary is found, the shim prints every searched path and points at the
-source build (`yarn workspace plec build`; `PLEC_CLI_VERSION` in `.env.plec`
-selects the variant).
+release artifact build (`yarn workspace plec build:artifact`; `PLEC_CLI_VERSION`
+in `.env.plec` selects the variant).
 
 ## Version
 
@@ -61,6 +61,7 @@ contracts and are deliberately not coupled to this SemVer.
 
 ```sh
 yarn workspace plec build
+yarn workspace plec build:artifact
 yarn workspace plec test
 yarn workspace plec typecheck
 ```

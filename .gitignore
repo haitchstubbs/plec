@@ -27,6 +27,7 @@ coverage/
 !.env.benchmark
 !.env.devports
 !.env.example
+!.env.plec
 *.log
 
 # IDE and OS
