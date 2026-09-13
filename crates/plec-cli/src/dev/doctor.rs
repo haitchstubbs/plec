@@ -474,8 +474,8 @@ fn nested_execution(compiled: &CompiledApp) -> Vec<NestedComponentReport> {
 
 /// Structural validation of `plec:*` boundary markers and `data-plec-node`
 /// addresses in an HTML fragment (docs/dom-address-protocol.md). Checks
-/// pairing and address grammar; deriving the *expected* marker set from a
-/// graph is the deferred `markers validate` command.
+/// pairing and address grammar; the expected-set derivation from a compiled
+/// graph lives in `markers validate` (dev/markers.rs).
 pub fn validate_markers(repo: &Repo, html_path: &Path) -> Result<MarkerReport, String> {
     let path = if html_path.is_absolute() {
         html_path.to_path_buf()

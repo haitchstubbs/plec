@@ -141,9 +141,7 @@ fails if curated file or line references become stale.
 
 When an investigation reveals a recurring question that none of these
 commands answer, extend `crates/plec-cli/src/dev/` rather than solving it ad
-hoc again. Deferred command ideas already tracked in beads: `impact`,
-`context <domain>`, `verify adoption`, `graph resolve/tree`,
-`markers explain/validate`.
+hoc again. Deferred command ideas already tracked in beads: `impact`.
 
 ## Boundaries
 

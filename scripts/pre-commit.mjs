@@ -176,7 +176,7 @@ function renderRow(issue, depth = 0) {
         cell(issue.status),
         issue.priority != null ? `P${issue.priority}` : "",
         cell(issue.issue_type),
-        cell(issue.assignee),
+        cell('haitchstubbs'),
         cell(issue.labels?.join(", ")),
     ];
 }

@@ -379,13 +379,26 @@ are reported in output instead of crashing the debugger.
 ## `plec workspace markers`
 
 Explain structural addresses or validate required markers against a compiled
-graph. Validation reports the first missing or duplicate adoption marker.
+graph. Validation derives the expected marker set by walking the compiled
+graph — element `data-plec-node` addresses, conditional/component/slot
+boundary pairs, keyed loop rows, text marker adjacency — and diffs it against
+the HTML in document order.
 
 ```bash
 plec workspace markers explain root/outlet:main/component:1/node:0
 plec workspace markers validate --graph app --html page.html
 plec workspace markers validate --graph app --html page.html --source apps/fullstack/src/router.tsx --json
 ```
+
+Structural mode (default): loop rows match any recorded key (`key:*`
+wildcards, extra rows tolerated) and conditional interiors whose selected
+branch is unknown are optional. `--route /path` selects which manifest child
+renders into each route outlet (default: first non-wildcard child in manifest
+order). `--snapshot snapshot.json` switches to strict mode: the snapshot's
+`structure` records select every branch and keyed row, making the expected
+sequence fully concrete — missing markers, unexpected markers, and order
+inversions all fail with the matching adoption error code
+(`missing:ssr-component:...`, `mismatch:ssr-branch:...`).
 
 ## `plec workspace context <domain>`
 

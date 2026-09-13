@@ -130,6 +130,12 @@ pub enum MarkersCommand {
         html: PathBuf,
         #[arg(long)]
         source: Option<PathBuf>,
+        /// Captured `PlecSsrSnapshot` selecting branches and keyed rows.
+        #[arg(long)]
+        snapshot: Option<PathBuf>,
+        /// Matched route path (e.g. `/about`) choosing outlet children.
+        #[arg(long)]
+        route: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -363,13 +369,19 @@ fn dispatch_markers(repo: &Repo, command: MarkersCommand) -> Result<(), String> 
             graph,
             html,
             source,
+            snapshot,
+            route,
             json,
         } => {
             let report = markers::validate(
                 repo,
                 &source.unwrap_or_else(|| repo.default_app_source()),
-                &graph,
-                &html,
+                &markers::ValidateOptions {
+                    graph: &graph,
+                    html: &html,
+                    snapshot: snapshot.as_deref(),
+                    route: route.as_deref(),
+                },
             )?;
             if json {
                 println!(
