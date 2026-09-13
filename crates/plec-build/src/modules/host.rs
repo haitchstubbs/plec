@@ -453,10 +453,43 @@ pub fn emit_node_runtime(
     out_dir: &std::path::Path,
 ) -> Result<bool, BuildError> {
     let source = repo_root.join("packages/plec-node-runtime/src/runtime.ts");
-    if !source.exists() {
-        return Ok(false);
-    }
     let server_dir = out_dir.join("server");
+
+    if !source.exists() {
+        let packaged = app_dir
+            .ancestors()
+            .map(|ancestor| ancestor.join("node_modules/plec/dist/node-runtime.mjs"))
+            .find(|candidate| candidate.is_file())
+            .or_else(|| {
+                app_dir
+                    .ancestors()
+                    .map(|ancestor| {
+                        ancestor.join("node_modules/plec-node-runtime/dist/runtime.mjs")
+                    })
+                    .find(|candidate| candidate.is_file())
+            });
+
+        let Some(packaged) = packaged else {
+            return Ok(false);
+        };
+
+        std::fs::create_dir_all(&server_dir).map_err(|error| {
+            BuildError::with_source(
+                Stage::ServerManifest,
+                format!("cannot create {}", server_dir.display()),
+                error,
+            )
+        })?;
+        std::fs::copy(&packaged, server_dir.join("runtime.mjs")).map_err(|error| {
+            BuildError::with_source(
+                Stage::ServerManifest,
+                format!("cannot copy {}", packaged.display()),
+                error,
+            )
+        })?;
+        return Ok(true);
+    }
+
     std::fs::create_dir_all(&server_dir).map_err(|error| {
         BuildError::with_source(
             Stage::ServerManifest,
@@ -584,6 +617,26 @@ preloads = ["/a.woff2", "/b.woff2"]
         )
         .expect("json");
         assert!(json.get("server").is_none());
+    }
+
+    #[test]
+    fn copies_packaged_node_runtime_for_out_of_repo_apps() {
+        let root = tempfile::tempdir().expect("root");
+        let app = root.path().join("app");
+        let package = app.join("node_modules/plec/dist");
+        let out = root.path().join("dist");
+        std::fs::create_dir_all(&package).expect("package dir");
+        std::fs::write(
+            package.join("node-runtime.mjs"),
+            "export const ready = true;",
+        )
+        .expect("runtime");
+
+        assert!(emit_node_runtime(root.path(), &app, &out).expect("runtime copy"));
+        assert_eq!(
+            std::fs::read_to_string(out.join("server/runtime.mjs")).expect("copied runtime"),
+            "export const ready = true;"
+        );
     }
 
     #[test]

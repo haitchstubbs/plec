@@ -39,10 +39,9 @@ styles = "/assets/styles.css"
         "src/router.tsx",
         r#"import { createRouter } from 'plec';
 import { Route as rootRoute } from './routes/index';
-import { Route as homeRoute } from './routes/home';
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([homeRoute]),
+  routeTree: rootRoute,
 });
 
 export default router;
@@ -50,27 +49,19 @@ export default router;
     ),
     (
         "src/routes/index.tsx",
-        r#"import { Outlet, createRootRoute } from 'plec';
+        r#"import { createRootRoute } from 'plec';
+import { Home } from './home';
 
 export const Route = createRootRoute({
-  component: () => <Outlet />,
+  component: Home,
 });
 "#,
     ),
     (
         "src/routes/home.tsx",
-        r#"import { createRoute } from 'plec';
-import { Route as rootRoute } from './index';
-
-function Home() {
+        r#"export function Home() {
   return <main><h1>My Plec App</h1><p>Welcome to Plec.</p></main>;
 }
-
-export const Route = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '',
-  component: Home,
-});
 "#,
     ),
     (

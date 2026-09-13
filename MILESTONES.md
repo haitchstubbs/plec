@@ -20,7 +20,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.3 | Out-of-repo plec build: runtime staging + esbuild from the app's node_modules | closed | P1 | feature |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.4 | bin shim: plec command owned by packages/plec | closed | P2 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.5 | plec init + application template | closed | P1 | feature | haitchstubbs |  |
-| &nbsp;&nbsp;↳ wasm-runtime-1wj.6 | plec dev — consumer watch + serve loop | in_progress | P1 | feature | haitchstubbs |  |
+| &nbsp;&nbsp;↳ wasm-runtime-1wj.6 | plec dev — consumer watch + serve loop | closed | P1 | feature | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.7 | Docs: install-from-source workflow for the release package | open | P2 | task |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.8 | apps/fullstack as the canonical example built from real release assets | closed | P1 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.9 | Eliminate the plec-runtime staging workspace package | closed | P1 | task | haitchstubbs |  |
