@@ -7,6 +7,10 @@ afterwards. Never spawn the server manually.
 
 ## Tiers
 
+`test:wasm` runs the wasm-bindgen browser suite with the pinned Playwright
+Chromium and ChromeDriver toolchain. `plec workspace test wasm` uses this
+runner and owns output capture separately.
+
 | Package script     | Repo root              | Contents                                                                      |
 | ------------------ | ---------------------- | ----------------------------------------------------------------------------- |
 | `test:e2e`         | `yarn test:e2e`        | `tests/smoke` — fast render/mount gate (the default agents run)               |

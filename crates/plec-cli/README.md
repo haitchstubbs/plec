@@ -234,9 +234,10 @@ plec workspace test last --failure nested_loop  # failures matching a substring
 plec workspace test last --json                 # the captured report as JSON
 ```
 
-The runner spawns `scripts/browser-harness.mjs` (which single-sources
-ChromeDriver/Chrome resolution for wasm-pack), tees output live, and parses
-the wasm-bindgen-test noise into a structured report:
+The runner spawns `packages/plec-e2e/scripts/wasm-harness.mjs` (the canonical
+Playwright browser-toolchain runner, which single-sources ChromeDriver/Chrome
+resolution for wasm-pack), tees output live, and parses the wasm-bindgen-test
+noise into a structured report:
 
 ```text
 2 / 87 failed
@@ -355,6 +356,28 @@ ASSERTED BY
 DOCUMENTED BY
   docs/ssr-architecture.md:81  > **Contract evolution:** …
 ```
+
+## `plec workspace impact <symbol-or-protocol-constant>`
+
+Change-impact companion to `trace`: everything a change to a symbol or
+protocol constant would touch, grouped by layer — Rust
+definitions/consumers/fixtures, TypeScript glue/tests, e2e specs, docs. For
+tracked protocol boundaries (`SSR_SNAPSHOT_VERSION`,
+`BOOTSTRAP_WRAPPER_VERSION`, `PROVIDER_MANIFEST_VERSION`, `RouteManifest`)
+it also prints the contract-scanner registry: every versioned site,
+including ones that hard-code literals without naming the symbol. Sites
+allowlisted as intentional legacy literals are marked `review on change` —
+a version bump must consciously re-decide them (the typed-events fixture
+that kept snapshot v1 after the v2 bump hid exactly there).
+
+```bash
+plec workspace impact SSR_SNAPSHOT_VERSION
+plec workspace impact unsupported:ssr-snapshot-version
+plec workspace impact registerPlecProviders --json
+```
+
+The command is informational and always exits zero; `contract ssr --check`
+remains the gate.
 
 ## `plec workspace graph resolve` / `plec workspace graph tree`
 

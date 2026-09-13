@@ -34,6 +34,7 @@ not, the binary on PATH is the release frontend.
 | Re-read the last run's failures without re-running | `plec workspace test last [--failure <substr>]`            |
 | Do all SSR protocol versions agree?                | `plec workspace contract ssr [--check]`                    |
 | Where does this symbol/error code come from?       | `plec workspace trace <query>`                             |
+| What would changing this constant/symbol touch?    | `plec workspace impact <query>`                            |
 | Is the built/staged WASM current?                  | `plec workspace artifact stale`                            |
 | Full artifact identity + protocol report           | `plec workspace artifact provenance runtime`               |
 | Why is SSR adoption failing?                       | `plec workspace doctor adoption [--html f] [--snapshot f]` |
@@ -111,6 +112,18 @@ BY, with a RELATED CONTRACT row for known adoption codes. This answers
 "where can this come from and which tests expect it?" without opening five
 files.
 
+### Before changing a protocol constant or symbol
+
+```bash
+plec workspace impact SSR_SNAPSHOT_VERSION
+```
+
+Lists every site a change touches by layer (Rust definitions/consumers/
+fixtures, TypeScript glue/tests, e2e, docs) plus the contract registry:
+versioned sites that hard-code literals without naming the symbol. Rows
+marked `review on change` are allowlisted legacy literals a bump must
+consciously re-decide; `← fix before running suites` marks live conflicts.
+
 ### When investigating graph registration or component structure
 
 ```bash
@@ -141,7 +154,7 @@ fails if curated file or line references become stale.
 
 When an investigation reveals a recurring question that none of these
 commands answer, extend `crates/plec-cli/src/dev/` rather than solving it ad
-hoc again. Deferred command ideas already tracked in beads: `impact`.
+hoc again.
 
 ## Boundaries
 

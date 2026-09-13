@@ -8,7 +8,7 @@ import {
   repoRoot,
   wasmBindgenBinPath,
   wasmPackCachePath,
-} from './toolchain.mjs';
+} from '../../../scripts/toolchain.mjs';
 
 const verify = spawnSync(
   process.execPath,
