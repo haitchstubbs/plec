@@ -23,6 +23,18 @@ fn output_dir(tag: &str) -> PathBuf {
         .join(tag)
 }
 
+/// Copy an app into a disposable project rooted under Cargo's test output.
+/// Its nearest `node_modules/plec` is synthesized by the test, while other
+/// build dependencies continue to resolve from the workspace ancestor.
+fn fixture_project(tag: &str, name: &str) -> PathBuf {
+    let project = output_dir(&format!("source-{tag}"));
+    let _ = fs::remove_dir_all(&project);
+    let app = project.join("apps").join(name);
+    copy_dir_all(&fixture_app(name), &app);
+    install_plec_package(&project, "fixture-package-runtime");
+    app
+}
+
 fn run_build(app: &Path, out_dir: &Path, extra_args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_plec"))
         .arg("build")
@@ -50,8 +62,9 @@ fn read(path: impl AsRef<Path>) -> String {
 #[test]
 fn builds_expected_output_structure() {
     let out_dir = output_dir("structure");
+    let app = fixture_project("structure", "mini-app");
 
-    let output = run_build(&fixture_app("mini-app"), &out_dir, &["--title", "Mini App"]);
+    let output = run_build(&app, &out_dir, &["--title", "Mini App"]);
     assert_success(&output);
 
     // Minimum required artifact structure.
@@ -123,14 +136,15 @@ fn builds_expected_output_structure() {
 fn revision_derives_from_emitted_client_artifact() {
     let first_dir = output_dir("revision-first");
     let second_dir = output_dir("revision-second");
+    let app = fixture_project("revision", "mini-app");
 
-    let output = run_build(&fixture_app("mini-app"), &first_dir, &[]);
+    let output = run_build(&app, &first_dir, &[]);
     assert_success(&output);
     let first = emitted_revision(&first_dir);
 
     // Same inputs, deterministic revision.
     let output = run_build(
-        &fixture_app("mini-app"),
+        &app,
         &output_dir("revision-repeat"),
         &[],
     );
@@ -140,7 +154,7 @@ fn revision_derives_from_emitted_client_artifact() {
 
     // A different client entry emits different bytes and a different revision.
     let output = run_build(
-        &fixture_app("mini-app"),
+        &app,
         &second_dir,
         &["--client-entry", "src/client-alt.tsx"],
     );
@@ -160,15 +174,16 @@ fn revision_derives_from_emitted_client_artifact() {
 #[test]
 fn stale_artifacts_are_removed_between_builds() {
     let out_dir = output_dir("clean");
+    let app = fixture_project("clean", "mini-app");
 
-    let output = run_build(&fixture_app("mini-app"), &out_dir, &[]);
+    let output = run_build(&app, &out_dir, &[]);
     assert_success(&output);
 
     let stale = out_dir.join("public/stale-artifact.txt");
     fs::write(&stale, "stale").expect("stale artifact should be writable");
     assert!(stale.is_file());
 
-    let output = run_build(&fixture_app("mini-app"), &out_dir, &[]);
+    let output = run_build(&app, &out_dir, &[]);
     assert_success(&output);
 
     assert!(
@@ -184,8 +199,9 @@ fn stale_artifacts_are_removed_between_builds() {
 #[test]
 fn forbidden_browser_dependency_fails_the_build() {
     let out_dir = output_dir("zod");
+    let app = fixture_project("zod", "zod-app");
 
-    let output = run_build(&fixture_app("zod-app"), &out_dir, &[]);
+    let output = run_build(&app, &out_dir, &[]);
 
     assert!(
         !output.status.success(),
@@ -347,7 +363,7 @@ fn builds_out_of_repo_app_from_installed_plec_package() {
 }
 
 #[test]
-fn staging_failure_names_both_resolution_paths() {
+fn staging_failure_names_installed_package_resolution_path() {
     let project = out_of_repo_project("missing-runtime");
     let app = project.join("mini-app");
     copy_dir_all(&fixture_app("mini-app"), &app);
@@ -363,10 +379,6 @@ fn staging_failure_names_both_resolution_paths() {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("packages/plec-runtime/dist/runtime"),
-        "failure must name the workspace runtime path: {stderr}"
-    );
     assert!(
         stderr.contains("node_modules/plec/dist/runtime"),
         "failure must name the installed-package runtime path: {stderr}"

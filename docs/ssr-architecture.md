@@ -65,7 +65,7 @@ Key property: **server renderer, browser glue, and WASM runtime all walk the exa
 - Emits `plec:adoption` CustomEvent + `onAdoptionDiagnostic` callback with structured outcome/codes — this is how the acceptance test asserts behavior.
 - Standalone (non-router) mounts **never adopt** (`index.ts:382`); adoption is router-only.
 
-### `packages/plec-runtime` (WASM) — the adopter
+### `packages/plec/dist/runtime` (WASM) — the adopter
 
 - `start_adopt` (`runtime/lifecycle.rs:332`): version gate (v3 only) → manifest validation → `adopt_typed_route`.
 - `adopt_typed_route` (`router/navigation.rs:24`): adopts the root graph at path `root`, then walks the matched route chain adopting each child into its outlet element.

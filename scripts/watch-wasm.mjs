@@ -3,13 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { watch } from 'node:fs/promises';
 
-const packageRoot = path.resolve(
+const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
 );
 
-const cratePath = path.join(packageRoot, 'crates', 'plec-runtime');
-const outDir = path.join(packageRoot, 'dist', 'runtime');
+const cratePath = path.join(repoRoot, 'crates', 'plec-runtime');
 
 // Feature/profile from environment
 const profile = process.env.PLEC_RUNTIME_PROFILE ?? 'full';
@@ -56,21 +55,21 @@ for await (const event of watcher) {
 
 async function buildWasm() {
   const buildScript = path.resolve(
-    packageRoot,
-    '..',
-    '..',
+    repoRoot,
+    'packages',
+    'plec',
     'scripts',
-    'build-wasm.mjs',
+    'build-runtime.mjs',
   );
 
-  const args = [cratePath, outDir, '--profile', profile];
+  const args = ['--profile', profile];
   if (features && features.length) {
     args.push('--features', features.join(','));
   }
 
   const proc = spawn('node', [buildScript, ...args], {
     stdio: 'inherit',
-    cwd: packageRoot,
+    cwd: repoRoot,
   });
 
   await new Promise((resolve, reject) => {

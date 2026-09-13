@@ -9,7 +9,7 @@ pub use lifecycle::PlecRuntime;
 ///
 /// `plec workspace artifact provenance` / `plec workspace artifact stale`
 /// read this section out of
-/// `packages/plec-runtime/dist/runtime/runtime_bg.wasm` and
+/// `packages/plec/dist/runtime/runtime_bg.wasm` and
 /// its staged copy under `apps/fullstack/dist/runtime`. The value derives
 /// from the plec-ir constant at compile time, so it cannot drift from the
 /// snapshot schema itself.

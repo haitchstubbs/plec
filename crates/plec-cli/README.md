@@ -200,7 +200,7 @@ Every `workspace` command accepts `--json` for machine-readable output.
 
 Compile the Plec-owned runtime WASM artifact. The WASM runtime is a Plec
 asset, not a consumer asset: applications stage whatever
-`packages/plec-runtime/dist/runtime` contains and never compile it
+`packages/plec/dist/runtime` contains and never compile it
 themselves, so the build entry point lives in the dev frontend rather than
 in `plec build`. The pipeline itself stays in `scripts/build-wasm.mjs`
 (wasm-pack → wasm-tools strip → protocol stamp → brotli sidecars →
@@ -257,7 +257,7 @@ failure — query the capture instead.
 ## `plec workspace artifact provenance` / `plec workspace artifact stale`
 
 The runtime flows through a pipeline — source crate → wasm-pack →
-`packages/plec-runtime/dist/runtime` → staged copy in
+`packages/plec/dist/runtime` → staged copy in
 `apps/fullstack/dist/public/runtime` — and sessions keep tripping over
 "am I testing source, package dist, or staged dist?". Two staleness shapes
 are checked:

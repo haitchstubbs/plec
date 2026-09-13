@@ -6459,12 +6459,6 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"plec-runtime@workspace:packages/plec-runtime":
-  version: 0.0.0-use.local
-  resolution: "plec-runtime@workspace:packages/plec-runtime"
-  languageName: unknown
-  linkType: soft
-
 "plec@workspace:*, plec@workspace:packages/plec":
   version: 0.0.0-use.local
   resolution: "plec@workspace:packages/plec"

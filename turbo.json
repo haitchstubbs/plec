@@ -9,20 +9,8 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**", "build/**"]
     },
-    "plec-runtime#build": {
-      "dependsOn": ["^build"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "../../Cargo.lock",
-        "../../Cargo.toml",
-        "../../crates/plec-ir/**",
-        "../../crates/plec-runtime/**",
-        "../../scripts/build-wasm.mjs"
-      ],
-      "outputs": ["dist/**"]
-    },
     "plec#build": {
-      "dependsOn": ["plec-browser#build", "plec-runtime#build"],
+      "dependsOn": ["plec-browser#build"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "../../Cargo.lock",

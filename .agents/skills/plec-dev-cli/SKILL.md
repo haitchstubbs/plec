@@ -65,7 +65,7 @@ Must pass before running the suites. Intentional legacy fixtures are marked
 runtime and verify the built binaries:
 
 ```bash
-yarn workspace plec-runtime build:wasm
+yarn workspace plec build:wasm
 plec workspace artifact stale
 ```
 

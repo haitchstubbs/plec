@@ -1,14 +1,9 @@
 //! Stage the prebuilt Plec runtime assets into the application output.
 //!
-//! Resolution order:
-//! 1. the workspace runtime build
-//!    (`<repo_root>/packages/plec-runtime/dist/runtime`) — the canonical,
-//!    freshness-audited in-workspace source;
-//! 2. the installed `plec` package's staged assets
-//!    (`<nearest node_modules>/plec/dist/runtime`), resolved npm-style by
-//!    walking up from the application directory, for applications built
-//!    outside the monorepo where the runtime arrives as a release-artifact
-//!    dependency.
+//! Runtime assets come from the installed `plec` package
+//! (`<nearest node_modules>/plec/dist/runtime`), resolved npm-style by walking
+//! up from the application directory. This keeps monorepo applications on the
+//! same release artifact surface as external consumers.
 //!
 //! The selected directory's runtime asset tree is a supply-chain boundary:
 //! every staged file is canonicalized and must resolve inside the selected
@@ -34,26 +29,15 @@ struct Provenance {
 
 pub fn stage(
     app_dir: &Path,
-    repo_root: &Path,
     out_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let workspace_dir = repo_root
-        .join("packages")
-        .join("plec-runtime")
-        .join("dist")
-        .join("runtime");
-
-    let source_dir = if has_runtime_binaries(&workspace_dir) {
-        workspace_dir
-    } else if let Some(packaged) = packaged_runtime_dir(app_dir) {
+    let source_dir = if let Some(packaged) = packaged_runtime_dir(app_dir) {
         packaged
     } else {
         return Err(format!(
-            "Plec runtime artifact not found — looked in:\n  1. {} (workspace runtime \
-             build; compile it with `yarn workspace plec-runtime build`)\n  2. \
+            "Plec runtime artifact not found — looked in:\n  \
              node_modules/plec/dist/runtime in or above {} (installed plec package)\n\
-             Provide one of these before building.",
-            workspace_dir.display(),
+             Build the release artifact with `yarn workspace plec build` before building.",
             app_dir.display(),
         )
         .into());
@@ -174,7 +158,7 @@ fn verify_provenance(
     let raw = contained_bytes(&provenance_path, boundary, "provenance.json").map_err(|_| {
         format!(
             "runtime provenance record not found at {} — rebuild the runtime with \
-             `plec workspace compile` (dev frontend) or `yarn workspace plec-runtime build`",
+              `plec workspace compile` (dev frontend) or `yarn workspace plec build:wasm`",
             provenance_path.display()
         )
     })?;
@@ -220,13 +204,12 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    /// Write a runtime asset tree at the workspace layout
-    /// (`<repo>/packages/plec-runtime/dist/runtime`) whose binaries carry
-    /// real provenance digests.
-    fn write_runtime_source(repo: &Path, js: &str, wasm: &[u8]) {
-        let runtime = repo
-            .join("packages")
-            .join("plec-runtime")
+    /// Write a runtime asset tree at the installed package layout whose
+    /// binaries carry real provenance digests.
+    fn write_runtime_source(app: &Path, js: &str, wasm: &[u8]) {
+        let runtime = app
+            .join("node_modules")
+            .join("plec")
             .join("dist")
             .join("runtime");
         fs::create_dir_all(&runtime).expect("runtime dir");
@@ -243,8 +226,8 @@ mod tests {
 
     #[test]
     fn stages_verified_runtime_assets_and_sidecars() {
-        let dir = tempfile::tempdir().expect("dir");
-        write_runtime_source(dir.path(), "runtime glue", b"\0asm\x01\x00\x00\x00");
+        let app = tempfile::tempdir().expect("app dir");
+        write_runtime_source(app.path(), "runtime glue", b"\0asm\x01\x00\x00\x00");
         // A valid sidecar: Brotli bytes of the verified runtime.js.
         let mut compressed = Vec::new();
         brotli::BrotliCompress(
@@ -254,18 +237,15 @@ mod tests {
         )
         .expect("compress");
         fs::write(
-            dir.path()
-                .join("packages/plec-runtime/dist/runtime/runtime.js.br"),
+            app.path()
+                .join("node_modules/plec/dist/runtime/runtime.js.br"),
             compressed,
         )
         .expect("sidecar");
 
-        // Stage from the workspace layout the source fixtures create.
-        let repo = dir.path();
-        let app = tempfile::tempdir().expect("app dir");
         let out = tempfile::tempdir().expect("out dir");
 
-        stage(app.path(), repo, out.path()).expect("staging succeeds");
+        stage(app.path(), out.path()).expect("staging succeeds");
 
         let staged = out.path().join("runtime");
         assert_eq!(
@@ -283,8 +263,8 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn rejects_symlinks_that_escape_the_runtime_directory() {
-        let dir = tempfile::tempdir().expect("dir");
-        write_runtime_source(dir.path(), "runtime glue", b"\0asm\x01\x00\x00\x00");
+        let app = tempfile::tempdir().expect("app dir");
+        write_runtime_source(app.path(), "runtime glue", b"\0asm\x01\x00\x00\x00");
 
         let outside = tempfile::tempdir().expect("outside dir");
         fs::write(outside.path().join("escape.wasm"), b"hostile").expect("outside wasm");
@@ -292,8 +272,8 @@ mod tests {
         // Replace the real binary with a symlink that leaves the runtime
         // directory.
         fs::remove_file(
-            dir.path()
-                .join("packages/plec-runtime/dist/runtime/runtime_bg.wasm"),
+            app.path()
+                .join("node_modules/plec/dist/runtime/runtime_bg.wasm"),
         )
         .expect("remove real binary");
 
@@ -301,16 +281,15 @@ mod tests {
         {
             std::os::unix::fs::symlink(
                 outside.path().join("escape.wasm"),
-                dir.path()
-                    .join("packages/plec-runtime/dist/runtime/runtime_bg.wasm"),
+                app.path()
+                    .join("node_modules/plec/dist/runtime/runtime_bg.wasm"),
             )
             .expect("symlink");
         }
 
-        let app = tempfile::tempdir().expect("app dir");
         let out = tempfile::tempdir().expect("out dir");
 
-        let error = stage(app.path(), dir.path(), out.path()).expect_err("must fail");
+        let error = stage(app.path(), out.path()).expect_err("must fail");
         let message = error.to_string();
         assert!(
             message.contains("outside the selected runtime directory"),
@@ -324,11 +303,11 @@ mod tests {
 
     #[test]
     fn rejects_a_missing_provenance_record() {
-        let dir = tempfile::tempdir().expect("dir");
-        let runtime = dir
+        let app = tempfile::tempdir().expect("app dir");
+        let runtime = app
             .path()
-            .join("packages")
-            .join("plec-runtime")
+            .join("node_modules")
+            .join("plec")
             .join("dist")
             .join("runtime");
         fs::create_dir_all(&runtime).expect("runtime dir");
@@ -337,10 +316,9 @@ mod tests {
             .expect("runtime_bg.wasm");
         // No provenance.json.
 
-        let app = tempfile::tempdir().expect("app dir");
         let out = tempfile::tempdir().expect("out dir");
 
-        let error = stage(app.path(), dir.path(), out.path()).expect_err("must fail");
+        let error = stage(app.path(), out.path()).expect_err("must fail");
         let message = error.to_string();
         assert!(
             message.contains("provenance record not found"),
@@ -350,21 +328,20 @@ mod tests {
 
     #[test]
     fn rejects_a_provenance_hash_mismatch() {
-        let dir = tempfile::tempdir().expect("dir");
-        write_runtime_source(dir.path(), "runtime glue", b"\0asm\x01\x00\x00\x00");
+        let app = tempfile::tempdir().expect("app dir");
+        write_runtime_source(app.path(), "runtime glue", b"\0asm\x01\x00\x00\x00");
 
         // Tamper with a verified binary after writing provenance.
         fs::write(
-            dir.path()
-                .join("packages/plec-runtime/dist/runtime/runtime_bg.wasm"),
+            app.path()
+                .join("node_modules/plec/dist/runtime/runtime_bg.wasm"),
             b"\0asm\x01\x00\x00\x00tampered",
         )
         .expect("tampered wasm");
 
-        let app = tempfile::tempdir().expect("app dir");
         let out = tempfile::tempdir().expect("out dir");
 
-        let error = stage(app.path(), dir.path(), out.path()).expect_err("must fail");
+        let error = stage(app.path(), out.path()).expect_err("must fail");
         let message = error.to_string();
         assert!(
             message.contains("provenance hash mismatch for runtime_bg.wasm"),
@@ -374,8 +351,8 @@ mod tests {
 
     #[test]
     fn rejects_a_sidecar_that_does_not_round_trip_the_verified_binary() {
-        let dir = tempfile::tempdir().expect("dir");
-        write_runtime_source(dir.path(), "runtime glue", b"\0asm\x01\x00\x00\x00");
+        let app = tempfile::tempdir().expect("app dir");
+        write_runtime_source(app.path(), "runtime glue", b"\0asm\x01\x00\x00\x00");
 
         // Valid Brotli of different bytes than runtime.js carries.
         let mut compressed = Vec::new();
@@ -386,16 +363,15 @@ mod tests {
         )
         .expect("compress");
         fs::write(
-            dir.path()
-                .join("packages/plec-runtime/dist/runtime/runtime.js.br"),
+            app.path()
+                .join("node_modules/plec/dist/runtime/runtime.js.br"),
             compressed,
         )
         .expect("sidecar");
 
-        let app = tempfile::tempdir().expect("app dir");
         let out = tempfile::tempdir().expect("out dir");
 
-        let error = stage(app.path(), dir.path(), out.path()).expect_err("must fail");
+        let error = stage(app.path(), out.path()).expect_err("must fail");
         let message = error.to_string();
         assert!(
             message.contains("does not match the verified runtime.js bytes"),

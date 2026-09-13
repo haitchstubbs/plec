@@ -97,7 +97,7 @@ That distinction makes application behavior inspectable before it runs. A graph 
 
 Plec is not an attempt to replace JavaScript with WebAssembly.
 
-WebAssembly is an implementation detail of the runtime. Today both halves are Rust: application source compiles through the Rust pipeline in `crates/*`, and the executor ships as the Rust runtime compiled to WebAssembly (`packages/plec-runtime`).
+WebAssembly is an implementation detail of the runtime. Today both halves are Rust: application source compiles through the Rust pipeline in `crates/*`, and the executor ships as the Rust runtime compiled to WebAssembly in `packages/plec/dist/runtime`.
 
 The larger idea is to change the boundary between application source and application execution:
 

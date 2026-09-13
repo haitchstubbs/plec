@@ -55,5 +55,21 @@ yarn workspace plec test
 yarn workspace plec typecheck
 ```
 
-This package is client-side TypeScript; it contains no server code. Browser
-startup (`startPlecRouter`) lives in [`plec-browser`](../plec-browser).
+## Runtime development
+
+The Rust runtime crate remains [`crates/plec-runtime`](../../crates/plec-runtime).
+`plec` publishes its validated WASM assets into `dist/runtime`, which is the
+same package directory applications stage from through `node_modules/plec`.
+
+```sh
+yarn workspace plec build:runtime      # cargo check + WASM publish
+yarn workspace plec build:wasm         # WASM publish only
+yarn workspace plec dev:wasm           # watch and republish
+yarn workspace plec test:runtime       # cargo test --lib
+yarn workspace plec test:runtime:core  # cargo test --no-default-features
+yarn workspace plec test:wasm          # browser harness
+```
+
+WASM builds use a temporary release directory, verify hashes, Brotli sidecars,
+and the protocol marker, then publish `dist/runtime` as one complete tree.
+Browser startup (`startPlecRouter`) lives in [`plec-browser`](../plec-browser).

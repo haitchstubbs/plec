@@ -86,7 +86,7 @@ pub fn emit(
         .map_err(|error| BuildError::with_source(stage, "failed to write route artifact", error))?;
 
     let host_components = collect_host_components(&bundle);
-    stage_runtime(app_dir, repo_root, public_dir)?;
+    stage_runtime(app_dir, public_dir)?;
     Ok(ArtifactOutput { host_components })
 }
 
@@ -135,8 +135,8 @@ fn collect_host_components(
 }
 
 /// Stage the prebuilt WASM runtime next to the compiler artifacts.
-fn stage_runtime(app_dir: &Path, repo_root: &Path, public_dir: &Path) -> Result<(), BuildError> {
-    stage(app_dir, repo_root, public_dir).map_err(|error| {
+fn stage_runtime(app_dir: &Path, public_dir: &Path) -> Result<(), BuildError> {
+    stage(app_dir, public_dir).map_err(|error| {
         BuildError::new(
             Stage::Compile,
             format!("failed to stage Plec runtime: {error}"),
