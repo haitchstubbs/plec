@@ -29,7 +29,8 @@
     }
   },
   "scripts": {
-    "build": "node scripts/build-artifact.mjs",
+    "build": "node scripts/build-workspace.mjs",
+    "build:artifact": "node scripts/build-artifact.mjs",
     "build:runtime": "cargo check --locked --manifest-path ../../crates/plec-runtime/Cargo.toml && yarn build:wasm",
     "build:wasm": "node scripts/build-runtime.mjs",
     "dev:wasm": "cd ../.. && node scripts/watch-wasm.mjs",

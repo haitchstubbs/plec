@@ -15,18 +15,15 @@
  * monorepo (workspace protocol, bare workspace-package specifiers) or if a
  * browser entry can pull Node builtins into a client bundle.
  */
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import esbuild from 'esbuild';
-
-const packageDir = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-);
-const repoRoot = path.resolve(packageDir, '..', '..');
-const distDir = path.join(packageDir, 'dist');
+import {
+  buildWorkspaceSurface,
+  distDir,
+  packageDir,
+  repoRoot,
+  run,
+} from './build-package.mjs';
 const isWindows = process.platform === 'win32';
 
 // ---------------------------------------------------------------------------
@@ -68,83 +65,7 @@ if (cargoVersion !== packageVersion) {
   process.exit(1);
 }
 
-function run(command, args, options = {}) {
-  execFileSync(command, args, {
-    cwd: repoRoot,
-    stdio: 'inherit',
-    ...options,
-  });
-}
-
-function ensureBuilt(label, markerPath, workspace, script) {
-  if (fs.existsSync(path.join(repoRoot, markerPath))) return;
-  console.log(`Building ${label} (missing ${markerPath})...`);
-  run('yarn', ['workspace', workspace, 'run', script]);
-}
-
-ensureBuilt(
-  'plec-browser',
-  'packages/plec-browser/dist/index.js',
-  'plec-browser',
-  'build',
-);
-console.log('Cleaning previous plec artifact...');
-fs.rmSync(distDir, { recursive: true, force: true });
-ensureBuilt(
-  'plec-runtime WASM',
-  'packages/plec/dist/runtime/runtime_bg.wasm',
-  'plec',
-  'build:wasm',
-);
-ensureBuilt(
-  'plec-node-runtime',
-  'packages/plec-node-runtime/dist/runtime.mjs',
-  'plec-node-runtime',
-  'build',
-);
-
-console.log('Compiling plec (tsc)...');
-run('yarn', ['exec', 'tsc', '-p', 'packages/plec/tsconfig.json']);
-
-const bundleEntries = [
-  {
-    entry: path.join(packageDir, 'src/server.ts'),
-    outfile: path.join(distDir, 'server.js'),
-    // Node builtins stay external; the server entry legitimately runs on Node.
-    platform: 'node',
-  },
-  {
-    entry: path.join(packageDir, 'src/browser.ts'),
-    outfile: path.join(distDir, 'browser.js'),
-    // The browser entry must never pull Node builtins into a client bundle;
-    // platform=browser fails loudly if any source reaches for one.
-    platform: 'browser',
-  },
-];
-for (const { entry, outfile, platform } of bundleEntries) {
-  console.log(`Bundling ${path.basename(outfile)} (${platform})...`);
-  await esbuild.build({
-    entryPoints: [entry],
-    outfile,
-    bundle: true,
-    platform,
-    format: 'esm',
-    sourcemap: false,
-    logLevel: 'warning',
-  });
-}
-
-// The browser re-export declaration must be self-contained: its workspace
-// dependency is a single-file declaration unit, so copy it verbatim.
-console.log('Staging self-contained type declarations...');
-fs.copyFileSync(
-  path.join(repoRoot, 'packages/plec-browser/dist/index.d.ts'),
-  path.join(distDir, 'browser.d.ts'),
-);
-fs.copyFileSync(
-  path.join(repoRoot, 'packages/plec-node-runtime/dist/runtime.mjs'),
-  path.join(distDir, 'node-runtime.mjs'),
-);
+await buildWorkspaceSurface();
 
 console.log(
   'Building release CLI binary (PLEC_CLI_VERSION=release)...',

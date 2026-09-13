@@ -32,9 +32,11 @@ jobs:
           toolchain: 1.98.0
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-${{ runner.os }}-${{ runner.arch }}
-          key: ${{ hashFiles('Cargo.lock', 'cli-tools.json') }}
+          shared-key: ci-v2-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**/*.toml', 'crates/**/*.rs', 'cli-tools.json') }}
           cache-bin: true
+          cache-workspace-crates: true
+          save-if: false
       - name: Install dependencies
         run: yarn install --immutable
       - name: Check formatting
@@ -62,9 +64,10 @@ jobs:
           toolchain: 1.98.0
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-${{ runner.os }}-${{ runner.arch }}
-          key: ${{ hashFiles('Cargo.lock', 'cli-tools.json') }}
+          shared-key: ci-v2-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**/*.toml', 'crates/**/*.rs', 'cli-tools.json') }}
           cache-bin: true
+          cache-workspace-crates: true
       - name: Restore pinned tools and browser assets
         uses: actions/cache@v4
         with:
@@ -94,4 +97,46 @@ jobs:
           PLEC_BIN: ${{ github.workspace }}/target/debug/plec
         run: yarn test:wasm
       - name: Build and test E2E
+        env:
+          PLEC_BIN: ${{ github.workspace }}/target/debug/plec
         run: yarn turbo run build test:e2e
+
+  artifact:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: required
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - name: Enable Corepack
+        run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: yarn
+          cache-dependency-path: yarn.lock
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-v2-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**/*.toml', 'crates/**/*.rs', 'cli-tools.json') }}
+          cache-bin: true
+          cache-workspace-crates: true
+          save-if: false
+      - name: Restore pinned tools and browser assets
+        uses: actions/cache@v4
+        with:
+          path: |
+            .tools
+            .cache/ms-playwright
+          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cli-tools.json') }}
+      - name: Install dependencies
+        run: yarn install --immutable
+      - name: Install build tools
+        run: yarn install:build-tools
+      - name: Build release artifact
+        run: yarn workspace plec build:artifact

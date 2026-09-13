@@ -65,7 +65,7 @@ function fail(searched) {
   for (const { label, path: candidate } of searched)
     console.error(`plec:   - ${candidate} (${label})`);
   console.error(
-    'plec: build the CLI from source: `yarn workspace plec build` copies the release binary into the artifact (PLEC_CLI_VERSION in .env.plec selects the variant).',
+    'plec: build the CLI from source: `yarn workspace plec build:artifact` copies the release binary into the artifact (PLEC_CLI_VERSION in .env.plec selects the variant).',
   );
   console.error(
     'plec: or install it globally: `yarn install:plec-cli:dev` (dev variant, includes the `workspace` command group).',

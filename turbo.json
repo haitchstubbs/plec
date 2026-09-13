@@ -22,6 +22,7 @@
     "fullstack#build": {
       "cache": false,
       "dependsOn": ["plec#build"],
+      "env": ["PLEC_BIN"],
       "outputs": ["dist/**"]
     },
     "test": {
