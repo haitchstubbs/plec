@@ -23,6 +23,7 @@ pub mod markers;
 pub mod repo;
 pub mod trace;
 pub mod verify;
+pub mod version;
 pub mod wasm_section;
 pub mod wasmtest;
 
@@ -122,6 +123,17 @@ pub enum WorkspaceCommand {
     Markers {
         #[command(subcommand)]
         command: MarkersCommand,
+    },
+
+    /// Show, set, or verify the Plec product SemVer.
+    Version {
+        /// Set the product version in every authoritative declaration.
+        #[arg(long, value_name = "SEMVER")]
+        set: Option<String>,
+
+        /// Only verify version consistency; never modify files.
+        #[arg(long)]
+        check: bool,
     },
 }
 
@@ -372,6 +384,7 @@ pub fn dispatch(command: WorkspaceCommand) -> Result<(), String> {
         WorkspaceCommand::Verify { command } => dispatch_verify(&repo, command),
         WorkspaceCommand::Graph { command } => dispatch_graph(&repo, command),
         WorkspaceCommand::Markers { command } => dispatch_markers(&repo, command),
+        WorkspaceCommand::Version { set, check } => version::run(&repo, set, check),
     }
 }
 

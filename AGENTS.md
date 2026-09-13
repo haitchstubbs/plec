@@ -211,6 +211,7 @@ plec workspace test wasm [filters] [--failures]
 plec workspace test last [--failure <substr>]
 plec workspace contract ssr [--check]
 plec workspace contract limits [--write]
+plec workspace version [--set <semver> | --check]
 plec workspace trace <symbol|error-code>
 plec workspace impact <symbol|protocol-constant>
 plec workspace artifact provenance runtime

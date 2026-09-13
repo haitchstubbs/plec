@@ -15,7 +15,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | wasm-runtime-1nw | Bound mount recursion depth for deep acyclic node graphs | closed | P2 | task | haitchstubbs |  |
 | **wasm-runtime-1wj** | **packages/plec: the release package — source-buildable CLI + framework toolkit** | open | P1 | epic | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.1 | packages/plec release-package layout: self-contained artifact build | closed | P1 | task | haitchstubbs |  |
-| &nbsp;&nbsp;↳ wasm-runtime-1wj.10 | Implement canonical Plec SemVer release versioning | open | P2 | task | haitchstubbs |  |
+| &nbsp;&nbsp;↳ wasm-runtime-1wj.10 | Implement canonical Plec SemVer release versioning | closed | P2 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.2 | Rename internal plec dev group to plec workspace | closed | P2 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.3 | Out-of-repo plec build: runtime staging + esbuild from the app's node_modules | closed | P1 | feature | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.4 | bin shim: plec command owned by packages/plec | closed | P2 | task | haitchstubbs |  |

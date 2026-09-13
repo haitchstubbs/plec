@@ -1978,6 +1978,7 @@ dependencies = [
  "plec-parser",
  "plec-server",
  "pollster",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
