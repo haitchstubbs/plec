@@ -32,6 +32,16 @@ pub struct BuildOptions {
     pub styles_href: Option<String>,
     /// Font preload URLs; CLI flags or `plec.toml`.
     pub preloads: Vec<String>,
+    /// Runtime asset resolution policy. Auto preserves workspace development
+    /// behavior; Package is used when dogfooding the release artifact.
+    pub runtime_source: RuntimeSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RuntimeSource {
+    #[default]
+    Auto,
+    Package,
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +188,7 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
         &public_dir,
         &host_config.host_imports,
         &host_config.custom_elements,
+        options.runtime_source,
     )?;
 
     let automatic_providers = artifacts

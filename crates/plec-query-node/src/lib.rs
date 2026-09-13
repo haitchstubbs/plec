@@ -90,10 +90,7 @@ pub fn cmp(
     dialect: Option<String>,
 ) -> napi::Result<serde_json::Value> {
     let dialect = query_core::Dialect::parse(dialect.as_deref().unwrap_or("postgres"));
-    out(
-        query_core::cmp_for_dialect(sv(left)?, operator, sv(right)?, &dialect)
-            .map_err(core_err)?,
-    )
+    out(query_core::cmp_for_dialect(sv(left)?, operator, sv(right)?, &dialect).map_err(core_err)?)
 }
 
 #[napi]
@@ -235,10 +232,7 @@ pub fn over_clause(
     let order_by: Vec<query_core::WindowOrderItem> =
         serde_json::from_value(order_by).map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let dialect = query_core::Dialect::parse(&dialect);
-    out(
-        query_core::over_clause(sq(query)?, partition_by, order_by, &dialect)
-            .map_err(core_err)?,
-    )
+    out(query_core::over_clause(sq(query)?, partition_by, order_by, &dialect).map_err(core_err)?)
 }
 
 // ─── Builder — utility ────────────────────────────────────────────────────────

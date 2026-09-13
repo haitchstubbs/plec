@@ -1,7 +1,7 @@
-use crate::prelude::*;
 use crate::cookie::TypedPendingCookie;
 #[cfg(feature = "fetch")]
 use crate::fetch::TypedPendingFetch;
+use crate::prelude::*;
 use crate::runtime::TypedRoutePhase;
 use plec_schema::typed::TypedActionInstruction;
 

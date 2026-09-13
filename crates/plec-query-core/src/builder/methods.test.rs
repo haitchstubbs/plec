@@ -727,8 +727,8 @@ fn dml_qualified_table_names_render_as_identifier_parts() {
             )
         })
         .unwrap();
-    let delete = builder_delete_from(&builder_new(Some("duckdb")), "platform.reps".to_string())
-        .unwrap();
+    let delete =
+        builder_delete_from(&builder_new(Some("duckdb")), "platform.reps".to_string()).unwrap();
 
     assert_eq!(
         parse_query(builder_query(&insert).unwrap()).text,

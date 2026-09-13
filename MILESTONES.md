@@ -22,7 +22,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.5 | plec init + application template | in_progress | P1 | feature | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.6 | plec dev — consumer watch + serve loop | open | P1 | feature |  |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.7 | Docs: install-from-source workflow for the release package | open | P2 | task |  |  |
-| &nbsp;&nbsp;↳ wasm-runtime-1wj.8 | apps/fullstack as the canonical example built from real release assets | open | P1 | task |  |  |
+| &nbsp;&nbsp;↳ wasm-runtime-1wj.8 | apps/fullstack as the canonical example built from real release assets | closed | P1 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.9 | Eliminate the plec-runtime staging workspace package | in_progress | P1 | task | haitchstubbs |  |
 | wasm-runtime-2fl | Sync cookie policy denial silently falls back to host inputs | closed | P1 | bug | haitchstubbs |  |
 | wasm-runtime-43g | Split plec-runtime into plec-dom/plec-eval/plec-client/plec-router crates | closed | P1 | task |  |  |
@@ -61,7 +61,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | wasm-runtime-buy | Remove or implement crates/plec-diagnostics stub | closed | P3 | chore |  |  |
 | wasm-runtime-ctb | plec dev graph resolve/tree: registry resolution debugger | closed | P2 | feature | haitchstubbs |  |
 | wasm-runtime-d5q | Make loader error retry acceptance deterministic with SSR | closed | P2 | task | haitchstubbs |  |
-| wasm-runtime-dvs | plec dev context <domain>: condensed architecture packets for agents | open | P3 | feature |  |  |
+| wasm-runtime-dvs | plec dev context <domain>: condensed architecture packets for agents | closed | P3 | feature | haitchstubbs |  |
 | wasm-runtime-e7f | Move WASM test orchestration under packages/plec-e2e Playwright ownership | open | P3 | chore |  |  |
 | wasm-runtime-e92 | test:core fails to compile: typed/vm.rs unit test reads .body on () without fetch feature | closed | P2 | bug | haitchstubbs |  |
 | wasm-runtime-f93 | Navigation froze location-derived component props (sidebar aria-current stuck on first-load page) | closed | P1 | bug |  |  |

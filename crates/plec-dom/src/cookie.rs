@@ -34,7 +34,12 @@ pub fn read_sync_cookie(
     // artifact-declared capabilities never grant authority on their own.
     let allowed = policy
         .and_then(|entries| entries.get(name))
-        .is_some_and(|entry| entry.operations.iter().any(|operation| operation == "getSync"));
+        .is_some_and(|entry| {
+            entry
+                .operations
+                .iter()
+                .any(|operation| operation == "getSync")
+        });
     if !allowed {
         return Err(JsValue::from_str(
             "cookie operation denied by runtime policy",

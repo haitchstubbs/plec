@@ -307,9 +307,7 @@ pub fn print_provenance(report: &ProvenanceReport, repo: &Repo) -> bool {
         }
     } else {
         println!("\npackage dist provenance");
-        println!(
-            "  provenance.json       missing — rebuild (yarn workspace plec build:wasm)"
-        );
+        println!("  provenance.json       missing — rebuild (yarn workspace plec build:wasm)");
     }
 
     for layer in [&report.dist, &report.staged] {

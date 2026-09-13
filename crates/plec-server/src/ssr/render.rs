@@ -300,15 +300,7 @@ fn render_node_bounded(
             children,
         } => {
             if let Some(target) = scope.host_component_props.get(prop) {
-                return render_host_node(
-                    app,
-                    component_index,
-                    index,
-                    target,
-                    props,
-                    scope,
-                    state,
-                );
+                return render_host_node(app, component_index, index, target, props, scope, state);
             }
             let target = scope.component_props.get(prop).copied();
             render_component_node(
@@ -1084,9 +1076,7 @@ fn evaluate_bounded(
                         }
                         // JS property access: `array.length` / `string.length`
                         // are real values, and SSR expressions rely on them.
-                        (Value::Array(values), Some("length")) => {
-                            number_value(values.len() as f64)
-                        }
+                        (Value::Array(values), Some("length")) => number_value(values.len() as f64),
                         (Value::String(value), Some("length")) => {
                             number_value(value.chars().count() as f64)
                         }
@@ -1238,12 +1228,8 @@ fn evaluate_bounded(
             // Refs are browser-owned values; the SSR host has none, exactly
             // like the runtime's empty ref table.
             ExpressionInstruction::LoadRef { .. } => {
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    Value::Null,
-                ) {
+                if !evaluate_stack_push(&mut stack, &mut stack_sizes, &mut stack_bytes, Value::Null)
+                {
                     return Value::Null;
                 }
             }

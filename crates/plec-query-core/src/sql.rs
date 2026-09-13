@@ -122,8 +122,10 @@ fn to_query_fragment_typed(value: &SqlValue) -> Result<SqlQuery, BuilderError> {
                     "Cannot interpolate an empty array".to_string(),
                 ));
             }
-            let mut builder =
-                SqlQueryBuilder::with_capacity(arr.len().saturating_mul(3), arr.len().saturating_mul(8));
+            let mut builder = SqlQueryBuilder::with_capacity(
+                arr.len().saturating_mul(3),
+                arr.len().saturating_mul(8),
+            );
             for (index, primitive) in arr.iter().enumerate() {
                 if index > 0 {
                     builder.push_text_raw(", ", ", ");
@@ -172,8 +174,10 @@ pub fn raw(text: String) -> SqlRaw {
 /// Join a list of SqlValues with a separator (default: ", ").
 pub fn join(items: Vec<SqlValue>, separator: Option<String>) -> Result<SqlQuery, String> {
     let sep = separator.unwrap_or_else(|| ", ".to_string());
-    let mut builder =
-        SqlQueryBuilder::with_capacity(items.len().saturating_mul(8), items.len().saturating_mul(8));
+    let mut builder = SqlQueryBuilder::with_capacity(
+        items.len().saturating_mul(8),
+        items.len().saturating_mul(8),
+    );
 
     for (i, item) in items.iter().enumerate() {
         if i > 0 {
@@ -199,7 +203,9 @@ pub fn sql(strings: Vec<String>, exprs: Vec<SqlValue>) -> Result<SqlQuery, Strin
         if i >= exprs.len() {
             continue;
         }
-        builder.push_value(&exprs[i]).map_err(|err| err.to_string())?;
+        builder
+            .push_value(&exprs[i])
+            .map_err(|err| err.to_string())?;
     }
 
     Ok(builder.finish())

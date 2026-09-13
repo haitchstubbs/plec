@@ -3,7 +3,7 @@ use crate::dev;
 use clap::{Parser, Subcommand};
 use plec_build::{
     build, modules::host::resolve_custom_elements, modules::host::resolve_host_imports,
-    BuildOptions,
+    BuildOptions, RuntimeSource,
 };
 use plec_compiler::{
     compile_with_options, load_with_options, lower_route_manifest, lower_routes, CompilerOptions,
@@ -56,6 +56,9 @@ enum Command {
         /// Skip minification of browser/server bundles.
         #[arg(long)]
         no_optimize: bool,
+
+        #[arg(long, value_enum, default_value_t = RuntimeSourceArg::Auto)]
+        runtime_source: RuntimeSourceArg,
     },
 
     /// Serve a built Plec application with the native host.
@@ -125,6 +128,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             server_entry,
             title,
             no_optimize,
+            runtime_source,
         } => {
             let result = build(BuildOptions {
                 source,
@@ -136,6 +140,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 description: None,
                 styles_href: None,
                 preloads: Vec::new(),
+                runtime_source: runtime_source.into(),
             })?;
             println!(
                 "Plec build complete (revision {}) in {}",
@@ -163,6 +168,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum RuntimeSourceArg {
+    Auto,
+    Package,
+}
+
+impl From<RuntimeSourceArg> for RuntimeSource {
+    fn from(value: RuntimeSourceArg) -> Self {
+        match value {
+            RuntimeSourceArg::Auto => RuntimeSource::Auto,
+            RuntimeSourceArg::Package => RuntimeSource::Package,
+        }
+    }
 }
 
 fn compiler_options_for_source(

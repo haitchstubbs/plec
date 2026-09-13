@@ -171,7 +171,8 @@ fn visit_module(
             );
             continue;
         }
-        let Some((resolved, target_scope)) = resolve_module(&specifier, &absolute, scope_root, workspace)?
+        let Some((resolved, target_scope)) =
+            resolve_module(&specifier, &absolute, scope_root, workspace)?
         else {
             continue;
         };
@@ -227,8 +228,7 @@ fn resolve_module(
 
         let base = parent.join(specifier);
 
-        return Ok(resolve_source_candidate(&base)
-            .map(|path| (path, from_scope.to_path_buf())));
+        return Ok(resolve_source_candidate(&base).map(|path| (path, from_scope.to_path_buf())));
     }
 
     if let Some((path, package_dir)) = resolve_workspace_module(specifier, workspace)? {
@@ -238,9 +238,8 @@ fn resolve_module(
     // External dependency sources are not part of the source graph today;
     // when this hook gains a real resolver it must also decide which
     // containment scope those sources belong to.
-    resolve_dependency_module(specifier, from_file).map(|resolved| {
-        resolved.map(|path| (path, from_scope.to_path_buf()))
-    })
+    resolve_dependency_module(specifier, from_file)
+        .map(|resolved| resolved.map(|path| (path, from_scope.to_path_buf())))
 }
 
 /// Resolve authored source files using the same general preference as the
@@ -443,7 +442,8 @@ fn read_workspace_manifest(manifest: &Path) -> Result<Value, String> {
     }
     let source = fs::read_to_string(manifest)
         .map_err(|error| format!("Failed to read {}: {error}", manifest.display()))?;
-    serde_json::from_str(&source).map_err(|error| format!("Invalid {}: {error}", manifest.display()))
+    serde_json::from_str(&source)
+        .map_err(|error| format!("Invalid {}: {error}", manifest.display()))
 }
 
 /// Resolve a bare import to a workspace package source file.
@@ -608,10 +608,9 @@ mod tests {
             "export const Mark = () => <svg><path d=\"M0 0\" /></svg>;",
         );
         let index = WorkspaceIndex::load(repo.path()).unwrap();
-        let (resolved, package_scope) =
-            resolve_workspace_module("@scope/icons/icons/mark", &index)
-                .unwrap()
-                .expect("wildcard export should resolve");
+        let (resolved, package_scope) = resolve_workspace_module("@scope/icons/icons/mark", &index)
+            .unwrap()
+            .expect("wildcard export should resolve");
         assert_eq!(
             resolved,
             fs::canonicalize(repo.path().join("packages/icons/src/icons/mark.tsx")).unwrap()

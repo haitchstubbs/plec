@@ -118,9 +118,7 @@ mod tests {
             .expect_err("over-wide component should be rejected");
 
         assert!(
-            error
-                .0
-                .contains("exceeds the maximum length"),
+            error.0.contains("exceeds the maximum length"),
             "{}",
             error.0
         );
@@ -155,10 +153,6 @@ mod tests {
         let error = super::lower_application_to_executable(&application)
             .expect_err("component count exhaustion should be rejected");
 
-        assert!(
-            error.0.contains("maximum component count"),
-            "{}",
-            error.0
-        );
+        assert!(error.0.contains("maximum component count"), "{}", error.0);
     }
 }

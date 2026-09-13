@@ -105,18 +105,12 @@ mod tests {
             custom_elements: Default::default(),
         };
 
-        let source_graph = read_source_graph_with_options(
-            &entry,
-            temp.path(),
-            temp.path(),
-            &options,
-        )
-        .expect("host source graph resolves");
-        let semantic_graph = plec_model::build_semantic_graph(
-            &source_graph.modules,
-            &source_graph.resolved_imports,
-        )
-        .expect("semantic graph builds");
+        let source_graph =
+            read_source_graph_with_options(&entry, temp.path(), temp.path(), &options)
+                .expect("host source graph resolves");
+        let semantic_graph =
+            plec_model::build_semantic_graph(&source_graph.modules, &source_graph.resolved_imports)
+                .expect("semantic graph builds");
         let root = discover_root_component(
             &source_graph.modules,
             &semantic_graph,

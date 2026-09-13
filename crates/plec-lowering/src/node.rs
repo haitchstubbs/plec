@@ -331,7 +331,10 @@ impl Ctx<'_> {
                                     },
                                     BTreeSet::new(),
                                 ),
-                                ComponentTarget::Host { provider, component } => (
+                                ComponentTarget::Host {
+                                    provider,
+                                    component,
+                                } => (
                                     name.clone(),
                                     ComponentProp::Component {
                                         name: self.string(&name),

@@ -19,11 +19,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
         return Err(JsValue::from_str("missing:ssr-root-graph"));
     }
     let root_id = graph_instance_id(None, "main", None);
-    let root_loader_data = state
-        .typed_host_inputs
-        .borrow()
-        .get("loaderData")
-        .cloned();
+    let root_loader_data = state.typed_host_inputs.borrow().get("loaderData").cloned();
     adopt_typed_graph(
         state,
         root_id.clone(),

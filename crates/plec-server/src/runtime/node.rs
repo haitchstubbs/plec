@@ -364,7 +364,9 @@ impl ApplicationRuntime for NodeApplicationRuntime {
                 "component": request.component,
                 "props": request.props,
             }))
-            .map_err(|error| ServerError::message(format!("host render request serialization failed: {error}")))?;
+            .map_err(|error| {
+                ServerError::message(format!("host render request serialization failed: {error}"))
+            })?;
             let internal = dispatch_internal(
                 &self.process.address,
                 &self.process.token,
@@ -383,19 +385,19 @@ impl ApplicationRuntime for NodeApplicationRuntime {
                 return Ok(None);
             }
             if internal.status != StatusCode::OK {
-                return Err(self.process.failed(format!(
-                    "host render returned {}",
-                    internal.status
-                )));
+                return Err(self
+                    .process
+                    .failed(format!("host render returned {}", internal.status)));
             }
             #[derive(serde::Deserialize)]
             struct HostRenderResponse {
                 html: String,
             }
-            let response: HostRenderResponse = serde_json::from_slice(&internal.body).map_err(|_| {
-                self.process
-                    .failed("host render returned an invalid response")
-            })?;
+            let response: HostRenderResponse =
+                serde_json::from_slice(&internal.body).map_err(|_| {
+                    self.process
+                        .failed("host render returned an invalid response")
+                })?;
             if response.html.len() > plec_ir::limits::MAX_PROVIDER_MANIFEST_JSON_BYTES {
                 return Err(self
                     .process

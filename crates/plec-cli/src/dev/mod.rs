@@ -13,6 +13,7 @@
 pub mod artifact;
 pub mod cli;
 pub mod compile;
+pub mod context;
 pub mod contract;
 pub mod doctor;
 pub mod graph;
@@ -63,6 +64,17 @@ pub enum WorkspaceCommand {
     Contract {
         #[command(subcommand)]
         command: ContractCommand,
+    },
+
+    /// Emit a condensed architecture packet for a workspace domain.
+    Context {
+        /// Domain to inspect: ssr-adoption, routing, typed-events, cookies, artifacts.
+        #[arg(value_enum)]
+        domain: context::Domain,
+
+        /// Print the packet as JSON.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Categorized search for a symbol or adoption error code.
@@ -255,6 +267,19 @@ pub fn dispatch(command: WorkspaceCommand) -> Result<(), String> {
         WorkspaceCommand::Test { command } => dispatch_test(&repo, command),
         WorkspaceCommand::Artifact { command } => dispatch_artifact(&repo, command),
         WorkspaceCommand::Contract { command } => dispatch_contract(&repo, command),
+        WorkspaceCommand::Context { domain, json } => {
+            let report = context::build(&repo, domain)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report)
+                        .map_err(|error| format!("serialize context report: {error}"))?
+                );
+            } else {
+                context::print_report(&report);
+            }
+            Ok(())
+        }
         WorkspaceCommand::Trace { query, json } => {
             let report = trace::trace(&repo, &query);
             if json {
