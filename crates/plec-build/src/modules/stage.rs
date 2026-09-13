@@ -1,9 +1,8 @@
 //! Stage the prebuilt Plec runtime assets into the application output.
 //!
-//! Runtime assets resolve from the workspace in Auto mode, then from the
-//! installed `plec` package (`<nearest node_modules>/plec/dist/runtime`) by
-//! walking up from the application directory. Package mode always selects the
-//! installed release surface.
+//! Runtime assets resolve from the installed `plec` package
+//! (`<nearest node_modules>/plec/dist/runtime`) by walking up from the
+//! application directory.
 //!
 //! The selected directory's runtime asset tree is a supply-chain boundary:
 //! every staged file is canonicalized and must resolve inside the selected
@@ -31,15 +30,11 @@ use super::build::RuntimeSource;
 
 pub fn stage(
     app_dir: &Path,
-    repo_root: &Path,
+    _repo_root: &Path,
     out_dir: &Path,
-    runtime_source: RuntimeSource,
+    _runtime_source: RuntimeSource,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let source_dir = if runtime_source == RuntimeSource::Auto {
-        workspace_runtime_dir(repo_root).or_else(|| packaged_runtime_dir(app_dir))
-    } else {
-        packaged_runtime_dir(app_dir)
-    };
+    let source_dir = packaged_runtime_dir(app_dir);
     let source_dir = if let Some(source_dir) = source_dir {
         source_dir
     } else {
@@ -133,11 +128,6 @@ fn packaged_runtime_dir(app_dir: &Path) -> Option<PathBuf> {
                 .join("runtime")
         })
         .find(|candidate| has_runtime_binaries(candidate))
-}
-
-fn workspace_runtime_dir(repo_root: &Path) -> Option<PathBuf> {
-    let candidate = repo_root.join("packages/plec-runtime/dist/runtime");
-    has_runtime_binaries(&candidate).then_some(candidate)
 }
 
 /// Read a runtime asset only after confirming that its fully resolved path
@@ -276,12 +266,16 @@ mod tests {
     }
 
     #[test]
-    fn auto_prefers_workspace_runtime_over_installed_package() {
+    fn auto_uses_installed_package_only() {
         let root = tempfile::tempdir().expect("repo dir");
         let app = root.path().join("apps/fullstack");
         fs::create_dir_all(&app).expect("app dir");
         write_runtime_source(&app, "package runtime", b"package wasm");
-        let workspace = root.path().join("packages/plec-runtime/dist/runtime");
+        let workspace = root
+            .path()
+            .join("packages")
+            .join("plec-runtime")
+            .join("dist/runtime");
         fs::create_dir_all(&workspace).expect("workspace runtime dir");
         fs::write(workspace.join("runtime.js"), "workspace runtime").expect("workspace js");
         fs::write(workspace.join("runtime_bg.wasm"), b"workspace wasm").expect("workspace wasm");
@@ -296,7 +290,7 @@ mod tests {
         stage(&app, root.path(), out.path(), RuntimeSource::Auto).expect("staging succeeds");
         assert_eq!(
             fs::read_to_string(out.path().join("runtime/runtime.js")).expect("staged js"),
-            "workspace runtime"
+            "package runtime"
         );
     }
 

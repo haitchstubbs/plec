@@ -57,6 +57,12 @@ ensureBuilt(
   'plec',
   'build:wasm',
 );
+ensureBuilt(
+  'plec-node-runtime',
+  'packages/plec-node-runtime/dist/runtime.mjs',
+  'plec-node-runtime',
+  'build',
+);
 
 console.log('Compiling plec (tsc)...');
 run('yarn', ['exec', 'tsc', '-p', 'packages/plec/tsconfig.json']);
@@ -95,6 +101,10 @@ console.log('Staging self-contained type declarations...');
 fs.copyFileSync(
   path.join(repoRoot, 'packages/plec-browser/dist/index.d.ts'),
   path.join(distDir, 'browser.d.ts'),
+);
+fs.copyFileSync(
+  path.join(repoRoot, 'packages/plec-node-runtime/dist/runtime.mjs'),
+  path.join(distDir, 'node-runtime.mjs'),
 );
 
 console.log(
@@ -144,6 +154,7 @@ for (const required of [
   'runtime/runtime.js',
   'runtime/runtime.js.br',
   'runtime/provenance.json',
+  'node-runtime.mjs',
   `bin/${binaryName}`,
 ]) {
   if (!fs.existsSync(path.join(distDir, required)))
