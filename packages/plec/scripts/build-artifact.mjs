@@ -29,6 +29,45 @@ const repoRoot = path.resolve(packageDir, '..', '..');
 const distDir = path.join(packageDir, 'dist');
 const isWindows = process.platform === 'win32';
 
+// ---------------------------------------------------------------------------
+// Product-version consistency gate: the release artifact's public metadata
+// (package.json) and the compiled CLI binary describe the same Plec release,
+// so a Cargo/package.json drift must fail before anything is assembled.
+// ---------------------------------------------------------------------------
+function readWorkspaceVersion() {
+  const cargo = fs.readFileSync(
+    path.join(repoRoot, 'Cargo.toml'),
+    'utf8',
+  );
+  let inWorkspacePackage = false;
+  for (const line of cargo.split('\n')) {
+    const section = /^\s*\[([^\]]+)\]/.exec(line);
+    if (section) {
+      inWorkspacePackage = section[1] === 'workspace.package';
+      continue;
+    }
+    if (!inWorkspacePackage) continue;
+    const match = /^\s*version\s*=\s*"([^"]+)"\s*$/.exec(line);
+    if (match) return match[1];
+  }
+  throw new Error(
+    'cannot find [workspace.package] version in Cargo.toml',
+  );
+}
+
+const cargoVersion = readWorkspaceVersion();
+const packageVersion = JSON.parse(
+  fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'),
+).version;
+if (cargoVersion !== packageVersion) {
+  console.error(
+    `Plec product version mismatch: Cargo workspace declares ${cargoVersion}, ` +
+      `packages/plec declares ${packageVersion}. ` +
+      'Realign with `plec workspace version --set <version>`.',
+  );
+  process.exit(1);
+}
+
 function run(command, args, options = {}) {
   execFileSync(command, args, {
     cwd: repoRoot,

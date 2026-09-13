@@ -27,6 +27,10 @@ cargo build -p plec-cli
 plec <command>
 ```
 
+Both frontends support `plec --version`, which prints the Plec product
+SemVer compiled from the workspace package metadata (see
+[Product version](#product-version)).
+
 Available commands:
 
 ```text
@@ -219,6 +223,34 @@ plec workspace compile --json             # machine-readable summary
 separate layers, so `plec workspace artifact stale` audits a build it did not
 perform. `plec build` stages the artifact this command produced and fails
 loudly (with a pointer here) when it is missing.
+
+## `plec workspace version`
+
+Show, set, or verify the canonical Plec product SemVer. The product version
+is declared once in the Cargo workspace (`[workspace.package] version` in the
+root `Cargo.toml`) and mirrored by `packages/plec/package.json`, the release
+artifact's public metadata; the CLI reports the same value through
+`plec --version` because plec-cli inherits the workspace version.
+
+```bash
+plec workspace version                 # print both declarations
+plec workspace version --check         # verify consistency; exit non-zero on drift
+plec workspace version --set 0.2.0     # update every authoritative declaration
+```
+
+`--set` validates SemVer (including prerelease/build metadata) before
+touching disk and updates exactly the two authoritative files — dependency
+pins, protocol constants, and everything else stay byte-identical.
+
+### Product version vs protocol versions
+
+The Plec **release version** (SemVer) is independent from every
+compatibility contract: `plec_ir::VERSION` / `COMPONENT_VERSION`, the route
+manifest schema, `SSR_SNAPSHOT_VERSION`, the Node sidecar protocol, and the
+DOM marker/address protocols. A product bump never modifies those constants,
+and changing a protocol version does not by itself dictate a product bump —
+release policy decides. Build revision/content hashes, not SemVer, remain the
+authority for exact artifact freshness.
 
 ## `plec workspace test wasm` / `plec workspace test last`
 

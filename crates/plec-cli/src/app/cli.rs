@@ -10,6 +10,7 @@ use plec_inspect::Inspector;
 use pollster::block_on;
 use std::path::PathBuf;
 #[derive(Parser)]
+#[command(name = "plec", version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     #[command(subcommand)]
     command: Command,

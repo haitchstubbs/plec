@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -36,6 +37,16 @@ describe.skipIf(!built)('plec release artifact', () => {
     expect(existsSync(path.join(distDir, 'bin', binaryName))).toBe(
       true,
     );
+  });
+
+  it('ships a CLI binary whose version matches the package version', () => {
+    const output = execFileSync(path.join(distDir, 'bin', binaryName), [
+      '--version',
+    ]);
+    const packageVersion: string = JSON.parse(
+      readFileSync(path.join(packageDir, 'package.json'), 'utf8'),
+    ).version;
+    expect(output.toString().trim()).toBe(`plec ${packageVersion}`);
   });
 
   it('exposes self-contained server and browser entries', () => {

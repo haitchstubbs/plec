@@ -118,6 +118,12 @@ the packaged release binary (app commands only). The dev `workspace` group
 lives in the cargo-installed binary, so run those as bare `plec …` on the
 shell `PATH`, or set `PLEC_BIN` to force a binary.
 
+Both variants report the same Plec product SemVer via `plec --version`. It
+is declared once in the Cargo workspace and mirrored into
+`packages/plec/package.json`; update it with `plec workspace version --set`
+and verify with `--check` (protocol/IR versions are separate compatibility
+contracts, never bumped by it).
+
 ## Tests
 
 ```sh
