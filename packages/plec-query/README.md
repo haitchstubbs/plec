@@ -4,8 +4,8 @@ The public TypeScript package for the haitchstack query builder. This package is
 
 ## Entry points
 
-| Export                    | Path                 | Purpose                        |
-| ------------------------- | -------------------- | ------------------------------ |
+| Export                    | Path                  | Purpose                        |
+| ------------------------- | --------------------- | ------------------------------ |
 | `@haitchstack/query`      | `./dist/index.js`     | Main API — Node native runtime |
 | `@haitchstack/query/wasm` | `./dist/wasm.js`      | WASM runtime (browser/bundler) |
 | `@haitchstack/query/zod`  | `./dist/zod/index.js` | Zod schema integration         |

@@ -1,4 +1,4 @@
-import { config as baseConfig } from "./base.js";
+import { config as baseConfig } from './base.js';
 
 /**
  * Create the ESLint configuration for a Node-oriented workspace package.
@@ -10,14 +10,18 @@ export function nodePackageConfig(options = {}) {
   return [
     ...baseConfig,
     {
-      ignores: ["native/**", "src/generated/**", ...(options.ignores ?? [])],
+      ignores: [
+        'native/**',
+        'src/generated/**',
+        ...(options.ignores ?? []),
+      ],
     },
     {
-      files: ["scripts/*.mjs"],
+      files: ['scripts/*.mjs'],
       languageOptions: {
         globals: {
-          console: "readonly",
-          process: "readonly",
+          console: 'readonly',
+          process: 'readonly',
         },
       },
     },

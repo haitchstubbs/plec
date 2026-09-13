@@ -1,11 +1,11 @@
-import { sql } from "#core";
+import { sql } from '#core';
 import type {
   ComparisonOperator,
   Primitive,
   SqlIdentifier,
   SqlQuery,
   SqlRaw,
-} from "#types";
+} from '#types';
 import {
   getActiveRuntimeDialect,
   makeDeferredQuery,
@@ -23,60 +23,77 @@ import {
   runtimeNotLikeSql,
   runtimeOr,
   serializeSqlValue,
-} from "../runtime/bridge";
+} from '../runtime/bridge';
 
 type PredicateInput = SqlQuery | string;
 type ExpressionInput = Primitive | SqlIdentifier | SqlQuery | SqlRaw;
-const COMPARISON_OPERATORS = new Set(["=", "!=", "<>", ">", ">=", "<", "<="]);
+const COMPARISON_OPERATORS = new Set([
+  '=',
+  '!=',
+  '<>',
+  '>',
+  '>=',
+  '<',
+  '<=',
+]);
 const SQL_DIALECTS = new Set([
-  "postgres",
-  "duckdb",
-  "sqlite",
-  "mysql",
-  "mssql",
-  "mssqlserver",
-  "oracle",
-  "snowflake",
-  "googlesql",
-  "redshift",
-  "bigquery",
-  "clickhouse",
+  'postgres',
+  'duckdb',
+  'sqlite',
+  'mysql',
+  'mssql',
+  'mssqlserver',
+  'oracle',
+  'snowflake',
+  'googlesql',
+  'redshift',
+  'bigquery',
+  'clickhouse',
 ]);
 
 function withSqlShape(fields: Record<string, unknown>): SqlQuery {
   return makeDeferredQuery(fields, () => {
-    throw new Error("Deferred expression is missing a materializer.");
+    throw new Error('Deferred expression is missing a materializer.');
   });
 }
 
 function exprNode(value: ExpressionInput): SqlQuery {
-  if (value === null) return withSqlShape({ type: "val", value: null });
-  if (typeof value === "bigint" || value instanceof Date) {
-    return withSqlShape({ type: "val", value: serializeSqlValue(value) });
+  if (value === null) return withSqlShape({ type: 'val', value: null });
+  if (typeof value === 'bigint' || value instanceof Date) {
+    return withSqlShape({
+      type: 'val',
+      value: serializeSqlValue(value),
+    });
   }
   if (
-    typeof value === "boolean" ||
-    typeof value === "number" ||
-    typeof value === "string"
+    typeof value === 'boolean' ||
+    typeof value === 'number' ||
+    typeof value === 'string'
   ) {
-    return withSqlShape({ type: "val", value });
+    return withSqlShape({ type: 'val', value });
   }
   const obj = value as Record<string, unknown>;
-  if ("type" in obj && typeof obj.type === "string") {
+  if ('type' in obj && typeof obj.type === 'string') {
     return value as SqlQuery;
   }
-  if (obj.__kind === "identifier") {
-    return withSqlShape({ type: "ref", parts: (value as SqlIdentifier).parts });
+  if (obj.__kind === 'identifier') {
+    return withSqlShape({
+      type: 'ref',
+      parts: (value as SqlIdentifier).parts,
+    });
   }
-  if (obj.__kind === "raw") {
-    return withSqlShape({ type: "raw", text: obj.text as string });
+  if (obj.__kind === 'raw') {
+    return withSqlShape({ type: 'raw', text: obj.text as string });
   }
-  return withSqlShape({ type: "query", query: serializeSqlValue(value) });
+  return withSqlShape({
+    type: 'query',
+    query: serializeSqlValue(value),
+  });
 }
 
 function predicateNode(condition: PredicateInput): SqlQuery {
-  if (typeof condition === "string") {
-    return withSqlShape({ type: "raw", text: condition });
+  if (typeof condition === 'string') {
+    return withSqlShape({ type: 'raw', text: condition });
   }
   return exprNode(condition);
 }
@@ -90,18 +107,18 @@ function deferredExpression(
 
 export function ref(...parts: string[]): SqlIdentifier {
   if (parts.length === 1) {
-    return { __kind: "identifier", parts: (parts[0] ?? "").split(".") };
+    return { __kind: 'identifier', parts: (parts[0] ?? '').split('.') };
   }
 
-  return { __kind: "identifier", parts };
+  return { __kind: 'identifier', parts };
 }
 
 export function excluded(column: string): SqlQuery {
   return {
-    type: "excluded",
+    type: 'excluded',
     column,
-    text: "",
-    raw: "",
+    text: '',
+    raw: '',
     values: [],
   } as SqlQuery;
 }
@@ -112,17 +129,20 @@ export function cmp(
   right: ExpressionInput,
 ): SqlQuery {
   const normalized = operator.trim();
-  const dialect = (getActiveRuntimeDialect() ?? "postgres")
+  const dialect = (getActiveRuntimeDialect() ?? 'postgres')
     .trim()
     .toLowerCase();
-  if (!SQL_DIALECTS.has(dialect) || !COMPARISON_OPERATORS.has(normalized)) {
+  if (
+    !SQL_DIALECTS.has(dialect) ||
+    !COMPARISON_OPERATORS.has(normalized)
+  ) {
     throw new Error(
       `Dialect "${dialect}" does not support operator "${normalized}" in this builder.`,
     );
   }
   return deferredExpression(
     {
-      type: "cmp",
+      type: 'cmp',
       left: exprNode(left),
       op: normalized,
       right: exprNode(right),
@@ -131,39 +151,59 @@ export function cmp(
   );
 }
 
-export function eq(left: ExpressionInput, right: ExpressionInput): SqlQuery {
-  return cmp(left, "=", right);
+export function eq(
+  left: ExpressionInput,
+  right: ExpressionInput,
+): SqlQuery {
+  return cmp(left, '=', right);
 }
 
-export function ne(left: ExpressionInput, right: ExpressionInput): SqlQuery {
-  return cmp(left, "<>", right);
+export function ne(
+  left: ExpressionInput,
+  right: ExpressionInput,
+): SqlQuery {
+  return cmp(left, '<>', right);
 }
 
-export function gt(left: ExpressionInput, right: ExpressionInput): SqlQuery {
-  return cmp(left, ">", right);
+export function gt(
+  left: ExpressionInput,
+  right: ExpressionInput,
+): SqlQuery {
+  return cmp(left, '>', right);
 }
 
-export function gte(left: ExpressionInput, right: ExpressionInput): SqlQuery {
-  return cmp(left, ">=", right);
+export function gte(
+  left: ExpressionInput,
+  right: ExpressionInput,
+): SqlQuery {
+  return cmp(left, '>=', right);
 }
 
-export function lt(left: ExpressionInput, right: ExpressionInput): SqlQuery {
-  return cmp(left, "<", right);
+export function lt(
+  left: ExpressionInput,
+  right: ExpressionInput,
+): SqlQuery {
+  return cmp(left, '<', right);
 }
 
-export function lte(left: ExpressionInput, right: ExpressionInput): SqlQuery {
-  return cmp(left, "<=", right);
+export function lte(
+  left: ExpressionInput,
+  right: ExpressionInput,
+): SqlQuery {
+  return cmp(left, '<=', right);
 }
 
 export function isNull(value: ExpressionInput): SqlQuery {
-  return deferredExpression({ type: "isNull", value: exprNode(value) }, () =>
-    runtimeIsNull(value),
+  return deferredExpression(
+    { type: 'isNull', value: exprNode(value) },
+    () => runtimeIsNull(value),
   );
 }
 
 export function isNotNull(value: ExpressionInput): SqlQuery {
-  return deferredExpression({ type: "isNotNull", value: exprNode(value) }, () =>
-    runtimeIsNotNull(value),
+  return deferredExpression(
+    { type: 'isNotNull', value: exprNode(value) },
+    () => runtimeIsNotNull(value),
   );
 }
 
@@ -173,11 +213,11 @@ export function inArray(
 ): SqlQuery {
   if (Array.isArray(items)) {
     if (items.length === 0) {
-      throw new Error("Cannot interpolate an empty array");
+      throw new Error('Cannot interpolate an empty array');
     }
     return deferredExpression(
       {
-        type: "inArray",
+        type: 'inArray',
         value: exprNode(value),
         items: items.map((item) => serializeSqlValue(item)),
       },
@@ -193,11 +233,11 @@ export function notInArray(
 ): SqlQuery {
   if (Array.isArray(items)) {
     if (items.length === 0) {
-      throw new Error("Cannot interpolate an empty array");
+      throw new Error('Cannot interpolate an empty array');
     }
     return deferredExpression(
       {
-        type: "notInArray",
+        type: 'notInArray',
         value: exprNode(value),
         items: items.map((item) => serializeSqlValue(item)),
       },
@@ -214,7 +254,7 @@ export function between(
 ): SqlQuery {
   return deferredExpression(
     {
-      type: "between",
+      type: 'between',
       value: exprNode(value),
       lower: exprNode(lower),
       upper: exprNode(upper),
@@ -230,7 +270,7 @@ export function notBetween(
 ): SqlQuery {
   return deferredExpression(
     {
-      type: "notBetween",
+      type: 'notBetween',
       value: exprNode(value),
       lower: exprNode(lower),
       upper: exprNode(upper),
@@ -244,7 +284,11 @@ export function like(
   pattern: ExpressionInput,
 ): SqlQuery {
   return deferredExpression(
-    { type: "like", value: exprNode(value), pattern: exprNode(pattern) },
+    {
+      type: 'like',
+      value: exprNode(value),
+      pattern: exprNode(pattern),
+    },
     () => runtimeLikeSql(value, pattern),
   );
 }
@@ -254,7 +298,11 @@ export function notLike(
   pattern: ExpressionInput,
 ): SqlQuery {
   return deferredExpression(
-    { type: "notLike", value: exprNode(value), pattern: exprNode(pattern) },
+    {
+      type: 'notLike',
+      value: exprNode(value),
+      pattern: exprNode(pattern),
+    },
     () => runtimeNotLikeSql(value, pattern),
   );
 }
@@ -262,7 +310,7 @@ export function notLike(
 export function exists(query: SqlQuery): SqlQuery {
   return deferredExpression(
     {
-      type: "exists",
+      type: 'exists',
       query: {
         text: query.text,
         raw: query.raw,
@@ -276,7 +324,7 @@ export function exists(query: SqlQuery): SqlQuery {
 export function notExists(query: SqlQuery): SqlQuery {
   return deferredExpression(
     {
-      type: "notExists",
+      type: 'notExists',
       query: {
         text: query.text,
         raw: query.raw,
@@ -289,14 +337,14 @@ export function notExists(query: SqlQuery): SqlQuery {
 
 export function and(...conditions: PredicateInput[]): SqlQuery {
   return deferredExpression(
-    { type: "and", conditions: conditions.map(predicateNode) },
+    { type: 'and', conditions: conditions.map(predicateNode) },
     () => runtimeAnd(conditions),
   );
 }
 
 export function or(...conditions: PredicateInput[]): SqlQuery {
   return deferredExpression(
-    { type: "or", conditions: conditions.map(predicateNode) },
+    { type: 'or', conditions: conditions.map(predicateNode) },
     () => runtimeOr(conditions),
   );
 }

@@ -1,5 +1,5 @@
-import { isObjectRecord as isRecord } from "../utils/record";
-import type { RuntimeBinding } from "./types";
+import { isObjectRecord as isRecord } from '../utils/record';
+import type { RuntimeBinding } from './types';
 
 type Primitive = string | number | boolean | bigint | null | Date;
 type SqlQuery = {
@@ -8,65 +8,72 @@ type SqlQuery = {
   values: Primitive[];
 };
 type SqlIdentifier = {
-  __kind: "identifier";
+  __kind: 'identifier';
   parts: string[];
 };
-type SqlRaw = { __kind: "raw"; text: string };
-type SqlValue = SqlQuery | SqlIdentifier | SqlRaw | Primitive | Primitive[];
+type SqlRaw = { __kind: 'raw'; text: string };
+type SqlValue =
+  SqlQuery | SqlIdentifier | SqlRaw | Primitive | Primitive[];
 
 function isQuery(value: unknown): value is SqlQuery {
   return (
-    isRecord(value) && "text" in value && "raw" in value && "values" in value
+    isRecord(value) &&
+    'text' in value &&
+    'raw' in value &&
+    'values' in value
   );
 }
 
 function isIdentifier(value: unknown): value is SqlIdentifier {
   return (
     isRecord(value) &&
-    "__kind" in value &&
-    (value as { __kind?: string }).__kind === "identifier"
+    '__kind' in value &&
+    (value as { __kind?: string }).__kind === 'identifier'
   );
 }
 
 function isRaw(value: unknown): value is SqlRaw {
   return (
     isRecord(value) &&
-    "__kind" in value &&
-    (value as { __kind?: string }).__kind === "raw"
+    '__kind' in value &&
+    (value as { __kind?: string }).__kind === 'raw'
   );
 }
 
 function revivePrimitive(value: unknown): Primitive {
-  if (isRecord(value) && "__kind" in value) {
+  if (isRecord(value) && '__kind' in value) {
     const tagged = value as {
       __kind?: string;
       value?: string;
     };
-    if (tagged.__kind === "date" && tagged.value) return new Date(tagged.value);
-    if (tagged.__kind === "bigint" && tagged.value) return BigInt(tagged.value);
+    if (tagged.__kind === 'date' && tagged.value)
+      return new Date(tagged.value);
+    if (tagged.__kind === 'bigint' && tagged.value)
+      return BigInt(tagged.value);
   }
 
   return value as Primitive;
 }
 
 function renderValue(value: Primitive): string {
-  if (value === null) return "NULL";
-  if (typeof value === "string") return `'${value.replace(/'/g, "''")}'`;
-  if (typeof value === "number" || typeof value === "bigint")
+  if (value === null) return 'NULL';
+  if (typeof value === 'string')
+    return `'${value.replace(/'/g, "''")}'`;
+  if (typeof value === 'number' || typeof value === 'bigint')
     return String(value);
-  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
   if (value instanceof Date)
     return `'${value.toISOString().replace(/'/g, "''")}'`;
-  throw new Error("Unsupported SQL value");
+  throw new Error('Unsupported SQL value');
 }
 
 function escapeIdentifierPart(part: string): string {
-  if (!part.length) throw new Error("Identifier part cannot be empty");
+  if (!part.length) throw new Error('Identifier part cannot be empty');
   return `"${part.replace(/"/g, '""')}"`;
 }
 
 function renderIdentifierPart(part: string): string {
-  if (!part.length) throw new Error("Identifier part cannot be empty");
+  if (!part.length) throw new Error('Identifier part cannot be empty');
   return part;
 }
 
@@ -78,8 +85,8 @@ function toQuery(value: SqlValue): SqlQuery {
   if (isQuery(value)) return value;
   if (isIdentifier(value)) {
     return {
-      text: value.parts.map(escapeIdentifierPart).join("."),
-      raw: value.parts.map(renderIdentifierPart).join("."),
+      text: value.parts.map(escapeIdentifierPart).join('.'),
+      raw: value.parts.map(renderIdentifierPart).join('.'),
       values: [],
     };
   }
@@ -94,16 +101,16 @@ function toQuery(value: SqlValue): SqlQuery {
 
   if (Array.isArray(value)) {
     if (value.length === 0)
-      throw new Error("Cannot interpolate an empty array");
+      throw new Error('Cannot interpolate an empty array');
     return {
-      text: value.map(() => "?").join(", "),
-      raw: value.map(renderValue).join(", "),
+      text: value.map(() => '?').join(', '),
+      raw: value.map(renderValue).join(', '),
       values: value,
     };
   }
 
   return {
-    text: "?",
+    text: '?',
     raw: renderValue(value),
     values: [value],
   };
@@ -112,14 +119,14 @@ function toQuery(value: SqlValue): SqlQuery {
 export const browserFallbackBinding = {
   identifier(partsJson: string) {
     return JSON.stringify({
-      __kind: "identifier",
+      __kind: 'identifier',
       parts: parseValue(partsJson),
     });
   },
   raw(text: string) {
-    return JSON.stringify({ __kind: "raw", text });
+    return JSON.stringify({ __kind: 'raw', text });
   },
-  join(itemsJson: string, separator = ", ") {
+  join(itemsJson: string, separator = ', ') {
     const items = (parseValue(itemsJson) as unknown[]).map(
       (item) => reviveSerialized(item) as SqlValue,
     );
@@ -140,8 +147,8 @@ export const browserFallbackBinding = {
 
     return JSON.stringify(
       serializeQuery({
-        text: textParts.join(""),
-        raw: rawParts.join(""),
+        text: textParts.join(''),
+        raw: rawParts.join(''),
         values,
       }),
     );
@@ -156,8 +163,8 @@ export const browserFallbackBinding = {
     const values: Primitive[] = [];
 
     for (let i = 0; i < strings.length; i++) {
-      textParts.push(strings[i] ?? "");
-      rawParts.push(strings[i] ?? "");
+      textParts.push(strings[i] ?? '');
+      rawParts.push(strings[i] ?? '');
 
       if (i >= exprs.length) continue;
       const query = toQuery(exprs[i] as SqlValue);
@@ -168,46 +175,48 @@ export const browserFallbackBinding = {
 
     return JSON.stringify(
       serializeQuery({
-        text: textParts.join(""),
-        raw: rawParts.join(""),
+        text: textParts.join(''),
+        raw: rawParts.join(''),
         values,
       }),
     );
   },
   refIdentifier(partsJson: string) {
     return JSON.stringify({
-      __kind: "identifier",
+      __kind: 'identifier',
       parts: parseValue(partsJson),
     });
   },
-  compilePostgres(queryValue: Parameters<RuntimeBinding["compileQuery"]>[0]) {
-    return browserFallbackBinding.compileQuery(queryValue, "postgres");
+  compilePostgres(
+    queryValue: Parameters<RuntimeBinding['compileQuery']>[0],
+  ) {
+    return browserFallbackBinding.compileQuery(queryValue, 'postgres');
   },
   compileQuery(queryValue: unknown, dialect: string) {
     const query =
-      typeof queryValue === "string"
+      typeof queryValue === 'string'
         ? (reviveSerialized(parseValue(queryValue)) as SqlQuery)
         : (reviveSerialized(queryValue) as SqlQuery);
     let placeholderIndex = 0;
     const compiledText = query.text.replace(/\?/g, () => {
       placeholderIndex += 1;
 
-      if (placeholderIndex > query.values.length) return "?";
-      if (dialect === "postgres" || dialect === "duckdb")
+      if (placeholderIndex > query.values.length) return '?';
+      if (dialect === 'postgres' || dialect === 'duckdb')
         return `$${placeholderIndex}`;
-      if (dialect === "mssql" || dialect === "mssqlserver")
+      if (dialect === 'mssql' || dialect === 'mssqlserver')
         return `@p${placeholderIndex}`;
-      return "?";
+      return '?';
     });
 
     if (
       ![
-        "postgres",
-        "duckdb",
-        "mysql",
-        "sqlite",
-        "mssql",
-        "mssqlserver",
+        'postgres',
+        'duckdb',
+        'mysql',
+        'sqlite',
+        'mssql',
+        'mssqlserver',
       ].includes(dialect)
     ) {
       throw new Error(
@@ -227,11 +236,16 @@ export const browserFallbackBinding = {
       values: query.values,
     });
   },
-  cmp(leftJson: string, operator: string, rightJson: string, dialect: string) {
+  cmp(
+    leftJson: string,
+    operator: string,
+    rightJson: string,
+    dialect: string,
+  ) {
     const normalized = validateOperatorForDialect(
       operator,
       dialect,
-      "comparison",
+      'comparison',
     );
     const left = reviveSerialized(parseValue(leftJson)) as SqlValue;
     const right = reviveSerialized(parseValue(rightJson)) as SqlValue;
@@ -264,8 +278,8 @@ export const browserFallbackBinding = {
     const rendered = args.map((arg) => toQuery(arg));
     return JSON.stringify(
       serializeQuery({
-        text: `${normalized}(${rendered.map((item) => item.text).join(", ")})`,
-        raw: `${normalized}(${rendered.map((item) => item.raw).join(", ")})`,
+        text: `${normalized}(${rendered.map((item) => item.text).join(', ')})`,
+        raw: `${normalized}(${rendered.map((item) => item.raw).join(', ')})`,
         values: rendered.flatMap((item) => item.values),
       }),
     );
@@ -279,7 +293,7 @@ export const browserFallbackBinding = {
     const normalized = validateOperatorForDialect(
       operator,
       dialect,
-      "arithmetic",
+      'arithmetic',
     );
     const left = reviveSerialized(parseValue(leftJson)) as SqlValue;
     const right = reviveSerialized(parseValue(rightJson)) as SqlValue;
@@ -295,12 +309,12 @@ export const browserFallbackBinding = {
   },
   and(conditionsJson: string) {
     return JSON.stringify(
-      combineBoolean(parseValue(conditionsJson) as unknown[], "AND"),
+      combineBoolean(parseValue(conditionsJson) as unknown[], 'AND'),
     );
   },
   or(conditionsJson: string) {
     return JSON.stringify(
-      combineBoolean(parseValue(conditionsJson) as unknown[], "OR"),
+      combineBoolean(parseValue(conditionsJson) as unknown[], 'OR'),
     );
   },
 } as unknown as RuntimeBinding;
@@ -312,7 +326,7 @@ function reviveSerialized(value: unknown): unknown {
 
   if (isRecord(value)) {
     if (
-      "values" in value &&
+      'values' in value &&
       Array.isArray((value as { values: unknown[] }).values)
     ) {
       const query = value as {
@@ -327,7 +341,7 @@ function reviveSerialized(value: unknown): unknown {
       } satisfies SqlQuery;
     }
 
-    if ("__kind" in value) {
+    if ('__kind' in value) {
       return value;
     }
   }
@@ -336,10 +350,10 @@ function reviveSerialized(value: unknown): unknown {
 }
 
 function serializePrimitive(value: Primitive): unknown {
-  if (typeof value === "bigint")
-    return { __kind: "bigint", value: value.toString() };
+  if (typeof value === 'bigint')
+    return { __kind: 'bigint', value: value.toString() };
   if (value instanceof Date)
-    return { __kind: "date", value: value.toISOString() };
+    return { __kind: 'date', value: value.toISOString() };
   return value;
 }
 
@@ -351,7 +365,7 @@ function serializeQuery(query: SqlQuery) {
   };
 }
 
-function combineBoolean(conditions: unknown[], operator: "AND" | "OR") {
+function combineBoolean(conditions: unknown[], operator: 'AND' | 'OR') {
   if (conditions.length === 0)
     throw new Error(
       `${operator.toLowerCase()}(...) requires at least one condition`,
@@ -359,8 +373,8 @@ function combineBoolean(conditions: unknown[], operator: "AND" | "OR") {
   const revived = conditions.map((condition) => {
     const value = reviveSerialized(condition) as SqlValue;
     const query =
-      typeof value === "string"
-        ? toQuery({ __kind: "raw", text: value })
+      typeof value === 'string'
+        ? toQuery({ __kind: 'raw', text: value })
         : toQuery(value);
     return {
       text: `(${query.text})`,
@@ -377,38 +391,46 @@ function combineBoolean(conditions: unknown[], operator: "AND" | "OR") {
 }
 
 const SQL_DIALECTS = new Set([
-  "postgres",
-  "duckdb",
-  "sqlite",
-  "mysql",
-  "mssql",
-  "mssqlserver",
-  "oracle",
-  "snowflake",
-  "googlesql",
-  "redshift",
-  "bigquery",
-  "clickhouse",
+  'postgres',
+  'duckdb',
+  'sqlite',
+  'mysql',
+  'mssql',
+  'mssqlserver',
+  'oracle',
+  'snowflake',
+  'googlesql',
+  'redshift',
+  'bigquery',
+  'clickhouse',
 ]);
 
 const SUPPORTED_FUNCTIONS = new Set([
-  "COUNT",
-  "SUM",
-  "AVG",
-  "MIN",
-  "MAX",
-  "COALESCE",
-  "LOWER",
-  "UPPER",
-  "LAG",
-  "LEAD",
-  "ROW_NUMBER",
-  "RANK",
-  "DENSE_RANK",
+  'COUNT',
+  'SUM',
+  'AVG',
+  'MIN',
+  'MAX',
+  'COALESCE',
+  'LOWER',
+  'UPPER',
+  'LAG',
+  'LEAD',
+  'ROW_NUMBER',
+  'RANK',
+  'DENSE_RANK',
 ]);
 
-const COMPARISON_OPERATORS = new Set(["=", "!=", "<>", ">", ">=", "<", "<="]);
-const ARITHMETIC_OPERATORS = new Set(["+", "-", "*", "/"]);
+const COMPARISON_OPERATORS = new Set([
+  '=',
+  '!=',
+  '<>',
+  '>',
+  '>=',
+  '<',
+  '<=',
+]);
+const ARITHMETIC_OPERATORS = new Set(['+', '-', '*', '/']);
 
 function normalizeFunctionName(name: string): string {
   return name.trim().toUpperCase();
@@ -418,9 +440,15 @@ function normalizeOperator(operator: string): string {
   return operator.trim();
 }
 
-function validateFunctionForDialect(name: string, dialect: string): string {
+function validateFunctionForDialect(
+  name: string,
+  dialect: string,
+): string {
   const normalized = normalizeFunctionName(name);
-  if (!SQL_DIALECTS.has(dialect) || !SUPPORTED_FUNCTIONS.has(normalized)) {
+  if (
+    !SQL_DIALECTS.has(dialect) ||
+    !SUPPORTED_FUNCTIONS.has(normalized)
+  ) {
     throw new Error(
       `Dialect "${dialect}" does not support function "${normalized}" in this builder.`,
     );
@@ -432,7 +460,7 @@ function validateFunctionForDialect(name: string, dialect: string): string {
 function validateOperatorForDialect(
   operator: string,
   dialect: string,
-  kind: "comparison" | "arithmetic",
+  kind: 'comparison' | 'arithmetic',
 ): string {
   const normalized = normalizeOperator(operator);
   if (!SQL_DIALECTS.has(dialect)) {
@@ -442,7 +470,7 @@ function validateOperatorForDialect(
   }
 
   const supported =
-    kind === "comparison"
+    kind === 'comparison'
       ? COMPARISON_OPERATORS.has(normalized)
       : ARITHMETIC_OPERATORS.has(normalized);
   if (!supported) {
@@ -456,25 +484,25 @@ function validateOperatorForDialect(
 
 function supportsWindowFunctions(dialect: string): boolean {
   return [
-    "postgres",
-    "mysql",
-    "sqlite",
-    "mssql",
-    "duckdb",
-    "googlesql",
-    "oracle",
-    "mssqlserver",
-    "snowflake",
-    "redshift",
-    "bigquery",
-    "clickhouse",
+    'postgres',
+    'mysql',
+    'sqlite',
+    'mssql',
+    'duckdb',
+    'googlesql',
+    'oracle',
+    'mssqlserver',
+    'snowflake',
+    'redshift',
+    'bigquery',
+    'clickhouse',
   ].includes(dialect);
 }
 
 type WindowOrderItem = {
   expression: SqlQuery;
-  direction?: "ASC" | "DESC";
-  nulls?: "FIRST" | "LAST";
+  direction?: 'ASC' | 'DESC';
+  nulls?: 'FIRST' | 'LAST';
 };
 
 (
@@ -505,8 +533,8 @@ type WindowOrderItem = {
   const orderBy = (parseValue(orderByJson) as unknown[]).map((item) => {
     const value = item as {
       expression: unknown;
-      direction?: "ASC" | "DESC";
-      nulls?: "FIRST" | "LAST";
+      direction?: 'ASC' | 'DESC';
+      nulls?: 'FIRST' | 'LAST';
     };
     return {
       expression: reviveSerialized(value.expression) as SqlQuery,
@@ -519,30 +547,33 @@ type WindowOrderItem = {
 
   if (partitionBy.length > 0) {
     parts.push({
-      text: `PARTITION BY ${partitionBy.map((item) => item.text).join(", ")}`,
-      raw: `PARTITION BY ${partitionBy.map((item) => item.raw).join(", ")}`,
+      text: `PARTITION BY ${partitionBy.map((item) => item.text).join(', ')}`,
+      raw: `PARTITION BY ${partitionBy.map((item) => item.raw).join(', ')}`,
       values: partitionBy.flatMap((item) => item.values),
     });
   }
 
   if (orderBy.length > 0) {
     const items = orderBy.map((item) => ({
-      text: `${item.expression.text}${item.direction ? ` ${item.direction}` : ""}${item.nulls ? ` NULLS ${item.nulls}` : ""}`,
-      raw: `${item.expression.raw}${item.direction ? ` ${item.direction}` : ""}${item.nulls ? ` NULLS ${item.nulls}` : ""}`,
+      text: `${item.expression.text}${item.direction ? ` ${item.direction}` : ''}${item.nulls ? ` NULLS ${item.nulls}` : ''}`,
+      raw: `${item.expression.raw}${item.direction ? ` ${item.direction}` : ''}${item.nulls ? ` NULLS ${item.nulls}` : ''}`,
       values: item.expression.values,
     }));
     parts.push({
-      text: `ORDER BY ${items.map((item) => item.text).join(", ")}`,
-      raw: `ORDER BY ${items.map((item) => item.raw).join(", ")}`,
+      text: `ORDER BY ${items.map((item) => item.text).join(', ')}`,
+      raw: `ORDER BY ${items.map((item) => item.raw).join(', ')}`,
       values: items.flatMap((item) => item.values),
     });
   }
 
   return JSON.stringify(
     serializeQuery({
-      text: `${query.text} OVER (${parts.map((item) => item.text).join(" ")})`,
-      raw: `${query.raw} OVER (${parts.map((item) => item.raw).join(" ")})`,
-      values: [...query.values, ...parts.flatMap((item) => item.values)],
+      text: `${query.text} OVER (${parts.map((item) => item.text).join(' ')})`,
+      raw: `${query.raw} OVER (${parts.map((item) => item.raw).join(' ')})`,
+      values: [
+        ...query.values,
+        ...parts.flatMap((item) => item.values),
+      ],
     }),
   );
 };

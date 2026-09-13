@@ -66,4 +66,4 @@ export type {
   WithSet,
   WithUpdate,
   WithWhere,
-} from "#types";
+} from '#types';

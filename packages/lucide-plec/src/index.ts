@@ -69,8 +69,9 @@ function renderAttributes(props: Record<string, unknown>): string {
         /^[A-Za-z_:][A-Za-z0-9:._-]*$/.test(key) &&
         !key.toLowerCase().startsWith('on'),
     )
-    .map(([key, value]) =>
-      ` ${key === 'className' ? 'class' : key}="${escapeHtml(value)}"`,
+    .map(
+      ([key, value]) =>
+        ` ${key === 'className' ? 'class' : key}="${escapeHtml(value)}"`,
     )
     .join('');
 }
@@ -82,8 +83,9 @@ function renderIcon(
 ): string {
   const attributes = { ...defaultAttributes, ...props };
   const children = definition
-    .map(([tag, childAttributes]) =>
-      `<${tag}${renderAttributes(childAttributes)}></${tag}>`,
+    .map(
+      ([tag, childAttributes]) =>
+        `<${tag}${renderAttributes(childAttributes)}></${tag}>`,
     )
     .join('');
   return `<svg${renderAttributes(attributes)}>${children}</svg>`;

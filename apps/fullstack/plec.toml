@@ -7,9 +7,6 @@
 title = "Plec fullstack playground"
 description = "Plec fullstack runtime experiment."
 
-[server]
-entry = "src/server.ts"
-
 [client]
 styles = "/assets/styles.css"
 # Self-hosted variable fonts: without preloading they are discovered only

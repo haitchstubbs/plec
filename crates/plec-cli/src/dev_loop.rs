@@ -240,14 +240,17 @@ mod tests {
     fn snapshot_ignores_build_and_dependency_directories() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::create_dir_all(dir.path().join("api")).unwrap();
         fs::create_dir_all(dir.path().join("node_modules/pkg")).unwrap();
         fs::create_dir_all(dir.path().join("dist")).unwrap();
         fs::write(dir.path().join("src/router.tsx"), "route").unwrap();
+        fs::write(dir.path().join("api/todos.ts"), "route").unwrap();
         fs::write(dir.path().join("node_modules/pkg/index.js"), "ignored").unwrap();
         fs::write(dir.path().join("dist/index.html"), "ignored").unwrap();
         let snapshot = source_snapshot(dir.path()).unwrap();
-        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot.len(), 2);
         assert!(snapshot.contains_key(Path::new("src/router.tsx")));
+        assert!(snapshot.contains_key(Path::new("api/todos.ts")));
     }
 
     #[test]

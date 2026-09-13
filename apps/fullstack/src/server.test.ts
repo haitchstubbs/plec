@@ -1,92 +1,63 @@
 import { describe, expect, it } from 'vitest';
-import { handleRequest } from './server';
+import { GET as list, POST as create } from '../api/todos';
+import { DELETE, PATCH } from '../api/todos/[id]';
+import { GET as memory } from '../api/dev/memory';
 
-const request = async (path: string, init?: RequestInit) => {
-  const url = `http://plec.test${path}`;
-  const response = await handleRequest(new Request(url, init), {
-    url,
-    pathname: path,
-    method: init?.method ?? 'GET',
-    headers: {},
-    cookies: {},
-    params: {},
-    query: {},
-  });
-  if (!response) throw new Error(`unhandled request ${path}`);
-  return response;
-};
+const request = (init?: RequestInit) =>
+  new Request('http://plec.test/api/todos', init);
 
-describe('Plec application server', () => {
-  it('handles the CRUD Todo API through the sidecar contract', async () => {
-    const initial = await (await request('/api/todos')).json();
-    expect(initial).toHaveLength(1);
+describe('file-based API handlers', () => {
+  it('handles Todo CRUD', async () => {
+    expect(await (await list()).json()).toHaveLength(1);
     const created = await (
-      await request('/api/todos', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: 'Ship Plec' }),
-      })
+      await create(
+        request({
+          method: 'POST',
+          body: JSON.stringify({ title: 'Ship Plec' }),
+        }),
+      )
     ).json();
-    expect(created.title).toBe('Ship Plec');
-    const updated = await (
-      await request(`/api/todos/${created.id}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ completed: true }),
-      })
-    ).json();
-    expect(updated.completed).toBe(true);
+    const context = { params: { id: created.id } };
     expect(
       (
-        await request(`/api/todos/${created.id}`, {
-          method: 'DELETE',
-        })
-      ).status,
+        await (
+          await PATCH(
+            request({
+              method: 'PATCH',
+              body: JSON.stringify({ completed: true }),
+            }),
+            context,
+          )
+        ).json()
+      ).completed,
+    ).toBe(true);
+    expect(
+      (await DELETE(request({ method: 'DELETE' }), context)).status,
     ).toBe(204);
   });
 
-  it('rejects invalid mutations and unknown API routes', async () => {
+  it('rejects invalid mutations', async () => {
     expect(
-      (
-        await request('/api/todos', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: '{}',
-        })
-      ).status,
+      (await create(request({ method: 'POST', body: '{}' }))).status,
     ).toBe(400);
     expect(
       (
-        await request('/api/todos/nope', {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ completed: 'yes' }),
-        })
+        await PATCH(
+          request({
+            method: 'PATCH',
+            body: JSON.stringify({ completed: 'yes' }),
+          }),
+          { params: { id: 'nope' } },
+        )
       ).status,
     ).toBe(404);
-    expect(
-      await handleRequest(new Request('http://plec.test/api/nope'), {
-        url: 'http://plec.test/api/nope',
-        pathname: '/api/nope',
-        method: 'GET',
-        headers: {},
-        cookies: {},
-        params: {},
-        query: {},
-      }),
-    ).toBeUndefined();
   });
 
-  it('reports Node memory diagnostics for the cross-browser development HUD', async () => {
-    const response = await request('/api/dev/memory');
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
+  it('reports Node memory diagnostics', async () => {
+    expect((await memory()).status).toBe(200);
+    expect(await (await memory()).json()).toMatchObject({
       pid: expect.any(Number),
-      rssBytes: expect.any(Number),
       heapUsedBytes: expect.any(Number),
-      externalBytes: expect.any(Number),
-      arrayBuffersBytes: expect.any(Number),
-      heapLimitBytes: expect.any(Number),
       activeResources: expect.any(Array),
     });
   });

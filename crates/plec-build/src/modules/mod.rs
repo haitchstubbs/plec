@@ -1,3 +1,4 @@
+pub mod api_routes;
 pub mod artifacts;
 pub mod assets;
 pub mod build;

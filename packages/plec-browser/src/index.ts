@@ -144,8 +144,8 @@ function isHostProviderManifest(
     if (
       !entry ||
       typeof entry.id !== 'string' ||
-        typeof entry.module !== 'string' ||
-        typeof entry.ssr !== 'boolean' ||
+      typeof entry.module !== 'string' ||
+      typeof entry.ssr !== 'boolean' ||
       !Array.isArray(entry.components) ||
       !/^[A-Za-z0-9_-]+$/.test(entry.id) ||
       seen.has(entry.id)

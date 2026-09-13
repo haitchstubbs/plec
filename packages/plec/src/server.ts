@@ -9,6 +9,11 @@ export type RequestContext = {
   query: Record<string, string | string[]>;
 };
 
+export type ApiRouteHandler = (
+  request: Request,
+  context: RequestContext,
+) => Response | Promise<Response>;
+
 /** Application-owned `/api/*` handler executed by the native host's sidecar. */
 export type AppRequestHandler = (
   request: Request,

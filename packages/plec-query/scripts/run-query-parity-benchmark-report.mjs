@@ -1,23 +1,23 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync } from 'node:child_process';
 
 const command =
-  "yarn vitest run --config vitest.config.ts tests/benchmarks/issue53/report-capture.test.ts";
+  'yarn vitest run --config vitest.config.ts tests/benchmarks/issue53/report-capture.test.ts';
 const result =
-  process.platform === "win32"
-    ? spawnSync("cmd.exe", ["/d", "/s", "/c", command], {
+  process.platform === 'win32'
+    ? spawnSync('cmd.exe', ['/d', '/s', '/c', command], {
         cwd: process.cwd(),
-        stdio: "inherit",
+        stdio: 'inherit',
         env: {
           ...process.env,
-          BENCH_QUERY_PARITY_REPORT: "1",
+          BENCH_QUERY_PARITY_REPORT: '1',
         },
       })
-    : spawnSync("sh", ["-lc", command], {
+    : spawnSync('sh', ['-lc', command], {
         cwd: process.cwd(),
-        stdio: "inherit",
+        stdio: 'inherit',
         env: {
           ...process.env,
-          BENCH_QUERY_PARITY_REPORT: "1",
+          BENCH_QUERY_PARITY_REPORT: '1',
         },
       });
 

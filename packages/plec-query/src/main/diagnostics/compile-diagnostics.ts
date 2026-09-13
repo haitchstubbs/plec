@@ -1,4 +1,4 @@
-import type { NodeQueryCompileDiagnostics } from "../types";
+import type { NodeQueryCompileDiagnostics } from '../types';
 
 export function createNodeQueryCompileDiagnosticsSample(): NodeQueryCompileDiagnostics {
   return {
@@ -7,6 +7,6 @@ export function createNodeQueryCompileDiagnosticsSample(): NodeQueryCompileDiagn
     pendingOpsApplyMs: 0,
     compileBundleMs: 0,
     pendingOpCount: 0,
-    applyMode: "none",
+    applyMode: 'none',
   };
 }

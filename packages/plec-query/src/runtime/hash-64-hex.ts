@@ -5,5 +5,5 @@ export function hash64Hex(input: string): string {
     hash ^= BigInt(input.charCodeAt(i));
     hash = (hash * prime) & 0xffffffffffffffffn;
   }
-  return hash.toString(16).padStart(16, "0");
+  return hash.toString(16).padStart(16, '0');
 }

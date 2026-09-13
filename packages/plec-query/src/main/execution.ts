@@ -5,8 +5,8 @@ import type {
   Primitive,
   RemoteQueryRequest,
   SqlQuery,
-} from "#types";
-import { runtimeCompileQuery } from "../runtime/bridge";
+} from '#types';
+import { runtimeCompileQuery } from '../runtime/bridge';
 
 type PostgresDriver<TResult> = {
   query(text: string, values: Primitive[]): TResult | Promise<TResult>;
@@ -35,16 +35,18 @@ async function resolveHeaders(
     return undefined;
   }
 
-  return typeof headers === "function" ? await headers() : headers;
+  return typeof headers === 'function' ? await headers() : headers;
 }
 
-async function defaultMapResponse(response: Response): Promise<unknown> {
+async function defaultMapResponse(
+  response: Response,
+): Promise<unknown> {
   return response.json();
 }
 
 function buildRequestHeaders(headers?: HeadersInit): Headers {
   const requestHeaders = new Headers(headers);
-  requestHeaders.set("content-type", "application/json");
+  requestHeaders.set('content-type', 'application/json');
   return requestHeaders;
 }
 
@@ -69,7 +71,7 @@ function buildRequestHeaders(headers?: HeadersInit): Headers {
  */
 export function compileQuery(
   query: SqlQuery,
-  dialect: Dialect = "postgres",
+  dialect: Dialect = 'postgres',
 ): CompiledQuery {
   return runtimeCompileQuery(query, dialect);
 }
@@ -94,7 +96,7 @@ export function compileQuery(
  * ```
  */
 export function compilePostgres(query: SqlQuery): CompiledQuery {
-  return compileQuery(query, "postgres");
+  return compileQuery(query, 'postgres');
 }
 
 /**
@@ -152,7 +154,7 @@ export function createRemoteHttpConnection<TResult = unknown>(
 
   if (!fetchImpl) {
     throw new Error(
-      "createRemoteHttpConnection requires a fetch implementation in this runtime.",
+      'createRemoteHttpConnection requires a fetch implementation in this runtime.',
     );
   }
 
@@ -160,21 +162,21 @@ export function createRemoteHttpConnection<TResult = unknown>(
     async execute(query) {
       const compiled = compilePostgres(query);
       const request: RemoteQueryRequest = {
-        dialect: "postgres",
+        dialect: 'postgres',
         text: compiled.text,
         values: compiled.values,
         raw: compiled.raw,
       };
       const resolvedHeaders = await resolveHeaders(options.headers);
       const response = await fetchImpl(options.url, {
-        method: "POST",
+        method: 'POST',
         headers: buildRequestHeaders(resolvedHeaders),
         body: JSON.stringify(request),
       });
 
       if (!response.ok) {
-        const responseText = await response.text().catch(() => "");
-        const details = responseText ? ` ${responseText}` : "";
+        const responseText = await response.text().catch(() => '');
+        const details = responseText ? ` ${responseText}` : '';
         throw new Error(
           `Remote query request failed with status ${response.status}.${details}`,
         );

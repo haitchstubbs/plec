@@ -45,7 +45,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | wasm-runtime-8eo | Migrate plec-e2e to canonical Playwright runner | closed | P1 | task | haitchstubbs |  |
 | wasm-runtime-8or | Fullstack client bundle imports the whole lucide icon set | closed | P2 | task | haitchstubbs |  |
 | wasm-runtime-8vi | Stream-limit fetched and loader response bodies | closed | P2 | bug | haitchstubbs |  |
-| wasm-runtime-8yy | Design file-based API routes (apps/fullstack/api) like Next's app/api | open | P3 | feature | haitchstubbs |  |
+| wasm-runtime-8yy | Design file-based API routes (apps/fullstack/api) like Next's app/api | closed | P3 | feature | haitchstubbs |  |
 | wasm-runtime-96v | Rework router listener closures to drop raw-pointer state capture | closed | P3 | task | haitchstubbs |  |
 | wasm-runtime-a08 | Generate TypeScript resource-limit constants from Rust | closed | P2 | task | haitchstubbs |  |
 | **wasm-runtime-a2n** | **Deferred host-renderer capabilities** | closed | P2 | epic | haitchstubbs |  |

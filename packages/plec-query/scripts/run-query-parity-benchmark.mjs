@@ -1,33 +1,33 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync } from 'node:child_process';
 
 const label = process.argv[2];
 
-if (label !== "baseline" && label !== "post") {
+if (label !== 'baseline' && label !== 'post') {
   console.error(
-    "Usage: node ./scripts/run-query-parity-benchmark.mjs <baseline|post>",
+    'Usage: node ./scripts/run-query-parity-benchmark.mjs <baseline|post>',
   );
   process.exit(1);
 }
 
 const command =
-  "yarn vitest run --config vitest.config.ts tests/benchmarks/issue53/capture.test.ts";
+  'yarn vitest run --config vitest.config.ts tests/benchmarks/issue53/capture.test.ts';
 const result =
-  process.platform === "win32"
-    ? spawnSync("cmd.exe", ["/d", "/s", "/c", command], {
+  process.platform === 'win32'
+    ? spawnSync('cmd.exe', ['/d', '/s', '/c', command], {
         cwd: process.cwd(),
-        stdio: "inherit",
+        stdio: 'inherit',
         env: {
           ...process.env,
-          BENCH_QUERY_PARITY_CAPTURE: "1",
+          BENCH_QUERY_PARITY_CAPTURE: '1',
           BENCH_QUERY_PARITY_LABEL: label,
         },
       })
-    : spawnSync("sh", ["-lc", command], {
+    : spawnSync('sh', ['-lc', command], {
         cwd: process.cwd(),
-        stdio: "inherit",
+        stdio: 'inherit',
         env: {
           ...process.env,
-          BENCH_QUERY_PARITY_CAPTURE: "1",
+          BENCH_QUERY_PARITY_CAPTURE: '1',
           BENCH_QUERY_PARITY_LABEL: label,
         },
       });

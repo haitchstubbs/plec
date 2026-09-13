@@ -87,7 +87,9 @@ async function loadSsrProviders(
   manifestPath: string | undefined,
 ): Promise<Map<string, PlecHostProvider>> {
   if (!manifestPath) return new Map();
-  const parsed = JSON.parse(await readFile(manifestPath, 'utf8')) as unknown;
+  const parsed = JSON.parse(
+    await readFile(manifestPath, 'utf8'),
+  ) as unknown;
   if (!isHostProviderManifest(parsed))
     throw new BundleError('invalid host provider manifest');
   const publicDir = resolve(manifestPath, '..');
@@ -98,16 +100,25 @@ async function loadSsrProviders(
     const modulePath = resolve(publicDir, `.${url.pathname}`);
     const providerDir = resolve(publicDir, 'assets/providers');
     if (!modulePath.startsWith(`${providerDir}/`))
-      throw new BundleError(`invalid host provider module for ${entry.id}`);
+      throw new BundleError(
+        `invalid host provider module for ${entry.id}`,
+      );
     const imported = await import(pathToFileURL(modulePath).href);
     if (typeof imported.default !== 'function')
-      throw new BundleError(`host provider ${entry.id} has no default factory`);
-    providers.set(entry.id, (imported.default as () => PlecHostProvider)());
+      throw new BundleError(
+        `host provider ${entry.id} has no default factory`,
+      );
+    providers.set(
+      entry.id,
+      (imported.default as () => PlecHostProvider)(),
+    );
   }
   return providers;
 }
 
-function isHostProviderManifest(value: unknown): value is HostProviderManifest {
+function isHostProviderManifest(
+  value: unknown,
+): value is HostProviderManifest {
   if (!value || typeof value !== 'object') return false;
   const manifest = value as Partial<HostProviderManifest>;
   return (
@@ -130,7 +141,10 @@ async function renderHostProvider(
   const value: unknown = await request.json();
   if (!value || typeof value !== 'object')
     throw new Error('invalid host render request');
-  const { provider, component, props } = value as Record<string, unknown>;
+  const { provider, component, props } = value as Record<
+    string,
+    unknown
+  >;
   if (
     typeof provider !== 'string' ||
     typeof component !== 'string' ||
@@ -142,7 +156,10 @@ async function renderHostProvider(
   const render = providers.get(provider)?.[component]?.render;
   if (!render) return undefined;
   const html = await render(props as Record<string, unknown>);
-  if (typeof html !== 'string' || Buffer.byteLength(html) > MAX_HOST_RENDER_BYTES)
+  if (
+    typeof html !== 'string' ||
+    Buffer.byteLength(html) > MAX_HOST_RENDER_BYTES
+  )
     throw new Error('invalid host render response');
   return html;
 }

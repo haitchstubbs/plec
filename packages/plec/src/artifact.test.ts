@@ -43,7 +43,9 @@ describe.skipIf(!built)('plec release artifact', () => {
     expect(existsSync(path.join(distDir, 'browser.js'))).toBe(true);
     expect(existsSync(path.join(distDir, 'server.d.ts'))).toBe(true);
     expect(existsSync(path.join(distDir, 'browser.d.ts'))).toBe(true);
-    expect(existsSync(path.join(distDir, 'node-runtime.mjs'))).toBe(true);
+    expect(existsSync(path.join(distDir, 'node-runtime.mjs'))).toBe(
+      true,
+    );
   });
 
   it('never references the monorepo from shipped JS', () => {

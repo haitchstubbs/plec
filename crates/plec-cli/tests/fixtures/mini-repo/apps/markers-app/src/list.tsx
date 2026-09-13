@@ -8,9 +8,7 @@ export function ListPage() {
   return (
     <ul>
       {rows.map((row) => (
-        <li key={row.id}>
-          {row.label}
-        </li>
+        <li key={row.id}>{row.label}</li>
       ))}
     </ul>
   );

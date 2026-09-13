@@ -1,5 +1,5 @@
-import type { SqlIdentifier, SqlQuery, SqlRaw } from "#types";
-import { runtimeJoin } from "../../runtime/bridge";
+import type { SqlIdentifier, SqlQuery, SqlRaw } from '#types';
+import { runtimeJoin } from '../../runtime/bridge';
 
 /**
  * Join SQL fragments into a single query expression.
@@ -18,7 +18,7 @@ import { runtimeJoin } from "../../runtime/bridge";
  */
 export function join(
   items: Array<SqlQuery | SqlIdentifier | SqlRaw>,
-  separator = ", ",
+  separator = ', ',
 ): SqlQuery {
   return runtimeJoin(items, separator);
 }

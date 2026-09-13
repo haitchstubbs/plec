@@ -6,16 +6,18 @@ The implementation should:
 
 1. Pin Rust/Cargo tooling by:
 
-   * semantic version
-   * upstream Git repository
-   * exact full Git commit SHA
+   - semantic version
+   - upstream Git repository
+   - exact full Git commit SHA
+
 2. Install pinned Cargo tools from that exact Git commit, not merely from crates.io by version.
 3. Install those tools repo-locally under `.tools/`, not globally.
 4. Add:
 
-   * `cargo-deny`
-   * `cargo-audit`
-   * `cargo-lock`
+   - `cargo-deny`
+   - `cargo-audit`
+   - `cargo-lock`
+
 5. Add a committed `deny.toml`.
 6. Add one repository-owned Rust dependency security entrypoint.
 7. Ensure all meaningful Rust builds use `--locked`.
@@ -33,19 +35,19 @@ Work against `feat/ssr`.
 
 Important existing files:
 
-* root `Cargo.toml`
-* root committed `Cargo.lock`
-* root `cli-tools.json`
-* `scripts/setup.mjs`
-* `scripts/toolchain.mjs`
-* `scripts/verify-toolchain.mjs`
-* `scripts/build-wasm.mjs`
-* `scripts/browser-harness.mjs`
-* `scripts/watch-wasm.mjs`
-* root `package.json`
-* `packages/plec/package.json`
-* `packages/plec/scripts/build-artifact.mjs`
-* root `turbo.json`
+- root `Cargo.toml`
+- root committed `Cargo.lock`
+- root `cli-tools.json`
+- `scripts/setup.mjs`
+- `scripts/toolchain.mjs`
+- `scripts/verify-toolchain.mjs`
+- `scripts/build-wasm.mjs`
+- `scripts/browser-harness.mjs`
+- `scripts/watch-wasm.mjs`
+- root `package.json`
+- `packages/plec/package.json`
+- `packages/plec/scripts/build-artifact.mjs`
+- root `turbo.json`
 
 The repository already follows a useful pattern:
 
@@ -66,16 +68,16 @@ Extend that architecture rather than creating a parallel tool-management system.
 
 Existing hardening already present:
 
-* root `Cargo.lock` is committed
-* `verify-toolchain.mjs` runs `cargo metadata --locked`
-* `plec` runtime cargo check/test commands use `--locked`
-* `scripts/build-wasm.mjs` forwards `--locked` through `wasm-pack`
+- root `Cargo.lock` is committed
+- `verify-toolchain.mjs` runs `cargo metadata --locked`
+- `plec` runtime cargo check/test commands use `--locked`
+- `scripts/build-wasm.mjs` forwards `--locked` through `wasm-pack`
 
 Known gaps:
 
-* `packages/plec/scripts/build-artifact.mjs` currently performs a release `cargo build` without `--locked`
-* root `install:plec-cli` commands omit `--locked`
-* `scripts/browser-harness.mjs` does not currently forward `--locked` through `wasm-pack test`
+- `packages/plec/scripts/build-artifact.mjs` currently performs a release `cargo build` without `--locked`
+- root `install:plec-cli` commands omit `--locked`
+- `scripts/browser-harness.mjs` does not currently forward `--locked` through `wasm-pack test`
 
 Fix these as part of this issue.
 
@@ -270,9 +272,9 @@ After installation:
 
 A repo-local installation may be reused only when:
 
-* expected executable exists
-* it lives under the expected commit-specific tool root
-* reported version matches the configured version
+- expected executable exists
+- it lives under the expected commit-specific tool root
+- reported version matches the configured version
 
 Do not consider a matching global binary sufficient.
 
@@ -304,19 +306,19 @@ Verify all pinned Cargo tooling from its repo-local path.
 
 For each Cargo tool:
 
-* executable exists
-* executable is the expected repo-local executable
-* reported version exactly matches `cli-tools.json`
+- executable exists
+- executable is the expected repo-local executable
+- reported version exactly matches `cli-tools.json`
 
 Do not use PATH discovery for these tools.
 
 Continue validating:
 
-* Node
-* Yarn
-* Rust
-* Cargo.lock resolution
-* browser tooling when `--browser` is supplied
+- Node
+- Yarn
+- Rust
+- Cargo.lock resolution
+- browser tooling when `--browser` is supplied
 
 The existing:
 
@@ -346,12 +348,12 @@ Start with a strict but maintainable policy.
 
 Use `cargo-deny` for:
 
-* dependency source provenance
-* licenses
-* explicit bans
-* wildcard version detection
-* build-time executable/interpreted-content checks
-* RustSec advisories where applicable
+- dependency source provenance
+- licenses
+- explicit bans
+- wildcard version detection
+- build-time executable/interpreted-content checks
+- RustSec advisories where applicable
 
 Policy principles:
 
@@ -363,9 +365,9 @@ Allow crates.io.
 
 For Git dependencies:
 
-* deny unknown Git sources by default
-* if Git dependencies are intentionally introduced later, require review
-* require immutable revision pins rather than branches/tags wherever cargo-deny supports enforcement
+- deny unknown Git sources by default
+- if Git dependencies are intentionally introduced later, require review
+- require immutable revision pins rather than branches/tags wherever cargo-deny supports enforcement
 
 ### Versions
 
@@ -383,9 +385,9 @@ Do not paste a giant generic license allowlist.
 
 Any exception should:
 
-* be narrow
-* include a reason
-* be reviewable in source control
+- be narrow
+- include a reason
+- be reviewable in source control
 
 ### Build-time behaviour
 
@@ -724,24 +726,24 @@ Keep exceptions visible and reviewable.
 
 For any ignored advisory or policy exception:
 
-* identify the exact crate/advisory
-* include a reason
-* avoid broad wildcard ignores
-* remove the exception when the underlying dependency is upgraded
+- identify the exact crate/advisory
+- include a reason
+- avoid broad wildcard ignores
+- remove the exception when the underlying dependency is upgraded
 
 For Git dependencies:
 
-* exact immutable revisions only
-* no branch-based trust
+- exact immutable revisions only
+- no branch-based trust
 
 For tool pins:
 
-* use full 40-character commits
-* version must match the source at that commit
-* updating a tool requires reviewing both:
+- use full 40-character commits
+- version must match the source at that commit
+- updating a tool requires reviewing both:
 
-  * new version
-  * new commit SHA
+  - new version
+  - new commit SHA
 
 This makes a tool update an explicit source-controlled security change.
 
@@ -829,8 +831,8 @@ commit = Y
 
 must:
 
-* originate from commit `Y` via setup
-* report version `X`
+- originate from commit `Y` via setup
+- report version `X`
 
 Invalid/mismatched metadata fails closed.
 
@@ -900,17 +902,17 @@ Do not create a large synthetic security test framework solely for this.
 
 Do not:
 
-* introduce `cargo-vet`
-* build a custom malware scanner
-* attempt to sandbox `build.rs`
-* attempt to sandbox proc macros
-* globally install the new security tooling
-* replace Cargo's lockfile model
-* duplicate RustSec databases
-* implement automatic dependency upgrades
-* introduce broad unrelated dependency cleanup
-* refactor the Plec build architecture beyond what is necessary for this gate
-* treat commit pinning as proof that upstream source itself is trustworthy
+- introduce `cargo-vet`
+- build a custom malware scanner
+- attempt to sandbox `build.rs`
+- attempt to sandbox proc macros
+- globally install the new security tooling
+- replace Cargo's lockfile model
+- duplicate RustSec databases
+- implement automatic dependency upgrades
+- introduce broad unrelated dependency cleanup
+- refactor the Plec build architecture beyond what is necessary for this gate
+- treat commit pinning as proof that upstream source itself is trustworthy
 
 The purpose is narrower:
 

@@ -1,5 +1,5 @@
-import type { SqlQuery } from "#types";
-import type { DeferredQueryNode } from "./types";
+import type { SqlQuery } from '#types';
+import type { DeferredQueryNode } from './types';
 
 export function makeDeferredQuery(
   node: DeferredQueryNode,

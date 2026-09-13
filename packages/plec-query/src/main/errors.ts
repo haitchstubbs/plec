@@ -1,4 +1,4 @@
-import type { QueryValidationErrorDetail } from "#types";
+import type { QueryValidationErrorDetail } from '#types';
 
 /**
  * Thrown by the query builder when the active dialect does not support a
@@ -11,9 +11,9 @@ export class QueryValidationError extends Error {
   readonly details: QueryValidationErrorDetail[];
 
   constructor(details: QueryValidationErrorDetail[]) {
-    const summary = details.map((d) => d.message).join("; ");
+    const summary = details.map((d) => d.message).join('; ');
     super(summary);
-    this.name = "QueryValidationError";
+    this.name = 'QueryValidationError';
     this.details = details;
     // Restore prototype chain in environments that do not support ES2015 class
     // semantics (e.g. transpiled targets).

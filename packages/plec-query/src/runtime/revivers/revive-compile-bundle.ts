@@ -1,5 +1,5 @@
-import type { Primitive } from "#types";
-import { revivePrimitiveList } from "./revive-primitive-list";
+import type { Primitive } from '#types';
+import { revivePrimitiveList } from './revive-primitive-list';
 
 export function reviveCompileBundle<T extends { values: unknown[] }>(
   bundle: T,

@@ -3,8 +3,8 @@ import {
   setWasmBinding,
   type WireAliasedQuery,
   type WireQuery,
-} from "../runtime/bridge";
-import { browserFallbackBinding } from "../runtime/browser-fallback";
+} from '../runtime/bridge';
+import { browserFallbackBinding } from '../runtime/browser-fallback';
 
 let initialized = false;
 
@@ -24,8 +24,16 @@ type GeneratedWasmBinding = {
   is_not_null: (value: unknown) => WireQuery;
   in_array: (value: unknown, items: unknown[]) => WireQuery;
   not_in_array: (value: unknown, items: unknown[]) => WireQuery;
-  between: (value: unknown, lower: unknown, upper: unknown) => WireQuery;
-  not_between: (value: unknown, lower: unknown, upper: unknown) => WireQuery;
+  between: (
+    value: unknown,
+    lower: unknown,
+    upper: unknown,
+  ) => WireQuery;
+  not_between: (
+    value: unknown,
+    lower: unknown,
+    upper: unknown,
+  ) => WireQuery;
   like_sql: (value: unknown, pattern: unknown) => WireQuery;
   not_like_sql: (value: unknown, pattern: unknown) => WireQuery;
   exists_sql: (query: WireQuery) => WireQuery;
@@ -34,7 +42,11 @@ type GeneratedWasmBinding = {
   or: (conditions: unknown[]) => WireQuery;
   fn_call: (name: string, args: unknown[]) => WireQuery;
   scalar_case: (branches: unknown[], elseVal: unknown) => WireQuery;
-  arith_binary: (left: unknown, operator: string, right: unknown) => WireQuery;
+  arith_binary: (
+    left: unknown,
+    operator: string,
+    right: unknown,
+  ) => WireQuery;
   over_clause: (
     query: WireQuery,
     partitionBy: unknown[],
@@ -60,11 +72,20 @@ type GeneratedWasmBinding = {
   ) => string;
   // Builder DISTINCT
   builder_distinct: (handle: string) => string;
-  builder_distinct_on_columns: (handle: string, colsJson: string) => string;
-  builder_distinct_on_exprs: (handle: string, exprsJson: string) => string;
+  builder_distinct_on_columns: (
+    handle: string,
+    colsJson: string,
+  ) => string;
+  builder_distinct_on_exprs: (
+    handle: string,
+    exprsJson: string,
+  ) => string;
   // Builder SELECT
   builder_select_columns: (handle: string, colsJson: string) => string;
-  builder_select_aliased: (handle: string, aliasesJson: string) => string;
+  builder_select_aliased: (
+    handle: string,
+    aliasesJson: string,
+  ) => string;
   builder_select_fragment: (
     handle: string,
     fragmentJson: string,
@@ -101,7 +122,10 @@ type GeneratedWasmBinding = {
   builder_and_having: (handle: string, predJson: string) => string;
   builder_or_having: (handle: string, predJson: string) => string;
   // Builder GROUP BY
-  builder_group_by_columns: (handle: string, colsJson: string) => string;
+  builder_group_by_columns: (
+    handle: string,
+    colsJson: string,
+  ) => string;
   // Builder ORDER BY
   builder_order_by_column: (
     handle: string,
@@ -109,7 +133,10 @@ type GeneratedWasmBinding = {
     direction?: string | null,
     null_order?: string | null,
   ) => string;
-  builder_order_by_columns: (handle: string, colsJson: string) => string;
+  builder_order_by_columns: (
+    handle: string,
+    colsJson: string,
+  ) => string;
   // Builder LIMIT / OFFSET
   builder_limit: (handle: string, count: number) => string;
   builder_offset: (handle: string, count: number) => string;
@@ -123,11 +150,21 @@ type GeneratedWasmBinding = {
   builder_intersect: (handle: string, queryJson: string) => string;
   builder_except: (handle: string, queryJson: string) => string;
   builder_union_handle: (handle: string, rhsHandle: string) => string;
-  builder_union_all_handle: (handle: string, rhsHandle: string) => string;
-  builder_intersect_handle: (handle: string, rhsHandle: string) => string;
+  builder_union_all_handle: (
+    handle: string,
+    rhsHandle: string,
+  ) => string;
+  builder_intersect_handle: (
+    handle: string,
+    rhsHandle: string,
+  ) => string;
   builder_except_handle: (handle: string, rhsHandle: string) => string;
   // Builder CTE
-  builder_with: (handle: string, name: string, queryJson: string) => string;
+  builder_with: (
+    handle: string,
+    name: string,
+    queryJson: string,
+  ) => string;
   builder_with_recursive: (
     handle: string,
     name: string,
@@ -159,17 +196,32 @@ type GeneratedWasmBinding = {
   builder_columns: (handle: string, colsJson: string) => string;
   builder_values_insert: (handle: string, rowsJson: string) => string;
   builder_insert_select: (handle: string, queryJson: string) => string;
-  builder_insert_select_handle: (handle: string, rhsHandle: string) => string;
-  builder_on_conflict_columns: (handle: string, colsJson: string) => string;
+  builder_insert_select_handle: (
+    handle: string,
+    rhsHandle: string,
+  ) => string;
+  builder_on_conflict_columns: (
+    handle: string,
+    colsJson: string,
+  ) => string;
   builder_on_conflict_constraint: (
     handle: string,
     constraint: string,
   ) => string;
   builder_do_nothing: (handle: string) => string;
-  builder_do_update_set: (handle: string, assignmentsJson: string) => string;
+  builder_do_update_set: (
+    handle: string,
+    assignmentsJson: string,
+  ) => string;
   builder_conflict_where: (handle: string, predJson: string) => string;
-  builder_returning_columns: (handle: string, colsJson: string) => string;
-  builder_returning_aliased: (handle: string, aliasesJson: string) => string;
+  builder_returning_columns: (
+    handle: string,
+    colsJson: string,
+  ) => string;
+  builder_returning_aliased: (
+    handle: string,
+    aliasesJson: string,
+  ) => string;
   builder_returning_fragment: (
     handle: string,
     fragmentJson: string,
@@ -196,14 +248,17 @@ type GeneratedWasmBinding = {
   };
   builder_canonical_ir_hash?: (handle: string) => string;
   builder_apply_ops: (handle: string, opsJson: string) => string;
-  builder_apply_ops_binary?: (handle: string, payload: Uint8Array) => string;
+  builder_apply_ops_binary?: (
+    handle: string,
+    payload: Uint8Array,
+  ) => string;
 };
 
 export async function initNodeQueryWasm(): Promise<void> {
   try {
     const generatedBinding =
-      (await import("../generated/wasm/query_wasm.js")) as unknown as GeneratedWasmBinding;
-    if (typeof generatedBinding.default === "function") {
+      (await import('../generated/wasm/query_wasm.js')) as unknown as GeneratedWasmBinding;
+    if (typeof generatedBinding.default === 'function') {
       await generatedBinding.default();
     }
     setWasmBinding({
@@ -244,8 +299,10 @@ export async function initNodeQueryWasm(): Promise<void> {
       builderFromSubquery: generatedBinding.builder_from_subquery,
       // Builder DISTINCT
       builderDistinct: generatedBinding.builder_distinct,
-      builderDistinctOnColumns: generatedBinding.builder_distinct_on_columns,
-      builderDistinctOnExprs: generatedBinding.builder_distinct_on_exprs,
+      builderDistinctOnColumns:
+        generatedBinding.builder_distinct_on_columns,
+      builderDistinctOnExprs:
+        generatedBinding.builder_distinct_on_exprs,
       // Builder SELECT
       builderSelectColumns: generatedBinding.builder_select_columns,
       builderSelectAliased: generatedBinding.builder_select_aliased,
@@ -293,23 +350,30 @@ export async function initNodeQueryWasm(): Promise<void> {
       builderWithHandle: generatedBinding.builder_with_handle,
       builderWithRecursiveHandle:
         generatedBinding.builder_with_recursive_handle,
-      builderFromSubqueryHandle: generatedBinding.builder_from_subquery_handle,
-      builderJoinSubqueryHandle: generatedBinding.builder_join_subquery_handle,
+      builderFromSubqueryHandle:
+        generatedBinding.builder_from_subquery_handle,
+      builderJoinSubqueryHandle:
+        generatedBinding.builder_join_subquery_handle,
       // Builder INSERT
       builderInsertInto: generatedBinding.builder_insert_into,
       builderColumns: generatedBinding.builder_columns,
       builderValuesInsert: generatedBinding.builder_values_insert,
       builderInsertSelect: generatedBinding.builder_insert_select,
-      builderInsertSelectHandle: generatedBinding.builder_insert_select_handle,
-      builderOnConflictColumns: generatedBinding.builder_on_conflict_columns,
+      builderInsertSelectHandle:
+        generatedBinding.builder_insert_select_handle,
+      builderOnConflictColumns:
+        generatedBinding.builder_on_conflict_columns,
       builderOnConflictConstraint:
         generatedBinding.builder_on_conflict_constraint,
       builderDoNothing: generatedBinding.builder_do_nothing,
       builderDoUpdateSet: generatedBinding.builder_do_update_set,
       builderConflictWhere: generatedBinding.builder_conflict_where,
-      builderReturningColumns: generatedBinding.builder_returning_columns,
-      builderReturningAliased: generatedBinding.builder_returning_aliased,
-      builderReturningFragment: generatedBinding.builder_returning_fragment,
+      builderReturningColumns:
+        generatedBinding.builder_returning_columns,
+      builderReturningAliased:
+        generatedBinding.builder_returning_aliased,
+      builderReturningFragment:
+        generatedBinding.builder_returning_fragment,
       // Builder UPDATE
       builderUpdate: generatedBinding.builder_update,
       builderSet: generatedBinding.builder_set,
@@ -324,7 +388,8 @@ export async function initNodeQueryWasm(): Promise<void> {
       builderInsertColumns: generatedBinding.builder_insert_columns,
       builderAs: generatedBinding.builder_as,
       builderCompileBundle: generatedBinding.builder_compile_bundle,
-      builderCanonicalIrHash: generatedBinding.builder_canonical_ir_hash,
+      builderCanonicalIrHash:
+        generatedBinding.builder_canonical_ir_hash,
       builderApplyOps: generatedBinding.builder_apply_ops,
       builderApplyOpsBinary: generatedBinding.builder_apply_ops_binary,
     });
@@ -334,8 +399,8 @@ export async function initNodeQueryWasm(): Promise<void> {
     // Fall back to the native or browser runtime below when wasm init is unavailable.
   }
 
-  if (typeof process !== "undefined" && process.versions?.node) {
-    const { loadNativeBinding } = await import("../runtime/native");
+  if (typeof process !== 'undefined' && process.versions?.node) {
+    const { loadNativeBinding } = await import('../runtime/native');
     setWasmBinding(loadNativeBinding());
     initialized = true;
     return;
@@ -348,7 +413,7 @@ export async function initNodeQueryWasm(): Promise<void> {
 export function assertNodeQueryWasmInitialized(): void {
   if (!initialized) {
     throw new Error(
-      "@haitchstack/query/wasm requires initNodeQueryWasm() before constructing Database.",
+      '@haitchstack/query/wasm requires initNodeQueryWasm() before constructing Database.',
     );
   }
 }

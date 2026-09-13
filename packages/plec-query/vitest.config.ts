@@ -1,4 +1,4 @@
-import type { ViteUserConfig as UserConfig } from "vitest/config";
+import type { ViteUserConfig as UserConfig } from 'vitest/config';
 
 export interface NodeVitestProjectOptions {
   name: string;
@@ -15,8 +15,8 @@ export interface NodeVitestProjectOptions {
 export function defineNodeVitestProject({
   name,
   root,
-  include = ["tests/**/*.test.ts"],
-  exclude = ["tests/types/**"],
+  include = ['tests/**/*.test.ts'],
+  exclude = ['tests/types/**'],
   passWithNoTests = false,
   alias,
 }: NodeVitestProjectOptions): UserConfig {
@@ -25,7 +25,7 @@ export function defineNodeVitestProject({
     resolve: alias === undefined ? undefined : { alias },
     test: {
       name,
-      environment: "node",
+      environment: 'node',
       include,
       exclude,
       passWithNoTests,
@@ -34,6 +34,6 @@ export function defineNodeVitestProject({
 }
 
 export default defineNodeVitestProject({
-  name: "query",
+  name: 'query',
   root: import.meta.dirname,
 });

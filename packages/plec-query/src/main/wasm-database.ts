@@ -5,9 +5,9 @@ import type {
   AnySourceColumnMap,
   DatabaseConfig,
   InitialBuilderState,
-} from "#types";
-import BaseDatabase from "./database";
-import { assertNodeQueryWasmInitialized } from "./wasm-runtime";
+} from '#types';
+import BaseDatabase from './database';
+import { assertNodeQueryWasmInitialized } from './wasm-runtime';
 
 type EmptySourceColumnMap = Record<never, never>;
 
@@ -19,8 +19,7 @@ class Database<
   TSelectedColumns extends string = never,
   TState extends AnyBuilderState = InitialBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
+    AnyDatabaseConnection | undefined,
 > extends BaseDatabase<
   TSchema,
   TRegisteredSources,

@@ -1,4 +1,4 @@
-const operators = ["+", "-", "*", "/"] as const;
+const operators = ['+', '-', '*', '/'] as const;
 
 /**
  * Supported arithmetic operator tokens.

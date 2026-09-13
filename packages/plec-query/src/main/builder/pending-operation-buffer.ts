@@ -1,7 +1,11 @@
-import type { PendingOp } from "#types";
+import type { PendingOp } from '#types';
 
 export class PendingOpBuffer {
-  public static readonly empty = new PendingOpBuffer(undefined, undefined, 0);
+  public static readonly empty = new PendingOpBuffer(
+    undefined,
+    undefined,
+    0,
+  );
 
   private _arrayCache: readonly PendingOp[] | undefined;
 
@@ -23,7 +27,7 @@ export class PendingOpBuffer {
 
     for (let index = this.length - 1; index >= 0; index -= 1) {
       if (currentOp === undefined) {
-        throw new Error("Pending op buffer is missing an operation.");
+        throw new Error('Pending op buffer is missing an operation.');
       }
       ops[index] = currentOp;
       currentOp = previous?.op;
