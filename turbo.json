@@ -32,7 +32,7 @@
       "cache": false,
       "persistent": false,
       "dependsOn": ["fullstack#build"],
-      "env": ["E2E_PORT"],
+      "env": ["E2E_PORT", "PLEC_BIN"],
       "outputs": []
     },
     "test:acceptance": {
