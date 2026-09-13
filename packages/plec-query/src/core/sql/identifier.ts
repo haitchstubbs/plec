@@ -1,4 +1,4 @@
-import type { SqlIdentifier } from "#types";
+import type { SqlIdentifier } from '#types';
 
 /**
  * Create a SQL identifier from path segments.
@@ -12,5 +12,5 @@ import type { SqlIdentifier } from "#types";
  * ```
  */
 export function identifier(...parts: string[]): SqlIdentifier {
-  return { __kind: "identifier", parts } as SqlIdentifier;
+  return { __kind: 'identifier', parts } as SqlIdentifier;
 }

@@ -1,9 +1,9 @@
 import type {
   NodeQueryCompileDiagnostics,
   NodeQueryCompileDiagnosticsCollector,
-} from "../types";
-import { DiagnosticsCollector } from "./collectors";
-import { createNodeQueryCompileDiagnosticsSample } from "./compile-diagnostics";
+} from '../types';
+import { DiagnosticsCollector } from './collectors';
+import { createNodeQueryCompileDiagnosticsSample } from './compile-diagnostics';
 /** @internal */
 export function captureNodeQueryCompileDiagnostics<TResult>(
   action: () => TResult,
@@ -19,8 +19,8 @@ export function captureNodeQueryCompileDiagnostics<TResult>(
     now:
       options.now ??
       (() =>
-        typeof performance !== "undefined" &&
-        typeof performance.now === "function"
+        typeof performance !== 'undefined' &&
+        typeof performance.now === 'function'
           ? performance.now()
           : Date.now()),
     sample,
@@ -29,9 +29,9 @@ export function captureNodeQueryCompileDiagnostics<TResult>(
     },
     recordApplyMode(mode) {
       sample.applyMode =
-        sample.applyMode === "none" || sample.applyMode === mode
+        sample.applyMode === 'none' || sample.applyMode === mode
           ? mode
-          : "mixed";
+          : 'mixed';
     },
   };
 

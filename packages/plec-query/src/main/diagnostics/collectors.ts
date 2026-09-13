@@ -1,21 +1,20 @@
 import type {
   NodeQueryBuildDiagnosticsCollector,
   NodeQueryCompileDiagnosticsCollector,
-} from "#types";
+} from '#types';
 
 const nodeQueryCompileDiagnosticsStack: NodeQueryCompileDiagnosticsCollector[] =
   [];
-const nodeQueryBuildDiagnosticsStack: NodeQueryBuildDiagnosticsCollector[] = [];
+const nodeQueryBuildDiagnosticsStack: NodeQueryBuildDiagnosticsCollector[] =
+  [];
 
 function getActiveNodeQueryCompileDiagnosticsCollector():
-  | NodeQueryCompileDiagnosticsCollector
-  | undefined {
+  NodeQueryCompileDiagnosticsCollector | undefined {
   return nodeQueryCompileDiagnosticsStack.at(-1);
 }
 
 function getActiveNodeQueryBuildDiagnosticsCollector():
-  | NodeQueryBuildDiagnosticsCollector
-  | undefined {
+  NodeQueryBuildDiagnosticsCollector | undefined {
   return nodeQueryBuildDiagnosticsStack.at(-1);
 }
 

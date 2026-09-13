@@ -1,4 +1,4 @@
-import type { NodeQueryBuildDiagnostics } from "../types";
+import type { NodeQueryBuildDiagnostics } from '../types';
 
 export function createNodeQueryBuildDiagnosticsSample(): NodeQueryBuildDiagnostics {
   return {

@@ -57,9 +57,9 @@ function average(total: number, iterations: number): number {
 
 function resolveValues(
   query: BenchmarkableQuery,
-  values: BenchmarkableQuery["values"],
+  values: BenchmarkableQuery['values'],
 ): unknown[] {
-  return typeof values === "function" ? values.call(query) : values;
+  return typeof values === 'function' ? values.call(query) : values;
 }
 
 function materializeQuery(query: BenchmarkableQuery) {
@@ -82,7 +82,7 @@ export async function measureQueryPerformance<
   const { execute = false, iterations = 1, now = defaultNow } = options;
 
   if (!Number.isInteger(iterations) || iterations < 1) {
-    throw new Error("iterations must be a positive integer.");
+    throw new Error('iterations must be a positive integer.');
   }
 
   let buildTotal = 0;
@@ -97,9 +97,9 @@ export async function measureQueryPerformance<
     lastQuery = query;
 
     if (execute) {
-      if (typeof query.execute !== "function") {
+      if (typeof query.execute !== 'function') {
         throw new Error(
-          "Cannot measure execution time for a query without execute().",
+          'Cannot measure execution time for a query without execute().',
         );
       }
 
@@ -110,7 +110,7 @@ export async function measureQueryPerformance<
   }
 
   if (!lastQuery) {
-    throw new Error("Query builder did not produce a query.");
+    throw new Error('Query builder did not produce a query.');
   }
 
   return {
@@ -140,7 +140,9 @@ export async function compareQueryPerformance<
     ]),
   );
 
-  return Object.fromEntries(entries) as QueryPerformanceComparison<TQueries>;
+  return Object.fromEntries(
+    entries,
+  ) as QueryPerformanceComparison<TQueries>;
 }
 
 export async function measureQueryLifecyclePerformance<
@@ -155,7 +157,7 @@ export async function measureQueryLifecyclePerformance<
   const { execute = false, iterations = 1, now = defaultNow } = options;
 
   if (!Number.isInteger(iterations) || iterations < 1) {
-    throw new Error("iterations must be a positive integer.");
+    throw new Error('iterations must be a positive integer.');
   }
 
   let chainTotal = 0;
@@ -188,9 +190,9 @@ export async function measureQueryLifecyclePerformance<
     getterReuseTotal += now() - getterReuseStart;
 
     if (execute) {
-      if (typeof query.execute !== "function") {
+      if (typeof query.execute !== 'function') {
         throw new Error(
-          "Cannot measure execution time for a query without execute().",
+          'Cannot measure execution time for a query without execute().',
         );
       }
 
@@ -201,7 +203,7 @@ export async function measureQueryLifecyclePerformance<
   }
 
   if (!lastMaterialized) {
-    throw new Error("Query builder did not produce a query.");
+    throw new Error('Query builder did not produce a query.');
   }
 
   return {
@@ -232,6 +234,8 @@ export async function compareQueryLifecyclePerformance<
     ]),
   );
 
-  return Object.fromEntries(entries) as QueryLifecyclePerformanceComparison<TQueries>;
+  return Object.fromEntries(
+    entries,
+  ) as QueryLifecyclePerformanceComparison<TQueries>;
 }
-import { defaultNow } from "../utils/perf";
+import { defaultNow } from '../utils/perf';

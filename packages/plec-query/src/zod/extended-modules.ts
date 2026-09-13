@@ -5,8 +5,8 @@ import {
   type ZodRecord,
   type ZodString,
   type ZodType,
-} from "zod";
-import type { $ZodRecordKey, $ZodType, SomeType } from "zod/v4/core";
+} from 'zod';
+import type { $ZodRecordKey, $ZodType, SomeType } from 'zod/v4/core';
 
 /**
  * A more specific alias for a Zod record schema with key and value generics.
@@ -51,22 +51,22 @@ export interface ZodStringExtensions {
 export type DynamicSchemaRule =
   | {
       match: string;
-      type: "prefixed";
+      type: 'prefixed';
       schema: ZodType<unknown>;
     }
   | {
       match: string;
-      type: "suffixed";
+      type: 'suffixed';
       schema: ZodType<unknown>;
     }
   | {
       match: string;
-      type: "exact";
+      type: 'exact';
       schema: ZodType<unknown>;
     }
   | {
       match: (key: string) => boolean;
-      type?: "custom";
+      type?: 'custom';
       schema: ZodType<unknown>;
     };
 
@@ -85,16 +85,16 @@ export abstract class HaitchstackQueryZodExtension {
     rule: DynamicSchemaRule,
     key: string,
   ) {
-    if (typeof rule.match === "function") {
+    if (typeof rule.match === 'function') {
       return rule.match(key);
     }
 
     switch (rule.type) {
-      case "prefixed":
+      case 'prefixed':
         return key.startsWith(rule.match);
-      case "suffixed":
+      case 'suffixed':
         return key.endsWith(rule.match);
-      case "exact":
+      case 'exact':
         return key === rule.match;
       default:
         return false;
@@ -115,15 +115,19 @@ export abstract class HaitchstackQueryZodExtension {
     return record(string(), unknown()).superRefine((lake, ctx) => {
       for (const [key, value] of Object.entries(lake)) {
         const rule = rules.find((rule) =>
-          HaitchstackQueryZodExtension.dynamicSchemaRuleMatcher(rule, key),
+          HaitchstackQueryZodExtension.dynamicSchemaRuleMatcher(
+            rule,
+            key,
+          ),
         );
 
         if (!rule) {
           ctx.addIssue({
-            code: "custom",
+            code: 'custom',
             path: [key],
             message:
-              options?.unknownKeyMessage?.(key) ?? `Unknown dataset "${key}"`,
+              options?.unknownKeyMessage?.(key) ??
+              `Unknown dataset "${key}"`,
           });
           continue;
         }
@@ -133,7 +137,7 @@ export abstract class HaitchstackQueryZodExtension {
         if (!result.success) {
           for (const issue of result.error.issues) {
             ctx.addIssue({
-              code: "custom",
+              code: 'custom',
               path: [key, ...issue.path],
               message: issue.message,
             });
@@ -155,9 +159,10 @@ export abstract class HaitchstackQueryZodExtension {
     suffixes: string[],
   ) {
     return stringSchema.refine(
-      (value: string) => suffixes.some((suffix) => value.endsWith(suffix)),
+      (value: string) =>
+        suffixes.some((suffix) => value.endsWith(suffix)),
       {
-        message: `Value must end with one of: ${suffixes.join(", ")}`,
+        message: `Value must end with one of: ${suffixes.join(', ')}`,
       },
     ) as ZodString;
   }
@@ -174,9 +179,10 @@ export abstract class HaitchstackQueryZodExtension {
     prefixes: string[],
   ) {
     return stringSchema.refine(
-      (value: string) => prefixes.some((prefix) => value.startsWith(prefix)),
+      (value: string) =>
+        prefixes.some((prefix) => value.startsWith(prefix)),
       {
-        message: `Value must start with one of: ${prefixes.join(", ")}`,
+        message: `Value must start with one of: ${prefixes.join(', ')}`,
       },
     ) as ZodString;
   }
@@ -188,10 +194,16 @@ export abstract class HaitchstackQueryZodExtension {
    * @param suffix - The required suffix value.
    * @returns The refined Zod string schema.
    */
-  public static stringHasSuffix(stringSchema: ZodString, suffix: string) {
-    return stringSchema.refine((value: string) => value.endsWith(suffix), {
-      message: `Value must end with "${suffix}"`,
-    }) as ZodString;
+  public static stringHasSuffix(
+    stringSchema: ZodString,
+    suffix: string,
+  ) {
+    return stringSchema.refine(
+      (value: string) => value.endsWith(suffix),
+      {
+        message: `Value must end with "${suffix}"`,
+      },
+    ) as ZodString;
   }
 
   /**
@@ -201,9 +213,15 @@ export abstract class HaitchstackQueryZodExtension {
    * @param prefix - The required prefix value.
    * @returns The refined Zod string schema.
    */
-  public static stringHasPrefix(stringSchema: ZodString, prefix: string) {
-    return stringSchema.refine((value: string) => value.startsWith(prefix), {
-      message: `Value must start with "${prefix}"`,
-    }) as ZodString;
+  public static stringHasPrefix(
+    stringSchema: ZodString,
+    prefix: string,
+  ) {
+    return stringSchema.refine(
+      (value: string) => value.startsWith(prefix),
+      {
+        message: `Value must start with "${prefix}"`,
+      },
+    ) as ZodString;
   }
 }

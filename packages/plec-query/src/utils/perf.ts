@@ -1,4 +1,5 @@
 export const defaultNow = (): number =>
-  typeof performance !== "undefined" && typeof performance.now === "function"
+  typeof performance !== 'undefined' &&
+  typeof performance.now === 'function'
     ? performance.now()
     : Date.now();

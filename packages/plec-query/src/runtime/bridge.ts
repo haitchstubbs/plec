@@ -1,4 +1,4 @@
-import { encode } from "@msgpack/msgpack";
+import { encode } from '@msgpack/msgpack';
 import {
   ARITHMETIC_OPERATORS,
   COMPARISON_OPERATORS,
@@ -6,15 +6,15 @@ import {
   type Dialect,
   SUPPORTED_FUNCTIONS,
   type SupportedFunction,
-} from "#core";
+} from '#core';
 import type {
   Primitive,
   SqlIdentifier,
   SqlQuery,
   SqlRaw,
   SqlValue,
-} from "#types";
-import { QueryValidationError } from "../main/errors";
+} from '#types';
+import { QueryValidationError } from '../main/errors';
 import {
   bindArraySqlValueMethod,
   bindBinarySqlValueMethod,
@@ -24,17 +24,17 @@ import {
   bindTernarySqlValueMethod,
   bindUnarySqlValueMethod,
   getBinding,
-} from "./get-runtime-binding";
-import { hash64Hex } from "./hash-64-hex";
-import { makeDeferredQuery } from "./make-deferred-query";
-import { reviveCompileBundle } from "./revivers/revive-compile-bundle";
-import { revivePrimitive } from "./revivers/revive-primitive";
-import { revivePrimitiveList } from "./revivers/revive-primitive-list";
-import { reviveQuery } from "./revivers/revive-query";
-import { serializeImmediateSqlValue } from "./serializers/serialize-immediate-sql-value";
-import { serializeQuery } from "./serializers/serialize-query";
-import { serializeSqlValue } from "./serializers/serialize-sql-value";
-import type { WireQuery } from "./types";
+} from './get-runtime-binding';
+import { hash64Hex } from './hash-64-hex';
+import { makeDeferredQuery } from './make-deferred-query';
+import { reviveCompileBundle } from './revivers/revive-compile-bundle';
+import { revivePrimitive } from './revivers/revive-primitive';
+import { revivePrimitiveList } from './revivers/revive-primitive-list';
+import { reviveQuery } from './revivers/revive-query';
+import { serializeImmediateSqlValue } from './serializers/serialize-immediate-sql-value';
+import { serializeQuery } from './serializers/serialize-query';
+import { serializeSqlValue } from './serializers/serialize-sql-value';
+import type { WireQuery } from './types';
 
 // Process-scoped expression dialect used by direct expression helper calls.
 // Database instances refresh this as query-building operations run.
@@ -42,7 +42,7 @@ let activeRuntimeDialect: Dialect | undefined;
 
 function resolveRuntimeDialect(overrideDialect?: Dialect): Dialect {
   return normalizeRuntimeDialect(
-    overrideDialect ?? activeRuntimeDialect ?? "postgres",
+    overrideDialect ?? activeRuntimeDialect ?? 'postgres',
   ) as Dialect;
 }
 
@@ -66,7 +66,7 @@ function validateFunctionForDialect(
 function validateOperatorForDialect(
   operator: string,
   dialect: Dialect,
-  kind: "comparison" | "arithmetic",
+  kind: 'comparison' | 'arithmetic',
 ): string {
   const normalized = operator.trim();
   if (!DIALECTS.has(dialect)) {
@@ -76,7 +76,7 @@ function validateOperatorForDialect(
   }
 
   const supported =
-    kind === "comparison"
+    kind === 'comparison'
       ? (COMPARISON_OPERATORS as ReadonlySet<string>).has(normalized)
       : (ARITHMETIC_OPERATORS as ReadonlySet<string>).has(normalized);
   if (!supported) {
@@ -110,12 +110,16 @@ function rethrowStructuredValidationError(err: unknown): never {
           feature: string;
         }>;
       };
-      if (parsed.kind === "ValidationError" && Array.isArray(parsed.errors)) {
+      if (
+        parsed.kind === 'ValidationError' &&
+        Array.isArray(parsed.errors)
+      ) {
         throw new QueryValidationError(
           parsed.errors.map((entry) => ({
             code: entry.code,
             message: entry.message,
-            feature: entry.feature as import("#types").UnsupportedFeature,
+            feature:
+              entry.feature as import('#types').UnsupportedFeature,
           })),
         );
       }
@@ -169,7 +173,7 @@ export function runtimeDeferredSql(
   const serializedExprs = exprs.map((expr) => serializeSqlValue(expr));
   return makeDeferredQuery(
     {
-      type: "sqlTemplate",
+      type: 'sqlTemplate',
       strings: stringChunks,
       exprs: serializedExprs,
     },
@@ -182,14 +186,18 @@ export function runtimeRef(parts: string[]): SqlIdentifier {
 }
 
 export function runtimeCompilePostgres(query: SqlQuery): SqlQuery {
-  return reviveQuery(getBinding().compilePostgres(serializeQuery(query)));
+  return reviveQuery(
+    getBinding().compilePostgres(serializeQuery(query)),
+  );
 }
 
 export function runtimeCompileQuery(
   query: SqlQuery,
   dialect: string,
 ): SqlQuery {
-  return reviveQuery(getBinding().compileQuery(serializeQuery(query), dialect));
+  return reviveQuery(
+    getBinding().compileQuery(serializeQuery(query), dialect),
+  );
 }
 
 export function runtimeCmp(
@@ -198,11 +206,13 @@ export function runtimeCmp(
   right: SqlValue,
   dialect?: string,
 ): SqlQuery {
-  const resolvedDialect = resolveRuntimeDialect(dialect as Dialect | undefined);
+  const resolvedDialect = resolveRuntimeDialect(
+    dialect as Dialect | undefined,
+  );
   const normalized = validateOperatorForDialect(
     operator,
     resolvedDialect,
-    "comparison",
+    'comparison',
   );
   return reviveQuery(
     getBinding().cmp(
@@ -220,7 +230,10 @@ export function runtimeFnCall(
   dialect?: Dialect,
 ): SqlQuery {
   const resolvedDialect = resolveRuntimeDialect(dialect);
-  const normalizedName = validateFunctionForDialect(name, resolvedDialect);
+  const normalizedName = validateFunctionForDialect(
+    name,
+    resolvedDialect,
+  );
   return reviveQuery(
     getBinding().fnCall(
       normalizedName,
@@ -235,8 +248,8 @@ export function runtimeOverClause(
   partitionBy: SqlQuery[],
   orderBy: Array<{
     expression: SqlQuery;
-    direction?: "ASC" | "DESC";
-    nulls?: "FIRST" | "LAST";
+    direction?: 'ASC' | 'DESC';
+    nulls?: 'FIRST' | 'LAST';
   }>,
   dialect: string,
 ): SqlQuery {
@@ -278,11 +291,13 @@ export function runtimeArithBinary(
   right: SqlValue,
   dialect?: string,
 ): SqlQuery {
-  const resolvedDialect = resolveRuntimeDialect(dialect as Dialect | undefined);
+  const resolvedDialect = resolveRuntimeDialect(
+    dialect as Dialect | undefined,
+  );
   const normalized = validateOperatorForDialect(
     operator,
     resolvedDialect,
-    "arithmetic",
+    'arithmetic',
   );
   return reviveQuery(
     getBinding().arithBinary(
@@ -303,123 +318,145 @@ export function runtimeBuilderNew(dialect?: string): string {
   return getBinding().builderNew(dialect);
 }
 // Runtime condition methods
-export const runtimeAnd = bindConditionMethod("and");
-export const runtimeOr = bindConditionMethod("or");
-export const runtimeIsNull = bindUnarySqlValueMethod("isNull");
-export const runtimeIsNotNull = bindUnarySqlValueMethod("isNotNull");
-export const runtimeInArray = bindArraySqlValueMethod("inArray");
-export const runtimeNotInArray = bindArraySqlValueMethod("notInArray");
-export const runtimeBetween = bindTernarySqlValueMethod("between");
-export const runtimeNotBetween = bindTernarySqlValueMethod("notBetween");
-export const runtimeLikeSql = bindBinarySqlValueMethod("likeSql");
-export const runtimeNotLikeSql = bindBinarySqlValueMethod("notLikeSql");
-export const runtimeExistsSql = bindExistsSqlMethod("existsSql");
-export const runtimeNotExistsSql = bindExistsSqlMethod("notExistsSql");
+export const runtimeAnd = bindConditionMethod('and');
+export const runtimeOr = bindConditionMethod('or');
+export const runtimeIsNull = bindUnarySqlValueMethod('isNull');
+export const runtimeIsNotNull = bindUnarySqlValueMethod('isNotNull');
+export const runtimeInArray = bindArraySqlValueMethod('inArray');
+export const runtimeNotInArray = bindArraySqlValueMethod('notInArray');
+export const runtimeBetween = bindTernarySqlValueMethod('between');
+export const runtimeNotBetween =
+  bindTernarySqlValueMethod('notBetween');
+export const runtimeLikeSql = bindBinarySqlValueMethod('likeSql');
+export const runtimeNotLikeSql = bindBinarySqlValueMethod('notLikeSql');
+export const runtimeExistsSql = bindExistsSqlMethod('existsSql');
+export const runtimeNotExistsSql = bindExistsSqlMethod('notExistsSql');
 // Runtime builder methods
-export const runtimeBuilderClone = bindRuntimeMethod("builderClone");
-export const runtimeBuilderDrop = bindRuntimeMethod("builderDrop");
-export const runtimeBuilderClear = bindRuntimeMethod("builderClear");
-export const runtimeBuilderFromTable = bindRuntimeMethod("builderFromTable");
+export const runtimeBuilderClone = bindRuntimeMethod('builderClone');
+export const runtimeBuilderDrop = bindRuntimeMethod('builderDrop');
+export const runtimeBuilderClear = bindRuntimeMethod('builderClear');
+export const runtimeBuilderFromTable =
+  bindRuntimeMethod('builderFromTable');
 export const runtimeBuilderFromTableAlias = bindRuntimeMethod(
-  "builderFromTableAlias",
+  'builderFromTableAlias',
 );
 export const runtimeBuilderFromSubquery = bindRuntimeMethod(
-  "builderFromSubquery",
+  'builderFromSubquery',
 );
-export const runtimeBuilderDistinct = bindRuntimeMethod("builderDistinct");
+export const runtimeBuilderDistinct =
+  bindRuntimeMethod('builderDistinct');
 export const runtimeBuilderDistinctOnColumns = bindRuntimeMethod(
-  "builderDistinctOnColumns",
+  'builderDistinctOnColumns',
 );
 export const runtimeBuilderDistinctOnExprs = bindRuntimeMethod(
-  "builderDistinctOnExprs",
+  'builderDistinctOnExprs',
 );
 export const runtimeBuilderSelectColumns = bindRuntimeMethod(
-  "builderSelectColumns",
+  'builderSelectColumns',
 );
 export const runtimeBuilderSelectAliased = bindRuntimeMethod(
-  "builderSelectAliased",
+  'builderSelectAliased',
 );
 export const runtimeBuilderSelectFragment = bindRuntimeMethod(
-  "builderSelectFragment",
+  'builderSelectFragment',
 );
-export const runtimeBuilderJoinTable = bindRuntimeMethod("builderJoinTable");
+export const runtimeBuilderJoinTable =
+  bindRuntimeMethod('builderJoinTable');
 export const runtimeBuilderJoinTableAlias = bindRuntimeMethod(
-  "builderJoinTableAlias",
+  'builderJoinTableAlias',
 );
 export const runtimeBuilderJoinSubquery = bindRuntimeMethod(
-  "builderJoinSubquery",
+  'builderJoinSubquery',
 );
-export const runtimeBuilderOn = bindRuntimeMethod("builderOn");
-export const runtimeBuilderAndOn = bindRuntimeMethod("builderAndOn");
-export const runtimeBuilderOrOn = bindRuntimeMethod("builderOrOn");
+export const runtimeBuilderOn = bindRuntimeMethod('builderOn');
+export const runtimeBuilderAndOn = bindRuntimeMethod('builderAndOn');
+export const runtimeBuilderOrOn = bindRuntimeMethod('builderOrOn');
 export const runtimeBuilderUsingColumns = bindRuntimeMethod(
-  "builderUsingColumns",
+  'builderUsingColumns',
 );
-export const runtimeBuilderOnColumns = bindRuntimeMethod("builderOnColumns");
-export const runtimeBuilderWhere = bindRuntimeMethod("builderWhere");
-export const runtimeBuilderAndWhere = bindRuntimeMethod("builderAndWhere");
-export const runtimeBuilderOrWhere = bindRuntimeMethod("builderOrWhere");
-export const runtimeBuilderHaving = bindRuntimeMethod("builderHaving");
-export const runtimeBuilderAndHaving = bindRuntimeMethod("builderAndHaving");
-export const runtimeBuilderOrHaving = bindRuntimeMethod("builderOrHaving");
+export const runtimeBuilderOnColumns =
+  bindRuntimeMethod('builderOnColumns');
+export const runtimeBuilderWhere = bindRuntimeMethod('builderWhere');
+export const runtimeBuilderAndWhere =
+  bindRuntimeMethod('builderAndWhere');
+export const runtimeBuilderOrWhere =
+  bindRuntimeMethod('builderOrWhere');
+export const runtimeBuilderHaving = bindRuntimeMethod('builderHaving');
+export const runtimeBuilderAndHaving =
+  bindRuntimeMethod('builderAndHaving');
+export const runtimeBuilderOrHaving =
+  bindRuntimeMethod('builderOrHaving');
 export const runtimeBuilderGroupByColumns = bindRuntimeMethod(
-  "builderGroupByColumns",
+  'builderGroupByColumns',
 );
 export const runtimeBuilderOrderByColumn = bindRuntimeMethod(
-  "builderOrderByColumn",
+  'builderOrderByColumn',
 );
 export const runtimeBuilderOrderByColumns = bindRuntimeMethod(
-  "builderOrderByColumns",
+  'builderOrderByColumns',
 );
-export const runtimeBuilderLimit = bindRuntimeMethod("builderLimit");
-export const runtimeBuilderOffset = bindRuntimeMethod("builderOffset");
-export const runtimeBuilderForUpdate = bindRuntimeMethod("builderForUpdate");
-export const runtimeBuilderForShare = bindRuntimeMethod("builderForShare");
-export const runtimeBuilderNoWait = bindRuntimeMethod("builderNoWait");
-export const runtimeBuilderSkipLocked = bindRuntimeMethod("builderSkipLocked");
-export const runtimeBuilderUnion = bindRuntimeMethod("builderUnion");
-export const runtimeBuilderUnionAll = bindRuntimeMethod("builderUnionAll");
-export const runtimeBuilderIntersect = bindRuntimeMethod("builderIntersect");
-export const runtimeBuilderExcept = bindRuntimeMethod("builderExcept");
-export const runtimeBuilderWith = bindRuntimeMethod("builderWith");
+export const runtimeBuilderLimit = bindRuntimeMethod('builderLimit');
+export const runtimeBuilderOffset = bindRuntimeMethod('builderOffset');
+export const runtimeBuilderForUpdate =
+  bindRuntimeMethod('builderForUpdate');
+export const runtimeBuilderForShare =
+  bindRuntimeMethod('builderForShare');
+export const runtimeBuilderNoWait = bindRuntimeMethod('builderNoWait');
+export const runtimeBuilderSkipLocked = bindRuntimeMethod(
+  'builderSkipLocked',
+);
+export const runtimeBuilderUnion = bindRuntimeMethod('builderUnion');
+export const runtimeBuilderUnionAll =
+  bindRuntimeMethod('builderUnionAll');
+export const runtimeBuilderIntersect =
+  bindRuntimeMethod('builderIntersect');
+export const runtimeBuilderExcept = bindRuntimeMethod('builderExcept');
+export const runtimeBuilderWith = bindRuntimeMethod('builderWith');
 export const runtimeBuilderWithRecursive = bindRuntimeMethod(
-  "builderWithRecursive",
+  'builderWithRecursive',
 );
-export const runtimeBuilderInsertInto = bindRuntimeMethod("builderInsertInto");
-export const runtimeBuilderColumns = bindRuntimeMethod("builderColumns");
+export const runtimeBuilderInsertInto = bindRuntimeMethod(
+  'builderInsertInto',
+);
+export const runtimeBuilderColumns =
+  bindRuntimeMethod('builderColumns');
 export const runtimeBuilderValuesInsert = bindRuntimeMethod(
-  "builderValuesInsert",
+  'builderValuesInsert',
 );
 export const runtimeBuilderInsertSelect = bindRuntimeMethod(
-  "builderInsertSelect",
+  'builderInsertSelect',
 );
 export const runtimeBuilderInsertSelectHandle = bindRuntimeMethod(
-  "builderInsertSelectHandle",
+  'builderInsertSelectHandle',
 );
 export const runtimeBuilderOnConflictColumns = bindRuntimeMethod(
-  "builderOnConflictColumns",
+  'builderOnConflictColumns',
 );
 export const runtimeBuilderOnConflictConstraint = bindRuntimeMethod(
-  "builderOnConflictConstraint",
+  'builderOnConflictConstraint',
 );
-export const runtimeBuilderDoNothing = bindRuntimeMethod("builderDoNothing");
-export const runtimeBuilderDoUpdateSet =
-  bindRuntimeMethod("builderDoUpdateSet");
+export const runtimeBuilderDoNothing =
+  bindRuntimeMethod('builderDoNothing');
+export const runtimeBuilderDoUpdateSet = bindRuntimeMethod(
+  'builderDoUpdateSet',
+);
 export const runtimeBuilderConflictWhere = bindRuntimeMethod(
-  "builderConflictWhere",
+  'builderConflictWhere',
 );
 export const runtimeBuilderReturningColumns = bindRuntimeMethod(
-  "builderReturningColumns",
+  'builderReturningColumns',
 );
 export const runtimeBuilderReturningAliased = bindRuntimeMethod(
-  "builderReturningAliased",
+  'builderReturningAliased',
 );
 export const runtimeBuilderReturningFragment = bindRuntimeMethod(
-  "builderReturningFragment",
+  'builderReturningFragment',
 );
-export const runtimeBuilderUpdate = bindRuntimeMethod("builderUpdate");
-export const runtimeBuilderSet = bindRuntimeMethod("builderSet");
-export const runtimeBuilderDeleteFrom = bindRuntimeMethod("builderDeleteFrom");
+export const runtimeBuilderUpdate = bindRuntimeMethod('builderUpdate');
+export const runtimeBuilderSet = bindRuntimeMethod('builderSet');
+export const runtimeBuilderDeleteFrom = bindRuntimeMethod(
+  'builderDeleteFrom',
+);
 
 export function runtimeBuilderGetQuery(handle: string): SqlQuery {
   try {
@@ -454,16 +491,18 @@ export function runtimeBuilderValues(handle: string): Primitive[] {
 }
 
 export const runtimeBuilderSelectedColumns = bindRuntimeMethod(
-  "builderSelectedColumns",
+  'builderSelectedColumns',
 );
 export const runtimeBuilderInsertColumns = bindRuntimeMethod(
-  "builderInsertColumns",
+  'builderInsertColumns',
 );
 
-export function runtimeBuilderConflictTargetKind(handle: string): string {
+export function runtimeBuilderConflictTargetKind(
+  handle: string,
+): string {
   const binding = getBinding();
-  if (typeof binding.builderConflictTargetKind !== "function") {
-    return "none";
+  if (typeof binding.builderConflictTargetKind !== 'function') {
+    return 'none';
   }
   return binding.builderConflictTargetKind(handle);
 }
@@ -472,7 +511,7 @@ export function runtimeBuilderAs(
   handle: string,
   alias: string,
 ): {
-  __kind: "aliased-query";
+  __kind: 'aliased-query';
   alias: string;
   query: SqlQuery;
   text: string;
@@ -483,7 +522,7 @@ export function runtimeBuilderAs(
 } {
   const obj = getBinding().builderAs(handle, alias);
   return {
-    __kind: "aliased-query",
+    __kind: 'aliased-query',
     alias: obj.alias,
     query: {
       text: obj.query.text,
@@ -500,7 +539,7 @@ export function runtimeBuilderAs(
 
 export function runtimeBuilderCanonicalIrHash(handle: string): string {
   const binding = getBinding();
-  if (typeof binding.builderCanonicalIrHash === "function") {
+  if (typeof binding.builderCanonicalIrHash === 'function') {
     return binding.builderCanonicalIrHash(handle);
   }
 
@@ -517,37 +556,43 @@ export function runtimeBuilderCanonicalIrHash(handle: string): string {
 
 // ─── Handle-passing bridge functions (Phase 5) ────────────────────────────────
 
-export const runtimeBuilderUnionHandle =
-  bindRuntimeMethod("builderUnionHandle");
+export const runtimeBuilderUnionHandle = bindRuntimeMethod(
+  'builderUnionHandle',
+);
 export const runtimeBuilderUnionAllHandle = bindRuntimeMethod(
-  "builderUnionAllHandle",
+  'builderUnionAllHandle',
 );
 export const runtimeBuilderIntersectHandle = bindRuntimeMethod(
-  "builderIntersectHandle",
+  'builderIntersectHandle',
 );
 export const runtimeBuilderExceptHandle = bindRuntimeMethod(
-  "builderExceptHandle",
+  'builderExceptHandle',
 );
-export const runtimeBuilderWithHandle = bindRuntimeMethod("builderWithHandle");
+export const runtimeBuilderWithHandle = bindRuntimeMethod(
+  'builderWithHandle',
+);
 export const runtimeBuilderWithRecursiveHandle = bindRuntimeMethod(
-  "builderWithRecursiveHandle",
+  'builderWithRecursiveHandle',
 );
 export const runtimeBuilderFromSubqueryHandle = bindRuntimeMethod(
-  "builderFromSubqueryHandle",
+  'builderFromSubqueryHandle',
 );
 export const runtimeBuilderJoinSubqueryHandle = bindRuntimeMethod(
-  "builderJoinSubqueryHandle",
+  'builderJoinSubqueryHandle',
 );
 
 // ─── Batch ops bridge function (Phase 6) ─────────────────────────────────────
 
-export const runtimeBuilderApplyOps = bindRuntimeMethod("builderApplyOps");
+export const runtimeBuilderApplyOps =
+  bindRuntimeMethod('builderApplyOps');
 
 export function runtimeCanApplyOpsBinary(): boolean {
-  return typeof getBinding().builderApplyOpsBinary === "function";
+  return typeof getBinding().builderApplyOpsBinary === 'function';
 }
 
-export function encodePendingOpsBinary(ops: readonly unknown[]): Uint8Array {
+export function encodePendingOpsBinary(
+  ops: readonly unknown[],
+): Uint8Array {
   const chunks: Uint8Array[] = [];
   let totalLength = 1 + 4;
 
@@ -587,9 +632,9 @@ export function runtimeBuilderApplyOpsBinary(
   payload: Uint8Array,
 ): string {
   const binding = getBinding();
-  if (typeof binding.builderApplyOpsBinary !== "function") {
+  if (typeof binding.builderApplyOpsBinary !== 'function') {
     throw new Error(
-      "builderApplyOpsBinary is not available in this runtime binding.",
+      'builderApplyOpsBinary is not available in this runtime binding.',
     );
   }
   return binding.builderApplyOpsBinary(handle, payload);
@@ -601,7 +646,7 @@ export function runtimeBuilderCompileBundle(handle: string): {
   values: Primitive[];
 } {
   const binding = getBinding();
-  if (typeof binding.builderCompileBundle !== "function") {
+  if (typeof binding.builderCompileBundle !== 'function') {
     return {
       text: binding.builderText(handle),
       raw: binding.builderRaw(handle),
@@ -615,8 +660,12 @@ export {
   clearWasmBinding,
   setRuntimeBinding,
   setWasmBinding,
-} from "./get-runtime-binding";
-export type { RuntimeBinding, WireAliasedQuery, WireQuery } from "./types";
+} from './get-runtime-binding';
+export type {
+  RuntimeBinding,
+  WireAliasedQuery,
+  WireQuery,
+} from './types';
 export {
   makeDeferredQuery,
   revivePrimitive,

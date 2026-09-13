@@ -38,10 +38,10 @@ not, the binary on PATH is the release frontend.
 | Is the built/staged WASM current?                  | `plec workspace artifact stale`                            |
 | Full artifact identity + protocol report           | `plec workspace artifact provenance runtime`               |
 | Why is SSR adoption failing?                       | `plec workspace doctor adoption [--html f] [--snapshot f]` |
-| Run every adoption validation gate                  | `plec workspace verify adoption`                           |
+| Run every adoption validation gate                 | `plec workspace verify adoption`                           |
 | How does a graph id resolve?                       | `plec workspace graph resolve <graph-id>`                  |
 | What nodes does a component own?                   | `plec workspace graph tree <graph-id>`                     |
-| What architecture does a domain use?              | `plec workspace context <domain>`                          |
+| What architecture does a domain use?               | `plec workspace context <domain>`                          |
 
 All commands accept `--json`.
 

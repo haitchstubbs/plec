@@ -1,14 +1,14 @@
 import type {
   NodeQueryBuildDiagnosticsCollector,
   NodeQueryBuildDiagnosticsCounter,
-} from "../types";
-import { captureNodeQueryBuildDiagnostics } from "./capture-build-diagnostics";
-import { captureNodeQueryCompileDiagnostics } from "./capture-compile-diagnostics";
-import { DiagnosticsCollector } from "./collectors";
+} from '../types';
+import { captureNodeQueryBuildDiagnostics } from './capture-build-diagnostics';
+import { captureNodeQueryCompileDiagnostics } from './capture-compile-diagnostics';
+import { DiagnosticsCollector } from './collectors';
 import {
   measureBuildDiagnosticsStep,
   measureDiagnosticsStep,
-} from "./measure-diagnostics-step";
+} from './measure-diagnostics-step';
 
 export const QueryDiagnostics = {
   incrementBuildCounter: (
@@ -19,7 +19,8 @@ export const QueryDiagnostics = {
   },
   measureBuildDiagnosticsStep: measureBuildDiagnosticsStep,
   measureDiagnosticsStep: measureDiagnosticsStep,
-  captureNodeQueryCompileDiagnostics: captureNodeQueryCompileDiagnostics,
+  captureNodeQueryCompileDiagnostics:
+    captureNodeQueryCompileDiagnostics,
   captureNodeQueryBuildDiagnostics: captureNodeQueryBuildDiagnostics,
 };
 

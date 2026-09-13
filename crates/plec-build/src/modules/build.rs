@@ -1,3 +1,4 @@
+use super::api_routes;
 use super::artifacts;
 use super::assets;
 use super::bundle::bundle;
@@ -59,6 +60,7 @@ pub enum Stage {
     BrowserBundle,
     DependencyValidation,
     ServerBundle,
+    ApiRoutes,
     ServerManifest,
     Hash,
     Brotli,
@@ -73,6 +75,7 @@ impl std::fmt::Display for Stage {
             Stage::BrowserBundle => "browser bundle",
             Stage::DependencyValidation => "dependency validation",
             Stage::ServerBundle => "server bundle",
+            Stage::ApiRoutes => "API routes",
             Stage::ServerManifest => "server manifest",
             Stage::Hash => "hash",
             Stage::Brotli => "brotli",
@@ -178,6 +181,8 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
     let client_entry = resolve_entry(&options.client_entry, &app_dir);
     let host_config = host::resolve_host_config(&app_dir, &options)?;
     let server_entry = resolve_entry(&host_config.server_entry, &app_dir);
+    let api_routes =
+        api_routes::discover(&app_dir).map_err(|error| BuildError::new(Stage::ApiRoutes, error))?;
 
     clean::prepare(&out_dir, &assets_dir)?;
 
@@ -236,10 +241,16 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
     // The native host imports this application bundle through its Node
     // sidecar; the manifest records the path.
     let server_bundle = out_dir.join("server").join("app.mjs");
-    server::bundle(&server_entry, &app_dir, &server_bundle, options.optimize)?;
+    server::bundle(
+        &app_dir,
+        server_entry.exists().then_some(server_entry.as_path()),
+        &api_routes,
+        &server_bundle,
+        options.optimize,
+    )?;
 
     let has_node_runtime = host::emit_node_runtime(&repo_root, &app_dir, &out_dir)?;
-    if !has_node_runtime && server_entry.exists() {
+    if !has_node_runtime && (server_entry.exists() || !api_routes.is_empty()) {
         // The app authored server code, but this workspace does not vendor
         // the Node application runtime: the emitted manifest carries no
         // `server` section and `/api/*` will 404 at runtime. Loud here beats

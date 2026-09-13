@@ -3,7 +3,7 @@ import type {
   NodeQueryBuildDiagnosticsStep,
   NodeQueryCompileDiagnosticsCollector,
   NodeQueryCompileDiagnosticsStep,
-} from "../types";
+} from '../types';
 
 export function measureDiagnosticsStep<TResult>(
   collector: NodeQueryCompileDiagnosticsCollector | undefined,

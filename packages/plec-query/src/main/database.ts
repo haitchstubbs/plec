@@ -1,12 +1,12 @@
-import * as Core from "#core";
-import type * as Types from "#types";
+import * as Core from '#core';
+import type * as Types from '#types';
 
-import * as RuntimeBridge from "../runtime/bridge";
+import * as RuntimeBridge from '../runtime/bridge';
 
-import * as Builder from "./builder";
-import * as Diagnostics from "./diagnostics";
-import * as Expressions from "./expr";
-import InternalQueryEngine from "./make-query";
+import * as Builder from './builder';
+import * as Diagnostics from './diagnostics';
+import * as Expressions from './expr';
+import InternalQueryEngine from './make-query';
 
 type AnyInternalDatabase = Database<
   Types.AnyDatabaseSchema | undefined,
@@ -46,13 +46,13 @@ class Database<
   TSchema extends Types.AnyDatabaseSchema | undefined = undefined,
   TRegisteredSources extends Types.AnySourceColumnMap =
     Types.EmptySourceColumnMap,
-  TSources extends Types.AnySourceColumnMap = Types.EmptySourceColumnMap,
+  TSources extends Types.AnySourceColumnMap =
+    Types.EmptySourceColumnMap,
   TDefaultColumns extends string = never,
   TSelectedColumns extends string = never,
   TState extends Types.AnyBuilderState = Types.InitialBuilderState,
   TConnection extends Types.AnyDatabaseConnection | undefined =
-    | Types.AnyDatabaseConnection
-    | undefined,
+    Types.AnyDatabaseConnection | undefined,
 > {
   /** @internal */
   declare readonly __databaseType?: Types.DatabaseTypeParams<
@@ -68,8 +68,8 @@ class Database<
   declare readonly __columns?: TSelectedColumns;
 
   private static _ephemeral<
-    TSchema extends Types.EphemeralGenerics["schema"],
-    TConnection extends Types.EphemeralGenerics["connection"],
+    TSchema extends Types.EphemeralGenerics['schema'],
+    TConnection extends Types.EphemeralGenerics['connection'],
   >(
     config: Types.DatabaseConfigParams<TSchema, TConnection>,
   ): Types.DatabaseConfigReturnParams<TSchema, TConnection> {
@@ -81,7 +81,15 @@ class Database<
       never,
       Types.InitialBuilderState,
       TConnection
-    >(config, undefined, true, Builder.PendingOpBuffer.empty, null, true, true);
+    >(
+      config,
+      undefined,
+      true,
+      Builder.PendingOpBuffer.empty,
+      null,
+      true,
+      true,
+    );
   }
 
   private readonly dialect: Types.Dialect;
@@ -105,7 +113,8 @@ class Database<
   private _materializedHandleCell: Types.BuilderHandleCell | undefined;
   // Cached result of compile(). Set on first call; never shared across instances.
   private _compiledResult: Types.CompiledQuery | undefined;
-  private _builderContextCache: Types.BuilderContext<string> | undefined;
+  private _builderContextCache:
+    Types.BuilderContext<string> | undefined;
 
   constructor(
     config: Types.DatabaseConfig<TSchema, TConnection> = {},
@@ -114,7 +123,8 @@ class Database<
     /** @internal */
     _ownsHandle = true,
     /** @internal */
-    _pendingOps: Builder.PendingOpBuffer = Builder.PendingOpBuffer.empty,
+    _pendingOps: Builder.PendingOpBuffer = Builder.PendingOpBuffer
+      .empty,
     /** @internal */
     _parent: object | null = null,
     /** @internal */
@@ -129,11 +139,12 @@ class Database<
     this._mutable = _mutable;
     this._mutableRoot = _mutableRoot;
     if (_ownsHandle) {
-      this.handle = handle ?? RuntimeBridge.runtimeBuilderNew(this.dialect);
+      this.handle =
+        handle ?? RuntimeBridge.runtimeBuilderNew(this.dialect);
     } else {
       if (handle === undefined) {
         throw new Error(
-          "Borrowed Database instances require a Rust builder handle.",
+          'Borrowed Database instances require a Rust builder handle.',
         );
       }
       this.handle = handle;
@@ -142,7 +153,11 @@ class Database<
     if (RuntimeBridge.getActiveRuntimeDialect() !== this.dialect)
       RuntimeBridge.setActiveRuntimeDialect(this.dialect);
     if (_ownsHandle) {
-      Builder.builderHandleRegistry.register(this, this._handleCell, this);
+      Builder.builderHandleRegistry.register(
+        this,
+        this._handleCell,
+        this,
+      );
     }
   }
 
@@ -171,32 +186,38 @@ class Database<
         return this._materializedHandle;
       if (this._pendingOps.length === 0) return this.handle;
     }
-    const diagnosticsCollector = Diagnostics.DiagnosticsCollector.Compiler();
+    const diagnosticsCollector =
+      Diagnostics.DiagnosticsCollector.Compiler();
     if (diagnosticsCollector) {
-      diagnosticsCollector.sample.pendingOpCount += this._pendingOps.length;
+      diagnosticsCollector.sample.pendingOpCount +=
+        this._pendingOps.length;
     }
     let committed: string;
     if (RuntimeBridge.runtimeCanApplyOpsBinary()) {
       try {
         // Binary path: child builders are serialized inline — single FFI call
         // for the entire tree (no per-child runtimeBuilderApplyOpsBinary).
-        const payload = Diagnostics.QueryDiagnostics.measureDiagnosticsStep(
-          diagnosticsCollector,
-          "pendingOpsSerializeMs",
-          () => {
-            const compactOps = this._pendingOps
-              .toArray()
-              .map((op) => this.serializePendingOpNested(op));
-            return RuntimeBridge.encodePendingOpsBinary(compactOps);
-          },
-        );
+        const payload =
+          Diagnostics.QueryDiagnostics.measureDiagnosticsStep(
+            diagnosticsCollector,
+            'pendingOpsSerializeMs',
+            () => {
+              const compactOps = this._pendingOps
+                .toArray()
+                .map((op) => this.serializePendingOpNested(op));
+              return RuntimeBridge.encodePendingOpsBinary(compactOps);
+            },
+          );
         committed = Diagnostics.QueryDiagnostics.measureDiagnosticsStep(
           diagnosticsCollector,
-          "pendingOpsApplyMs",
+          'pendingOpsApplyMs',
           () =>
-            RuntimeBridge.runtimeBuilderApplyOpsBinary(this.handle, payload),
+            RuntimeBridge.runtimeBuilderApplyOpsBinary(
+              this.handle,
+              payload,
+            ),
         );
-        diagnosticsCollector?.recordApplyMode("binary");
+        diagnosticsCollector?.recordApplyMode('binary');
       } catch {
         // Fallback: materialize builders to SQL queries, then JSON-encode.
         const resolvedBuilderCache = new Map<
@@ -207,34 +228,35 @@ class Database<
             selectedColumns?: string[];
           }
         >();
-        const pendingOps = Diagnostics.QueryDiagnostics.measureDiagnosticsStep(
-          diagnosticsCollector,
-          "pendingOpsMaterializeMs",
-          () =>
-            this.resolvePendingOpsForCommit(
-              this._pendingOps.toArray(),
-              resolvedBuilderCache,
-            ),
-        );
+        const pendingOps =
+          Diagnostics.QueryDiagnostics.measureDiagnosticsStep(
+            diagnosticsCollector,
+            'pendingOpsMaterializeMs',
+            () =>
+              this.resolvePendingOpsForCommit(
+                this._pendingOps.toArray(),
+                resolvedBuilderCache,
+              ),
+          );
         const serializedOps = pendingOps.map((op) =>
           Builder.serializePendingOp(op),
         );
         const serializedPayload =
           Diagnostics.QueryDiagnostics.measureDiagnosticsStep(
             diagnosticsCollector,
-            "pendingOpsSerializeMs",
+            'pendingOpsSerializeMs',
             () => JSON.stringify(serializedOps),
           );
         committed = Diagnostics.QueryDiagnostics.measureDiagnosticsStep(
           diagnosticsCollector,
-          "pendingOpsApplyMs",
+          'pendingOpsApplyMs',
           () =>
             RuntimeBridge.runtimeBuilderApplyOps(
               this.handle,
               serializedPayload,
             ),
         );
-        diagnosticsCollector?.recordApplyMode("json");
+        diagnosticsCollector?.recordApplyMode('json');
       }
     } else {
       // JSON path: materialize builders to SQL queries before encoding.
@@ -246,31 +268,35 @@ class Database<
           selectedColumns?: string[];
         }
       >();
-      const pendingOps = Diagnostics.QueryDiagnostics.measureDiagnosticsStep(
-        diagnosticsCollector,
-        "pendingOpsMaterializeMs",
-        () =>
-          this.resolvePendingOpsForCommit(
-            this._pendingOps.toArray(),
-            resolvedBuilderCache,
-          ),
-      );
+      const pendingOps =
+        Diagnostics.QueryDiagnostics.measureDiagnosticsStep(
+          diagnosticsCollector,
+          'pendingOpsMaterializeMs',
+          () =>
+            this.resolvePendingOpsForCommit(
+              this._pendingOps.toArray(),
+              resolvedBuilderCache,
+            ),
+        );
       const serializedOps = pendingOps.map((op) =>
         Builder.serializePendingOp(op),
       );
       const serializedPayload =
         Diagnostics.QueryDiagnostics.measureDiagnosticsStep(
           diagnosticsCollector,
-          "pendingOpsSerializeMs",
+          'pendingOpsSerializeMs',
           () => JSON.stringify(serializedOps),
         );
       committed = Diagnostics.QueryDiagnostics.measureDiagnosticsStep(
         diagnosticsCollector,
-        "pendingOpsApplyMs",
+        'pendingOpsApplyMs',
         () =>
-          RuntimeBridge.runtimeBuilderApplyOps(this.handle, serializedPayload),
+          RuntimeBridge.runtimeBuilderApplyOps(
+            this.handle,
+            serializedPayload,
+          ),
       );
-      diagnosticsCollector?.recordApplyMode("json");
+      diagnosticsCollector?.recordApplyMode('json');
     }
 
     if (this._mutable) {
@@ -289,7 +315,10 @@ class Database<
     const materializedCell = {
       handle: committed,
     } satisfies Types.BuilderHandleCell;
-    Builder.builderHandleRegistry.register(this as object, materializedCell);
+    Builder.builderHandleRegistry.register(
+      this as object,
+      materializedCell,
+    );
     this._materializedHandle = committed;
     this._materializedHandleCell = materializedCell;
     return committed;
@@ -309,7 +338,8 @@ class Database<
     const key = builder as object;
     const cached = resolvedBuilderCache.get(key);
     if (cached?.handle !== undefined) return cached.handle;
-    const handle = (builder as unknown as AnyInternalDatabase).committedHandle;
+    const handle = (builder as unknown as AnyInternalDatabase)
+      .committedHandle;
     resolvedBuilderCache.set(key, { ...cached, handle });
     return handle;
   }
@@ -349,7 +379,8 @@ class Database<
   ): string[] {
     const key = builder as object;
     const cached = resolvedBuilderCache.get(key);
-    if (cached?.selectedColumns !== undefined) return cached.selectedColumns;
+    if (cached?.selectedColumns !== undefined)
+      return cached.selectedColumns;
     const selectedColumns = RuntimeBridge.runtimeBuilderSelectedColumns(
       this.resolveNestedBuilderHandle(builder, resolvedBuilderCache),
     );
@@ -370,18 +401,18 @@ class Database<
   ): readonly Types.PendingOp[] {
     return pendingOps.map((op) => {
       switch (op.op) {
-        case "withBuilder":
+        case 'withBuilder':
           return {
-            op: "withQuery",
+            op: 'withQuery',
             name: op.name,
             query: this.resolveNestedBuilderQuery(
               op.rhsBuilder,
               resolvedBuilderCache,
             ),
           } satisfies Types.PendingOp;
-        case "withRecursiveBuilder":
+        case 'withRecursiveBuilder':
           return {
-            op: "withRecursiveQuery",
+            op: 'withRecursiveQuery',
             name: op.name,
             query: this.resolveNestedBuilderQuery(
               op.rhsBuilder,
@@ -392,18 +423,18 @@ class Database<
               resolvedBuilderCache,
             ),
           } satisfies Types.PendingOp;
-        case "fromSubqueryBuilder":
+        case 'fromSubqueryBuilder':
           return {
-            op: "fromSubquery",
+            op: 'fromSubquery',
             alias: op.alias,
             query: this.resolveNestedBuilderQuery(
               op.rhsBuilder,
               resolvedBuilderCache,
             ),
           } satisfies Types.PendingOp;
-        case "joinSubqueryBuilder":
+        case 'joinSubqueryBuilder':
           return {
-            op: "joinSubquery",
+            op: 'joinSubquery',
             joinType: op.joinType,
             alias: op.alias,
             query: this.resolveNestedBuilderQuery(
@@ -411,33 +442,33 @@ class Database<
               resolvedBuilderCache,
             ),
           } satisfies Types.PendingOp;
-        case "unionBuilder":
+        case 'unionBuilder':
           return {
-            op: "union",
+            op: 'union',
             query: this.resolveNestedBuilderQuery(
               op.rhsBuilder,
               resolvedBuilderCache,
             ),
           } satisfies Types.PendingOp;
-        case "unionAllBuilder":
+        case 'unionAllBuilder':
           return {
-            op: "unionAll",
+            op: 'unionAll',
             query: this.resolveNestedBuilderQuery(
               op.rhsBuilder,
               resolvedBuilderCache,
             ),
           } satisfies Types.PendingOp;
-        case "intersectBuilder":
+        case 'intersectBuilder':
           return {
-            op: "intersect",
+            op: 'intersect',
             query: this.resolveNestedBuilderQuery(
               op.rhsBuilder,
               resolvedBuilderCache,
             ),
           } satisfies Types.PendingOp;
-        case "exceptBuilder":
+        case 'exceptBuilder':
           return {
-            op: "except",
+            op: 'except',
             query: this.resolveNestedBuilderQuery(
               op.rhsBuilder,
               resolvedBuilderCache,
@@ -456,109 +487,109 @@ class Database<
     op: Types.PendingOp,
   ): Types.CompactPendingOp {
     switch (op.op) {
-      case "withBuilder": {
+      case 'withBuilder': {
         const child = op.rhsBuilder as unknown as AnyInternalDatabase;
         const committed =
           child._materializedHandle ??
           (child._pendingOps.length === 0 ? child.handle : undefined);
         if (committed !== undefined) {
-          return ["wh", op.name, committed];
+          return ['wh', op.name, committed];
         }
         const childOps = child._pendingOps
           .toArray()
           .map((cop) => child.serializePendingOpNested(cop));
-        return ["whi", op.name, child.handle, childOps];
+        return ['whi', op.name, child.handle, childOps];
       }
-      case "withRecursiveBuilder": {
+      case 'withRecursiveBuilder': {
         const child = op.rhsBuilder as unknown as AnyInternalDatabase;
         const committed =
           child._materializedHandle ??
           (child._pendingOps.length === 0 ? child.handle : undefined);
         if (committed !== undefined) {
-          return ["wrh", op.name, committed];
+          return ['wrh', op.name, committed];
         }
         const childOps = child._pendingOps
           .toArray()
           .map((cop) => child.serializePendingOpNested(cop));
-        return ["wrhi", op.name, child.handle, childOps];
+        return ['wrhi', op.name, child.handle, childOps];
       }
-      case "fromSubqueryBuilder": {
+      case 'fromSubqueryBuilder': {
         const child = op.rhsBuilder as unknown as AnyInternalDatabase;
         const committed =
           child._materializedHandle ??
           (child._pendingOps.length === 0 ? child.handle : undefined);
         if (committed !== undefined) {
-          return ["fsqh", op.alias, committed];
+          return ['fsqh', op.alias, committed];
         }
         const childOps = child._pendingOps
           .toArray()
           .map((cop) => child.serializePendingOpNested(cop));
-        return ["fsqi", op.alias, child.handle, childOps];
+        return ['fsqi', op.alias, child.handle, childOps];
       }
-      case "joinSubqueryBuilder": {
+      case 'joinSubqueryBuilder': {
         const child = op.rhsBuilder as unknown as AnyInternalDatabase;
         const committed =
           child._materializedHandle ??
           (child._pendingOps.length === 0 ? child.handle : undefined);
         if (committed !== undefined) {
-          return ["jsqh", op.joinType, op.alias, committed];
+          return ['jsqh', op.joinType, op.alias, committed];
         }
         const childOps = child._pendingOps
           .toArray()
           .map((cop) => child.serializePendingOpNested(cop));
-        return ["jsqi", op.joinType, op.alias, child.handle, childOps];
+        return ['jsqi', op.joinType, op.alias, child.handle, childOps];
       }
-      case "unionBuilder": {
+      case 'unionBuilder': {
         const child = op.rhsBuilder as unknown as AnyInternalDatabase;
         const committed =
           child._materializedHandle ??
           (child._pendingOps.length === 0 ? child.handle : undefined);
         if (committed !== undefined) {
-          return ["unh", committed];
+          return ['unh', committed];
         }
         const childOps = child._pendingOps
           .toArray()
           .map((cop) => child.serializePendingOpNested(cop));
-        return ["uni", child.handle, childOps];
+        return ['uni', child.handle, childOps];
       }
-      case "unionAllBuilder": {
+      case 'unionAllBuilder': {
         const child = op.rhsBuilder as unknown as AnyInternalDatabase;
         const committed =
           child._materializedHandle ??
           (child._pendingOps.length === 0 ? child.handle : undefined);
         if (committed !== undefined) {
-          return ["uah", committed];
+          return ['uah', committed];
         }
         const childOps = child._pendingOps
           .toArray()
           .map((cop) => child.serializePendingOpNested(cop));
-        return ["uai", child.handle, childOps];
+        return ['uai', child.handle, childOps];
       }
-      case "intersectBuilder": {
+      case 'intersectBuilder': {
         const child = op.rhsBuilder as unknown as AnyInternalDatabase;
         const committed =
           child._materializedHandle ??
           (child._pendingOps.length === 0 ? child.handle : undefined);
         if (committed !== undefined) {
-          return ["ixh", committed];
+          return ['ixh', committed];
         }
         const childOps = child._pendingOps
           .toArray()
           .map((cop) => child.serializePendingOpNested(cop));
-        return ["ixi", child.handle, childOps];
+        return ['ixi', child.handle, childOps];
       }
-      case "exceptBuilder": {
+      case 'exceptBuilder': {
         const child = op.rhsBuilder as unknown as AnyInternalDatabase;
         const committed =
           child._materializedHandle ??
           (child._pendingOps.length === 0 ? child.handle : undefined);
         if (committed !== undefined) {
-          return ["exh", committed];
+          return ['exh', committed];
         }
         const childOps = child._pendingOps
           .toArray()
           .map((cop) => child.serializePendingOpNested(cop));
-        return ["exi", child.handle, childOps];
+        return ['exi', child.handle, childOps];
       }
       default:
         return Builder.serializePendingOp(op);
@@ -589,7 +620,7 @@ class Database<
   > {
     return Diagnostics.QueryDiagnostics.measureBuildDiagnosticsStep(
       Diagnostics.DiagnosticsCollector.Builder(),
-      "cloneWithOwnedHandleMs",
+      'cloneWithOwnedHandleMs',
       () => {
         if (this._mutable) {
           if (this._mutableRoot) {
@@ -676,24 +707,26 @@ class Database<
     const collector = Diagnostics.DiagnosticsCollector.Builder();
     Diagnostics.QueryDiagnostics.incrementBuildCounter(
       collector,
-      "directMutationCount",
+      'directMutationCount',
     );
     return Diagnostics.QueryDiagnostics.measureBuildDiagnosticsStep(
       collector,
-      "directMutationMs",
+      'directMutationMs',
       () => {
         if (RuntimeBridge.getActiveRuntimeDialect() !== this.dialect)
           RuntimeBridge.setActiveRuntimeDialect(this.dialect);
         const baseHandle =
-          this._pendingOps.length === 0 ? this.handle : this.committedHandle;
+          this._pendingOps.length === 0
+            ? this.handle
+            : this.committedHandle;
         Diagnostics.QueryDiagnostics.incrementBuildCounter(
           collector,
-          "runtimeCallCount",
+          'runtimeCallCount',
         );
         const nextHandle =
           Diagnostics.QueryDiagnostics.measureBuildDiagnosticsStep(
             collector,
-            "runtimeCallMs",
+            'runtimeCallMs',
             () => mutate(baseHandle),
           );
         if (this._mutable) {
@@ -818,10 +851,10 @@ class Database<
           >,
         ) => TColumns),
   ): TColumns {
-    if (typeof input === "function") {
+    if (typeof input === 'function') {
       return Diagnostics.QueryDiagnostics.measureBuildDiagnosticsStep(
         Diagnostics.DiagnosticsCollector.Builder(),
-        "callbackResolveMs",
+        'callbackResolveMs',
         () =>
           input(
             this.createBuilderContext<
@@ -843,10 +876,10 @@ class Database<
           >,
         ) => Types.DistinctOnInput<TSources, TDefaultColumns>),
   ): Types.DistinctOnInput<TSources, TDefaultColumns> {
-    if (typeof input === "function") {
+    if (typeof input === 'function') {
       return Diagnostics.QueryDiagnostics.measureBuildDiagnosticsStep(
         Diagnostics.DiagnosticsCollector.Builder(),
-        "callbackResolveMs",
+        'callbackResolveMs',
         () =>
           input(
             this.createBuilderContext<
@@ -862,30 +895,30 @@ class Database<
   private serializeDistinctOnValue(
     value: Types.DistinctOnInput<TSources, TDefaultColumns>[number],
   ): Record<string, unknown> {
-    if (typeof value === "string") {
-      return { type: "ref", parts: value.split(".") };
+    if (typeof value === 'string') {
+      return { type: 'ref', parts: value.split('.') };
     }
 
     if (value === null) {
-      return { type: "val", value: null };
+      return { type: 'val', value: null };
     }
 
-    if (typeof value === "boolean" || typeof value === "number") {
-      return { type: "val", value };
+    if (typeof value === 'boolean' || typeof value === 'number') {
+      return { type: 'val', value };
     }
 
-    if (typeof value === "bigint" || value instanceof Date) {
+    if (typeof value === 'bigint' || value instanceof Date) {
       return {
-        type: "val",
+        type: 'val',
         value: RuntimeBridge.serializeSqlValue(value as Types.SqlValue),
       };
     }
 
     const obj = value as Record<string, unknown>;
 
-    if (obj.__kind === "value") {
+    if (obj.__kind === 'value') {
       return {
-        type: "val",
+        type: 'val',
         value: RuntimeBridge.serializeSqlValue(
           (value as Types.ValueLiteral<Types.Primitive>)
             .value as Types.SqlValue,
@@ -893,22 +926,25 @@ class Database<
       };
     }
 
-    if (obj.__kind === "identifier") {
-      return { type: "ref", parts: (value as Types.SqlIdentifier).parts };
+    if (obj.__kind === 'identifier') {
+      return {
+        type: 'ref',
+        parts: (value as Types.SqlIdentifier).parts,
+      };
     }
 
-    if (obj.__kind === "raw") {
-      return { type: "raw", text: obj.text as string };
+    if (obj.__kind === 'raw') {
+      return { type: 'raw', text: obj.text as string };
     }
 
-    if ("type" in obj && typeof obj.type === "string") {
+    if ('type' in obj && typeof obj.type === 'string') {
       return obj;
     }
 
-    if ("text" in obj && "raw" in obj && "values" in obj) {
+    if ('text' in obj && 'raw' in obj && 'values' in obj) {
       const query = value as Types.SqlQuery;
       return {
-        type: "query",
+        type: 'query',
         query: {
           text: query.text,
           raw: query.raw,
@@ -920,7 +956,7 @@ class Database<
     }
 
     return {
-      type: "val",
+      type: 'val',
       value: RuntimeBridge.serializeSqlValue(value as Types.SqlValue),
     };
   }
@@ -937,11 +973,13 @@ class Database<
     TConnection
   > {
     if (resolvedColumns.length === 0) {
-      throw new Error("distinctOn(...) requires at least one expression.");
+      throw new Error(
+        'distinctOn(...) requires at least one expression.',
+      );
     }
 
     const allColumns = resolvedColumns.every(
-      (column) => typeof column === "string",
+      (column) => typeof column === 'string',
     );
     if (allColumns) {
       return this.cloneWithPendingOp<
@@ -951,7 +989,7 @@ class Database<
         TSelectedColumns,
         Types.WithDistinct<TState>
       >({
-        op: "distinctOnColumns",
+        op: 'distinctOnColumns',
         cols: resolvedColumns as string[],
       });
     }
@@ -966,7 +1004,7 @@ class Database<
       TSelectedColumns,
       Types.WithDistinct<TState>
     >({
-      op: "distinctOnExprs",
+      op: 'distinctOnExprs',
       exprs,
     });
   }
@@ -974,12 +1012,14 @@ class Database<
   private resolvePredicateInput<TAvailable extends string>(
     input:
       | Types.PredicateInput
-      | ((db: Types.BuilderContext<TAvailable>) => Types.PredicateInput),
+      | ((
+          db: Types.BuilderContext<TAvailable>,
+        ) => Types.PredicateInput),
   ): Types.PredicateInput {
-    if (typeof input === "function") {
+    if (typeof input === 'function') {
       return Diagnostics.QueryDiagnostics.measureBuildDiagnosticsStep(
         Diagnostics.DiagnosticsCollector.Builder(),
-        "callbackResolveMs",
+        'callbackResolveMs',
         () => input(this.createBuilderContext<TAvailable>()),
       );
     }
@@ -992,7 +1032,9 @@ class Database<
   ): string[] | undefined {
     const cols =
       query instanceof Database
-        ? RuntimeBridge.runtimeBuilderSelectedColumns(query.committedHandle)
+        ? RuntimeBridge.runtimeBuilderSelectedColumns(
+            query.committedHandle,
+          )
         : (query.selectedColumns ?? []);
     return cols.length > 0 ? cols : undefined;
   }
@@ -1004,8 +1046,8 @@ class Database<
   >(
     resolvedColumns: TColumns,
     ops: {
-      aliased: "selectAliased" | "returningAliased";
-      columns: "selectColumns" | "returningColumns";
+      aliased: 'selectAliased' | 'returningAliased';
+      columns: 'selectColumns' | 'returningColumns';
     },
   ): Database<
     TSchema,
@@ -1042,11 +1084,11 @@ class Database<
 
     if (Array.isArray(resolvedColumns)) {
       const hasExpressions = resolvedColumns.some(
-        (column) => typeof column !== "string",
+        (column) => typeof column !== 'string',
       );
       if (hasExpressions) {
         const allExprNodeBacked = resolvedColumns
-          .filter((c) => typeof c !== "string")
+          .filter((c) => typeof c !== 'string')
           .every(
             (c) =>
               (c as unknown as { __exprNode?: unknown }).__exprNode !==
@@ -1055,47 +1097,49 @@ class Database<
 
         if (allExprNodeBacked) {
           const entries = resolvedColumns.map((column) => {
-            if (typeof column === "string") {
-              const parts = column.split(".");
+            if (typeof column === 'string') {
+              const parts = column.split('.');
               const alias = parts.at(-1) ?? column;
               return {
                 alias,
                 bare: true,
                 expr: {
-                  type: "ref",
+                  type: 'ref',
                   parts,
-                  text: "",
-                  raw: "",
+                  text: '',
+                  raw: '',
                   values: Expressions.EMPTY_EXPR_VALUES,
                 },
               };
             }
             return {
               alias: column.alias,
-              expr: (column as unknown as { __exprNode: unknown }).__exprNode,
+              expr: (column as unknown as { __exprNode: unknown })
+                .__exprNode,
             };
           });
           return applyAliased(entries);
         }
 
         const entries = resolvedColumns.map((column) => {
-          if (typeof column === "string") {
-            const parts = column.split(".");
+          if (typeof column === 'string') {
+            const parts = column.split('.');
             const alias = parts.at(-1) ?? column;
             return {
               alias,
               bare: true,
               expr: {
-                type: "ref",
+                type: 'ref',
                 parts,
-                text: "",
-                raw: "",
+                text: '',
+                raw: '',
                 values: Expressions.EMPTY_EXPR_VALUES,
               },
             };
           }
-          const exprNode = (column as unknown as { __exprNode?: unknown })
-            .__exprNode;
+          const exprNode = (
+            column as unknown as { __exprNode?: unknown }
+          ).__exprNode;
           if (exprNode !== undefined) {
             return {
               alias: column.alias,
@@ -1105,10 +1149,10 @@ class Database<
           return {
             alias: column.alias,
             expr: {
-              type: "query",
+              type: 'query',
               query: RuntimeBridge.serializeSqlValue(column.query),
-              text: "",
-              raw: "",
+              text: '',
+              raw: '',
               values: Expressions.EMPTY_EXPR_VALUES,
             },
           };
@@ -1119,20 +1163,23 @@ class Database<
       return applyColumns(resolvedColumns as string[]);
     }
 
-    const resolvedColumnObject = resolvedColumns as Record<string, unknown>;
+    const resolvedColumnObject = resolvedColumns as Record<
+      string,
+      unknown
+    >;
 
     const fastExprEntries: Array<{ alias: string; expr: unknown }> = [];
     for (const alias in resolvedColumnObject) {
       if (!Object.hasOwn(resolvedColumnObject, alias)) continue;
       const col = resolvedColumnObject[alias];
-      if (typeof col === "string") {
+      if (typeof col === 'string') {
         fastExprEntries.push({
           alias,
           expr: {
-            type: "ref",
-            parts: col.split("."),
-            text: "",
-            raw: "",
+            type: 'ref',
+            parts: col.split('.'),
+            text: '',
+            raw: '',
             values: Expressions.EMPTY_EXPR_VALUES,
           },
         });
@@ -1140,12 +1187,12 @@ class Database<
       }
 
       const obj = col as Record<string, unknown>;
-      if ("__exprNode" in obj && obj.__exprNode !== undefined) {
+      if ('__exprNode' in obj && obj.__exprNode !== undefined) {
         fastExprEntries.push({ alias, expr: obj.__exprNode });
         continue;
       }
 
-      if ("type" in obj && typeof obj.type === "string") {
+      if ('type' in obj && typeof obj.type === 'string') {
         fastExprEntries.push({ alias, expr: col });
         continue;
       }
@@ -1161,41 +1208,41 @@ class Database<
     const objectEntries = Object.entries(resolvedColumnObject);
 
     const hasExprNodeBacked = objectEntries.some(([, col]) => {
-      if (typeof col === "string") return false;
+      if (typeof col === 'string') return false;
       const obj = col as Record<string, unknown>;
       return (
-        ("__exprNode" in obj && obj.__exprNode !== undefined) ||
-        ("type" in obj && typeof obj.type === "string")
+        ('__exprNode' in obj && obj.__exprNode !== undefined) ||
+        ('type' in obj && typeof obj.type === 'string')
       );
     });
 
     if (hasExprNodeBacked) {
       const entries = objectEntries.map(([alias, col]) => {
-        if (typeof col === "string") {
-          const parts = col.split(".");
+        if (typeof col === 'string') {
+          const parts = col.split('.');
           return {
             alias,
             expr: {
-              type: "ref",
+              type: 'ref',
               parts,
-              text: "",
-              raw: "",
+              text: '',
+              raw: '',
               values: Expressions.EMPTY_EXPR_VALUES,
             },
           };
         }
         const obj = col as Record<string, unknown>;
-        if ("__exprNode" in obj && obj.__exprNode !== undefined) {
+        if ('__exprNode' in obj && obj.__exprNode !== undefined) {
           return { alias, expr: obj.__exprNode };
         }
-        if ("type" in obj && typeof obj.type === "string") {
+        if ('type' in obj && typeof obj.type === 'string') {
           return { alias, expr: col };
         }
         const q = col as Types.SqlQuery;
         return {
           alias,
           expr: {
-            type: "query",
+            type: 'query',
             query: {
               text: q.text,
               raw: q.raw,
@@ -1203,8 +1250,8 @@ class Database<
                 RuntimeBridge.serializeSqlValue(v as Types.SqlValue),
               ),
             },
-            text: "",
-            raw: "",
+            text: '',
+            raw: '',
             values: Expressions.EMPTY_EXPR_VALUES,
           },
         };
@@ -1213,15 +1260,15 @@ class Database<
     }
 
     const entries = objectEntries.map(([alias, col]) => {
-      if (typeof col === "string") {
-        const parts = col.split(".");
+      if (typeof col === 'string') {
+        const parts = col.split('.');
         return {
           alias,
           expr: {
-            type: "ref",
+            type: 'ref',
             parts,
-            text: "",
-            raw: "",
+            text: '',
+            raw: '',
             values: Expressions.EMPTY_EXPR_VALUES,
           },
         };
@@ -1229,10 +1276,10 @@ class Database<
       return {
         alias,
         expr: {
-          type: "query",
+          type: 'query',
           query: RuntimeBridge.serializeSqlValue(col as Types.SqlValue),
-          text: "",
-          raw: "",
+          text: '',
+          raw: '',
           values: Expressions.EMPTY_EXPR_VALUES,
         },
       };
@@ -1247,15 +1294,17 @@ class Database<
     const inputRows = Array.isArray(rows) ? rows : [rows];
 
     if (inputRows.length === 0) {
-      throw new Error("values(...) requires at least one row.");
+      throw new Error('values(...) requires at least one row.');
     }
 
     const firstRow = inputRows[0] ?? {};
     const inferredColumns =
-      explicitColumns.length > 0 ? explicitColumns : Object.keys(firstRow);
+      explicitColumns.length > 0
+        ? explicitColumns
+        : Object.keys(firstRow);
 
     if (inferredColumns.length === 0) {
-      throw new Error("values(...) requires at least one column.");
+      throw new Error('values(...) requires at least one column.');
     }
 
     const serializedRows = inputRows.map((row) => {
@@ -1266,13 +1315,15 @@ class Database<
         !inferredColumns.every((column) => keys.includes(column))
       ) {
         throw new Error(
-          "All values(...) rows must share the same column keys.",
+          'All values(...) rows must share the same column keys.',
         );
       }
 
       return inferredColumns.map((column) => {
         if (!(column in row)) {
-          throw new Error(`Missing value for insert column "${column}".`);
+          throw new Error(
+            `Missing value for insert column "${column}".`,
+          );
         }
 
         return RuntimeBridge.serializeSqlValue(
@@ -1292,7 +1343,7 @@ class Database<
     if (this._builderContextCache !== undefined) {
       Diagnostics.QueryDiagnostics.incrementBuildCounter(
         Diagnostics.DiagnosticsCollector.Builder(),
-        "builderContextCacheHits",
+        'builderContextCacheHits',
       );
       return this
         ._builderContextCache as unknown as Types.BuilderContext<TAvailable>;
@@ -1301,18 +1352,19 @@ class Database<
     const collector = Diagnostics.DiagnosticsCollector.Builder();
     const startedAt = collector?.now();
     const dialect = this.dialect;
-    const sharedContext = Builder.sharedBuilderContextCache.get(dialect);
+    const sharedContext =
+      Builder.sharedBuilderContextCache.get(dialect);
     if (sharedContext !== undefined) {
       this._builderContextCache = sharedContext;
       Diagnostics.QueryDiagnostics.incrementBuildCounter(
         collector,
-        "builderContextCacheHits",
+        'builderContextCacheHits',
       );
       return sharedContext as unknown as Types.BuilderContext<TAvailable>;
     }
     Diagnostics.QueryDiagnostics.incrementBuildCounter(
       collector,
-      "builderContextCacheMisses",
+      'builderContextCacheMisses',
     );
 
     // ── ExprNode factories ──────────────────────────────────────────────────
@@ -1365,13 +1417,13 @@ class Database<
           const result = build(wb);
           if (result !== wb) {
             throw new Error(
-              "Window builder callbacks must return the provided builder.",
+              'Window builder callbacks must return the provided builder.',
             );
           }
         }
 
         const overNode = Expressions.makeExprNode({
-          type: "over",
+          type: 'over',
           expr: node,
           partitionBy,
           orderBy,
@@ -1382,22 +1434,22 @@ class Database<
 
       const fe = {
         ...(node as object),
-        __kind: "function-expression" as const,
+        __kind: 'function-expression' as const,
         // __exprNode lets select() fast-path and msgpack encoding detect this as a
         // pure data ExprNode, bypassing the function-property spread on `node`.
         __exprNode: node,
-        text: "",
-        raw: "",
+        text: '',
+        raw: '',
         values: Expressions.EMPTY_EXPR_VALUES,
         as<TAlias extends string>(
           alias: TAlias,
         ): Types.AliasedSelectExpression<TAlias> {
           return {
-            __kind: "aliased-select-expression" as const,
+            __kind: 'aliased-select-expression' as const,
             alias,
             query: node,
-            text: "",
-            raw: "",
+            text: '',
+            raw: '',
             values: Expressions.EMPTY_EXPR_VALUES,
             // Extra field — lets select() detect ExprNode-backed columns.
             __exprNode: node,
@@ -1411,12 +1463,16 @@ class Database<
     function exprFnCall(
       name: string,
       args: Array<
-        Types.SelectExpressionInput<TAvailable> | "*" | Types.SqlIdentifier
+        | Types.SelectExpressionInput<TAvailable>
+        | '*'
+        | Types.SqlIdentifier
       >,
     ): Types.FunctionExpression {
-      const argNodes = args.map((arg) => Expressions.toExprOperand(arg));
+      const argNodes = args.map((arg) =>
+        Expressions.toExprOperand(arg),
+      );
       const fnNode = Expressions.makeExprNode({
-        type: "fnCall",
+        type: 'fnCall',
         name,
         args: argNodes,
       });
@@ -1428,20 +1484,20 @@ class Database<
     const context = {
       col: <TColumn extends TAvailable>(column: TColumn) => column,
       ref: <TColumn extends TAvailable>(column: TColumn) => ({
-        __kind: "identifier" as const,
-        parts: column.split("."),
+        __kind: 'identifier' as const,
+        parts: column.split('.'),
       }),
       excluded: <TColumn extends string>(column: TColumn) =>
         Expressions.excludedExpr(column),
       val: <TValue extends Types.Primitive>(value: TValue) => ({
-        __kind: "value" as const,
+        __kind: 'value' as const,
         value,
       }),
       fn: (name, ...args) => exprFnCall(name.toUpperCase(), args),
       agg: (name, ...args) => exprFnCall(name.toUpperCase(), args),
       lag: (value, offset, defaultValue) =>
         exprFnCall(
-          "LAG",
+          'LAG',
           defaultValue === undefined
             ? offset === undefined
               ? [value]
@@ -1450,16 +1506,16 @@ class Database<
         ),
       lead: (value, offset, defaultValue) =>
         exprFnCall(
-          "LEAD",
+          'LEAD',
           defaultValue === undefined
             ? offset === undefined
               ? [value]
               : [value, offset]
             : [value, offset ?? 1, defaultValue],
         ),
-      rowNumber: () => exprFnCall("ROW_NUMBER", []),
-      rank: () => exprFnCall("RANK", []),
-      denseRank: () => exprFnCall("DENSE_RANK", []),
+      rowNumber: () => exprFnCall('ROW_NUMBER', []),
+      rank: () => exprFnCall('RANK', []),
+      denseRank: () => exprFnCall('DENSE_RANK', []),
       cmp: <TLeft extends TAvailable>(
         left: TLeft,
         operator: Types.ComparisonOperator,
@@ -1469,7 +1525,7 @@ class Database<
           | Types.ValueLiteral<Types.Primitive>,
       ) =>
         Expressions.makeExprNode({
-          type: "cmp",
+          type: 'cmp',
           left: Expressions.exprRef(left),
           op: operator,
           right: Expressions.toExprOperand(right),
@@ -1482,9 +1538,9 @@ class Database<
           | Types.ValueLiteral<Types.Primitive>,
       ) =>
         Expressions.makeExprNode({
-          type: "cmp",
+          type: 'cmp',
           left: Expressions.exprRef(left),
-          op: "=",
+          op: '=',
           right: Expressions.toExprOperand(right),
         }),
       ne: <TLeft extends TAvailable>(
@@ -1495,9 +1551,9 @@ class Database<
           | Types.ValueLiteral<Types.Primitive>,
       ) =>
         Expressions.makeExprNode({
-          type: "cmp",
+          type: 'cmp',
           left: Expressions.exprRef(left),
-          op: "<>",
+          op: '<>',
           right: Expressions.toExprOperand(right),
         }),
       gt: <TLeft extends TAvailable>(
@@ -1508,9 +1564,9 @@ class Database<
           | Types.ValueLiteral<Types.Primitive>,
       ) =>
         Expressions.makeExprNode({
-          type: "cmp",
+          type: 'cmp',
           left: Expressions.exprRef(left),
-          op: ">",
+          op: '>',
           right: Expressions.toExprOperand(right),
         }),
       gte: <TLeft extends TAvailable>(
@@ -1521,9 +1577,9 @@ class Database<
           | Types.ValueLiteral<Types.Primitive>,
       ) =>
         Expressions.makeExprNode({
-          type: "cmp",
+          type: 'cmp',
           left: Expressions.exprRef(left),
-          op: ">=",
+          op: '>=',
           right: Expressions.toExprOperand(right),
         }),
       lt: <TLeft extends TAvailable>(
@@ -1534,9 +1590,9 @@ class Database<
           | Types.ValueLiteral<Types.Primitive>,
       ) =>
         Expressions.makeExprNode({
-          type: "cmp",
+          type: 'cmp',
           left: Expressions.exprRef(left),
-          op: "<",
+          op: '<',
           right: Expressions.toExprOperand(right),
         }),
       lte: <TLeft extends TAvailable>(
@@ -1547,19 +1603,19 @@ class Database<
           | Types.ValueLiteral<Types.Primitive>,
       ) =>
         Expressions.makeExprNode({
-          type: "cmp",
+          type: 'cmp',
           left: Expressions.exprRef(left),
-          op: "<=",
+          op: '<=',
           right: Expressions.toExprOperand(right),
         }),
       isNull: <TValue extends TAvailable>(value: TValue) =>
         Expressions.makeExprNode({
-          type: "isNull",
+          type: 'isNull',
           value: Expressions.exprRef(value),
         }),
       isNotNull: <TValue extends TAvailable>(value: TValue) =>
         Expressions.makeExprNode({
-          type: "isNotNull",
+          type: 'isNotNull',
           value: Expressions.exprRef(value),
         }),
       inArray: <TValue extends TAvailable>(
@@ -1568,9 +1624,9 @@ class Database<
       ) => {
         if (Array.isArray(items)) {
           if (items.length === 0)
-            throw new Error("Cannot interpolate an empty array");
+            throw new Error('Cannot interpolate an empty array');
           return Expressions.makeExprNode({
-            type: "inArray",
+            type: 'inArray',
             value: Expressions.exprRef(value),
             items: items.map((v) =>
               RuntimeBridge.serializeSqlValue(v as Types.SqlValue),
@@ -1578,7 +1634,7 @@ class Database<
           });
         }
         return Expressions.makeExprNode({
-          type: "inArray",
+          type: 'inArray',
           value: Expressions.exprRef(value),
           items: {
             text: items.text,
@@ -1595,9 +1651,9 @@ class Database<
       ) => {
         if (Array.isArray(items)) {
           if (items.length === 0)
-            throw new Error("Cannot interpolate an empty array");
+            throw new Error('Cannot interpolate an empty array');
           return Expressions.makeExprNode({
-            type: "notInArray",
+            type: 'notInArray',
             value: Expressions.exprRef(value),
             items: items.map((v) =>
               RuntimeBridge.serializeSqlValue(v as Types.SqlValue),
@@ -1605,7 +1661,7 @@ class Database<
           });
         }
         return Expressions.makeExprNode({
-          type: "notInArray",
+          type: 'notInArray',
           value: Expressions.exprRef(value),
           items: {
             text: items.text,
@@ -1628,7 +1684,7 @@ class Database<
           | Types.ValueLiteral<Types.Primitive>,
       ) =>
         Expressions.makeExprNode({
-          type: "between",
+          type: 'between',
           value: Expressions.exprRef(value),
           lower: Expressions.toExprOperand(lower),
           upper: Expressions.toExprOperand(upper),
@@ -1645,7 +1701,7 @@ class Database<
           | Types.ValueLiteral<Types.Primitive>,
       ) =>
         Expressions.makeExprNode({
-          type: "notBetween",
+          type: 'notBetween',
           value: Expressions.exprRef(value),
           lower: Expressions.toExprOperand(lower),
           upper: Expressions.toExprOperand(upper),
@@ -1655,7 +1711,7 @@ class Database<
         pattern: Types.SelectExpressionInput<TAvailable>,
       ) =>
         Expressions.makeExprNode({
-          type: "like",
+          type: 'like',
           value: Expressions.exprRef(value),
           pattern: Expressions.toExprOperand(pattern),
         }),
@@ -1664,13 +1720,13 @@ class Database<
         pattern: Types.SelectExpressionInput<TAvailable>,
       ) =>
         Expressions.makeExprNode({
-          type: "notLike",
+          type: 'notLike',
           value: Expressions.exprRef(value),
           pattern: Expressions.toExprOperand(pattern),
         }),
       exists: (query: Types.SqlQuery) =>
         Expressions.makeExprNode({
-          type: "exists",
+          type: 'exists',
           query: {
             text: query.text,
             raw: query.raw,
@@ -1681,7 +1737,7 @@ class Database<
         }),
       notExists: (query: Types.SqlQuery) =>
         Expressions.makeExprNode({
-          type: "notExists",
+          type: 'notExists',
           query: {
             text: query.text,
             raw: query.raw,
@@ -1692,34 +1748,46 @@ class Database<
         }),
       and: (...conditions: Types.PredicateInput[]) =>
         Expressions.makeExprNode({
-          type: "and",
-          conditions: conditions.map(Expressions.toExprNodeFromPredicate),
+          type: 'and',
+          conditions: conditions.map(
+            Expressions.toExprNodeFromPredicate,
+          ),
         }),
       or: (...conditions: Types.PredicateInput[]) =>
         Expressions.makeExprNode({
-          type: "or",
-          conditions: conditions.map(Expressions.toExprNodeFromPredicate),
+          type: 'or',
+          conditions: conditions.map(
+            Expressions.toExprNodeFromPredicate,
+          ),
         }),
-      count: (value = "*") =>
-        exprFnCall("COUNT", [
-          value as Types.SelectExpressionInput<TAvailable> | "*",
+      count: (value = '*') =>
+        exprFnCall('COUNT', [
+          value as Types.SelectExpressionInput<TAvailable> | '*',
         ]),
       sum: (value) =>
-        exprFnCall("SUM", [value as Types.SelectExpressionInput<TAvailable>]),
+        exprFnCall('SUM', [
+          value as Types.SelectExpressionInput<TAvailable>,
+        ]),
       avg: (value) =>
-        exprFnCall("AVG", [value as Types.SelectExpressionInput<TAvailable>]),
+        exprFnCall('AVG', [
+          value as Types.SelectExpressionInput<TAvailable>,
+        ]),
       min: (value) =>
-        exprFnCall("MIN", [value as Types.SelectExpressionInput<TAvailable>]),
+        exprFnCall('MIN', [
+          value as Types.SelectExpressionInput<TAvailable>,
+        ]),
       max: (value) =>
-        exprFnCall("MAX", [value as Types.SelectExpressionInput<TAvailable>]),
+        exprFnCall('MAX', [
+          value as Types.SelectExpressionInput<TAvailable>,
+        ]),
       coalesce: (...values) =>
         exprFnCall(
-          "COALESCE",
+          'COALESCE',
           values as Array<Types.SelectExpressionInput<TAvailable>>,
         ),
       case: (branches, elseValue) =>
         Expressions.makeExprNode({
-          type: "case",
+          type: 'case',
           branches: branches.map((branch) => ({
             when: Expressions.toExprNodeFromPredicate(branch.when),
             result: Expressions.toExprOperand(branch.then),
@@ -1731,30 +1799,30 @@ class Database<
         }),
       add: (left, right) =>
         Expressions.makeExprNode({
-          type: "arith",
+          type: 'arith',
           left: Expressions.toExprOperand(left),
-          op: "+",
+          op: '+',
           right: Expressions.toExprOperand(right),
         }),
       sub: (left, right) =>
         Expressions.makeExprNode({
-          type: "arith",
+          type: 'arith',
           left: Expressions.toExprOperand(left),
-          op: "-",
+          op: '-',
           right: Expressions.toExprOperand(right),
         }),
       mul: (left, right) =>
         Expressions.makeExprNode({
-          type: "arith",
+          type: 'arith',
           left: Expressions.toExprOperand(left),
-          op: "*",
+          op: '*',
           right: Expressions.toExprOperand(right),
         }),
       div: (left, right) =>
         Expressions.makeExprNode({
-          type: "arith",
+          type: 'arith',
           left: Expressions.toExprOperand(left),
-          op: "/",
+          op: '/',
           right: Expressions.toExprOperand(right),
         }),
     } satisfies Types.BuilderContext<TAvailable>;
@@ -1767,7 +1835,7 @@ class Database<
     );
     if (collector && startedAt !== undefined) {
       collector.recordStep(
-        "builderContextCreateMs",
+        'builderContextCreateMs',
         collector.now() - startedAt,
       );
     }
@@ -1779,7 +1847,7 @@ class Database<
       | Types.SelectedColumn<TSources, TDefaultColumns>
       | TSelectedColumns,
   >(column: Extract<TColumn, string>): Types.SqlIdentifier {
-    return { __kind: "identifier", parts: column.split(".") };
+    return { __kind: 'identifier', parts: column.split('.') };
   }
 
   private resolveDatasetName(
@@ -1810,7 +1878,9 @@ class Database<
       throw new Error(`Unknown dynamic dataset: ${name}`);
     }
 
-    for (const [key, definition] of Object.entries(template.variables)) {
+    for (const [key, definition] of Object.entries(
+      template.variables,
+    )) {
       const value = variables[key];
 
       if (!value) {
@@ -1819,7 +1889,9 @@ class Database<
 
       if (
         (definition as unknown as { pattern?: RegExp }).pattern &&
-        !(definition as unknown as { pattern?: RegExp }).pattern?.test(value)
+        !(definition as unknown as { pattern?: RegExp }).pattern?.test(
+          value,
+        )
       ) {
         throw new Error(`Invalid value for variable: ${key}`);
       }
@@ -1827,7 +1899,10 @@ class Database<
 
     return {
       ...template,
-      resolvedName: this.resolveDatasetName(template.datasetName, variables),
+      resolvedName: this.resolveDatasetName(
+        template.datasetName,
+        variables,
+      ),
     };
   }
 
@@ -1863,7 +1938,7 @@ class Database<
   > {
     return Diagnostics.QueryDiagnostics.measureBuildDiagnosticsStep(
       Diagnostics.DiagnosticsCollector.Builder(),
-      "callbackResolveMs",
+      'callbackResolveMs',
       () =>
         callback(
           Database._ephemeral<TSchema, TConnection>({
@@ -1944,7 +2019,7 @@ class Database<
       TSelectedColumns,
       Types.WithCte
     >({
-      op: "withBuilder",
+      op: 'withBuilder',
       name,
       rhsBuilder: query as Types.AnyDatabaseInstance,
     }) as Database<
@@ -2025,7 +2100,7 @@ class Database<
       TSelectedColumns,
       Types.WithCte
     >({
-      op: "withRecursiveBuilder",
+      op: 'withRecursiveBuilder',
       name,
       rhsBuilder: query as Types.AnyDatabaseInstance,
     }) as Database<
@@ -2070,7 +2145,11 @@ class Database<
     TSchema,
     TRegisteredSources,
     Types.EmptySourceColumnMap,
-    Types.AvailableSourceColumns<TSchema, Types.EmptySourceColumnMap, TTable>,
+    Types.AvailableSourceColumns<
+      TSchema,
+      Types.EmptySourceColumnMap,
+      TTable
+    >,
     never,
     Types.WithInsertInto,
     TConnection
@@ -2078,7 +2157,11 @@ class Database<
     return this.applyDirectMutation<
       TRegisteredSources,
       Types.EmptySourceColumnMap,
-      Types.AvailableSourceColumns<TSchema, Types.EmptySourceColumnMap, TTable>,
+      Types.AvailableSourceColumns<
+        TSchema,
+        Types.EmptySourceColumnMap,
+        TTable
+      >,
       never,
       Types.WithInsertInto
     >((handle) =>
@@ -2087,7 +2170,11 @@ class Database<
       TSchema,
       TRegisteredSources,
       Types.EmptySourceColumnMap,
-      Types.AvailableSourceColumns<TSchema, Types.EmptySourceColumnMap, TTable>,
+      Types.AvailableSourceColumns<
+        TSchema,
+        Types.EmptySourceColumnMap,
+        TTable
+      >,
       never,
       Types.WithInsertInto,
       TConnection
@@ -2130,7 +2217,10 @@ class Database<
       TSelectedColumns,
       Types.WithInsertColumns
     >((handle) =>
-      RuntimeBridge.runtimeBuilderColumns(handle, JSON.stringify(columns)),
+      RuntimeBridge.runtimeBuilderColumns(
+        handle,
+        JSON.stringify(columns),
+      ),
     );
   }
 
@@ -2168,7 +2258,11 @@ class Database<
       TTable,
       TTable
     >,
-    Types.AvailableSourceColumns<TSchema, Types.EmptySourceColumnMap, TTable>,
+    Types.AvailableSourceColumns<
+      TSchema,
+      Types.EmptySourceColumnMap,
+      TTable
+    >,
     never,
     Types.WithUpdate,
     TConnection
@@ -2181,7 +2275,11 @@ class Database<
         TTable,
         TTable
       >,
-      Types.AvailableSourceColumns<TSchema, Types.EmptySourceColumnMap, TTable>,
+      Types.AvailableSourceColumns<
+        TSchema,
+        Types.EmptySourceColumnMap,
+        TTable
+      >,
       never,
       Types.WithUpdate
     >((handle) =>
@@ -2195,7 +2293,11 @@ class Database<
         TTable,
         TTable
       >,
-      Types.AvailableSourceColumns<TSchema, Types.EmptySourceColumnMap, TTable>,
+      Types.AvailableSourceColumns<
+        TSchema,
+        Types.EmptySourceColumnMap,
+        TTable
+      >,
       never,
       Types.WithUpdate,
       TConnection
@@ -2236,7 +2338,11 @@ class Database<
       TTable,
       TTable
     >,
-    Types.AvailableSourceColumns<TSchema, Types.EmptySourceColumnMap, TTable>,
+    Types.AvailableSourceColumns<
+      TSchema,
+      Types.EmptySourceColumnMap,
+      TTable
+    >,
     never,
     Types.WithDelete,
     TConnection
@@ -2249,7 +2355,11 @@ class Database<
         TTable,
         TTable
       >,
-      Types.AvailableSourceColumns<TSchema, Types.EmptySourceColumnMap, TTable>,
+      Types.AvailableSourceColumns<
+        TSchema,
+        Types.EmptySourceColumnMap,
+        TTable
+      >,
       never,
       Types.WithDelete
     >((handle) =>
@@ -2263,7 +2373,11 @@ class Database<
         TTable,
         TTable
       >,
-      Types.AvailableSourceColumns<TSchema, Types.EmptySourceColumnMap, TTable>,
+      Types.AvailableSourceColumns<
+        TSchema,
+        Types.EmptySourceColumnMap,
+        TTable
+      >,
       never,
       Types.WithDelete,
       TConnection
@@ -2307,7 +2421,7 @@ class Database<
       TSelectedColumns,
       Types.WithDistinct<TState>
     >({
-      op: "distinct",
+      op: 'distinct',
     });
   }
 
@@ -2365,7 +2479,9 @@ class Database<
       >
     >,
     columns: (
-      db: Types.BuilderContext<Types.SelectedColumn<TSources, TDefaultColumns>>,
+      db: Types.BuilderContext<
+        Types.SelectedColumn<TSources, TDefaultColumns>
+      >,
     ) => Types.DistinctOnInput<TSources, TDefaultColumns>,
   ): ThisDb<
     TSchema,
@@ -2414,7 +2530,9 @@ class Database<
     TDefaultColumns,
     TSelectedColumns
   > {
-    return this.applyDistinctOnInput(this.resolveDistinctOnInput(columns));
+    return this.applyDistinctOnInput(
+      this.resolveDistinctOnInput(columns),
+    );
   }
 
   public select<TColumns extends string>(
@@ -2447,7 +2565,9 @@ class Database<
     TConnection
   >;
 
-  public select<TColumns extends Types.SelectInput<TSources, TDefaultColumns>>(
+  public select<
+    TColumns extends Types.SelectInput<TSources, TDefaultColumns>,
+  >(
     this: Database<
       TSchema,
       TRegisteredSources,
@@ -2475,7 +2595,9 @@ class Database<
     Types.WithSelect<TState>
   >;
 
-  public select<TColumns extends Types.SelectInput<TSources, TDefaultColumns>>(
+  public select<
+    TColumns extends Types.SelectInput<TSources, TDefaultColumns>,
+  >(
     this: Database<
       TSchema,
       TRegisteredSources,
@@ -2494,7 +2616,9 @@ class Database<
         TState
       >,
     columns: (
-      db: Types.BuilderContext<Types.SelectedColumn<TSources, TDefaultColumns>>,
+      db: Types.BuilderContext<
+        Types.SelectedColumn<TSources, TDefaultColumns>
+      >,
     ) => TColumns,
   ): Database<
     TSchema,
@@ -2537,29 +2661,30 @@ class Database<
       > {
     // INSERT...SELECT overload: columns is a Types.QueryOperand (has .query property)
     if (
-      typeof columns === "object" &&
+      typeof columns === 'object' &&
       columns !== null &&
-      "query" in columns &&
+      'query' in columns &&
       !Array.isArray(columns)
     ) {
       const queryOperand = columns as Types.AnyQueryOperand;
       // Resolve insert columns without forcing an eager commit: check pending ops first,
       // then fall back to the already-committed base handle.
       const pendingInsertColsOp = this._pendingOps.findLast(
-        (op) => op.op === "insertColumns",
-      ) as { op: "insertColumns"; cols: string[] } | undefined;
+        (op) => op.op === 'insertColumns',
+      ) as { op: 'insertColumns'; cols: string[] } | undefined;
       const insertCols =
         pendingInsertColsOp?.cols ??
         RuntimeBridge.runtimeBuilderInsertColumns(this.committedHandle);
       if (insertCols.length === 0) {
         throw new Error(
-          "insertInto(...).select(...) requires columns(...) first.",
+          'insertInto(...).select(...) requires columns(...) first.',
         );
       }
-      const selectedCols = this.resolveQueryOperandColumns(queryOperand);
+      const selectedCols =
+        this.resolveQueryOperandColumns(queryOperand);
       if (selectedCols && selectedCols.length !== insertCols.length) {
         throw new Error(
-          "insertInto(...).select(...) column count must match columns(...).",
+          'insertInto(...).select(...) column count must match columns(...).',
         );
       }
       return this.applyDirectMutation<
@@ -2576,7 +2701,9 @@ class Database<
             )
           : RuntimeBridge.runtimeBuilderInsertSelect(
               handle,
-              JSON.stringify(RuntimeBridge.serializeQuery(queryOperand.query)),
+              JSON.stringify(
+                RuntimeBridge.serializeQuery(queryOperand.query),
+              ),
             ),
       );
     }
@@ -2595,8 +2722,8 @@ class Database<
       Types.SelectedOutputColumns<TColumns>,
       Types.WithSelect<TState>
     >(resolvedColumns, {
-      aliased: "selectAliased",
-      columns: "selectColumns",
+      aliased: 'selectAliased',
+      columns: 'selectColumns',
     });
   }
 
@@ -2654,7 +2781,9 @@ class Database<
         TConnection
       >,
     columns: (
-      db: Types.BuilderContext<Types.SelectedColumn<TSources, TDefaultColumns>>,
+      db: Types.BuilderContext<
+        Types.SelectedColumn<TSources, TDefaultColumns>
+      >,
     ) => TColumns,
   ): Database<
     TSchema,
@@ -2699,8 +2828,8 @@ class Database<
       Types.SelectedOutputColumns<TColumns>,
       Types.WithReturning
     >(resolvedColumns, {
-      aliased: "returningAliased",
-      columns: "returningColumns",
+      aliased: 'returningAliased',
+      columns: 'returningColumns',
     });
   }
 
@@ -2824,11 +2953,12 @@ class Database<
     TConnection
   > {
     if (
-      RuntimeBridge.runtimeBuilderConflictTargetKind(this.committedHandle) ===
-      "constraint"
+      RuntimeBridge.runtimeBuilderConflictTargetKind(
+        this.committedHandle,
+      ) === 'constraint'
     ) {
       throw new Error(
-        "Insert conflict target cannot mix columns and constraint targets.",
+        'Insert conflict target cannot mix columns and constraint targets.',
       );
     }
     return this.applyDirectMutation<
@@ -2876,15 +3006,16 @@ class Database<
   > {
     if (!name) {
       throw new Error(
-        "onConflictOnConstraint(...) requires a non-empty constraint name.",
+        'onConflictOnConstraint(...) requires a non-empty constraint name.',
       );
     }
     if (
-      RuntimeBridge.runtimeBuilderConflictTargetKind(this.committedHandle) ===
-      "columns"
+      RuntimeBridge.runtimeBuilderConflictTargetKind(
+        this.committedHandle,
+      ) === 'columns'
     ) {
       throw new Error(
-        "Insert conflict target cannot mix columns and constraint targets.",
+        'Insert conflict target cannot mix columns and constraint targets.',
       );
     }
     return this.applyDirectMutation<
@@ -2967,7 +3098,7 @@ class Database<
     const entries = Object.entries(patch);
 
     if (entries.length === 0) {
-      throw new Error("doUpdateSet(...) requires at least one column.");
+      throw new Error('doUpdateSet(...) requires at least one column.');
     }
 
     const assignments = entries.map(([column, value]) => [
@@ -3038,7 +3169,7 @@ class Database<
         handle,
         JSON.stringify(
           Builder.buildPredicateForOp(
-            typeof resolved === "string"
+            typeof resolved === 'string'
               ? { text: resolved, raw: resolved, values: [] }
               : resolved,
           ),
@@ -3079,7 +3210,7 @@ class Database<
     const entries = Object.entries(patch);
 
     if (entries.length === 0) {
-      throw new Error("set(...) requires at least one column.");
+      throw new Error('set(...) requires at least one column.');
     }
 
     const assignments = entries.map(([column, value]) => [
@@ -3098,12 +3229,18 @@ class Database<
       TSelectedColumns,
       Types.WithSet
     >((handle) =>
-      RuntimeBridge.runtimeBuilderSet(handle, JSON.stringify(assignments)),
+      RuntimeBridge.runtimeBuilderSet(
+        handle,
+        JSON.stringify(assignments),
+      ),
     );
   }
 
   public from<
-    TSource extends Types.AvailableSourceName<TSchema, TRegisteredSources>,
+    TSource extends Types.AvailableSourceName<
+      TSchema,
+      TRegisteredSources
+    >,
   >(
     this: Database<
       TSchema,
@@ -3127,7 +3264,12 @@ class Database<
   ): Database<
     TSchema,
     TRegisteredSources,
-    Types.AvailableSourceMap<TSchema, TRegisteredSources, TSource, TSource>,
+    Types.AvailableSourceMap<
+      TSchema,
+      TRegisteredSources,
+      TSource,
+      TSource
+    >,
     Types.AvailableSourceColumns<TSchema, TRegisteredSources, TSource>,
     never,
     Types.WithFrom<TState>,
@@ -3135,7 +3277,10 @@ class Database<
   >;
 
   public from<
-    TSource extends Types.AvailableSourceName<TSchema, TRegisteredSources>,
+    TSource extends Types.AvailableSourceName<
+      TSchema,
+      TRegisteredSources
+    >,
     TAlias extends string,
   >(
     this: Database<
@@ -3161,7 +3306,12 @@ class Database<
   ): Database<
     TSchema,
     TRegisteredSources,
-    Types.AvailableSourceMap<TSchema, TRegisteredSources, TSource, TAlias>,
+    Types.AvailableSourceMap<
+      TSchema,
+      TRegisteredSources,
+      TSource,
+      TAlias
+    >,
     never,
     never,
     Types.WithFrom<TState>,
@@ -3229,7 +3379,8 @@ class Database<
     TConnection
   > {
     if (InternalQueryEngine.isAliasedQuery(source)) {
-      const rhsBuilder = InternalQueryEngine.getAliasedQueryBuilder(source);
+      const rhsBuilder =
+        InternalQueryEngine.getAliasedQueryBuilder(source);
       if (rhsBuilder) {
         return this.cloneWithPendingOp<
           TRegisteredSources,
@@ -3238,7 +3389,7 @@ class Database<
           never,
           Types.WithFrom<TState>
         >({
-          op: "fromSubqueryBuilder",
+          op: 'fromSubqueryBuilder',
           alias: source.alias,
           rhsBuilder,
         }) as unknown as Database<
@@ -3251,7 +3402,8 @@ class Database<
           TConnection
         >;
       }
-      const rhsHandle = InternalQueryEngine.getAliasedQueryHandle(source);
+      const rhsHandle =
+        InternalQueryEngine.getAliasedQueryHandle(source);
       return (rhsHandle
         ? this.cloneWithPendingOp<
             TRegisteredSources,
@@ -3260,7 +3412,7 @@ class Database<
             never,
             Types.WithFrom<TState>
           >({
-            op: "fromSubqueryHandle",
+            op: 'fromSubqueryHandle',
             alias: source.alias,
             rhsHandle,
           })
@@ -3271,7 +3423,7 @@ class Database<
             never,
             Types.WithFrom<TState>
           >({
-            op: "fromSubquery",
+            op: 'fromSubquery',
             alias: source.alias,
             query: RuntimeBridge.serializeQuery(source.query),
           })) as unknown as Database<
@@ -3293,7 +3445,7 @@ class Database<
           never,
           Types.WithFrom<TState>
         >({
-          op: "fromTableAlias",
+          op: 'fromTableAlias',
           table: source,
           alias,
         })
@@ -3304,7 +3456,7 @@ class Database<
           never,
           Types.WithFrom<TState>
         >({
-          op: "fromTable",
+          op: 'fromTable',
           table: source,
         })) as unknown as Database<
       TSchema,
@@ -3318,7 +3470,10 @@ class Database<
   }
 
   public join<
-    TSource extends Types.AvailableSourceName<TSchema, TRegisteredSources>,
+    TSource extends Types.AvailableSourceName<
+      TSchema,
+      TRegisteredSources
+    >,
   >(
     this: Database<
       TSchema,
@@ -3344,7 +3499,12 @@ class Database<
     TRegisteredSources,
     Types.MergeSources<
       TSources,
-      Types.AvailableSourceMap<TSchema, TRegisteredSources, TSource, TSource>
+      Types.AvailableSourceMap<
+        TSchema,
+        TRegisteredSources,
+        TSource,
+        TSource
+      >
     >,
     TDefaultColumns,
     TSelectedColumns,
@@ -3353,7 +3513,10 @@ class Database<
   >;
 
   public join<
-    TSource extends Types.AvailableSourceName<TSchema, TRegisteredSources>,
+    TSource extends Types.AvailableSourceName<
+      TSchema,
+      TRegisteredSources
+    >,
     TAlias extends string,
   >(
     this: Database<
@@ -3381,7 +3544,12 @@ class Database<
     TRegisteredSources,
     Types.MergeSources<
       TSources,
-      Types.AvailableSourceMap<TSchema, TRegisteredSources, TSource, TAlias>
+      Types.AvailableSourceMap<
+        TSchema,
+        TRegisteredSources,
+        TSource,
+        TAlias
+      >
     >,
     TDefaultColumns,
     TSelectedColumns,
@@ -3412,7 +3580,10 @@ class Database<
   ): Database<
     TSchema,
     TRegisteredSources,
-    Types.MergeSources<TSources, Types.NamedSourceMap<TAlias, TColumns>>,
+    Types.MergeSources<
+      TSources,
+      Types.NamedSourceMap<TAlias, TColumns>
+    >,
     TDefaultColumns,
     TSelectedColumns,
     Types.WithPendingJoin<TState>,
@@ -3449,7 +3620,11 @@ class Database<
     Types.WithPendingJoin<TState>,
     TConnection
   > {
-    return this.joinHelper("INNER JOIN", source, alias) as unknown as Database<
+    return this.joinHelper(
+      'INNER JOIN',
+      source,
+      alias,
+    ) as unknown as Database<
       TSchema,
       TRegisteredSources,
       Types.AnySourceColumnMap,
@@ -3468,25 +3643,27 @@ class Database<
     alias?: string,
   ): Types.AnyDatabaseInstance {
     if (InternalQueryEngine.isAliasedQuery(source)) {
-      const rhsBuilder = InternalQueryEngine.getAliasedQueryBuilder(source);
+      const rhsBuilder =
+        InternalQueryEngine.getAliasedQueryBuilder(source);
       if (rhsBuilder) {
         return this.cloneWithPendingOp({
-          op: "joinSubqueryBuilder",
+          op: 'joinSubqueryBuilder',
           joinType,
           alias: source.alias,
           rhsBuilder,
         });
       }
-      const rhsHandle = InternalQueryEngine.getAliasedQueryHandle(source);
+      const rhsHandle =
+        InternalQueryEngine.getAliasedQueryHandle(source);
       return rhsHandle
         ? this.cloneWithPendingOp({
-            op: "joinSubqueryHandle",
+            op: 'joinSubqueryHandle',
             joinType,
             alias: source.alias,
             rhsHandle,
           })
         : this.cloneWithPendingOp({
-            op: "joinSubquery",
+            op: 'joinSubquery',
             joinType,
             alias: source.alias,
             query: RuntimeBridge.serializeQuery(source.query),
@@ -3495,20 +3672,23 @@ class Database<
 
     return alias
       ? this.cloneWithPendingOp({
-          op: "joinTableAlias",
+          op: 'joinTableAlias',
           joinType,
           table: source,
           alias,
         })
       : this.cloneWithPendingOp({
-          op: "joinTable",
+          op: 'joinTable',
           joinType,
           table: source,
         });
   }
 
   public leftJoin<
-    TSource extends Types.AvailableSourceName<TSchema, TRegisteredSources>,
+    TSource extends Types.AvailableSourceName<
+      TSchema,
+      TRegisteredSources
+    >,
   >(
     this: Database<
       TSchema,
@@ -3534,7 +3714,12 @@ class Database<
     TRegisteredSources,
     Types.MergeSources<
       TSources,
-      Types.AvailableSourceMap<TSchema, TRegisteredSources, TSource, TSource>
+      Types.AvailableSourceMap<
+        TSchema,
+        TRegisteredSources,
+        TSource,
+        TSource
+      >
     >,
     TDefaultColumns,
     TSelectedColumns,
@@ -3543,7 +3728,10 @@ class Database<
   >;
 
   public leftJoin<
-    TSource extends Types.AvailableSourceName<TSchema, TRegisteredSources>,
+    TSource extends Types.AvailableSourceName<
+      TSchema,
+      TRegisteredSources
+    >,
     TAlias extends string,
   >(
     this: Database<
@@ -3571,7 +3759,12 @@ class Database<
     TRegisteredSources,
     Types.MergeSources<
       TSources,
-      Types.AvailableSourceMap<TSchema, TRegisteredSources, TSource, TAlias>
+      Types.AvailableSourceMap<
+        TSchema,
+        TRegisteredSources,
+        TSource,
+        TAlias
+      >
     >,
     TDefaultColumns,
     TSelectedColumns,
@@ -3602,7 +3795,10 @@ class Database<
   ): Database<
     TSchema,
     TRegisteredSources,
-    Types.MergeSources<TSources, Types.NamedSourceMap<TAlias, TColumns>>,
+    Types.MergeSources<
+      TSources,
+      Types.NamedSourceMap<TAlias, TColumns>
+    >,
     TDefaultColumns,
     TSelectedColumns,
     Types.WithPendingJoin<TState>,
@@ -3639,7 +3835,11 @@ class Database<
     Types.WithPendingJoin<TState>,
     TConnection
   > {
-    return this.joinHelper("LEFT JOIN", source, alias) as unknown as Database<
+    return this.joinHelper(
+      'LEFT JOIN',
+      source,
+      alias,
+    ) as unknown as Database<
       TSchema,
       TRegisteredSources,
       Types.AnySourceColumnMap,
@@ -3651,7 +3851,10 @@ class Database<
   }
 
   public rightJoin<
-    TSource extends Types.AvailableSourceName<TSchema, TRegisteredSources>,
+    TSource extends Types.AvailableSourceName<
+      TSchema,
+      TRegisteredSources
+    >,
   >(
     this: Database<
       TSchema,
@@ -3677,7 +3880,12 @@ class Database<
     TRegisteredSources,
     Types.MergeSources<
       TSources,
-      Types.AvailableSourceMap<TSchema, TRegisteredSources, TSource, TSource>
+      Types.AvailableSourceMap<
+        TSchema,
+        TRegisteredSources,
+        TSource,
+        TSource
+      >
     >,
     TDefaultColumns,
     TSelectedColumns,
@@ -3686,7 +3894,10 @@ class Database<
   >;
 
   public rightJoin<
-    TSource extends Types.AvailableSourceName<TSchema, TRegisteredSources>,
+    TSource extends Types.AvailableSourceName<
+      TSchema,
+      TRegisteredSources
+    >,
     TAlias extends string,
   >(
     this: Database<
@@ -3714,7 +3925,12 @@ class Database<
     TRegisteredSources,
     Types.MergeSources<
       TSources,
-      Types.AvailableSourceMap<TSchema, TRegisteredSources, TSource, TAlias>
+      Types.AvailableSourceMap<
+        TSchema,
+        TRegisteredSources,
+        TSource,
+        TAlias
+      >
     >,
     TDefaultColumns,
     TSelectedColumns,
@@ -3745,7 +3961,10 @@ class Database<
   ): Database<
     TSchema,
     TRegisteredSources,
-    Types.MergeSources<TSources, Types.NamedSourceMap<TAlias, TColumns>>,
+    Types.MergeSources<
+      TSources,
+      Types.NamedSourceMap<TAlias, TColumns>
+    >,
     TDefaultColumns,
     TSelectedColumns,
     Types.WithPendingJoin<TState>,
@@ -3782,7 +4001,11 @@ class Database<
     Types.WithPendingJoin<TState>,
     TConnection
   > {
-    return this.joinHelper("RIGHT JOIN", source, alias) as unknown as Database<
+    return this.joinHelper(
+      'RIGHT JOIN',
+      source,
+      alias,
+    ) as unknown as Database<
       TSchema,
       TRegisteredSources,
       Types.AnySourceColumnMap,
@@ -3794,7 +4017,10 @@ class Database<
   }
 
   public fullJoin<
-    TSource extends Types.AvailableSourceName<TSchema, TRegisteredSources>,
+    TSource extends Types.AvailableSourceName<
+      TSchema,
+      TRegisteredSources
+    >,
   >(
     this: Database<
       TSchema,
@@ -3820,7 +4046,12 @@ class Database<
     TRegisteredSources,
     Types.MergeSources<
       TSources,
-      Types.AvailableSourceMap<TSchema, TRegisteredSources, TSource, TSource>
+      Types.AvailableSourceMap<
+        TSchema,
+        TRegisteredSources,
+        TSource,
+        TSource
+      >
     >,
     TDefaultColumns,
     TSelectedColumns,
@@ -3829,7 +4060,10 @@ class Database<
   >;
 
   public fullJoin<
-    TSource extends Types.AvailableSourceName<TSchema, TRegisteredSources>,
+    TSource extends Types.AvailableSourceName<
+      TSchema,
+      TRegisteredSources
+    >,
     TAlias extends string,
   >(
     this: Database<
@@ -3857,7 +4091,12 @@ class Database<
     TRegisteredSources,
     Types.MergeSources<
       TSources,
-      Types.AvailableSourceMap<TSchema, TRegisteredSources, TSource, TAlias>
+      Types.AvailableSourceMap<
+        TSchema,
+        TRegisteredSources,
+        TSource,
+        TAlias
+      >
     >,
     TDefaultColumns,
     TSelectedColumns,
@@ -3888,7 +4127,10 @@ class Database<
   ): Database<
     TSchema,
     TRegisteredSources,
-    Types.MergeSources<TSources, Types.NamedSourceMap<TAlias, TColumns>>,
+    Types.MergeSources<
+      TSources,
+      Types.NamedSourceMap<TAlias, TColumns>
+    >,
     TDefaultColumns,
     TSelectedColumns,
     Types.WithPendingJoin<TState>,
@@ -3925,7 +4167,11 @@ class Database<
     Types.WithPendingJoin<TState>,
     TConnection
   > {
-    return this.joinHelper("FULL JOIN", source, alias) as unknown as Database<
+    return this.joinHelper(
+      'FULL JOIN',
+      source,
+      alias,
+    ) as unknown as Database<
       TSchema,
       TRegisteredSources,
       Types.AnySourceColumnMap,
@@ -3937,7 +4183,10 @@ class Database<
   }
 
   public crossJoin<
-    TSource extends Types.AvailableSourceName<TSchema, TRegisteredSources>,
+    TSource extends Types.AvailableSourceName<
+      TSchema,
+      TRegisteredSources
+    >,
   >(
     this: Database<
       TSchema,
@@ -3963,7 +4212,12 @@ class Database<
     TRegisteredSources,
     Types.MergeSources<
       TSources,
-      Types.AvailableSourceMap<TSchema, TRegisteredSources, TSource, TSource>
+      Types.AvailableSourceMap<
+        TSchema,
+        TRegisteredSources,
+        TSource,
+        TSource
+      >
     >,
     TDefaultColumns,
     TSelectedColumns,
@@ -3972,7 +4226,10 @@ class Database<
   >;
 
   public crossJoin<
-    TSource extends Types.AvailableSourceName<TSchema, TRegisteredSources>,
+    TSource extends Types.AvailableSourceName<
+      TSchema,
+      TRegisteredSources
+    >,
     TAlias extends string,
   >(
     this: Database<
@@ -4000,7 +4257,12 @@ class Database<
     TRegisteredSources,
     Types.MergeSources<
       TSources,
-      Types.AvailableSourceMap<TSchema, TRegisteredSources, TSource, TAlias>
+      Types.AvailableSourceMap<
+        TSchema,
+        TRegisteredSources,
+        TSource,
+        TAlias
+      >
     >,
     TDefaultColumns,
     TSelectedColumns,
@@ -4031,7 +4293,10 @@ class Database<
   ): Database<
     TSchema,
     TRegisteredSources,
-    Types.MergeSources<TSources, Types.NamedSourceMap<TAlias, TColumns>>,
+    Types.MergeSources<
+      TSources,
+      Types.NamedSourceMap<TAlias, TColumns>
+    >,
     TDefaultColumns,
     TSelectedColumns,
     Types.WithJoin<TState>,
@@ -4068,7 +4333,11 @@ class Database<
     Types.WithJoin<TState>,
     TConnection
   > {
-    return this.joinHelper("CROSS JOIN", source, alias) as unknown as Database<
+    return this.joinHelper(
+      'CROSS JOIN',
+      source,
+      alias,
+    ) as unknown as Database<
       TSchema,
       TRegisteredSources,
       Types.AnySourceColumnMap,
@@ -4128,7 +4397,9 @@ class Database<
         TConnection
       >,
     condition: (
-      db: Types.BuilderContext<Types.SelectedColumn<TSources, TDefaultColumns>>,
+      db: Types.BuilderContext<
+        Types.SelectedColumn<TSources, TDefaultColumns>
+      >,
     ) => Types.PredicateInput,
   ): Database<
     TSchema,
@@ -4206,13 +4477,13 @@ class Database<
     TConnection
   > {
     const condition =
-      second && third !== undefined && typeof first === "string"
-        ? Core.sql`${Core.identifier(first)} ${Core.raw(second)} ${typeof third === "string" && third.includes(".") ? Core.identifier(third) : third}`
+      second && third !== undefined && typeof first === 'string'
+        ? Core.sql`${Core.identifier(first)} ${Core.raw(second)} ${typeof third === 'string' && third.includes('.') ? Core.identifier(third) : third}`
         : this.resolvePredicateInput<
             Types.SelectedColumn<TSources, TDefaultColumns>
           >(first);
     const q: Types.SqlQuery =
-      typeof condition === "string"
+      typeof condition === 'string'
         ? InternalQueryEngine.makeStaticSqlQuery(condition)
         : condition;
 
@@ -4223,7 +4494,7 @@ class Database<
       TSelectedColumns,
       Types.WithPendingJoinReady<TState>
     >({
-      op: "on",
+      op: 'on',
       pred: Builder.buildPredicateForOp(q),
     });
   }
@@ -4261,7 +4532,7 @@ class Database<
         Types.SelectedColumn<TSources, TDefaultColumns>
       >(condition);
     const andOnQ: Types.SqlQuery =
-      typeof andOnResolved === "string"
+      typeof andOnResolved === 'string'
         ? InternalQueryEngine.makeStaticSqlQuery(andOnResolved)
         : andOnResolved;
     return this.cloneWithPendingOp<
@@ -4271,7 +4542,7 @@ class Database<
       TSelectedColumns,
       Types.WithPendingJoinReady<TState>
     >({
-      op: "andOn",
+      op: 'andOn',
       pred: Builder.buildPredicateForOp(andOnQ),
     });
   }
@@ -4309,7 +4580,7 @@ class Database<
         Types.SelectedColumn<TSources, TDefaultColumns>
       >(condition);
     const orOnQ: Types.SqlQuery =
-      typeof orOnResolved === "string"
+      typeof orOnResolved === 'string'
         ? InternalQueryEngine.makeStaticSqlQuery(orOnResolved)
         : orOnResolved;
     return this.cloneWithPendingOp<
@@ -4319,7 +4590,7 @@ class Database<
       TSelectedColumns,
       Types.WithPendingJoinReady<TState>
     >({
-      op: "orOn",
+      op: 'orOn',
       pred: Builder.buildPredicateForOp(orOnQ),
     });
   }
@@ -4362,7 +4633,7 @@ class Database<
       TSelectedColumns,
       Types.WithPendingJoinReady<TState>
     >({
-      op: "usingColumns",
+      op: 'usingColumns',
       cols: [...columns],
     });
   }
@@ -4413,7 +4684,7 @@ class Database<
       TSelectedColumns,
       Types.WithPendingJoinReady<TState>
     >({
-      op: "onColumns",
+      op: 'onColumns',
       pairs,
     });
   }
@@ -4467,7 +4738,9 @@ class Database<
         TConnection
       >,
     condition: (
-      db: Types.BuilderContext<Types.SelectedColumn<TSources, TDefaultColumns>>,
+      db: Types.BuilderContext<
+        Types.SelectedColumn<TSources, TDefaultColumns>
+      >,
     ) => Types.PredicateInput,
   ): Database<
     TSchema,
@@ -4517,7 +4790,7 @@ class Database<
         Types.SelectedColumn<TSources, TDefaultColumns>
       >(condition);
     const whereQ: Types.SqlQuery =
-      typeof whereResolved === "string"
+      typeof whereResolved === 'string'
         ? InternalQueryEngine.makeStaticSqlQuery(whereResolved)
         : whereResolved;
 
@@ -4528,7 +4801,7 @@ class Database<
       TSelectedColumns,
       Types.WithWhere<TState>
     >({
-      op: "where",
+      op: 'where',
       pred: Builder.buildPredicateForOp(whereQ),
     });
   }
@@ -4566,7 +4839,7 @@ class Database<
         Types.SelectedColumn<TSources, TDefaultColumns>
       >(condition);
     const andWhereQ: Types.SqlQuery =
-      typeof andWhereResolved === "string"
+      typeof andWhereResolved === 'string'
         ? InternalQueryEngine.makeStaticSqlQuery(andWhereResolved)
         : andWhereResolved;
 
@@ -4577,7 +4850,7 @@ class Database<
       TSelectedColumns,
       Types.WithWhere<TState>
     >({
-      op: "andWhere",
+      op: 'andWhere',
       pred: Builder.buildPredicateForOp(andWhereQ),
     });
   }
@@ -4615,7 +4888,7 @@ class Database<
         Types.SelectedColumn<TSources, TDefaultColumns>
       >(condition);
     const orWhereQ: Types.SqlQuery =
-      typeof orWhereResolved === "string"
+      typeof orWhereResolved === 'string'
         ? InternalQueryEngine.makeStaticSqlQuery(orWhereResolved)
         : orWhereResolved;
 
@@ -4626,7 +4899,7 @@ class Database<
       TSelectedColumns,
       Types.WithWhere<TState>
     >({
-      op: "orWhere",
+      op: 'orWhere',
       pred: Builder.buildPredicateForOp(orWhereQ),
     });
   }
@@ -4665,7 +4938,7 @@ class Database<
       TSelectedColumns,
       Types.WithGroupBy<TState>
     >({
-      op: "groupBy",
+      op: 'groupBy',
       cols: columns,
     });
   }
@@ -4719,7 +4992,9 @@ class Database<
         TConnection
       >,
     condition: (
-      db: Types.BuilderContext<Types.SelectedColumn<TSources, TDefaultColumns>>,
+      db: Types.BuilderContext<
+        Types.SelectedColumn<TSources, TDefaultColumns>
+      >,
     ) => Types.PredicateInput,
   ): Database<
     TSchema,
@@ -4769,7 +5044,7 @@ class Database<
         Types.SelectedColumn<TSources, TDefaultColumns>
       >(condition);
     const havingQ: Types.SqlQuery =
-      typeof havingResolved === "string"
+      typeof havingResolved === 'string'
         ? InternalQueryEngine.makeStaticSqlQuery(havingResolved)
         : havingResolved;
 
@@ -4780,7 +5055,7 @@ class Database<
       TSelectedColumns,
       Types.WithHaving<TState>
     >({
-      op: "having",
+      op: 'having',
       pred: Builder.buildPredicateForOp(havingQ),
     });
   }
@@ -4818,7 +5093,7 @@ class Database<
         Types.SelectedColumn<TSources, TDefaultColumns>
       >(condition);
     const andHavingQ: Types.SqlQuery =
-      typeof andHavingResolved === "string"
+      typeof andHavingResolved === 'string'
         ? InternalQueryEngine.makeStaticSqlQuery(andHavingResolved)
         : andHavingResolved;
 
@@ -4829,7 +5104,7 @@ class Database<
       TSelectedColumns,
       Types.WithHaving<TState>
     >({
-      op: "andHaving",
+      op: 'andHaving',
       pred: Builder.buildPredicateForOp(andHavingQ),
     });
   }
@@ -4867,7 +5142,7 @@ class Database<
         Types.SelectedColumn<TSources, TDefaultColumns>
       >(condition);
     const orHavingQ: Types.SqlQuery =
-      typeof orHavingResolved === "string"
+      typeof orHavingResolved === 'string'
         ? InternalQueryEngine.makeStaticSqlQuery(orHavingResolved)
         : orHavingResolved;
 
@@ -4878,7 +5153,7 @@ class Database<
       TSelectedColumns,
       Types.WithHaving<TState>
     >({
-      op: "orHaving",
+      op: 'orHaving',
       pred: Builder.buildPredicateForOp(orHavingQ),
     });
   }
@@ -4902,7 +5177,11 @@ class Database<
         TState,
         TConnection
       >,
-    column: Types.OrderableColumn<TSources, TDefaultColumns, TSelectedColumns>,
+    column: Types.OrderableColumn<
+      TSources,
+      TDefaultColumns,
+      TSelectedColumns
+    >,
     direction?: Types.OrderDirection,
     nullOrder?: Types.NullOrder,
   ): Database<
@@ -4988,7 +5267,7 @@ class Database<
         TSelectedColumns,
         Types.WithOrderBy<TState>
       >({
-        op: "orderByColumns",
+        op: 'orderByColumns',
         cols: columnOrColumns,
       });
     }
@@ -5000,7 +5279,7 @@ class Database<
       TSelectedColumns,
       Types.WithOrderBy<TState>
     >({
-      op: "orderBy",
+      op: 'orderBy',
       col: columnOrColumns,
       direction,
       nullOrder,
@@ -5026,7 +5305,11 @@ class Database<
         TState,
         TConnection
       >,
-    column: Types.OrderableColumn<TSources, TDefaultColumns, TSelectedColumns>,
+    column: Types.OrderableColumn<
+      TSources,
+      TDefaultColumns,
+      TSelectedColumns
+    >,
     direction?: Types.OrderDirection,
     nullOrder?: Types.NullOrder,
   ): Database<
@@ -5074,7 +5357,7 @@ class Database<
       TSelectedColumns,
       Types.WithLimit<TState>
     >({
-      op: "limit",
+      op: 'limit',
       count,
     });
   }
@@ -5113,7 +5396,7 @@ class Database<
       TSelectedColumns,
       Types.WithOffset<TState>
     >({
-      op: "offset",
+      op: 'offset',
       count,
     });
   }
@@ -5301,7 +5584,7 @@ class Database<
           TSelectedColumns,
           Types.WithCompound<TState>
         >({
-          op: "unionBuilder",
+          op: 'unionBuilder',
           rhsBuilder: query as Types.AnyDatabaseInstance,
         })
       : this.cloneWithPendingOp<
@@ -5311,7 +5594,7 @@ class Database<
           TSelectedColumns,
           Types.WithCompound<TState>
         >({
-          op: "union",
+          op: 'union',
           query: RuntimeBridge.serializeQuery(query.query),
         });
   }
@@ -5351,7 +5634,7 @@ class Database<
           TSelectedColumns,
           Types.WithCompound<TState>
         >({
-          op: "unionAllBuilder",
+          op: 'unionAllBuilder',
           rhsBuilder: query as Types.AnyDatabaseInstance,
         })
       : this.cloneWithPendingOp<
@@ -5361,7 +5644,7 @@ class Database<
           TSelectedColumns,
           Types.WithCompound<TState>
         >({
-          op: "unionAll",
+          op: 'unionAll',
           query: RuntimeBridge.serializeQuery(query.query),
         });
   }
@@ -5401,7 +5684,7 @@ class Database<
           TSelectedColumns,
           Types.WithCompound<TState>
         >({
-          op: "intersectBuilder",
+          op: 'intersectBuilder',
           rhsBuilder: query as Types.AnyDatabaseInstance,
         })
       : this.cloneWithPendingOp<
@@ -5411,7 +5694,7 @@ class Database<
           TSelectedColumns,
           Types.WithCompound<TState>
         >({
-          op: "intersect",
+          op: 'intersect',
           query: RuntimeBridge.serializeQuery(query.query),
         });
   }
@@ -5451,7 +5734,7 @@ class Database<
           TSelectedColumns,
           Types.WithCompound<TState>
         >({
-          op: "exceptBuilder",
+          op: 'exceptBuilder',
           rhsBuilder: query as Types.AnyDatabaseInstance,
         })
       : this.cloneWithPendingOp<
@@ -5461,7 +5744,7 @@ class Database<
           TSelectedColumns,
           Types.WithCompound<TState>
         >({
-          op: "except",
+          op: 'except',
           query: RuntimeBridge.serializeQuery(query.query),
         });
   }
@@ -5499,19 +5782,21 @@ class Database<
       TState
     >,
     alias: TAlias,
-  ): Types.AliasAccess<TState, Types.AliasedQuery<TAlias, TSelectedColumns>> {
+  ): Types.AliasAccess<
+    TState,
+    Types.AliasedQuery<TAlias, TSelectedColumns>
+  > {
     let materialized: Types.AnyAliasedQuery | undefined;
-    return InternalQueryEngine.createLazyAliasedQuery<TAlias, TSelectedColumns>(
-      this as unknown as Types.AnyDatabaseInstance,
-      alias,
-      () => {
-        materialized ??= RuntimeBridge.runtimeBuilderAs(
-          this.committedHandle,
-          alias,
-        ) as Types.AnyAliasedQuery;
-        return materialized;
-      },
-    ) as Types.AliasAccess<
+    return InternalQueryEngine.createLazyAliasedQuery<
+      TAlias,
+      TSelectedColumns
+    >(this as unknown as Types.AnyDatabaseInstance, alias, () => {
+      materialized ??= RuntimeBridge.runtimeBuilderAs(
+        this.committedHandle,
+        alias,
+      ) as Types.AnyAliasedQuery;
+      return materialized;
+    }) as Types.AliasAccess<
       TState,
       Types.AliasedQuery<TAlias, TSelectedColumns>
     >;
@@ -5520,23 +5805,23 @@ class Database<
   public get query(): Types.CompleteQueryAccess<
     TState,
     Types.SqlQuery,
-    "query"
+    'query'
   > {
     return RuntimeBridge.runtimeBuilderGetQuery(
       this.committedHandle,
-    ) as Types.CompleteQueryAccess<TState, Types.SqlQuery, "query">;
+    ) as Types.CompleteQueryAccess<TState, Types.SqlQuery, 'query'>;
   }
 
-  public get text(): Types.CompleteQueryAccess<TState, string, "text"> {
+  public get text(): Types.CompleteQueryAccess<TState, string, 'text'> {
     return RuntimeBridge.runtimeBuilderText(
       this.committedHandle,
-    ) as Types.CompleteQueryAccess<TState, string, "text">;
+    ) as Types.CompleteQueryAccess<TState, string, 'text'>;
   }
 
-  public get raw(): Types.CompleteQueryAccess<TState, string, "raw"> {
+  public get raw(): Types.CompleteQueryAccess<TState, string, 'raw'> {
     return RuntimeBridge.runtimeBuilderRaw(
       this.committedHandle,
-    ) as Types.CompleteQueryAccess<TState, string, "raw">;
+    ) as Types.CompleteQueryAccess<TState, string, 'raw'>;
   }
 
   public compile(
@@ -5563,7 +5848,7 @@ class Database<
     const handle = this.committedHandle;
     const bundle = Diagnostics.QueryDiagnostics.measureDiagnosticsStep(
       Diagnostics.DiagnosticsCollector.Compiler(),
-      "compileBundleMs",
+      'compileBundleMs',
       () => RuntimeBridge.runtimeBuilderCompileBundle(handle),
     );
     this._compiledResult = {
@@ -5597,10 +5882,14 @@ class Database<
     ? Promise<Awaited<TResult>>
     : never {
     if (!this.connection) {
-      throw new Error("Cannot execute query without a configured connection.");
+      throw new Error(
+        'Cannot execute query without a configured connection.',
+      );
     }
 
-    const query = RuntimeBridge.runtimeBuilderGetQuery(this.committedHandle);
+    const query = RuntimeBridge.runtimeBuilderGetQuery(
+      this.committedHandle,
+    );
     return Promise.resolve(
       this.connection.execute(query),
     ) as TConnection extends Types.DatabaseConnection<infer TResult>

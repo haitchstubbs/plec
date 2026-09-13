@@ -1,10 +1,10 @@
-import { z as zod } from "zod";
-import type { $ZodRecordKey, $ZodType, SomeType } from "zod/v4/core";
+import { z as zod } from 'zod';
+import type { $ZodRecordKey, $ZodType, SomeType } from 'zod/v4/core';
 import {
   HaitchstackQueryZodExtension,
   type ZodRecordExtensions,
   type ZodStringExtensions,
-} from "./extended-modules";
+} from './extended-modules';
 
 /**
  * Extends Zod core schema types with custom string and record helpers.
@@ -13,7 +13,7 @@ import {
  * Adds string prefix/suffix utilities and dynamic record schema mapping to Zod.
  */
 
-declare module "zod" {
+declare module 'zod' {
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- We need to redeclare this to add the method, even if we don't use the type directly
   interface ZodString extends ZodStringExtensions {}
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- We need to redeclare this to add the method, even if we don't use the type directly
@@ -31,12 +31,20 @@ zod.ZodString.prototype.suffix = function (suffix: string) {
   return HaitchstackQueryZodExtension.stringHasSuffix(this, suffix);
 };
 
-zod.ZodString.prototype.startsWithOneOf = function (prefixes: string[]) {
-  return HaitchstackQueryZodExtension.stringStartsWithOneOf(this, prefixes);
+zod.ZodString.prototype.startsWithOneOf = function (
+  prefixes: string[],
+) {
+  return HaitchstackQueryZodExtension.stringStartsWithOneOf(
+    this,
+    prefixes,
+  );
 };
 
 zod.ZodString.prototype.endsWithOneOf = function (suffixes: string[]) {
-  return HaitchstackQueryZodExtension.stringEndsWithOneOf(this, suffixes);
+  return HaitchstackQueryZodExtension.stringEndsWithOneOf(
+    this,
+    suffixes,
+  );
 };
 
 zod.ZodRecord.prototype.mapDynamicSchema =

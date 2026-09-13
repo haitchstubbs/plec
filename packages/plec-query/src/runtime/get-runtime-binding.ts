@@ -1,22 +1,24 @@
-import type { SqlQuery, SqlValue } from "#types";
-import { serializeSqlValue } from "./bridge";
-import { loadNativeBinding } from "./native";
-import { reviveQuery } from "./revivers/revive-query";
-import type { RuntimeBinding, WireQuery } from "./types";
+import type { SqlQuery, SqlValue } from '#types';
+import { serializeSqlValue } from './bridge';
+import { loadNativeBinding } from './native';
+import { reviveQuery } from './revivers/revive-query';
+import type { RuntimeBinding, WireQuery } from './types';
 
 let runtimeBinding: RuntimeBinding | undefined;
 let wasmBinding: RuntimeBinding | undefined;
 
 type RuntimeMethodKey = {
-  [K in keyof RuntimeBinding]-?: NonNullable<RuntimeBinding[K]> extends (
-    ...args: infer _Args
-  ) => unknown
+  [K in keyof RuntimeBinding]-?: NonNullable<
+    RuntimeBinding[K]
+  > extends (...args: infer _Args) => unknown
     ? K
     : never;
 }[keyof RuntimeBinding] &
   keyof RuntimeBinding;
 type RuntimeMethod<K extends RuntimeMethodKey> =
-  NonNullable<RuntimeBinding[K]> extends (...args: infer Args) => infer Return
+  NonNullable<RuntimeBinding[K]> extends (
+    ...args: infer Args
+  ) => infer Return
     ? (...args: Args) => Return
     : never;
 
@@ -29,13 +31,13 @@ export function getBinding(): RuntimeBinding {
     return runtimeBinding;
   }
 
-  if (typeof process !== "undefined" && process.versions?.node) {
+  if (typeof process !== 'undefined' && process.versions?.node) {
     runtimeBinding = loadNativeBinding();
     return runtimeBinding;
   }
 
   throw new Error(
-    "@haitchstack/query runtime binding has not been configured. Use the Node runtime on the server or @haitchstack/query/wasm in the browser.",
+    '@haitchstack/query runtime binding has not been configured. Use the Node runtime on the server or @haitchstack/query/wasm in the browser.',
   );
 }
 
@@ -57,7 +59,7 @@ export function bindRuntimeMethod<K extends RuntimeMethodKey>(
   return ((...args: Parameters<RuntimeMethod<K>>) => {
     const fn = getBinding()[method];
 
-    if (typeof fn !== "function") {
+    if (typeof fn !== 'function') {
       throw new Error(
         `${String(method)} is not available in this runtime binding.`,
       );
@@ -68,14 +70,14 @@ export function bindRuntimeMethod<K extends RuntimeMethodKey>(
 }
 
 export function bindConditionMethod(
-  method: "and" | "or",
+  method: 'and' | 'or',
 ): (conditions: Array<SqlQuery | string>) => SqlQuery {
   return (conditions) =>
     reviveQuery(
       getBinding()[method](
         conditions.map((condition) =>
-          typeof condition === "string"
-            ? { __kind: "raw", text: condition }
+          typeof condition === 'string'
+            ? { __kind: 'raw', text: condition }
             : serializeSqlValue(condition),
         ),
       ),
@@ -83,13 +85,14 @@ export function bindConditionMethod(
 }
 
 export function bindUnarySqlValueMethod(
-  method: "isNull" | "isNotNull",
+  method: 'isNull' | 'isNotNull',
 ): (value: SqlValue) => SqlQuery {
-  return (value) => reviveQuery(getBinding()[method](serializeSqlValue(value)));
+  return (value) =>
+    reviveQuery(getBinding()[method](serializeSqlValue(value)));
 }
 
 export function bindArraySqlValueMethod(
-  method: "inArray" | "notInArray",
+  method: 'inArray' | 'notInArray',
 ): (value: SqlValue, items: SqlValue[]) => SqlQuery {
   return (value, items) =>
     reviveQuery(
@@ -101,7 +104,7 @@ export function bindArraySqlValueMethod(
 }
 
 export function bindBinarySqlValueMethod(
-  method: "likeSql" | "notLikeSql",
+  method: 'likeSql' | 'notLikeSql',
 ): (value: SqlValue, pattern: SqlValue) => SqlQuery {
   return (value, pattern) =>
     reviveQuery(
@@ -113,7 +116,7 @@ export function bindBinarySqlValueMethod(
 }
 
 export function bindTernarySqlValueMethod(
-  method: "between" | "notBetween",
+  method: 'between' | 'notBetween',
 ): (value: SqlValue, lower: SqlValue, upper: SqlValue) => SqlQuery {
   return (value, lower, upper) =>
     reviveQuery(
@@ -126,8 +129,10 @@ export function bindTernarySqlValueMethod(
 }
 
 export function bindExistsSqlMethod(
-  method: "existsSql" | "notExistsSql",
+  method: 'existsSql' | 'notExistsSql',
 ): (query: SqlQuery) => SqlQuery {
   return (query) =>
-    reviveQuery(getBinding()[method](serializeSqlValue(query) as WireQuery));
+    reviveQuery(
+      getBinding()[method](serializeSqlValue(query) as WireQuery),
+    );
 }

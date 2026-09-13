@@ -1,5 +1,5 @@
-import type { SqlQuery, SqlValue } from "#types";
-import { runtimeDeferredSql } from "../../runtime/bridge";
+import type { SqlQuery, SqlValue } from '#types';
+import { runtimeDeferredSql } from '../../runtime/bridge';
 
 /**
  * Create a deferred SQL query from template strings.

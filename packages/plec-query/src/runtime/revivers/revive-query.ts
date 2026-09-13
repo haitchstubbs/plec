@@ -1,5 +1,5 @@
-import type { SqlQuery } from "#types";
-import { revivePrimitive } from "./revive-primitive";
+import type { SqlQuery } from '#types';
+import { revivePrimitive } from './revive-primitive';
 
 export function reviveQuery(wire: {
   text: string;

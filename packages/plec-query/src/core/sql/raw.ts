@@ -1,4 +1,4 @@
-import type { SqlRaw } from "#types";
+import type { SqlRaw } from '#types';
 
 /**
  * Create a SQL raw expression.
@@ -15,5 +15,5 @@ import type { SqlRaw } from "#types";
  * ```
  */
 export function raw(text: string): SqlRaw {
-  return { __kind: "raw", text } as SqlRaw;
+  return { __kind: 'raw', text } as SqlRaw;
 }

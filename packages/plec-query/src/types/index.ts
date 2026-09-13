@@ -1,12 +1,12 @@
-import type { Merge, Simplify } from "type-fest";
-import type { z } from "zod";
-import type { DIALECTS } from "#core";
+import type { Merge, Simplify } from 'type-fest';
+import type { z } from 'zod';
+import type { DIALECTS } from '#core';
 import type {
   SqlIdentifierSchema,
   SqlQuerySchema,
   SqlRawSchema,
-} from "#schemas";
-import type { buildPredicateForOp } from "../main/builder/build-predicate-for-operation";
+} from '#schemas';
+import type { buildPredicateForOp } from '../main/builder/build-predicate-for-operation';
 /**
  * Maps dataset variable names to string values.
  *
@@ -90,7 +90,7 @@ export type AnyDatabaseConnection = DatabaseConnection<unknown>;
  * const value: Primitive = 42;
  * ```
  */
-export type Primitive = SqlQuery["values"][number];
+export type Primitive = SqlQuery['values'][number];
 /**
  * Stores the rendered text and values for a compiled query.
  *
@@ -117,7 +117,7 @@ export type CompiledQuery = {
  * ```
  */
 export type RemoteQueryRequest = {
-  dialect: "postgres";
+  dialect: 'postgres';
   text: string;
   values: Primitive[];
   raw: string;
@@ -133,11 +133,7 @@ export type RemoteQueryRequest = {
  * ```
  */
 export type SqlValue =
-  | Primitive
-  | Primitive[]
-  | SqlQuery
-  | SqlIdentifier
-  | SqlRaw;
+  Primitive | Primitive[] | SqlQuery | SqlIdentifier | SqlRaw;
 
 /**
  * Narrows the supported SQL dialect names.
@@ -162,10 +158,7 @@ export type Dialect = typeof DIALECTS extends Set<infer T> ? T : never;
  * ```
  */
 export type UnsupportedFeature =
-  | "RightJoin"
-  | "FullJoin"
-  | "ReturningOnUpdate"
-  | "WindowFunction";
+  'RightJoin' | 'FullJoin' | 'ReturningOnUpdate' | 'WindowFunction';
 
 /**
  * Describes one unsupported-feature validation detail.
@@ -222,32 +215,32 @@ export type AnyDatabaseSchema = z.ZodObject<z.ZodRawShape>;
  * ```
  */
 export type QueryStage =
-  | "start"
-  | "cte"
-  | "from"
-  | "distinct"
-  | "select"
-  | "insertInto"
-  | "insertColumns"
-  | "insertValues"
-  | "insertSelect"
-  | "insertConflictTarget"
-  | "insertConflictUpdate"
-  | "insertConflictAction"
-  | "returning"
-  | "update"
-  | "set"
-  | "delete"
-  | "join"
-  | "joinPending"
-  | "joinPendingReady"
-  | "where"
-  | "groupBy"
-  | "having"
-  | "orderBy"
-  | "limit"
-  | "offset"
-  | "compound";
+  | 'start'
+  | 'cte'
+  | 'from'
+  | 'distinct'
+  | 'select'
+  | 'insertInto'
+  | 'insertColumns'
+  | 'insertValues'
+  | 'insertSelect'
+  | 'insertConflictTarget'
+  | 'insertConflictUpdate'
+  | 'insertConflictAction'
+  | 'returning'
+  | 'update'
+  | 'set'
+  | 'delete'
+  | 'join'
+  | 'joinPending'
+  | 'joinPendingReady'
+  | 'where'
+  | 'groupBy'
+  | 'having'
+  | 'orderBy'
+  | 'limit'
+  | 'offset'
+  | 'compound';
 
 /**
  * Tracks builder capabilities for a specific fluent state.
@@ -275,25 +268,25 @@ export type BuilderState<
   hasOffset: THasOffset;
   isCompleteSelectQuery: THasFrom extends true
     ? THasSelect extends true
-      ? TStage extends "joinPending"
+      ? TStage extends 'joinPending'
         ? false
         : true
       : false
     : false;
   isCompleteQuery: TStage extends
-    | "insertValues"
-    | "insertSelect"
-    | "insertConflictTarget"
-    | "insertConflictUpdate"
-    | "insertConflictAction"
-    | "returning"
-    | "set"
-    | "delete"
-    | "where"
+    | 'insertValues'
+    | 'insertSelect'
+    | 'insertConflictTarget'
+    | 'insertConflictUpdate'
+    | 'insertConflictAction'
+    | 'returning'
+    | 'set'
+    | 'delete'
+    | 'where'
     ? true
     : THasFrom extends true
       ? THasSelect extends true
-        ? TStage extends "joinPending"
+        ? TStage extends 'joinPending'
           ? false
           : true
         : false
@@ -322,7 +315,7 @@ export type AnyBuilderState = BuilderState;
  * ```
  */
 export type InitialBuilderState = BuilderState<
-  "start",
+  'start',
   false,
   false,
   false,
@@ -364,9 +357,9 @@ export type AnySourceColumnMap = SourceColumnMap;
  */
 export type TableName<TSchema extends AnyDatabaseSchema> = Extract<
   {
-    [TKey in keyof z.infer<TSchema>]: z.infer<TSchema>[TKey] extends Array<
-      Record<string, unknown>
-    >
+    [
+      TKey in keyof z.infer<TSchema>
+    ]: z.infer<TSchema>[TKey] extends Array<Record<string, unknown>>
       ? TKey
       : never;
   }[keyof z.infer<TSchema>],
@@ -428,15 +421,16 @@ export type QualifiedColumnName<
  * type Names = QualifiedColumnNames<{ users: "id" | "email" }>;
  * ```
  */
-export type QualifiedColumnNames<TSources extends AnySourceColumnMap> = Extract<
-  {
-    [TAlias in keyof TSources & string]: QualifiedColumnName<
-      TAlias,
-      Extract<TSources[TAlias], string>
-    >;
-  }[keyof TSources & string],
-  string
->;
+export type QualifiedColumnNames<TSources extends AnySourceColumnMap> =
+  Extract<
+    {
+      [TAlias in keyof TSources & string]: QualifiedColumnName<
+        TAlias,
+        Extract<TSources[TAlias], string>
+      >;
+    }[keyof TSources & string],
+    string
+  >;
 
 /**
  * Extracts the last segment from a dotted identifier.
@@ -491,8 +485,11 @@ export type MergeSources<
  * type Query = AliasedQuery<"recent_users", "id">;
  * ```
  */
-export type AliasedQuery<TAlias extends string, TColumns extends string> = {
-  readonly __kind: "aliased-query";
+export type AliasedQuery<
+  TAlias extends string,
+  TColumns extends string,
+> = {
+  readonly __kind: 'aliased-query';
   readonly alias: TAlias;
   readonly query: SqlQuery;
   readonly text: string;
@@ -551,7 +548,7 @@ export type AnyQueryOperand = QueryOperand<string>;
  * const direction: OrderDirection = "DESC";
  * ```
  */
-export type OrderDirection = "ASC" | "DESC" | "asc" | "desc";
+export type OrderDirection = 'ASC' | 'DESC' | 'asc' | 'desc';
 /**
  * Accepts the supported null ordering spellings.
  *
@@ -562,7 +559,7 @@ export type OrderDirection = "ASC" | "DESC" | "asc" | "desc";
  * const nulls: NullOrder = "LAST";
  * ```
  */
-export type NullOrder = "FIRST" | "LAST" | "first" | "last";
+export type NullOrder = 'FIRST' | 'LAST' | 'first' | 'last';
 /**
  * Accepts comparison operators for predicate helpers.
  *
@@ -573,7 +570,8 @@ export type NullOrder = "FIRST" | "LAST" | "first" | "last";
  * const operator: ComparisonOperator = ">=";
  * ```
  */
-export type ComparisonOperator = "=" | "!=" | "<>" | ">" | ">=" | "<" | "<=";
+export type ComparisonOperator =
+  '=' | '!=' | '<>' | '>' | '>=' | '<' | '<=';
 
 /**
  * Configures a database instance's dialect, connection, and schema.
@@ -615,7 +613,8 @@ export type PredicateInput = SqlQuery | string;
  * const join: JoinType = "LEFT JOIN";
  * ```
  */
-export type JoinType = "INNER JOIN" | "LEFT JOIN" | "RIGHT JOIN" | "FULL JOIN";
+export type JoinType =
+  'INNER JOIN' | 'LEFT JOIN' | 'RIGHT JOIN' | 'FULL JOIN';
 /**
  * Names the boolean operators used between clauses.
  *
@@ -626,7 +625,7 @@ export type JoinType = "INNER JOIN" | "LEFT JOIN" | "RIGHT JOIN" | "FULL JOIN";
  * const operator: ClauseOperator = "AND";
  * ```
  */
-export type ClauseOperator = "AND" | "OR";
+export type ClauseOperator = 'AND' | 'OR';
 /**
  * Names the supported compound-query operators.
  *
@@ -637,7 +636,8 @@ export type ClauseOperator = "AND" | "OR";
  * const operator: CompoundOperator = "UNION ALL";
  * ```
  */
-export type CompoundOperator = "UNION" | "UNION ALL" | "INTERSECT" | "EXCEPT";
+export type CompoundOperator =
+  'UNION' | 'UNION ALL' | 'INTERSECT' | 'EXCEPT';
 
 /**
  * Narrows selectable column names for the current source set.
@@ -681,8 +681,8 @@ export type SelectedColumnRecord<
  */
 export type WindowOrderItem = {
   expression: SqlQuery;
-  direction?: "ASC" | "DESC";
-  nulls?: "FIRST" | "LAST";
+  direction?: 'ASC' | 'DESC';
+  nulls?: 'FIRST' | 'LAST';
 };
 
 /**
@@ -712,11 +712,15 @@ export type WindowSpec = {
  * ```
  */
 export type FunctionExpression = SqlQuery & {
-  readonly __kind: "function-expression";
+  readonly __kind: 'function-expression';
   readonly __exprNode?: SqlQuery;
   readonly overClause?: WindowSpec;
-  as<TAlias extends string>(alias: TAlias): AliasedSelectExpression<TAlias>;
-  over(build?: (builder: WindowBuilder) => WindowBuilder): FunctionExpression;
+  as<TAlias extends string>(
+    alias: TAlias,
+  ): AliasedSelectExpression<TAlias>;
+  over(
+    build?: (builder: WindowBuilder) => WindowBuilder,
+  ): FunctionExpression;
 };
 
 /**
@@ -730,7 +734,7 @@ export type FunctionExpression = SqlQuery & {
  * ```
  */
 export type AliasedSelectExpression<TAlias extends string = string> = {
-  readonly __kind: "aliased-select-expression";
+  readonly __kind: 'aliased-select-expression';
   readonly alias: TAlias;
   readonly query: SqlQuery;
   readonly text: string;
@@ -784,7 +788,10 @@ export type WindowBuilder = {
 export type SelectExpressionValue<
   TSources extends AnySourceColumnMap,
   TDefaultColumns extends string,
-> = SelectedColumn<TSources, TDefaultColumns> | SqlQuery | FunctionExpression;
+> =
+  | SelectedColumn<TSources, TDefaultColumns>
+  | SqlQuery
+  | FunctionExpression;
 
 /**
  * Maps output property names to selectable expressions.
@@ -814,7 +821,9 @@ export type SelectExpressionRecord<
 export type SelectArrayValue<
   TSources extends AnySourceColumnMap,
   TDefaultColumns extends string,
-> = SelectedColumn<TSources, TDefaultColumns> | AliasedSelectExpression<string>;
+> =
+  | SelectedColumn<TSources, TDefaultColumns>
+  | AliasedSelectExpression<string>;
 
 /**
  * Accepts every supported select input shape.
@@ -914,10 +923,8 @@ export type OrderableColumn<
  * type Name = SourceColumnName<{ users: "id" | "email" }>;
  * ```
  */
-export type SourceColumnName<TSources extends AnySourceColumnMap> = Extract<
-  TSources[keyof TSources & string],
-  string
->;
+export type SourceColumnName<TSources extends AnySourceColumnMap> =
+  Extract<TSources[keyof TSources & string], string>;
 
 /**
  * Produces a readable compile-time error marker.
@@ -947,7 +954,7 @@ export type IncompleteQueryAccess<TAccessor extends string> =
   BuilderError<`Cannot access ${TAccessor} before completing the query`>;
 
 type IncompleteAliasAccess =
-  BuilderError<"Cannot alias a query before calling from(...).select(...)">;
+  BuilderError<'Cannot alias a query before calling from(...).select(...)'>;
 
 /**
  * Exposes a value only when the select query is complete.
@@ -963,7 +970,7 @@ export type QueryAccess<
   TState extends AnyBuilderState,
   TValue,
   TAccessor extends string,
-> = TState["isCompleteSelectQuery"] extends true
+> = TState['isCompleteSelectQuery'] extends true
   ? TValue
   : IncompleteQueryAccess<TAccessor>;
 
@@ -981,7 +988,7 @@ export type CompleteQueryAccess<
   TState extends AnyBuilderState,
   TValue,
   TAccessor extends string,
-> = TState["isCompleteQuery"] extends true
+> = TState['isCompleteQuery'] extends true
   ? TValue
   : IncompleteQueryAccess<TAccessor>;
 
@@ -998,7 +1005,7 @@ export type CompleteQueryAccess<
 export type AliasAccess<
   TState extends AnyBuilderState,
   TValue,
-> = TState["isCompleteSelectQuery"] extends true
+> = TState['isCompleteSelectQuery'] extends true
   ? TValue
   : IncompleteAliasAccess;
 
@@ -1024,7 +1031,7 @@ export type NonStringPrimitive = Exclude<Primitive, string>;
  * ```
  */
 export type ValueLiteral<TValue extends Primitive> = {
-  readonly __kind: "value";
+  readonly __kind: 'value';
   readonly value: TValue;
 };
 
@@ -1039,10 +1046,7 @@ export type ValueLiteral<TValue extends Primitive> = {
  * ```
  */
 export type WriteValue =
-  | Primitive
-  | ValueLiteral<Primitive>
-  | SqlQuery
-  | SqlIdentifier;
+  Primitive | ValueLiteral<Primitive> | SqlQuery | SqlIdentifier;
 
 /**
  * Maps insert column names to optional write values.
@@ -1122,11 +1126,15 @@ export type BuilderContext<TAvailable extends string> = {
   val<TValue extends Primitive>(value: TValue): ValueLiteral<TValue>;
   fn(
     name: string,
-    ...args: Array<SelectExpressionInput<TAvailable> | "*" | SqlIdentifier>
+    ...args: Array<
+      SelectExpressionInput<TAvailable> | '*' | SqlIdentifier
+    >
   ): FunctionExpression;
   agg(
     name: string,
-    ...args: Array<SelectExpressionInput<TAvailable> | "*" | SqlIdentifier>
+    ...args: Array<
+      SelectExpressionInput<TAvailable> | '*' | SqlIdentifier
+    >
   ): FunctionExpression;
   lag(
     value: TAvailable | SqlQuery | SqlIdentifier,
@@ -1203,7 +1211,7 @@ export type BuilderContext<TAvailable extends string> = {
   and(...conditions: PredicateInput[]): SqlQuery;
   or(...conditions: PredicateInput[]): SqlQuery;
   count(
-    value?: TAvailable | "*" | SqlQuery | SqlIdentifier,
+    value?: TAvailable | '*' | SqlQuery | SqlIdentifier,
   ): FunctionExpression;
   sum(value: TAvailable | SqlQuery | SqlIdentifier): FunctionExpression;
   avg(value: TAvailable | SqlQuery | SqlIdentifier): FunctionExpression;
@@ -1247,7 +1255,10 @@ export type BuilderContext<TAvailable extends string> = {
  * type Source = NamedSourceMap<"users", "id" | "email">;
  * ```
  */
-export type NamedSourceMap<TName extends string, TColumns extends string> = {
+export type NamedSourceMap<
+  TName extends string,
+  TColumns extends string,
+> = {
   [K in TName]: TColumns;
 };
 
@@ -1308,7 +1319,11 @@ export type AvailableSourceMap<
   TSource extends string,
   TAlias extends string,
 > = {
-  [K in TAlias]: AvailableSourceColumns<TSchema, TRegisteredSources, TSource>;
+  [K in TAlias]: AvailableSourceColumns<
+    TSchema,
+    TRegisteredSources,
+    TSource
+  >;
 };
 
 /**
@@ -1451,13 +1466,13 @@ export type DatabaseType<
 
 /** Rebuilds a {@link DatabaseType} from its bundled generic parameters. */
 export type DbOf<P extends DbParams> = DatabaseType<
-  P["schema"],
-  P["registeredSources"],
-  P["sources"],
-  P["defaultColumns"],
-  P["selectedColumns"],
-  P["state"],
-  P["connection"]
+  P['schema'],
+  P['registeredSources'],
+  P['sources'],
+  P['defaultColumns'],
+  P['selectedColumns'],
+  P['state'],
+  P['connection']
 >;
 
 /** Exposes a database type only when a type-level condition is satisfied. */
@@ -1470,56 +1485,49 @@ export type Gate<
 export type HasStage<
   TState extends AnyBuilderState,
   TStages extends QueryStage,
-> = TState["stage"] extends TStages ? true : false;
+> = TState['stage'] extends TStages ? true : false;
 
 /** Exposes a database type only when its state stage is allowed. */
-export type StageGate<P extends DbParams, TStages extends QueryStage> = Gate<
-  P,
-  HasStage<P["state"], TStages>
->;
+export type StageGate<
+  P extends DbParams,
+  TStages extends QueryStage,
+> = Gate<P, HasStage<P['state'], TStages>>;
 
-type StatementStartStage = "start" | "cte";
-type SelectableStage = "from" | "distinct" | "join" | "joinPendingReady";
+type StatementStartStage = 'start' | 'cte';
+type SelectableStage =
+  'from' | 'distinct' | 'join' | 'joinPendingReady';
 type JoinableStage =
-  | "from"
-  | "distinct"
-  | "select"
-  | "join"
-  | "joinPendingReady";
-type JoinPredicateStage = "joinPending" | "joinPendingReady";
+  'from' | 'distinct' | 'select' | 'join' | 'joinPendingReady';
+type JoinPredicateStage = 'joinPending' | 'joinPendingReady';
 type PostSelectStage =
-  | "select"
-  | "join"
-  | "joinPendingReady"
-  | "where"
-  | "groupBy"
-  | "having"
-  | "orderBy";
+  | 'select'
+  | 'join'
+  | 'joinPendingReady'
+  | 'where'
+  | 'groupBy'
+  | 'having'
+  | 'orderBy';
 type CanOrderByStage = PostSelectStage;
-type CanLimitStage = PostSelectStage | "offset";
-type CanOffsetStage = PostSelectStage | "limit";
-type CanSelectLockStage = PostSelectStage | "limit" | "offset";
-type CanInsertColumnStage = "insertInto" | "insertColumns";
+type CanLimitStage = PostSelectStage | 'offset';
+type CanOffsetStage = PostSelectStage | 'limit';
+type CanSelectLockStage = PostSelectStage | 'limit' | 'offset';
+type CanInsertColumnStage = 'insertInto' | 'insertColumns';
 type CanInsertValuesStage = CanInsertColumnStage;
-type CanInsertConflictTargetStage = "insertValues" | "insertSelect";
+type CanInsertConflictTargetStage = 'insertValues' | 'insertSelect';
 type CanInsertConflictActionStage =
-  | CanInsertConflictTargetStage
-  | "insertConflictTarget";
+  CanInsertConflictTargetStage | 'insertConflictTarget';
 type CanReturnDirectStage =
-  | "insertValues"
-  | "insertSelect"
-  | "insertConflictUpdate"
-  | "set"
-  | "delete";
-type CanSelectWhereStage = "select" | "join" | "joinPendingReady" | "where";
-type CanDmlWhereStage = "set" | "delete" | "where";
+  | 'insertValues'
+  | 'insertSelect'
+  | 'insertConflictUpdate'
+  | 'set'
+  | 'delete';
+type CanSelectWhereStage =
+  'select' | 'join' | 'joinPendingReady' | 'where';
+type CanDmlWhereStage = 'set' | 'delete' | 'where';
 type CanGroupByStage =
-  | "select"
-  | "join"
-  | "joinPendingReady"
-  | "where"
-  | "groupBy";
-type CanHavingStage = "groupBy" | "having";
+  'select' | 'join' | 'joinPendingReady' | 'where' | 'groupBy';
+type CanHavingStage = 'groupBy' | 'having';
 
 /**
  * Exposes the builder type only before a FROM clause has been applied.
@@ -1539,9 +1547,8 @@ export type FromCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["hasFrom"] extends false
+    AnyDatabaseConnection | undefined,
+> = TState['hasFrom'] extends false
   ? DbOf<
       DatabaseTypeParams<
         TSchema,
@@ -1573,9 +1580,8 @@ export type CteCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["hasFrom"] extends false
+    AnyDatabaseConnection | undefined,
+> = TState['hasFrom'] extends false
   ? DbOf<
       DatabaseTypeParams<
         TSchema,
@@ -1607,9 +1613,8 @@ export type DistinctCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["hasFrom"] extends true
+    AnyDatabaseConnection | undefined,
+> = TState['hasFrom'] extends true
   ? DbOf<
       DatabaseTypeParams<
         TSchema,
@@ -1641,10 +1646,9 @@ export type SelectableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["hasFrom"] extends true
-  ? TState["hasSelect"] extends false
+    AnyDatabaseConnection | undefined,
+> = TState['hasFrom'] extends true
+  ? TState['hasSelect'] extends false
     ? HasStage<TState, SelectableStage> extends true
       ? DbOf<
           DatabaseTypeParams<
@@ -1679,8 +1683,7 @@ export type InsertIntoCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
+    AnyDatabaseConnection | undefined,
 > = StageGate<
   DatabaseTypeParams<
     TSchema,
@@ -1712,8 +1715,7 @@ export type InsertColumnCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
+    AnyDatabaseConnection | undefined,
 > = StageGate<
   DatabaseTypeParams<
     TSchema,
@@ -1745,8 +1747,7 @@ export type InsertValuesCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
+    AnyDatabaseConnection | undefined,
 > = StageGate<
   DatabaseTypeParams<
     TSchema,
@@ -1778,8 +1779,7 @@ export type InsertConflictTargetCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
+    AnyDatabaseConnection | undefined,
 > = StageGate<
   DatabaseTypeParams<
     TSchema,
@@ -1811,8 +1811,7 @@ export type InsertConflictActionCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
+    AnyDatabaseConnection | undefined,
 > = StageGate<
   DatabaseTypeParams<
     TSchema,
@@ -1844,8 +1843,7 @@ export type InsertConflictWhereCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
+    AnyDatabaseConnection | undefined,
 > = StageGate<
   DatabaseTypeParams<
     TSchema,
@@ -1856,7 +1854,7 @@ export type InsertConflictWhereCallableDatabaseType<
     TState,
     TConnection
   >,
-  "insertConflictUpdate"
+  'insertConflictUpdate'
 >;
 
 /**
@@ -1877,8 +1875,7 @@ export type UpdateCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
+    AnyDatabaseConnection | undefined,
 > = StageGate<
   DatabaseTypeParams<
     TSchema,
@@ -1910,8 +1907,7 @@ export type SetCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
+    AnyDatabaseConnection | undefined,
 > = StageGate<
   DatabaseTypeParams<
     TSchema,
@@ -1922,7 +1918,7 @@ export type SetCallableDatabaseType<
     TState,
     TConnection
   >,
-  "update" | "set"
+  'update' | 'set'
 >;
 
 /**
@@ -1943,8 +1939,7 @@ export type DeleteCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
+    AnyDatabaseConnection | undefined,
 > = StageGate<
   DatabaseTypeParams<
     TSchema,
@@ -1976,8 +1971,7 @@ export type ReturningCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
+    AnyDatabaseConnection | undefined,
 > =
   HasStage<TState, CanReturnDirectStage> extends true
     ? DbOf<
@@ -1991,7 +1985,7 @@ export type ReturningCallableDatabaseType<
           TConnection
         >
       >
-    : TState["stage"] extends "insertConflictAction"
+    : TState['stage'] extends 'insertConflictAction'
       ? DbOf<
           DatabaseTypeParams<
             TSchema,
@@ -2003,8 +1997,8 @@ export type ReturningCallableDatabaseType<
             TConnection
           >
         >
-      : TState["stage"] extends "where"
-        ? TState["hasSelect"] extends false
+      : TState['stage'] extends 'where'
+        ? TState['hasSelect'] extends false
           ? DbOf<
               DatabaseTypeParams<
                 TSchema,
@@ -2037,9 +2031,8 @@ export type JoinCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["hasFrom"] extends true
+    AnyDatabaseConnection | undefined,
+> = TState['hasFrom'] extends true
   ? HasStage<TState, JoinableStage> extends true
     ? DbOf<
         DatabaseTypeParams<
@@ -2073,8 +2066,7 @@ export type JoinPredicateDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
+    AnyDatabaseConnection | undefined,
 > = StageGate<
   DatabaseTypeParams<
     TSchema,
@@ -2106,9 +2098,8 @@ export type WhereCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["hasSelect"] extends true
+    AnyDatabaseConnection | undefined,
+> = TState['hasSelect'] extends true
   ? HasStage<TState, CanSelectWhereStage> extends true
     ? DbOf<
         DatabaseTypeParams<
@@ -2154,9 +2145,8 @@ export type GroupByCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["hasSelect"] extends true
+    AnyDatabaseConnection | undefined,
+> = TState['hasSelect'] extends true
   ? HasStage<TState, CanGroupByStage> extends true
     ? DbOf<
         DatabaseTypeParams<
@@ -2190,9 +2180,8 @@ export type HavingCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["hasGroupBy"] extends true
+    AnyDatabaseConnection | undefined,
+> = TState['hasGroupBy'] extends true
   ? HasStage<TState, CanHavingStage> extends true
     ? DbOf<
         DatabaseTypeParams<
@@ -2226,9 +2215,8 @@ export type OrderByCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["hasSelect"] extends true
+    AnyDatabaseConnection | undefined,
+> = TState['hasSelect'] extends true
   ? HasStage<TState, CanOrderByStage> extends true
     ? DbOf<
         DatabaseTypeParams<
@@ -2262,10 +2250,9 @@ export type LimitCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["hasSelect"] extends true
-  ? TState["hasLimit"] extends false
+    AnyDatabaseConnection | undefined,
+> = TState['hasSelect'] extends true
+  ? TState['hasLimit'] extends false
     ? HasStage<TState, CanLimitStage> extends true
       ? DbOf<
           DatabaseTypeParams<
@@ -2300,10 +2287,9 @@ export type OffsetCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["hasSelect"] extends true
-  ? TState["hasOffset"] extends false
+    AnyDatabaseConnection | undefined,
+> = TState['hasSelect'] extends true
+  ? TState['hasOffset'] extends false
     ? HasStage<TState, CanOffsetStage> extends true
       ? DbOf<
           DatabaseTypeParams<
@@ -2338,9 +2324,8 @@ export type SelectLockCallableDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["hasSelect"] extends true
+    AnyDatabaseConnection | undefined,
+> = TState['hasSelect'] extends true
   ? HasStage<TState, CanSelectLockStage> extends true
     ? DbOf<
         DatabaseTypeParams<
@@ -2374,9 +2359,8 @@ export type CompleteSelectDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["isCompleteSelectQuery"] extends true
+    AnyDatabaseConnection | undefined,
+> = TState['isCompleteSelectQuery'] extends true
   ? DbOf<
       DatabaseTypeParams<
         TSchema,
@@ -2408,9 +2392,8 @@ export type CompleteQueryDatabaseType<
   TSelectedColumns extends string,
   TState extends AnyBuilderState,
   TConnection extends AnyDatabaseConnection | undefined =
-    | AnyDatabaseConnection
-    | undefined,
-> = TState["isCompleteQuery"] extends true
+    AnyDatabaseConnection | undefined,
+> = TState['isCompleteQuery'] extends true
   ? DbOf<
       DatabaseTypeParams<
         TSchema,
@@ -2484,10 +2467,8 @@ export type PredicateResolverInput<
  * type Left = JoinOnLeft<{ users: "id" }>;
  * ```
  */
-export type JoinOnLeft<TSources extends AnySourceColumnMap> = SelectedColumn<
-  TSources,
-  never
->;
+export type JoinOnLeft<TSources extends AnySourceColumnMap> =
+  SelectedColumn<TSources, never>;
 /**
  * Narrows the right side of an ON column comparison.
  *
@@ -2499,8 +2480,7 @@ export type JoinOnLeft<TSources extends AnySourceColumnMap> = SelectedColumn<
  * ```
  */
 export type JoinOnRight<TSources extends AnySourceColumnMap> =
-  | SelectedColumn<TSources, never>
-  | Exclude<Primitive, string>;
+  SelectedColumn<TSources, never> | Exclude<Primitive, string>;
 /**
  * Accepts one or many ORDER BY inputs.
  *
@@ -2534,11 +2514,11 @@ export type WithStage<
   TStage extends QueryStage,
 > = BuilderState<
   TStage,
-  TState["hasFrom"],
-  TState["hasSelect"],
-  TState["hasGroupBy"],
-  TState["hasLimit"],
-  TState["hasOffset"]
+  TState['hasFrom'],
+  TState['hasSelect'],
+  TState['hasGroupBy'],
+  TState['hasLimit'],
+  TState['hasOffset']
 >;
 
 /**
@@ -2552,12 +2532,12 @@ export type WithStage<
  * ```
  */
 export type WithFrom<TState extends AnyBuilderState> = BuilderState<
-  "from",
+  'from',
   true,
-  TState["hasSelect"],
-  TState["hasGroupBy"],
-  TState["hasLimit"],
-  TState["hasOffset"]
+  TState['hasSelect'],
+  TState['hasGroupBy'],
+  TState['hasLimit'],
+  TState['hasOffset']
 >;
 
 /**
@@ -2570,7 +2550,14 @@ export type WithFrom<TState extends AnyBuilderState> = BuilderState<
  * type State = WithCte;
  * ```
  */
-export type WithCte = BuilderState<"cte", false, false, false, false, false>;
+export type WithCte = BuilderState<
+  'cte',
+  false,
+  false,
+  false,
+  false,
+  false
+>;
 /**
  * Represents the state after entering a DISTINCT clause.
  *
@@ -2583,7 +2570,7 @@ export type WithCte = BuilderState<"cte", false, false, false, false, false>;
  */
 export type WithDistinct<TState extends AnyBuilderState> = WithStage<
   TState,
-  "distinct"
+  'distinct'
 >;
 /**
  * Represents the state after entering INSERT INTO.
@@ -2596,7 +2583,7 @@ export type WithDistinct<TState extends AnyBuilderState> = WithStage<
  * ```
  */
 export type WithInsertInto = BuilderState<
-  "insertInto",
+  'insertInto',
   false,
   false,
   false,
@@ -2614,7 +2601,7 @@ export type WithInsertInto = BuilderState<
  * ```
  */
 export type WithInsertColumns = BuilderState<
-  "insertColumns",
+  'insertColumns',
   false,
   false,
   false,
@@ -2632,7 +2619,7 @@ export type WithInsertColumns = BuilderState<
  * ```
  */
 export type WithInsertValues = BuilderState<
-  "insertValues",
+  'insertValues',
   false,
   false,
   false,
@@ -2650,7 +2637,7 @@ export type WithInsertValues = BuilderState<
  * ```
  */
 export type WithInsertSelect = BuilderState<
-  "insertSelect",
+  'insertSelect',
   false,
   false,
   false,
@@ -2668,7 +2655,7 @@ export type WithInsertSelect = BuilderState<
  * ```
  */
 export type WithInsertConflictTarget = BuilderState<
-  "insertConflictTarget",
+  'insertConflictTarget',
   false,
   false,
   false,
@@ -2686,7 +2673,7 @@ export type WithInsertConflictTarget = BuilderState<
  * ```
  */
 export type WithInsertConflictUpdate = BuilderState<
-  "insertConflictUpdate",
+  'insertConflictUpdate',
   false,
   false,
   false,
@@ -2704,7 +2691,7 @@ export type WithInsertConflictUpdate = BuilderState<
  * ```
  */
 export type WithInsertConflictAction = BuilderState<
-  "insertConflictAction",
+  'insertConflictAction',
   false,
   false,
   false,
@@ -2722,7 +2709,7 @@ export type WithInsertConflictAction = BuilderState<
  * ```
  */
 export type WithReturning = BuilderState<
-  "returning",
+  'returning',
   false,
   false,
   false,
@@ -2741,7 +2728,7 @@ export type WithReturning = BuilderState<
  */
 export type WithJoin<TState extends AnyBuilderState> = WithStage<
   TState,
-  "join"
+  'join'
 >;
 /**
  * Represents the state while a JOIN predicate is still pending.
@@ -2755,7 +2742,7 @@ export type WithJoin<TState extends AnyBuilderState> = WithStage<
  */
 export type WithPendingJoin<TState extends AnyBuilderState> = WithStage<
   TState,
-  "joinPending"
+  'joinPending'
 >;
 /**
  * Represents the state after a pending JOIN has enough data to continue.
@@ -2767,10 +2754,8 @@ export type WithPendingJoin<TState extends AnyBuilderState> = WithStage<
  * type State = WithPendingJoinReady<WithFrom<InitialBuilderState>>;
  * ```
  */
-export type WithPendingJoinReady<TState extends AnyBuilderState> = WithStage<
-  TState,
-  "joinPendingReady"
->;
+export type WithPendingJoinReady<TState extends AnyBuilderState> =
+  WithStage<TState, 'joinPendingReady'>;
 /**
  * Represents the state after entering WHERE.
  *
@@ -2783,7 +2768,7 @@ export type WithPendingJoinReady<TState extends AnyBuilderState> = WithStage<
  */
 export type WithWhere<TState extends AnyBuilderState> = WithStage<
   TState,
-  "where"
+  'where'
 >;
 /**
  * Represents the state after entering HAVING.
@@ -2797,7 +2782,7 @@ export type WithWhere<TState extends AnyBuilderState> = WithStage<
  */
 export type WithHaving<TState extends AnyBuilderState> = WithStage<
   TState,
-  "having"
+  'having'
 >;
 /**
  * Represents the state after entering ORDER BY.
@@ -2811,7 +2796,7 @@ export type WithHaving<TState extends AnyBuilderState> = WithStage<
  */
 export type WithOrderBy<TState extends AnyBuilderState> = WithStage<
   TState,
-  "orderBy"
+  'orderBy'
 >;
 /**
  * Represents the state after entering UPDATE.
@@ -2824,7 +2809,7 @@ export type WithOrderBy<TState extends AnyBuilderState> = WithStage<
  * ```
  */
 export type WithUpdate = BuilderState<
-  "update",
+  'update',
   false,
   false,
   false,
@@ -2841,7 +2826,14 @@ export type WithUpdate = BuilderState<
  * type State = WithSet;
  * ```
  */
-export type WithSet = BuilderState<"set", false, false, false, false, false>;
+export type WithSet = BuilderState<
+  'set',
+  false,
+  false,
+  false,
+  false,
+  false
+>;
 /**
  * Represents the state after entering DELETE.
  *
@@ -2853,7 +2845,7 @@ export type WithSet = BuilderState<"set", false, false, false, false, false>;
  * ```
  */
 export type WithDelete = BuilderState<
-  "delete",
+  'delete',
   false,
   false,
   false,
@@ -2871,12 +2863,12 @@ export type WithDelete = BuilderState<
  * ```
  */
 export type WithCompound<TState extends AnyBuilderState> = BuilderState<
-  "compound",
-  TState["hasFrom"],
-  TState["hasSelect"],
-  TState["hasGroupBy"],
-  TState["hasLimit"],
-  TState["hasOffset"]
+  'compound',
+  TState['hasFrom'],
+  TState['hasSelect'],
+  TState['hasGroupBy'],
+  TState['hasLimit'],
+  TState['hasOffset']
 >;
 
 /**
@@ -2890,12 +2882,12 @@ export type WithCompound<TState extends AnyBuilderState> = BuilderState<
  * ```
  */
 export type WithSelect<TState extends AnyBuilderState> = BuilderState<
-  "select",
-  TState["hasFrom"],
+  'select',
+  TState['hasFrom'],
   true,
-  TState["hasGroupBy"],
-  TState["hasLimit"],
-  TState["hasOffset"]
+  TState['hasGroupBy'],
+  TState['hasLimit'],
+  TState['hasOffset']
 >;
 
 /**
@@ -2909,12 +2901,12 @@ export type WithSelect<TState extends AnyBuilderState> = BuilderState<
  * ```
  */
 export type WithGroupBy<TState extends AnyBuilderState> = BuilderState<
-  "groupBy",
-  TState["hasFrom"],
-  TState["hasSelect"],
+  'groupBy',
+  TState['hasFrom'],
+  TState['hasSelect'],
   true,
-  TState["hasLimit"],
-  TState["hasOffset"]
+  TState['hasLimit'],
+  TState['hasOffset']
 >;
 
 /**
@@ -2928,12 +2920,12 @@ export type WithGroupBy<TState extends AnyBuilderState> = BuilderState<
  * ```
  */
 export type WithLimit<TState extends AnyBuilderState> = BuilderState<
-  "limit",
-  TState["hasFrom"],
-  TState["hasSelect"],
-  TState["hasGroupBy"],
+  'limit',
+  TState['hasFrom'],
+  TState['hasSelect'],
+  TState['hasGroupBy'],
   true,
-  TState["hasOffset"]
+  TState['hasOffset']
 >;
 
 /**
@@ -2947,11 +2939,11 @@ export type WithLimit<TState extends AnyBuilderState> = BuilderState<
  * ```
  */
 export type WithOffset<TState extends AnyBuilderState> = BuilderState<
-  "offset",
-  TState["hasFrom"],
-  TState["hasSelect"],
-  TState["hasGroupBy"],
-  TState["hasLimit"],
+  'offset',
+  TState['hasFrom'],
+  TState['hasSelect'],
+  TState['hasGroupBy'],
+  TState['hasLimit'],
   true
 >;
 
@@ -2978,9 +2970,9 @@ export type PendingPredicate = ReturnType<typeof buildPredicateForOp>;
  * ```
  */
 export type PendingDistinctOp =
-  | { op: "distinct" }
-  | { op: "distinctOnColumns"; cols: string[] }
-  | { op: "distinctOnExprs"; exprs: unknown[] };
+  | { op: 'distinct' }
+  | { op: 'distinctOnColumns'; cols: string[] }
+  | { op: 'distinctOnExprs'; exprs: unknown[] };
 
 /**
  * Describes pending WHERE, HAVING, and ON predicate operations.
@@ -2993,15 +2985,15 @@ export type PendingDistinctOp =
  * ```
  */
 export type PendingWhereOp =
-  | { op: "where"; pred: PendingPredicate }
-  | { op: "andWhere"; pred: PendingPredicate }
-  | { op: "orWhere"; pred: PendingPredicate }
-  | { op: "having"; pred: PendingPredicate }
-  | { op: "andHaving"; pred: PendingPredicate }
-  | { op: "orHaving"; pred: PendingPredicate }
-  | { op: "on"; pred: PendingPredicate }
-  | { op: "andOn"; pred: PendingPredicate }
-  | { op: "orOn"; pred: PendingPredicate };
+  | { op: 'where'; pred: PendingPredicate }
+  | { op: 'andWhere'; pred: PendingPredicate }
+  | { op: 'orWhere'; pred: PendingPredicate }
+  | { op: 'having'; pred: PendingPredicate }
+  | { op: 'andHaving'; pred: PendingPredicate }
+  | { op: 'orHaving'; pred: PendingPredicate }
+  | { op: 'on'; pred: PendingPredicate }
+  | { op: 'andOn'; pred: PendingPredicate }
+  | { op: 'orOn'; pred: PendingPredicate };
 
 /**
  * Describes pending source and subquery operations.
@@ -3014,30 +3006,40 @@ export type PendingWhereOp =
  * ```
  */
 export type PendingSourceOp =
-  | { op: "fromTable"; table: string }
-  | { op: "fromTableAlias"; table: string; alias: string }
-  | { op: "joinTable"; joinType: string; table: string }
-  | { op: "joinTableAlias"; joinType: string; table: string; alias: string }
+  | { op: 'fromTable'; table: string }
+  | { op: 'fromTableAlias'; table: string; alias: string }
+  | { op: 'joinTable'; joinType: string; table: string }
   | {
-      op: "fromSubqueryBuilder";
+      op: 'joinTableAlias';
+      joinType: string;
+      table: string;
+      alias: string;
+    }
+  | {
+      op: 'fromSubqueryBuilder';
       alias: string;
       rhsBuilder: AnyDatabaseInstance;
     }
-  | { op: "fromSubqueryHandle"; alias: string; rhsHandle: string }
-  | { op: "fromSubquery"; alias: string; query: unknown }
+  | { op: 'fromSubqueryHandle'; alias: string; rhsHandle: string }
+  | { op: 'fromSubquery'; alias: string; query: unknown }
   | {
-      op: "joinSubqueryBuilder";
+      op: 'joinSubqueryBuilder';
       joinType: string;
       alias: string;
       rhsBuilder: AnyDatabaseInstance;
     }
   | {
-      op: "joinSubqueryHandle";
+      op: 'joinSubqueryHandle';
       joinType: string;
       alias: string;
       rhsHandle: string;
     }
-  | { op: "joinSubquery"; joinType: string; alias: string; query: unknown };
+  | {
+      op: 'joinSubquery';
+      joinType: string;
+      alias: string;
+      query: unknown;
+    };
 
 /**
  * Describes pending JOIN constraint operations.
@@ -3050,8 +3052,8 @@ export type PendingSourceOp =
  * ```
  */
 export type PendingJoinConstraintOp =
-  | { op: "usingColumns"; cols: string[] }
-  | { op: "onColumns"; pairs: Array<readonly [string, string]> };
+  | { op: 'usingColumns'; cols: string[] }
+  | { op: 'onColumns'; pairs: Array<readonly [string, string]> };
 
 /**
  * Describes pending CTE operations.
@@ -3064,17 +3066,17 @@ export type PendingJoinConstraintOp =
  * ```
  */
 export type PendingQueryCteOp =
-  | { op: "withBuilder"; name: string; rhsBuilder: AnyDatabaseInstance }
-  | { op: "withHandle"; name: string; rhsHandle: string }
-  | { op: "withQuery"; name: string; query: unknown }
+  | { op: 'withBuilder'; name: string; rhsBuilder: AnyDatabaseInstance }
+  | { op: 'withHandle'; name: string; rhsHandle: string }
+  | { op: 'withQuery'; name: string; query: unknown }
   | {
-      op: "withRecursiveBuilder";
+      op: 'withRecursiveBuilder';
       name: string;
       rhsBuilder: AnyDatabaseInstance;
     }
-  | { op: "withRecursiveHandle"; name: string; rhsHandle: string }
+  | { op: 'withRecursiveHandle'; name: string; rhsHandle: string }
   | {
-      op: "withRecursiveQuery";
+      op: 'withRecursiveQuery';
       name: string;
       query: unknown;
       columns?: string[];
@@ -3091,16 +3093,16 @@ export type PendingQueryCteOp =
  * ```
  */
 export type PendingInsertOp =
-  | { op: "insertInto"; table: string }
-  | { op: "insertColumns"; cols: string[] }
-  | { op: "valuesInsert"; columnNames: string[]; rows: unknown[][] }
-  | { op: "onConflictColumns"; cols: string[] }
-  | { op: "onConflictConstraint"; name: string }
-  | { op: "doNothing" }
-  | { op: "doUpdateSet"; assignments: [string, unknown][] }
-  | { op: "conflictWhere"; pred: PendingPredicate }
-  | { op: "insertSelectHandle"; rhsHandle: string }
-  | { op: "insertSelect"; query: unknown };
+  | { op: 'insertInto'; table: string }
+  | { op: 'insertColumns'; cols: string[] }
+  | { op: 'valuesInsert'; columnNames: string[]; rows: unknown[][] }
+  | { op: 'onConflictColumns'; cols: string[] }
+  | { op: 'onConflictConstraint'; name: string }
+  | { op: 'doNothing' }
+  | { op: 'doUpdateSet'; assignments: [string, unknown][] }
+  | { op: 'conflictWhere'; pred: PendingPredicate }
+  | { op: 'insertSelectHandle'; rhsHandle: string }
+  | { op: 'insertSelect'; query: unknown };
 
 /**
  * Describes pending UPDATE, DELETE, and SET operations.
@@ -3113,9 +3115,9 @@ export type PendingInsertOp =
  * ```
  */
 export type PendingDmlOp =
-  | { op: "update"; table: string }
-  | { op: "deleteFrom"; table: string }
-  | { op: "set"; assignments: [string, unknown][] };
+  | { op: 'update'; table: string }
+  | { op: 'deleteFrom'; table: string }
+  | { op: 'set'; assignments: [string, unknown][] };
 
 /**
  * Describes pending compound-query operations.
@@ -3128,18 +3130,18 @@ export type PendingDmlOp =
  * ```
  */
 export type PendingCompoundOp =
-  | { op: "unionBuilder"; rhsBuilder: AnyDatabaseInstance }
-  | { op: "unionHandle"; rhsHandle: string }
-  | { op: "union"; query: unknown }
-  | { op: "unionAllBuilder"; rhsBuilder: AnyDatabaseInstance }
-  | { op: "unionAllHandle"; rhsHandle: string }
-  | { op: "unionAll"; query: unknown }
-  | { op: "intersectBuilder"; rhsBuilder: AnyDatabaseInstance }
-  | { op: "intersectHandle"; rhsHandle: string }
-  | { op: "intersect"; query: unknown }
-  | { op: "exceptBuilder"; rhsBuilder: AnyDatabaseInstance }
-  | { op: "exceptHandle"; rhsHandle: string }
-  | { op: "except"; query: unknown };
+  | { op: 'unionBuilder'; rhsBuilder: AnyDatabaseInstance }
+  | { op: 'unionHandle'; rhsHandle: string }
+  | { op: 'union'; query: unknown }
+  | { op: 'unionAllBuilder'; rhsBuilder: AnyDatabaseInstance }
+  | { op: 'unionAllHandle'; rhsHandle: string }
+  | { op: 'unionAll'; query: unknown }
+  | { op: 'intersectBuilder'; rhsBuilder: AnyDatabaseInstance }
+  | { op: 'intersectHandle'; rhsHandle: string }
+  | { op: 'intersect'; query: unknown }
+  | { op: 'exceptBuilder'; rhsBuilder: AnyDatabaseInstance }
+  | { op: 'exceptHandle'; rhsHandle: string }
+  | { op: 'except'; query: unknown };
 
 /**
  * Stores one aliased expression in a pending projection payload.
@@ -3168,10 +3170,10 @@ export type PendingAliasedEntry = {
  * ```
  */
 export type PendingProjectionOp =
-  | { op: "selectAliased"; entries: PendingAliasedEntry[] }
-  | { op: "selectColumns"; cols: string[] }
-  | { op: "returningAliased"; entries: PendingAliasedEntry[] }
-  | { op: "returningColumns"; cols: string[] };
+  | { op: 'selectAliased'; entries: PendingAliasedEntry[] }
+  | { op: 'selectColumns'; cols: string[] }
+  | { op: 'returningAliased'; entries: PendingAliasedEntry[] }
+  | { op: 'returningColumns'; cols: string[] };
 
 /**
  * Describes pending ORDER BY and GROUP BY operations.
@@ -3185,13 +3187,13 @@ export type PendingProjectionOp =
  */
 export type PendingOrderOp =
   | {
-      op: "orderBy";
+      op: 'orderBy';
       col: string;
       direction?: string;
       nullOrder?: string;
     }
-  | { op: "orderByColumns"; cols: string[] }
-  | { op: "groupBy"; cols: string[] };
+  | { op: 'orderByColumns'; cols: string[] }
+  | { op: 'groupBy'; cols: string[] };
 
 /**
  * Describes pending pagination and row-lock operations.
@@ -3204,12 +3206,12 @@ export type PendingOrderOp =
  * ```
  */
 export type PendingPaginationOp =
-  | { op: "limit"; count: number }
-  | { op: "offset"; count: number }
-  | { op: "forUpdate" }
-  | { op: "forShare" }
-  | { op: "noWait" }
-  | { op: "skipLocked" };
+  | { op: 'limit'; count: number }
+  | { op: 'offset'; count: number }
+  | { op: 'forUpdate' }
+  | { op: 'forShare' }
+  | { op: 'noWait' }
+  | { op: 'skipLocked' };
 
 /**
  * Unions every pending operation payload.
@@ -3245,80 +3247,80 @@ export type PendingOp =
  * ```
  */
 export type CompactPendingOp =
-  | readonly ["w", PendingPredicate]
-  | readonly ["d"]
-  | readonly ["dc", string[]]
-  | readonly ["de", unknown[]]
-  | readonly ["aw", PendingPredicate]
-  | readonly ["ow", PendingPredicate]
-  | readonly ["h", PendingPredicate]
-  | readonly ["ah", PendingPredicate]
-  | readonly ["oh", PendingPredicate]
-  | readonly ["ft", string]
-  | readonly ["fta", string, string]
-  | readonly ["jt", string, string]
-  | readonly ["jta", string, string, string]
-  | readonly ["on", PendingPredicate]
-  | readonly ["aon", PendingPredicate]
-  | readonly ["oon", PendingPredicate]
-  | readonly ["uc", string[]]
-  | readonly ["oc", Array<readonly [string, string]>]
-  | readonly ["wh", string, string]
-  | readonly ["wq", string, unknown]
-  | readonly ["wrh", string, string]
-  | readonly ["wrq", string, unknown]
+  | readonly ['w', PendingPredicate]
+  | readonly ['d']
+  | readonly ['dc', string[]]
+  | readonly ['de', unknown[]]
+  | readonly ['aw', PendingPredicate]
+  | readonly ['ow', PendingPredicate]
+  | readonly ['h', PendingPredicate]
+  | readonly ['ah', PendingPredicate]
+  | readonly ['oh', PendingPredicate]
+  | readonly ['ft', string]
+  | readonly ['fta', string, string]
+  | readonly ['jt', string, string]
+  | readonly ['jta', string, string, string]
+  | readonly ['on', PendingPredicate]
+  | readonly ['aon', PendingPredicate]
+  | readonly ['oon', PendingPredicate]
+  | readonly ['uc', string[]]
+  | readonly ['oc', Array<readonly [string, string]>]
+  | readonly ['wh', string, string]
+  | readonly ['wq', string, unknown]
+  | readonly ['wrh', string, string]
+  | readonly ['wrq', string, unknown]
   | {
-      op: "withRecursiveQuery";
+      op: 'withRecursiveQuery';
       name: string;
       query: unknown;
       columns: string[];
     }
-  | readonly ["ii", string]
-  | readonly ["ic", string[]]
-  | readonly ["vi", string[], unknown[][]]
-  | readonly ["upd", string]
-  | readonly ["del", string]
-  | readonly ["set", [string, unknown][]]
-  | readonly ["ict", string[]]
-  | readonly ["icn", string]
-  | readonly ["idn"]
-  | readonly ["idu", [string, unknown][]]
-  | readonly ["icw", PendingPredicate]
-  | readonly ["sa", PendingAliasedEntry[]]
-  | readonly ["sc", string[]]
-  | readonly ["ra", PendingAliasedEntry[]]
-  | readonly ["rc", string[]]
-  | readonly ["ob", string, string | null, string | null]
-  | readonly ["obc", string[]]
-  | readonly ["gb", string[]]
-  | readonly ["l", number]
-  | readonly ["o", number]
-  | readonly ["fu"]
-  | readonly ["fs"]
-  | readonly ["nw"]
-  | readonly ["sl"]
-  | readonly ["unh", string]
-  | readonly ["un", unknown]
-  | readonly ["uah", string]
-  | readonly ["ua", unknown]
-  | readonly ["ixh", string]
-  | readonly ["ix", unknown]
-  | readonly ["exh", string]
-  | readonly ["ex", unknown]
-  | readonly ["fsqh", string, string]
-  | readonly ["fsq", string, unknown]
-  | readonly ["jsqh", string, string, string]
-  | readonly ["jsq", string, string, unknown]
-  | readonly ["ish", string]
-  | readonly ["is", unknown]
-  | readonly ["whi", string, string, CompactPendingOp[]]
-  | readonly ["wrhi", string, string, CompactPendingOp[]]
-  | readonly ["fsqi", string, string, CompactPendingOp[]]
-  | readonly ["jsqi", string, string, string, CompactPendingOp[]]
-  | readonly ["uni", string, CompactPendingOp[]]
-  | readonly ["uai", string, CompactPendingOp[]]
-  | readonly ["ixi", string, CompactPendingOp[]]
-  | readonly ["exi", string, CompactPendingOp[]];
+  | readonly ['ii', string]
+  | readonly ['ic', string[]]
+  | readonly ['vi', string[], unknown[][]]
+  | readonly ['upd', string]
+  | readonly ['del', string]
+  | readonly ['set', [string, unknown][]]
+  | readonly ['ict', string[]]
+  | readonly ['icn', string]
+  | readonly ['idn']
+  | readonly ['idu', [string, unknown][]]
+  | readonly ['icw', PendingPredicate]
+  | readonly ['sa', PendingAliasedEntry[]]
+  | readonly ['sc', string[]]
+  | readonly ['ra', PendingAliasedEntry[]]
+  | readonly ['rc', string[]]
+  | readonly ['ob', string, string | null, string | null]
+  | readonly ['obc', string[]]
+  | readonly ['gb', string[]]
+  | readonly ['l', number]
+  | readonly ['o', number]
+  | readonly ['fu']
+  | readonly ['fs']
+  | readonly ['nw']
+  | readonly ['sl']
+  | readonly ['unh', string]
+  | readonly ['un', unknown]
+  | readonly ['uah', string]
+  | readonly ['ua', unknown]
+  | readonly ['ixh', string]
+  | readonly ['ix', unknown]
+  | readonly ['exh', string]
+  | readonly ['ex', unknown]
+  | readonly ['fsqh', string, string]
+  | readonly ['fsq', string, unknown]
+  | readonly ['jsqh', string, string, string]
+  | readonly ['jsq', string, string, unknown]
+  | readonly ['ish', string]
+  | readonly ['is', unknown]
+  | readonly ['whi', string, string, CompactPendingOp[]]
+  | readonly ['wrhi', string, string, CompactPendingOp[]]
+  | readonly ['fsqi', string, string, CompactPendingOp[]]
+  | readonly ['jsqi', string, string, string, CompactPendingOp[]]
+  | readonly ['uni', string, CompactPendingOp[]]
+  | readonly ['uai', string, CompactPendingOp[]]
+  | readonly ['ixi', string, CompactPendingOp[]]
+  | readonly ['exi', string, CompactPendingOp[]];
 
 /**
  * Stores compile-phase timing and mode diagnostics for node-query.
@@ -3343,7 +3345,7 @@ export type NodeQueryCompileDiagnostics = {
   pendingOpsApplyMs: number;
   compileBundleMs: number;
   pendingOpCount: number;
-  applyMode: "binary" | "json" | "none" | "mixed";
+  applyMode: 'binary' | 'json' | 'none' | 'mixed';
 };
 
 /**
@@ -3413,10 +3415,10 @@ export type NodeQueryBuildDiagnostics = {
  * ```
  */
 export type NodeQueryCompileDiagnosticsStep =
-  | "pendingOpsMaterializeMs"
-  | "pendingOpsSerializeMs"
-  | "pendingOpsApplyMs"
-  | "compileBundleMs";
+  | 'pendingOpsMaterializeMs'
+  | 'pendingOpsSerializeMs'
+  | 'pendingOpsApplyMs'
+  | 'compileBundleMs';
 
 /**
  * Names each timed step in build diagnostics.
@@ -3429,20 +3431,20 @@ export type NodeQueryCompileDiagnosticsStep =
  * ```
  */
 export type NodeQueryBuildDiagnosticsStep =
-  | "directMutationMs"
-  | "cloneWithOwnedHandleMs"
-  | "callbackResolveMs"
-  | "builderContextCreateMs"
-  | "exprNodeBuildMs"
-  | "predicateBuildMs"
-  | "jsonSerializeMs"
-  | "runtimeCallMs"
-  | "runtimeSourceMs"
-  | "runtimeSelectMs"
-  | "runtimePredicateMs"
-  | "runtimeCteMs"
-  | "runtimeOrderMs"
-  | "runtimePaginationMs";
+  | 'directMutationMs'
+  | 'cloneWithOwnedHandleMs'
+  | 'callbackResolveMs'
+  | 'builderContextCreateMs'
+  | 'exprNodeBuildMs'
+  | 'predicateBuildMs'
+  | 'jsonSerializeMs'
+  | 'runtimeCallMs'
+  | 'runtimeSourceMs'
+  | 'runtimeSelectMs'
+  | 'runtimePredicateMs'
+  | 'runtimeCteMs'
+  | 'runtimeOrderMs'
+  | 'runtimePaginationMs';
 
 /**
  * Names each counter tracked by build diagnostics.
@@ -3455,13 +3457,13 @@ export type NodeQueryBuildDiagnosticsStep =
  * ```
  */
 export type NodeQueryBuildDiagnosticsCounter =
-  | "directMutationCount"
-  | "runtimeCallCount"
-  | "builderContextCacheHits"
-  | "builderContextCacheMisses"
-  | "exprNodeCount"
-  | "predicateBuildCount"
-  | "jsonSerializeCount";
+  | 'directMutationCount'
+  | 'runtimeCallCount'
+  | 'builderContextCacheHits'
+  | 'builderContextCacheMisses'
+  | 'exprNodeCount'
+  | 'predicateBuildCount'
+  | 'jsonSerializeCount';
 
 /**
  * Records compile diagnostics into a shared sample object.
@@ -3477,9 +3479,12 @@ export type NodeQueryBuildDiagnosticsCounter =
 export type NodeQueryCompileDiagnosticsCollector = {
   now: () => number;
   sample: NodeQueryCompileDiagnostics;
-  recordStep(step: NodeQueryCompileDiagnosticsStep, durationMs: number): void;
+  recordStep(
+    step: NodeQueryCompileDiagnosticsStep,
+    durationMs: number,
+  ): void;
   recordApplyMode(
-    mode: Exclude<NodeQueryCompileDiagnostics["applyMode"], "mixed">,
+    mode: Exclude<NodeQueryCompileDiagnostics['applyMode'], 'mixed'>,
   ): void;
 };
 
@@ -3497,6 +3502,9 @@ export type NodeQueryCompileDiagnosticsCollector = {
 export type NodeQueryBuildDiagnosticsCollector = {
   now: () => number;
   sample: NodeQueryBuildDiagnostics;
-  recordStep(step: NodeQueryBuildDiagnosticsStep, durationMs: number): void;
+  recordStep(
+    step: NodeQueryBuildDiagnosticsStep,
+    durationMs: number,
+  ): void;
   incrementCounter(counter: NodeQueryBuildDiagnosticsCounter): void;
 };

@@ -1,9 +1,9 @@
 import type {
   NodeQueryBuildDiagnostics,
   NodeQueryBuildDiagnosticsCollector,
-} from "../types";
-import { createNodeQueryBuildDiagnosticsSample } from "./build-diagnostics";
-import { DiagnosticsCollector } from "./collectors";
+} from '../types';
+import { createNodeQueryBuildDiagnosticsSample } from './build-diagnostics';
+import { DiagnosticsCollector } from './collectors';
 
 /** @internal */
 export function captureNodeQueryBuildDiagnostics<TResult>(
@@ -17,8 +17,8 @@ export function captureNodeQueryBuildDiagnostics<TResult>(
     now:
       options.now ??
       (() =>
-        typeof performance !== "undefined" &&
-        typeof performance.now === "function"
+        typeof performance !== 'undefined' &&
+        typeof performance.now === 'function'
           ? performance.now()
           : Date.now()),
     sample,

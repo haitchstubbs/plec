@@ -9,4 +9,4 @@
  * console.log(DEFAULT_DIALECT);
  * ```
  */
-export const DEFAULT_DIALECT = "postgres";
+export const DEFAULT_DIALECT = 'postgres';
