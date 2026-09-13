@@ -120,5 +120,5 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | wasm-runtime-rz7 | Anchor-click interception intermittently falls through to a full page navigation during client-side route swaps | closed | P2 | bug | haitchstubbs |  |
 | wasm-runtime-sum | Fix chromedriver/playwright Chromium version drift breaking test harness | closed | P1 | bug | haitchstubbs |  |
 | wasm-runtime-tfk | plec dev verify adoption: one-shot validation pipeline | closed | P2 | feature | haitchstubbs |  |
-| wasm-runtime-ujj | Investigate runtime baseline nondeterminism | open | P2 | bug | haitchstubbs |  |
+| wasm-runtime-ujj | Investigate runtime baseline nondeterminism | closed | P2 | bug | haitchstubbs |  |
 | wasm-runtime-vdd | Wire the native plec-server crate into dev/build workflows and retire packages/plec-server | closed | P2 | task | haitchstubbs |  |
