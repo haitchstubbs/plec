@@ -20,13 +20,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
+      - name: Enable Corepack
+        run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.0
-      - name: Enable Corepack
-        run: corepack enable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ runner.os }}-${{ runner.arch }}
@@ -47,13 +50,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
+      - name: Enable Corepack
+        run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.0
-      - name: Enable Corepack
-        run: corepack enable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ runner.os }}-${{ runner.arch }}
