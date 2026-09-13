@@ -19,6 +19,11 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
         return Err(JsValue::from_str("missing:ssr-root-graph"));
     }
     let root_id = graph_instance_id(None, "main", None);
+    let root_loader_data = state
+        .typed_host_inputs
+        .borrow()
+        .get("loaderData")
+        .cloned();
     adopt_typed_graph(
         state,
         root_id.clone(),
@@ -29,6 +34,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
         None,
         root,
         "root".into(),
+        root_loader_data.as_ref(),
     )?;
     let mut parent_id = root_id;
     let mut path = "root".to_owned();
@@ -95,6 +101,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                 Some(match_key),
                 outlet,
                 child_path.clone(),
+                None,
             )?;
             let mut typed = state.typed.borrow_mut();
             let instance = typed.get_mut(&id).expect("adopted route exists");
@@ -118,19 +125,17 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
             instance.runtime.apply_static_bindings()?;
             drop(typed);
         } else {
-            if let Some((_, plec_ir::SsrLoaderState::Resolved { value })) = &loader {
-                // Loader data is a host input: seed it before adoption so
-                // `loadHost("loaderData")` state initializers evaluate
-                // from the imported outcome instead of blank state.
-                state
-                    .typed_host_inputs
-                    .borrow_mut()
-                    .insert("loaderData".into(), ssr_snapshot_value(value));
-                state
-                    .typed_ssr_host_inputs
-                    .borrow_mut()
-                    .insert("loaderData".into());
-            }
+            let loader_data = match &loader {
+                Some((_, plec_ir::SsrLoaderState::Resolved { value })) => {
+                    Some(ssr_snapshot_value(value))
+                }
+                _ if *state.typed_ssr_imported.borrow() => state
+                    .typed
+                    .borrow()
+                    .get(&parent_id)
+                    .and_then(|instance| instance.loader_data.clone()),
+                _ => None,
+            };
             adopt_typed_graph(
                 state,
                 id.clone(),
@@ -141,6 +146,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                 Some(match_key),
                 outlet,
                 child_path.clone(),
+                loader_data.as_ref(),
             )?;
             // Chain agreement above proves these params equal the
             // snapshot's imported values, so this stamps the transferred
@@ -510,7 +516,7 @@ fn mount_typed_graph(
     runtime.set_component_definitions(graph.components);
     runtime.host_registry = state.host_registry.clone();
     runtime.host_dispatch = Some(state.clone());
-    runtime.set_host_inputs(state.typed_host_inputs.borrow().clone())?;
+    runtime.set_host_inputs(state.typed_host_inputs_for(None))?;
     runtime.graph_generation = state.next_typed_generation();
     // Fresh client mounts use the exact structural address the server
     // renderer would have given this route position, so CSR-created DOM
@@ -529,6 +535,7 @@ fn mount_typed_graph(
             route_id,
             match_key,
             route_state: None,
+            loader_data: None,
             loader_runtime: None,
             component_call: None,
             component_start: None,
@@ -549,6 +556,7 @@ fn adopt_typed_graph(
     match_key: Option<String>,
     root: Element,
     path: String,
+    loader_data: Option<&RuntimeValue>,
 ) -> Result<(), JsValue> {
     state.ensure_typed_instance_absent(
         &id,
@@ -579,7 +587,12 @@ fn adopt_typed_graph(
     // Adopted instances keep emitting addresses under the claimed path:
     // branch flips and delta rows must match the server grammar.
     runtime.path = path.clone();
-    runtime.set_host_inputs(state.typed_host_inputs.borrow().clone())?;
+    let host_inputs = if parent_id.is_none() {
+        state.typed_host_inputs.borrow().clone()
+    } else {
+        state.typed_host_inputs_for(loader_data)
+    };
+    runtime.set_host_inputs(host_inputs)?;
     runtime.graph_generation = state.next_typed_generation();
     let branches = state
         .typed_ssr_branches
@@ -621,6 +634,7 @@ fn adopt_typed_graph(
             route_id,
             match_key,
             route_state: None,
+            loader_data: loader_data.cloned(),
             loader_runtime: None,
             component_call: None,
             component_start: None,

@@ -455,6 +455,7 @@ pub struct TypedGraphInstance {
     pub route_id: Option<String>,
     pub match_key: Option<String>,
     pub route_state: Option<TypedRouteState>,
+    pub loader_data: Option<RuntimeValue>,
     /// The normal graph remains alive only while its route loader is pending.
     pub loader_runtime: Option<TypedRuntime>,
     pub component_call: Option<usize>,
@@ -830,7 +831,12 @@ impl RuntimeState {
                         }))
                     })
                     .collect::<Result<Vec<_>, JsValue>>()?;
-                runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+                let loader_data = self
+                    .typed
+                    .borrow()
+                    .get(&parent_id)
+                    .and_then(|instance| instance.loader_data.clone());
+                runtime.set_host_inputs(self.typed_host_inputs_for(loader_data.as_ref()))?;
                 runtime.graph_generation = self.next_typed_generation();
                 if let Some(adoption) = request.adoption.as_ref() {
                     runtime.adopt(
@@ -887,6 +893,7 @@ impl RuntimeState {
                         route_id: None,
                         match_key: None,
                         route_state: None,
+                        loader_data: None,
                         loader_runtime: None,
                         component_call: Some(request.call),
                         component_start: Some(request.start),

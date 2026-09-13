@@ -267,7 +267,12 @@ impl RuntimeState {
         next.set_component_definitions(graph.components);
         next.host_registry = self.host_registry.clone();
         next.host_dispatch = Some(self.clone());
-        next.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+        let loader_data = self
+            .typed
+            .borrow()
+            .get(id)
+            .and_then(|instance| instance.loader_data.clone());
+        next.set_host_inputs(self.typed_host_inputs_for(loader_data.as_ref()))?;
         next.graph_generation = self.next_typed_generation();
         if let Some(error) = error {
             next.set_route_error(error)?;
@@ -364,7 +369,7 @@ impl RuntimeState {
             // Loader data is a host input: state initializers such as
             // loadHost("loaderData") only re-evaluate when host inputs are
             // (re)applied, so seed the graph before its first paint.
-            loader.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+            loader.set_host_inputs(self.typed_host_inputs_for(instance.loader_data.as_ref()))?;
             loader.mount(root)?;
             let mut previous = std::mem::replace(&mut instance.runtime, loader);
             previous.invalidate_fetches();

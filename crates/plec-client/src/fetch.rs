@@ -749,9 +749,6 @@ impl RuntimeState {
                     }
                     _ => value.clone(),
                 };
-                self.typed_host_inputs
-                    .borrow_mut()
-                    .insert("loaderData".into(), exported.clone());
                 let restore = {
                     let mut typed = self.typed.borrow_mut();
                     let instance = match typed.get_mut(&instance_id) {
@@ -759,6 +756,8 @@ impl RuntimeState {
                         None => return Ok(()),
                     };
                     let restore = instance.loader_runtime.is_some();
+                    instance.loader_data = Some(exported.clone());
+                    let host_inputs = self.typed_host_inputs_for(instance.loader_data.as_ref());
                     let Some(runtime) =
                         instance.runtime_for_generation_mut(pending.graph_generation)
                     else {
@@ -788,7 +787,7 @@ impl RuntimeState {
                         // dependency edges) keep their pre-fetch DOM until
                         // the static bindings are re-applied, mirroring how
                         // location host inputs refresh on navigation.
-                        runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+                        runtime.set_host_inputs(host_inputs)?;
                         runtime.apply_static_bindings()?;
                         runtime.queue_static_component_refreshes()?;
                     }
@@ -836,15 +835,14 @@ impl RuntimeState {
             }
             _ => value,
         };
-        self.typed_host_inputs
-            .borrow_mut()
-            .insert("loaderData".into(), exported.clone());
         let restore = {
             let mut typed = self.typed.borrow_mut();
             let instance = typed
                 .get_mut(instance_id)
                 .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
             let restore = instance.loader_runtime.is_some();
+            instance.loader_data = Some(exported.clone());
+            let host_inputs = self.typed_host_inputs_for(instance.loader_data.as_ref());
             let runtime = instance
                 .runtime_for_generation_mut(graph_generation)
                 .ok_or_else(|| JsValue::from_str("typed route loader runtime is stale"))?;
@@ -859,7 +857,7 @@ impl RuntimeState {
                 return Err(JsValue::from_str("loader state handle out of range"));
             }
             if !restore {
-                runtime.set_host_inputs(self.typed_host_inputs.borrow().clone())?;
+                runtime.set_host_inputs(host_inputs)?;
                 runtime.apply_static_bindings()?;
                 runtime.queue_static_component_refreshes()?;
             }
