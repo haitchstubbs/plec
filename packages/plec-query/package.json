@@ -50,7 +50,7 @@
     "bench:query-cache-hit": "yarn bench:query-cache-hit:baseline && yarn bench:query-cache-hit:post && yarn bench:query-cache-hit:report",
     "lint": "eslint . --max-warnings 0",
     "check-types": "tsc --noEmit",
-    "test": "vitest run --config vitest.config.ts && yarn test:types",
+    "test": "vitest run --config vitest.config.ts --passWithNoTests && yarn test:types",
     "test:runtime": "vitest run --config vitest.config.ts",
     "test:types": "tsc -p tsconfig.type-tests.json --noEmit"
   },

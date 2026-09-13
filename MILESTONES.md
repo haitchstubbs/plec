@@ -24,6 +24,7 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.7 | Docs: install-from-source workflow for the release package | open | P2 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.8 | apps/fullstack as the canonical example built from real release assets | closed | P1 | task | haitchstubbs |  |
 | &nbsp;&nbsp;↳ wasm-runtime-1wj.9 | Eliminate the plec-runtime staging workspace package | closed | P1 | task | haitchstubbs |  |
+| wasm-runtime-1yf | Application interaction ergonomics: mutations, middleware, and server actions | open | P2 | epic | haitchstubbs |  |
 | wasm-runtime-2fl | Sync cookie policy denial silently falls back to host inputs | closed | P1 | bug | haitchstubbs |  |
 | wasm-runtime-43g | Split plec-runtime into plec-dom/plec-eval/plec-client/plec-router crates | closed | P1 | task | haitchstubbs |  |
 | wasm-runtime-472 | plec dev impact: change-impact report for protocol constants and symbols | closed | P2 | feature | haitchstubbs |  |
@@ -86,6 +87,10 @@ In the meantime, issues can be subbmited via github and will be prioritised into
 | &nbsp;&nbsp;↳ wasm-runtime-ixk.6 | Test and document the SSR text-marker adjacency invariant | closed | P3 | task | haitchstubbs | dom-runtime, ssr, testing |
 | &nbsp;&nbsp;↳ wasm-runtime-ixk.7 | Isolate and document the legacy 0.8/0.9 marker and adoption schemes | closed | P3 | chore | haitchstubbs | dom-runtime, ssr, tech-debt |
 | wasm-runtime-jfd | plec-e2e: pre-existing tsc strict errors in tests | closed | P3 | task | haitchstubbs |  |
+| **wasm-runtime-kqp** | **Application interaction ergonomics: mutations, middleware, and server actions** | open | P2 | epic | haitchstubbs |  |
+| &nbsp;&nbsp;↳ wasm-runtime-kqp.1 | Add lifecycle-owned mutation primitive for async application operations | open | P2 | feature | haitchstubbs |  |
+| &nbsp;&nbsp;↳ wasm-runtime-kqp.2 | Add deterministic middleware composition for file-based API routes | open | P2 | feature | haitchstubbs |  |
+| &nbsp;&nbsp;↳ wasm-runtime-kqp.3 | Design typed Plec server actions over the generated server boundary | open | P3 | task | haitchstubbs |  |
 | wasm-runtime-lcy | plec dev markers explain/validate: executable DOM address protocol | closed | P2 | feature | haitchstubbs |  |
 | **wasm-runtime-moq** | **Plec SSR execution/adoption contract: resumable HTML + typed execution snapshot** | closed | P1 | epic | haitchstubbs | ssr |
 | &nbsp;&nbsp;↳ wasm-runtime-moq.1 | Freeze typed SSR snapshot contract v1 in plec-ir (Rust-owned schema + validation) | closed | P1 | feature | haitchstubbs | rust, ssr |

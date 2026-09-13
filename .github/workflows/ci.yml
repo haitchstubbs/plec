@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  required:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: dtolnay/rust-toolchain@master
+      - name: Install OS prerequisites
+        run: sudo apt-get update && sudo apt-get install --yes unzip
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install dependencies
+        run: yarn install --immutable
+      - name: Install build tools
+        run: yarn install:build-tools
+      - name: Verify browser toolchain
+        run: yarn toolchain:verify:browser
+      - name: Check formatting
+        run: yarn format:check
+      - name: Typecheck
+        run: yarn typecheck
+      - name: Test
+        run: yarn test
+      - name: Test WASM
+        run: yarn test:wasm
+      - name: Build
+        run: yarn build
+      - name: Test E2E
+        run: yarn test:e2e
