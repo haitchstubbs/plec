@@ -1,8 +1,8 @@
 import * as React from 'react';
 import { Dialog as SheetPrimitive } from '@base-ui/react/dialog';
 
-import { cn } from '@wasm-runtime/ui/lib/utils';
-import { Button } from '@wasm-runtime/ui/atoms/button';
+import { cn } from 'plec-ui/lib/utils';
+import { Button } from 'plec-ui/atoms/button';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Cancel01Icon } from '@hugeicons/core-free-icons';
 

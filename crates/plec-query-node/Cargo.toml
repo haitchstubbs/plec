@@ -1,0 +1,18 @@
+[package]
+name = "plec-query-node"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi.workspace = true
+napi-derive.workspace = true
+query_core = { package = "plec-query", path = "../plec-query-core" }
+serde.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+napi-build = "2"

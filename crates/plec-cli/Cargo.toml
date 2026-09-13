@@ -7,11 +7,25 @@ edition.workspace = true
 plec-inspect = { path = "../plec-inspect" }
 plec-ir = { path = "../plec-ir" }
 plec-parser = { path = "../plec-parser" }
-plec-sema = { path = "../plec-sema" }
+plec-model = { path = "../plec-model" }
 plec-compiler = { path = "../plec-compiler" }
+plec-build = { path = "../plec-build" }
+plec-server = { path = "../plec-server" }
+axum = { workspace = true }
+tokio = { workspace = true }
 clap = { workspace = true }
 pollster = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
+semver = { workspace = true }
+brotli = { workspace = true }
+sha2 = { workspace = true }
 [[bin]]
 name = "plec"
 path = "src/main.rs"
+
+[build-dependencies]
+dotenvy = "0.15.7"
+
+[dev-dependencies]
+tempfile = { workspace = true }

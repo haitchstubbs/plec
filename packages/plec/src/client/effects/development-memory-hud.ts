@@ -6,7 +6,8 @@ type ServerMemory = {
   heapUsedBytes: number;
   heapTotalBytes: number;
   externalBytes: number;
-  arrayBuffers: number;
+  arrayBuffersBytes?: number;
+  arrayBuffers?: number;
   heapLimitBytes: number;
   activeResources: string[];
 };
@@ -48,7 +49,7 @@ export function installDevelopmentMemoryHud(
       '<strong>Development memory</strong>',
       `<p>Node RSS: <b>${formatBytes(server.rssBytes)}</b></p>`,
       `<p>Node heap: <b>${formatBytes(server.heapUsedBytes)} / ${formatBytes(server.heapLimitBytes)}</b></p>`,
-      `<p>Node external: ${formatBytes(server.externalBytes)} · Array buffers: ${formatBytes(server.arrayBuffers)}</p>`,
+      `<p>Node external: ${formatBytes(server.externalBytes)} · Array buffers: ${formatBytes(server.arrayBuffersBytes ?? server.arrayBuffers ?? 0)}</p>`,
       `<p>${browser}</p>`,
       `<p class="plec-development-memory-meta">PID ${server.pid} · uptime ${server.uptimeSeconds}s · ${server.activeResources.join(', ') || 'no active resources'}</p>`,
     ].join('');

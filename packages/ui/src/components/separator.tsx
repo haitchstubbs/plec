@@ -1,6 +1,6 @@
 import { Separator as SeparatorPrimitive } from '@base-ui/react/separator';
 
-import { cn } from '@wasm-runtime/ui/lib/utils';
+import { cn } from 'plec-ui/lib/utils';
 
 function Separator({
   className,

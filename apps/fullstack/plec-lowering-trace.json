@@ -86,7 +86,7 @@
     "seq": 9,
     "stage": "component-factory-init",
     "symbol": "CircleHelp",
-    "file": "@wasm-runtime/lucide-plec/icons/circle-help",
+    "file": "plec-lucide/icons/circle-help",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -96,7 +96,7 @@
     "seq": 10,
     "stage": "component-factory-init",
     "symbol": "House",
-    "file": "@wasm-runtime/lucide-plec/icons/house",
+    "file": "plec-lucide/icons/house",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -106,7 +106,7 @@
     "seq": 11,
     "stage": "component-factory-init",
     "symbol": "ListChecks",
-    "file": "@wasm-runtime/lucide-plec/icons/list-checks",
+    "file": "plec-lucide/icons/list-checks",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -116,7 +116,7 @@
     "seq": 12,
     "stage": "component-factory-init",
     "symbol": "Workflow",
-    "file": "@wasm-runtime/lucide-plec/icons/workflow",
+    "file": "plec-lucide/icons/workflow",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -126,7 +126,7 @@
     "seq": 13,
     "stage": "component-factory-init",
     "symbol": "ChevronRight",
-    "file": "@wasm-runtime/lucide-plec/icons/chevron-right",
+    "file": "plec-lucide/icons/chevron-right",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -136,7 +136,7 @@
     "seq": 14,
     "stage": "component-factory-init",
     "symbol": "PanelLeft",
-    "file": "@wasm-runtime/lucide-plec/icons/panel-left",
+    "file": "plec-lucide/icons/panel-left",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -341,7 +341,7 @@
     "seq": 36,
     "stage": "component-factory-init",
     "symbol": "CircleHelp",
-    "file": "@wasm-runtime/lucide-plec/icons/circle-help",
+    "file": "plec-lucide/icons/circle-help",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -351,7 +351,7 @@
     "seq": 37,
     "stage": "component-factory-init",
     "symbol": "House",
-    "file": "@wasm-runtime/lucide-plec/icons/house",
+    "file": "plec-lucide/icons/house",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -361,7 +361,7 @@
     "seq": 38,
     "stage": "component-factory-init",
     "symbol": "ListChecks",
-    "file": "@wasm-runtime/lucide-plec/icons/list-checks",
+    "file": "plec-lucide/icons/list-checks",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -371,7 +371,7 @@
     "seq": 39,
     "stage": "component-factory-init",
     "symbol": "Workflow",
-    "file": "@wasm-runtime/lucide-plec/icons/workflow",
+    "file": "plec-lucide/icons/workflow",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -381,7 +381,7 @@
     "seq": 40,
     "stage": "component-factory-init",
     "symbol": "ChevronRight",
-    "file": "@wasm-runtime/lucide-plec/icons/chevron-right",
+    "file": "plec-lucide/icons/chevron-right",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -391,7 +391,7 @@
     "seq": 41,
     "stage": "component-factory-init",
     "symbol": "PanelLeft",
-    "file": "@wasm-runtime/lucide-plec/icons/panel-left",
+    "file": "plec-lucide/icons/panel-left",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false

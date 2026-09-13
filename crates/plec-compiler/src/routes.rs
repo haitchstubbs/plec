@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use plec_hir::{ComponentId, HirApplication, HirRoute, HirRouteApplication, HirRouteMetadata};
 use plec_ir::{
-    ActionInstruction, ActionProgram, CapabilityRequest, ComponentApplication, ExpressionInstruction,
-    ExpressionProgram, ReturnOutcome, RouteManifest, RouteManifestEntry, RouteOutlet, StateSlot,
-    Value, RouteMetadata,
+    ActionInstruction, ActionProgram, CapabilityRequest, ComponentApplication,
+    ExpressionInstruction, ExpressionProgram, ReturnOutcome, RouteManifest, RouteManifestEntry,
+    RouteMetadata, RouteOutlet, StateSlot, Value,
 };
+use plec_model::{resolve_local_symbol, SemanticGraph};
 use plec_parser::ParsedModule;
-use plec_sema::{resolve_local_symbol, SemanticGraph};
 use serde::Serialize;
 use swc_ecma_ast::{
     ArrowFunctionBody, Callee, Decl, Expr, KeyValueProp, ModuleItem, Pat, Prop, PropName,
@@ -138,6 +138,9 @@ pub fn lower_routes(
             }
         }
     }
+    // Source graph traversal may discover modules in different equivalent
+    // orders. Keep manifest and phase artifact output stable across processes.
+    routes.sort_unstable_by(|left, right| left.id.cmp(&right.id));
     let root = routes
         .iter()
         .find(|route| route.parent.is_none())
@@ -182,9 +185,11 @@ pub fn lower_route_manifest(routes: &HirRouteApplication) -> RouteManifest {
                 // cannot supply this runtime handle.
                 loader_action: route.loader.as_ref().map(|_| 0),
                 outlet_id: route.outlet_id.clone(),
-                meta: (!route.metadata.title.is_none() || !route.metadata.description.is_none()).then(|| RouteMetadata {
-                    title: route.metadata.title.clone(), description: route.metadata.description.clone(),
-                }),
+                meta: (!route.metadata.title.is_none() || !route.metadata.description.is_none())
+                    .then(|| RouteMetadata {
+                        title: route.metadata.title.clone(),
+                        description: route.metadata.description.clone(),
+                    }),
             })
             .collect(),
     }
@@ -199,20 +204,42 @@ pub fn lower_route_artifacts(
     graph: &SemanticGraph,
     routes: &HirRouteApplication,
 ) -> Result<RouteArtifactBundle, RouteError> {
+    lower_route_artifacts_with_options(modules, graph, routes, &std::collections::BTreeSet::new())
+}
+
+/// Like [`lower_route_artifacts`], but compiles intrinsic JSX elements under
+/// the configured trusted custom-element list.
+pub fn lower_route_artifacts_with_options(
+    modules: &[ParsedModule],
+    graph: &SemanticGraph,
+    routes: &HirRouteApplication,
+    custom_elements: &std::collections::BTreeSet<String>,
+) -> Result<RouteArtifactBundle, RouteError> {
     let mut phases = vec![routes.root.clone()];
     for route in &routes.routes {
         phases.push(route.component.clone());
         phases.extend(route.pending_component.clone());
         phases.extend(route.error_component.clone());
     }
+    phases.sort_by(|left, right| {
+        left.module_id
+            .cmp(&right.module_id)
+            .then_with(|| left.local_name.cmp(&right.local_name))
+    });
     phases.dedup();
 
     let mut artifacts = Vec::new();
     for phase in phases {
-        let root = crate::discover_root_component(modules, graph, &phase.module_id, Some(&phase.local_name))
-            .map_err(|error| RouteError(error.to_string()))?;
-        let application = crate::lower_application(modules, &root, graph)
-            .map_err(|error| RouteError(error.to_string()))?;
+        let root = crate::discover_root_component(
+            modules,
+            graph,
+            &phase.module_id,
+            Some(&phase.local_name),
+        )
+        .map_err(|error| RouteError(error.to_string()))?;
+        let application =
+            crate::lower_application_with_options(modules, &root, graph, custom_elements)
+                .map_err(|error| RouteError(error.to_string()))?;
         let executable = crate::lower_application_to_executable(&application)
             .map_err(|error| RouteError(error.to_string()))?;
         artifacts.push(RouteArtifact {
@@ -239,7 +266,11 @@ pub fn lower_route_artifacts(
             .components
             .get_mut(artifact.graph.root_component)
             .ok_or_else(|| RouteError("route artifact root component is missing".into()))?;
-        if !root.route_outlets.iter().any(|outlet| outlet.id == route.outlet_id) {
+        if !root
+            .route_outlets
+            .iter()
+            .any(|outlet| outlet.id == route.outlet_id)
+        {
             root.route_outlets.push(RouteOutlet {
                 id: route.outlet_id.clone(),
                 node: root.root_node,
@@ -265,7 +296,10 @@ pub fn lower_route_artifacts(
     // A revision must be stable across processes and derived from the Rust
     // compiler's canonical route/graph content rather than a JS build step.
     manifest.revision = stable_revision(&artifacts);
-    Ok(RouteArtifactBundle { manifest, graphs: artifacts })
+    Ok(RouteArtifactBundle {
+        manifest,
+        graphs: artifacts,
+    })
 }
 
 /// Compile the deliberately narrow loader subset needed for the experiment:
@@ -273,7 +307,10 @@ pub fn lower_route_artifacts(
 /// The runtime owns cancellation, status handling, JSON decoding, and route
 /// phase transitions, so author-provided `signal` plumbing is unnecessary in
 /// the action graph.
-fn static_route_loader_url(modules: &[ParsedModule], route: &HirRoute) -> Result<String, RouteError> {
+fn static_route_loader_url(
+    modules: &[ParsedModule],
+    route: &HirRoute,
+) -> Result<String, RouteError> {
     let (module_id, local) = route
         .id
         .rsplit_once('#')
@@ -291,7 +328,9 @@ fn static_route_loader_url(modules: &[ParsedModule], route: &HirRoute) -> Result
         .find(|declaration| matches!(&declaration.name, Pat::Ident(name) if name.id.sym == *local))
         .and_then(|declaration| declaration.init.as_deref())
         .and_then(|expression| match expression {
-            Expr::Call(call) if callee_name(&call.callee) == Some("createRoute") => call.args.first(),
+            Expr::Call(call) if callee_name(&call.callee) == Some("createRoute") => {
+                call.args.first()
+            }
             _ => None,
         })
         .and_then(|argument| match argument.expr.as_ref() {
@@ -299,9 +338,8 @@ fn static_route_loader_url(modules: &[ParsedModule], route: &HirRoute) -> Result
             _ => None,
         })
         .ok_or_else(|| RouteError("route loader declaration is missing".into()))?;
-    fetch_url_from_loader(loader).ok_or_else(|| {
-        RouteError("route loader must contain a fetch() with a static URL".into())
-    })
+    fetch_url_from_loader(loader)
+        .ok_or_else(|| RouteError("route loader must contain a fetch() with a static URL".into()))
 }
 
 fn fetch_url_from_loader(loader: &Expr) -> Option<String> {
@@ -322,10 +360,12 @@ fn fetch_url_from_loader(loader: &Expr) -> Option<String> {
 
 fn fetch_url_from_statements(statements: &[Stmt]) -> Option<String> {
     statements.iter().find_map(|statement| match statement {
-        Stmt::Decl(Decl::Var(declaration)) => declaration
-            .decls
-            .iter()
-            .find_map(|declaration| declaration.init.as_deref().and_then(fetch_url_from_expression)),
+        Stmt::Decl(Decl::Var(declaration)) => declaration.decls.iter().find_map(|declaration| {
+            declaration
+                .init
+                .as_deref()
+                .and_then(fetch_url_from_expression)
+        }),
         Stmt::Expr(expression) => fetch_url_from_expression(&expression.expr),
         Stmt::Return(returned) => returned.arg.as_deref().and_then(fetch_url_from_expression),
         Stmt::Block(block) => fetch_url_from_statements(&block.stmts),
@@ -340,7 +380,9 @@ fn fetch_url_from_expression(expression: &Expr) -> Option<String> {
             .args
             .first()
             .and_then(|argument| match argument.expr.as_ref() {
-                Expr::Lit(swc_ecma_ast::Lit::Str(url)) => Some(url.value.to_string_lossy().into_owned()),
+                Expr::Lit(swc_ecma_ast::Lit::Str(url)) => {
+                    Some(url.value.to_string_lossy().into_owned())
+                }
                 _ => None,
             }),
         Expr::Paren(parenthesized) => fetch_url_from_expression(&parenthesized.expr),
@@ -350,7 +392,10 @@ fn fetch_url_from_expression(expression: &Expr) -> Option<String> {
     }
 }
 
-fn attach_route_loader(application: &mut ComponentApplication, url: String) -> Result<usize, RouteError> {
+fn attach_route_loader(
+    application: &mut ComponentApplication,
+    url: String,
+) -> Result<usize, RouteError> {
     let component = application
         .components
         .get_mut(application.root_component)
@@ -363,6 +408,13 @@ fn attach_route_loader(application: &mut ComponentApplication, url: String) -> R
             ExpressionInstruction::Constant {
                 constant: url_constant,
             },
+            ExpressionInstruction::Return,
+        ],
+    });
+    let error_expression = component.expressions.len();
+    component.expressions.push(ExpressionProgram {
+        instructions: vec![
+            ExpressionInstruction::LoadFrame { slot: 1 },
             ExpressionInstruction::Return,
         ],
     });
@@ -381,6 +433,16 @@ fn attach_route_loader(application: &mut ComponentApplication, url: String) -> R
     component.state_slots.push(StateSlot {
         initial_expression: null_expression,
         frame_slot: loader_state,
+    });
+    // `responseJson` stays an action-local transport envelope. The shared
+    // client/server loader executor returns it, then each host exports `body`
+    // at its loader-data boundary.
+    let result_expression = component.expressions.len();
+    component.expressions.push(ExpressionProgram {
+        instructions: vec![
+            ExpressionInstruction::LoadFrame { slot: 0 },
+            ExpressionInstruction::Return,
+        ],
     });
     let loader_action = component.actions.len();
     component.actions.push(ActionProgram {
@@ -406,11 +468,11 @@ fn attach_route_loader(application: &mut ComponentApplication, url: String) -> R
             },
             ActionInstruction::Return {
                 outcome: ReturnOutcome::Success,
-                value: None,
+                value: Some(result_expression),
             },
             ActionInstruction::Return {
                 outcome: ReturnOutcome::Failure,
-                value: None,
+                value: Some(error_expression),
             },
         ],
     });
@@ -421,7 +483,11 @@ fn stable_revision(artifacts: &[RouteArtifact]) -> String {
     // FNV-1a is intentionally small and deterministic; this is a cache-bust
     // revision, not a security digest.
     let mut hash = 0xcbf29ce484222325_u64;
-    for artifact in artifacts {
+    // Route phase discovery can produce equivalent artifacts in different
+    // orders. Hash by graph identity so revision does not depend on that order.
+    let mut ordered = artifacts.iter().collect::<Vec<_>>();
+    ordered.sort_unstable_by(|left, right| left.graph_id.cmp(&right.graph_id));
+    for artifact in ordered {
         let json = serde_json::to_vec(artifact).expect("route artifacts serialize");
         for byte in json {
             hash ^= u64::from(byte);
@@ -558,7 +624,9 @@ fn string_option(props: &[PropOrSpread], name: &str) -> Result<Option<String>, R
     Ok(None)
 }
 fn route_metadata_option(props: &[PropOrSpread]) -> Result<HirRouteMetadata, RouteError> {
-    let Some(Expr::Object(meta)) = prop(props, "meta") else { return Ok(HirRouteMetadata::default()); };
+    let Some(Expr::Object(meta)) = prop(props, "meta") else {
+        return Ok(HirRouteMetadata::default());
+    };
     Ok(HirRouteMetadata {
         title: string_option(&meta.props, "title")?,
         description: string_option(&meta.props, "description")?,
@@ -648,8 +716,8 @@ fn parent_option(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plec_model::build_semantic_graph;
     use plec_parser::parse_module;
-    use plec_sema::build_semantic_graph;
 
     #[test]
     fn lowers_static_route_tree_to_a_deterministic_manifest() {
@@ -668,10 +736,7 @@ mod tests {
         assert_eq!(manifest.version, 3);
         assert_eq!(manifest.root_graph_id, "routes.tsx#Layout");
         assert_eq!(manifest.routes.len(), 1);
-        assert_eq!(
-            manifest.routes[0].parent_id.as_deref(),
-            None
-        );
+        assert_eq!(manifest.routes[0].parent_id.as_deref(), None);
         assert_eq!(manifest.routes[0].loader_action, Some(0));
         assert_eq!(
             manifest.routes[0].pending_graph_id.as_deref(),
@@ -759,10 +824,25 @@ mod tests {
         let artifacts = lower_route_artifacts(&modules, &graph, &routes).unwrap();
         assert_eq!(artifacts.manifest.version, 3);
         assert_eq!(artifacts.graphs.len(), 4);
-        assert!(artifacts.graphs.iter().all(|artifact| artifact.graph.version == "0.10"));
-        let layout = artifacts.graphs.iter().find(|artifact| artifact.graph_id == "routes.tsx#Layout").unwrap();
-        assert_eq!(layout.graph.components[layout.graph.root_component].route_outlets[0].id, "main");
+        assert!(artifacts
+            .graphs
+            .iter()
+            .all(|artifact| artifact.graph.version == "0.10"));
+        let layout = artifacts
+            .graphs
+            .iter()
+            .find(|artifact| artifact.graph_id == "routes.tsx#Layout")
+            .unwrap();
+        assert_eq!(
+            layout.graph.components[layout.graph.root_component].route_outlets[0].id,
+            "main"
+        );
         assert!(artifacts.manifest.revision.starts_with("rust-route-"));
+        let reversed = artifacts.graphs.iter().rev().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            artifacts.manifest.revision,
+            stable_revision(&reversed),
+            "route revision must not depend on artifact ordering"
+        );
     }
-
 }

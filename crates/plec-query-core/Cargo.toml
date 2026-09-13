@@ -1,0 +1,27 @@
+[package]
+name = "plec-query"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+rmp-serde.workspace = true
+once_cell.workspace = true
+blake3.workspace = true
+dashmap.workspace = true
+lru.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+smallvec.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+insta.workspace = true
+pretty_assertions.workspace = true
+proptest.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "query"
+harness = false

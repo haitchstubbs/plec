@@ -1,0 +1,12 @@
+[package]
+name = "plec-eval"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+js-sys = { workspace = true }
+plec-dom = { path = "../plec-dom" }
+plec-ir = { path = "../plec-ir" }
+plec-schema = { path = "../plec-schema" }
+serde_json = { workspace = true }
+wasm-bindgen = { workspace = true }

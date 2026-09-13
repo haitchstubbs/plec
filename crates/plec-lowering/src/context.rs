@@ -7,7 +7,20 @@ use crate::LoweringError;
 
 /// component index, declared props (name, callable, component), children slot,
 /// direct props-bag parameter.
-pub(crate) type ComponentTargets = HashMap<ComponentId, (usize, Vec<(String, bool, bool)>, bool, bool)>;
+pub(crate) enum ComponentTarget {
+    Native {
+        index: usize,
+        parameters: Vec<(String, bool, bool)>,
+        has_slot: bool,
+        direct_props: bool,
+    },
+    Host {
+        provider: String,
+        component: String,
+    },
+}
+
+pub(crate) type ComponentTargets = HashMap<ComponentId, ComponentTarget>;
 
 pub(crate) struct Ctx<'a> {
     pub(crate) component: &'a HirComponent,
@@ -80,7 +93,11 @@ impl<'a> Ctx<'a> {
         self.constants.insert(key, id);
         id
     }
-    pub(crate) fn host(&mut self, kind: &'static str, name: Option<&str>) -> Result<usize, LoweringError> {
+    pub(crate) fn host(
+        &mut self,
+        kind: &'static str,
+        name: Option<&str>,
+    ) -> Result<usize, LoweringError> {
         if kind == "cookie" {
             let name = name.expect("cookie host slots require a static name");
             self.cookie_capability("getSync", name, "/", None, None, None)?;
@@ -112,18 +129,39 @@ impl<'a> Ctx<'a> {
         secure: Option<bool>,
         max_age: Option<i64>,
     ) -> Result<(), LoweringError> {
-        let expiry = if max_age.is_some() { "maxAge" } else { "session" };
-        if let Some(capability) = self.app.capabilities.iter_mut().find(|capability| capability.name == name) {
-            if capability.path != path || capability.same_site.as_deref() != same_site || capability.secure != secure {
+        let expiry = if max_age.is_some() {
+            "maxAge"
+        } else {
+            "session"
+        };
+        if let Some(capability) = self
+            .app
+            .capabilities
+            .iter_mut()
+            .find(|capability| capability.name == name)
+        {
+            if capability.path != path
+                || capability.same_site.as_deref() != same_site
+                || capability.secure != secure
+            {
                 return Err(self.err("cookie capability options conflict for the same name"));
             }
-            if !capability.operations.contains(&operation) { capability.operations.push(operation); }
-            if !capability.expiry_modes.contains(&expiry) { capability.expiry_modes.push(expiry); }
+            if !capability.operations.contains(&operation) {
+                capability.operations.push(operation);
+            }
+            if !capability.expiry_modes.contains(&expiry) {
+                capability.expiry_modes.push(expiry);
+            }
             return Ok(());
         }
         self.app.capabilities.push(CookieCapability {
-            kind: "cookie", name: name.into(), operations: vec![operation], path: path.into(),
-            same_site: same_site.map(str::to_owned), secure, expiry_modes: vec![expiry],
+            kind: "cookie",
+            name: name.into(),
+            operations: vec![operation],
+            path: path.into(),
+            same_site: same_site.map(str::to_owned),
+            secure,
+            expiry_modes: vec![expiry],
         });
         Ok(())
     }

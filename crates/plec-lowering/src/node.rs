@@ -2,11 +2,12 @@ use std::collections::BTreeSet;
 
 use plec_hir::*;
 use plec_ir::{
-    Binding, ComponentProp, DependencyEdge, DependencyEndpoint, Event, EventField, ExpressionInstruction,
-    ExpressionProgram, Loop, Node, PropProgram, PropWrite, Text, Value,
+    Binding, ComponentProp, DependencyEdge, DependencyEndpoint, Event, EventField,
+    ExpressionInstruction, ExpressionProgram, HostComponentTarget, Loop, Node, PropProgram,
+    PropWrite, Text, Value,
 };
 
-use crate::{Ctx, LoweringError};
+use crate::{ComponentTarget, Ctx, LoweringError};
 
 impl Ctx<'_> {
     pub(crate) fn node(
@@ -30,7 +31,15 @@ impl Ctx<'_> {
                         _ => None,
                     })
                     .unwrap_or(if element.tag == "svg" { "svg" } else { "html" });
-                let host_ref = element.host_ref.map(|binding| self.host_refs.get(&binding).copied().ok_or_else(|| self.err("host ref used before lowering"))).transpose()?;
+                let host_ref = element
+                    .host_ref
+                    .map(|binding| {
+                        self.host_refs
+                            .get(&binding)
+                            .copied()
+                            .ok_or_else(|| self.err("host ref used before lowering"))
+                    })
+                    .transpose()?;
                 self.app.nodes.push(Node::Element {
                     tag,
                     namespace,
@@ -54,7 +63,10 @@ impl Ctx<'_> {
                 for event in element.events {
                     let fields = event_fields(&event.callable, self.component)
                         .into_iter()
-                        .map(|slot| EventField { name: self.string("event"), slot })
+                        .map(|slot| EventField {
+                            name: self.string("event"),
+                            slot,
+                        })
                         .collect();
                     let action = self.callable(&event.callable)?;
                     let event_type = self.string(&event.event);
@@ -70,7 +82,9 @@ impl Ctx<'_> {
                     if self.app.route_outlets.iter().any(|outlet| outlet.id == id) {
                         return Err(self.err("duplicate route outlet id"));
                     }
-                    self.app.route_outlets.push(plec_ir::RouteOutlet { id, node: index });
+                    self.app
+                        .route_outlets
+                        .push(plec_ir::RouteOutlet { id, node: index });
                 }
                 Ok(index)
             }
@@ -122,7 +136,10 @@ impl Ctx<'_> {
                     let index = self.app.expressions.len();
                     self.app.expressions.push(ExpressionProgram {
                         instructions: vec![
-                            ExpressionInstruction::MakeArray { count: 0, spreads: vec![] },
+                            ExpressionInstruction::MakeArray {
+                                count: 0,
+                                spreads: vec![],
+                            },
                             ExpressionInstruction::Return,
                         ],
                     });
@@ -186,14 +203,72 @@ impl Ctx<'_> {
                     .targets
                     .ok_or_else(|| self.err("component calls are not executable in IR 0.9"))?;
                 let static_target = match &call.target {
-                    plec_hir::HirComponentTarget::Static(target) => Some(targets
-                        .get(target)
-                        .ok_or_else(|| self.err("component target missing from application"))?),
-                    plec_hir::HirComponentTarget::Prop(_) => None,
+                    plec_hir::HirComponentTarget::Static(target) => Some(
+                        targets
+                            .get(target)
+                            .ok_or_else(|| self.err("component target missing from application"))?,
+                    ),
+                    plec_hir::HirComponentTarget::Host { .. }
+                    | plec_hir::HirComponentTarget::Prop(_) => None,
                 };
+                if let plec_hir::HirComponentTarget::Host {
+                    provider,
+                    component,
+                } = &call.target
+                {
+                    // Callback/event props cross as runtime-owned handles
+                    // alongside the value record; value props keep the
+                    // single `__plec_props` record channel.
+                    let mut record_props = Vec::new();
+                    let mut callable_props = Vec::new();
+                    for prop in &call.props {
+                        match prop {
+                            HirProp::Callable { name, callable } => {
+                                if name == "__plec_props" {
+                                    return Err(self.err(
+                                        "host component callback prop cannot be named __plec_props",
+                                    ));
+                                }
+                                let action = self.callable(callable)?;
+                                callable_props.push(ComponentProp::Callable {
+                                    name: self.string(name),
+                                    action,
+                                });
+                            }
+                            other => record_props.push(other.clone()),
+                        }
+                    }
+                    let (expression, dependencies) =
+                        self.component_props_record(&record_props, self.active_loop.is_some())?;
+                    let index = self.app.nodes.len();
+                    let props_name = self.string("__plec_props");
+                    let mut props = vec![ComponentProp::Value {
+                        name: props_name,
+                        expression,
+                    }];
+                    props.extend(callable_props);
+                    self.app.nodes.push(Node::HostComponent {
+                        provider: provider.clone(),
+                        component: component.clone(),
+                        parent,
+                        props,
+                    });
+                    self.edges(dependencies, "hostComponent", index);
+                    self.prop_edges(expression, "hostComponent", index);
+                    self.row_edges(expression, "hostComponent", index);
+                    return Ok(index);
+                }
                 let empty_parameters = Vec::new();
                 let (parameters, has_slot, direct_props) = static_target
-                    .map(|(_, parameters, has_slot, direct_props)| (parameters, *has_slot, *direct_props))
+                    .and_then(|target| match target {
+                        ComponentTarget::Native {
+                            parameters,
+                            has_slot,
+                            direct_props,
+                            ..
+                        } => Some((parameters, *has_slot, *direct_props)),
+                        ComponentTarget::Host { .. } => None,
+                    })
                     .unwrap_or((&empty_parameters, false, false));
                 let mut supplied = BTreeSet::new();
                 let mut props = Vec::new();
@@ -243,26 +318,55 @@ impl Ctx<'_> {
                             )
                         }
                         HirProp::Component { name, target } => {
-                            let component = targets.get(&target)
-                                .ok_or_else(|| self.err("component prop target missing from application"))?.0;
-                            (name.clone(), ComponentProp::Component { name: self.string(&name), component }, BTreeSet::new())
+                            let target = targets.get(&target).ok_or_else(|| {
+                                self.err("component prop target missing from application")
+                            })?;
+                            match target {
+                                ComponentTarget::Native { index, .. } => (
+                                    name.clone(),
+                                    ComponentProp::Component {
+                                        name: self.string(&name),
+                                        component: *index,
+                                        host: None,
+                                    },
+                                    BTreeSet::new(),
+                                ),
+                                ComponentTarget::Host {
+                                    provider,
+                                    component,
+                                } => (
+                                    name.clone(),
+                                    ComponentProp::Component {
+                                        name: self.string(&name),
+                                        component: 0,
+                                        host: Some(HostComponentTarget {
+                                            provider: provider.clone(),
+                                            component: component.clone(),
+                                        }),
+                                    },
+                                    BTreeSet::new(),
+                                ),
+                            }
                         }
                         HirProp::Spread { .. } if direct_props => continue,
                         HirProp::Spread { .. } => {
-                            return Err(self.err("component prop spreads require a direct props-bag target"))
+                            return Err(self
+                                .err("component prop spreads require a direct props-bag target"))
                         }
                     };
                     if !supplied.insert(name.clone()) {
                         return Err(self.err("duplicate component prop"));
                     }
                     if static_target.is_some() && !direct_props {
-                        let Some((_, callable, component)) =
-                            parameters.iter().find(|(parameter, _, _)| parameter == &name)
+                        let Some((_, callable, component)) = parameters
+                            .iter()
+                            .find(|(parameter, _, _)| parameter == &name)
                         else {
                             return Err(self.err("unknown component prop"));
                         };
                         if *callable != matches!(prop, ComponentProp::Callable { .. })
-                            || *component != matches!(prop, ComponentProp::Component { .. }) {
+                            || *component != matches!(prop, ComponentProp::Component { .. })
+                        {
                             return Err(self.err("component prop kind does not match parameter"));
                         }
                     }
@@ -270,12 +374,19 @@ impl Ctx<'_> {
                     props.push(prop);
                 }
                 if direct_props {
-                    let (expression, deps) = self.component_props_record(&call_props, self.active_loop.is_some())?;
+                    let (expression, deps) =
+                        self.component_props_record(&call_props, self.active_loop.is_some())?;
                     dependencies.extend(deps);
-                    props = vec![ComponentProp::Value { name: self.string("__plec_props"), expression }];
-                } else if static_target.is_some() && (supplied.len() != parameters.len()
-                    || parameters.iter().any(|(name, _, _)| !supplied.contains(name))
-                ) {
+                    props = vec![ComponentProp::Value {
+                        name: self.string("__plec_props"),
+                        expression,
+                    }];
+                } else if static_target.is_some()
+                    && (supplied.len() != parameters.len()
+                        || parameters
+                            .iter()
+                            .any(|(name, _, _)| !supplied.contains(name)))
+                {
                     return Err(self.err("missing component prop"));
                 }
                 if !has_slot && !call.children.is_empty() {
@@ -288,14 +399,30 @@ impl Ctx<'_> {
                     .collect::<Result<Vec<_>, _>>()?;
                 let index = self.app.nodes.len();
                 match &call.target {
-                    plec_hir::HirComponentTarget::Static(_) => self.app.nodes.push(Node::Component {
-                        component: static_target.expect("static target").0,
-                        parent, props, children,
-                    }),
-                    plec_hir::HirComponentTarget::Prop(binding) => {
-                        let prop = *self.props.get(binding).ok_or_else(|| self.err("component factory prop missing"))?;
-                        self.app.nodes.push(Node::DynamicComponent { prop, parent, props, children });
+                    plec_hir::HirComponentTarget::Static(_) => {
+                        self.app.nodes.push(Node::Component {
+                            component: match static_target.expect("static target") {
+                                ComponentTarget::Native { index, .. } => *index,
+                                ComponentTarget::Host { .. } => unreachable!(),
+                            },
+                            parent,
+                            props,
+                            children,
+                        })
                     }
+                    plec_hir::HirComponentTarget::Prop(binding) => {
+                        let prop = *self
+                            .props
+                            .get(binding)
+                            .ok_or_else(|| self.err("component factory prop missing"))?;
+                        self.app.nodes.push(Node::DynamicComponent {
+                            prop,
+                            parent,
+                            props,
+                            children,
+                        });
+                    }
+                    plec_hir::HirComponentTarget::Host { .. } => unreachable!(),
                 }
                 self.edges(dependencies, "component", index);
                 let expressions = match &self.app.nodes[index] {
@@ -303,7 +430,9 @@ impl Ctx<'_> {
                         .iter()
                         .filter_map(|prop| match prop {
                             ComponentProp::Value { expression, .. } => Some(*expression),
-                            ComponentProp::Callable { .. } | ComponentProp::Component { .. } => None,
+                            ComponentProp::Callable { .. } | ComponentProp::Component { .. } => {
+                                None
+                            }
                         })
                         .collect::<Vec<_>>(),
                     _ => unreachable!(),
@@ -409,7 +538,7 @@ impl Ctx<'_> {
                     handle,
                     r#loop: None,
                 },
-            })
+            });
         }
     }
     fn row_edges(&mut self, expression: usize, kind: &'static str, target_handle: usize) {
@@ -439,7 +568,12 @@ impl Ctx<'_> {
             });
         }
     }
-    pub(crate) fn prop_edges(&mut self, expression: usize, kind: &'static str, target_handle: usize) {
+    pub(crate) fn prop_edges(
+        &mut self,
+        expression: usize,
+        kind: &'static str,
+        target_handle: usize,
+    ) {
         let props = self.app.expressions[expression]
             .instructions
             .iter()
@@ -467,7 +601,9 @@ impl Ctx<'_> {
 
 fn event_fields(callable: &HirCallable, component: &HirComponent) -> Vec<usize> {
     match callable {
-        HirCallable::Inline { parameters, .. } => (!parameters.is_empty()).then_some(0).into_iter().collect(),
+        HirCallable::Inline { parameters, .. } => {
+            (!parameters.is_empty()).then_some(0).into_iter().collect()
+        }
         HirCallable::Reference { binding } => component
             .callables
             .iter()
@@ -476,7 +612,11 @@ fn event_fields(callable: &HirCallable, component: &HirComponent) -> Vec<usize> 
             .then_some(0)
             .into_iter()
             .collect(),
-        HirCallable::Conditional { consequent, alternate, .. } => {
+        HirCallable::Conditional {
+            consequent,
+            alternate,
+            ..
+        } => {
             let mut fields = event_fields(consequent, component);
             if fields.is_empty() {
                 fields = event_fields(alternate, component);

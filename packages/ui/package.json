@@ -1,5 +1,5 @@
 {
-  "name": "@wasm-runtime/ui",
+  "name": "plec-ui",
   "private": true,
   "type": "module",
   "imports": {

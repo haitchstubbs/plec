@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "revision": "rust-route-v1",
+  "routes": [{ "routeId": "src/routes/list.route.tsx#Route" }],
+  "public": { "location": "/list" },
+  "loaders": [],
+  "structure": {
+    "graphs": {
+      "root/outlet:main": {
+        "graphId": "src/layout.tsx#Layout",
+        "branches": [{ "node": 3, "selected": "consequent" }],
+        "loops": []
+      },
+      "root/outlet:main/outlet:main": {
+        "graphId": "src/list.tsx#ListPage",
+        "branches": [],
+        "loops": [{ "node": 3, "keys": ["one", "two"] }]
+      }
+    },
+    "nested": {}
+  }
+}

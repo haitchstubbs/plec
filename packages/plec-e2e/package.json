@@ -1,0 +1,22 @@
+{
+  "name": "plec-e2e",
+  "packageManager": "yarn@4.17.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:wasm": "node scripts/wasm-harness.mjs",
+    "test:e2e": "node ../../scripts/run-playwright.mjs",
+    "test:e2e:ui": "node ../../scripts/run-playwright.mjs --ui",
+    "test:e2e:headed": "node ../../scripts/run-playwright.mjs --headed",
+    "test:e2e:debug": "node ../../scripts/run-playwright.mjs --debug",
+    "test:acceptance": "node ../../scripts/run-playwright.mjs --config playwright.acceptance.config.ts",
+    "test:bench": "node ../../scripts/run-playwright.mjs --config playwright.bench.config.ts --grep-invert @smoke",
+    "test:bench:smoke": "node ../../scripts/run-playwright.mjs --config playwright.bench.config.ts --grep @smoke",
+    "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec-e2e/tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "vitest": "^3.2.4"
+  }
+}

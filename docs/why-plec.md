@@ -28,7 +28,7 @@ Plec attempts to combine these ideas into one architecture.
 | **Blazor WebAssembly** ([Microsoft Learn][6])     |                           ✅ |                              ❌ |                                   ❌ |                          ✅ |                                 ✅ |                               ✅ |                         ❌ |                         ✅ |                                        ❌ |                               ✅ |
 | **Leptos** ([Leptos][7])                          |                           ✅ |                              ✅ |                                   ❌ |                          ✅ |                                 ✅ |                               ✅ |                         ❌ |                         ✅ |                                        ❌ |                               ❌ |
 | **Dioxus** ([Dioxus Labs][8])                     |                           ✅ |                              ❌ |                                   ❌ |                          ✅ |                                 ✅ |                               ✅ |                         ❌ |                         ✅ |                                        ❌ |                               ❌ |
-| **Plec**                                          |                           ✅ |                              ✅ |                                   ✅ |                         🚧 |                                 ✅ |                              🚧 |                        🚧 |                        🚧 |                                        ✅ |                               ✅ |
+| **Plec**                                          |                           ✅ |                              ✅ |                                   ✅ |                          🚧 |                                 ✅ |                               🚧 |                         🚧 |                         🚧 |                                        ✅ |                               ✅ |
 
 The matrix is intentionally strict. A ✅ means the architecture directly addresses the problem, not merely that a solution could be built on top of it. A 🚧 marks a design target the architecture is built around but that is not yet implemented in Plec.
 
@@ -97,7 +97,7 @@ That distinction makes application behavior inspectable before it runs. A graph 
 
 Plec is not an attempt to replace JavaScript with WebAssembly.
 
-WebAssembly is an implementation detail of the runtime. Today both halves are Rust: application source compiles through the Rust pipeline in `crates/*`, and the executor ships as the Rust runtime compiled to WebAssembly (`packages/plec-runtime`).
+WebAssembly is an implementation detail of the runtime. Today both halves are Rust: application source compiles through the Rust pipeline in `crates/*`, and the executor ships as the Rust runtime compiled to WebAssembly in `packages/plec/dist/runtime`.
 
 The larger idea is to change the boundary between application source and application execution:
 

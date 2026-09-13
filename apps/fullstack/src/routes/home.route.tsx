@@ -6,5 +6,8 @@ export const Route = createRoute({
   getParentRoute: () => rootRoute,
   path: '',
   component: HomePage,
-  meta: { title: 'Plec runtime control room', description: 'Plec compiler and runtime control room.' },
+  meta: {
+    title: 'Plec runtime control room',
+    description: 'Plec compiler and runtime control room.',
+  },
 });

@@ -1,0 +1,141 @@
+{
+  "version": "0.10",
+  "rootComponent": 0,
+  "components": [
+    {
+      "id": "rust-keyed-component.tsx#Todos",
+      "rootNode": 0,
+      "strings": ["items", "ul", "id", "title"],
+      "constants": [],
+      "nodes": [
+        { "op": "element", "tag": 1, "parent": null, "children": [2] },
+        {
+          "op": "component",
+          "component": 1,
+          "parent": null,
+          "props": [{ "kind": "value", "name": 3, "expression": 2 }]
+        },
+        { "op": "loop", "loop": 0, "parent": 0 }
+      ],
+      "texts": [],
+      "bindings": [],
+      "propPrograms": [],
+      "events": [],
+      "inputs": [{ "name": 0, "kind": "collection" }],
+      "stateSlots": [],
+      "parameters": [],
+      "expressions": [
+        {
+          "instructions": [
+            { "op": "makeArray", "count": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadRowField", "field": 2 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadRowField", "field": 3 },
+            { "op": "return" }
+          ]
+        }
+      ],
+      "actions": [],
+      "loops": [
+        {
+          "sourceExpression": 0,
+          "keyExpression": 1,
+          "itemSlot": 1,
+          "rowTemplate": 1,
+          "input": 0
+        }
+      ],
+      "dependencyEdges": [
+        {
+          "source": { "kind": "rowField", "handle": 3, "loop": 0 },
+          "target": { "kind": "component", "handle": 1 }
+        }
+      ]
+    },
+    {
+      "id": "rust-keyed-component.tsx#Child",
+      "rootNode": 0,
+      "strings": ["title", "li", "span", "button", "click"],
+      "constants": [0.0, 1.0],
+      "nodes": [
+        {
+          "op": "element",
+          "tag": 1,
+          "parent": null,
+          "children": [1, 3]
+        },
+        { "op": "element", "tag": 2, "parent": 0, "children": [2] },
+        { "op": "text", "text": 0, "parent": 1 },
+        { "op": "element", "tag": 3, "parent": 0, "children": [4] },
+        { "op": "text", "text": 1, "parent": 3 }
+      ],
+      "texts": [{ "binding": 0 }, { "binding": 1 }],
+      "bindings": [
+        { "target": 2, "sink": "text", "expression": 1 },
+        { "target": 4, "sink": "text", "expression": 2 }
+      ],
+      "propPrograms": [],
+      "events": [{ "target": 3, "type": 4, "action": 0 }],
+      "inputs": [],
+      "stateSlots": [{ "initialExpression": 0, "frameSlot": 0 }],
+      "parameters": [{ "name": 0, "callable": false }],
+      "expressions": [
+        {
+          "instructions": [
+            { "op": "constant", "constant": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadProp", "prop": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadState", "state": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadState", "state": 0 },
+            { "op": "constant", "constant": 1 },
+            { "op": "binary", "kind": "add" },
+            { "op": "return" }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "instructions": [
+            { "op": "evaluate", "expression": 3 },
+            { "op": "storeState", "state": 0 },
+            { "op": "return" }
+          ]
+        }
+      ],
+      "loops": [],
+      "dependencyEdges": [
+        {
+          "source": { "kind": "prop", "handle": 0 },
+          "target": { "kind": "binding", "handle": 0 }
+        },
+        {
+          "source": { "kind": "state", "handle": 0 },
+          "target": { "kind": "binding", "handle": 1 }
+        }
+      ]
+    }
+  ]
+}

@@ -1,28 +1,50 @@
 {
-  "name": "wasm-runtime",
+  "name": "plecjs",
   "private": true,
   "packageManager": "yarn@4.17.1",
+  "engines": {
+    "node": "24.20.0"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
+    "install:build-tools": "node scripts/setup.mjs",
+    "install:plec-cli": "cargo install --path crates/plec-cli",
+    "install:plec-cli:dev": "PLEC_CLI_VERSION=dev cargo install --path crates/plec-cli --force",
+    "roadmap": "dotenv -e .env.devports -- sh -c 'bdui start --port \"$BEADS_UI_PORT\"'",
+    "roadmap:stop": "yarn bdui stop",
+    "setup": "yarn install --immutable && yarn install:build-tools && yarn build --force",
+    "toolchain:verify": "node scripts/verify-toolchain.mjs",
+    "toolchain:verify:browser": "node scripts/verify-toolchain.mjs --browser",
     "dev": "turbo run dev --parallel",
-    "dev:wasm": "yarn workspace plec-runtime dev:wasm",
+    "dev:wasm": "yarn workspace plec dev:wasm",
     "build": "turbo run build",
     "test": "turbo run test",
+    "test:acceptance": "turbo run test:acceptance",
+    "test:e2e": "turbo run test:e2e",
+    "test:runtime": "yarn workspace plec test:runtime",
+    "test:wasm": "plec workspace test wasm",
+    "test:wasm:query": "plec workspace test last",
+    "bench": "turbo run bench",
     "lint": "yarn format:check",
-    "format": "prettier --write . && cargo fmt --manifest-path packages/plec-runtime/crates/runtime/Cargo.toml",
-    "format:check": "prettier --check . && cargo fmt --manifest-path packages/plec-runtime/crates/runtime/Cargo.toml --check",
+    "format": "prettier --write . && cargo fmt --manifest-path crates/plec-runtime/Cargo.toml",
+    "format:check": "prettier --check . && cargo fmt --manifest-path crates/plec-runtime/Cargo.toml --check",
     "typecheck": "turbo run typecheck",
+    "inspect:fixture": "node scripts/inspect-fixture.mjs",
     "measure:runtime-baseline": "node benchmarks/measure-runtime-baseline.mjs",
     "measure:runtime-baseline:verify": "node benchmarks/measure-runtime-baseline.mjs --verify",
-    "clean": "turbo run clean && git clean -xdf .turbo"
+    "clean": "turbo run clean && git clean -xdf .turbo && yarn roadmap:stop"
   },
   "devDependencies": {
+    "@puppeteer/browsers": "3.2.2",
     "@types/node": "^24.4.0",
+    "beads-ui": "^0.12.6",
     "binaryen": "^131.0.0",
-    "prettier": "^3.7.4",
+    "dotenv-cli": "^11.0.0",
+    "prettier": "^3.9.6",
+    "prettier-plugin-toml": "^2.0.6",
     "turbo": "^2.5.6",
     "typescript": "^7.0.2",
     "vitest": "^3.2.4"

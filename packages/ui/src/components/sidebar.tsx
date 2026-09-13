@@ -6,23 +6,23 @@ import { useRender } from '@base-ui/react/use-render';
 import { cva, type VariantProps } from 'class-variance-authority';
 
 import { useIsMobile } from '@/hooks/use-mobile';
-import { cn } from '@wasm-runtime/ui/lib/utils';
-import { Button } from '@wasm-runtime/ui/atoms/button';
-import { Input } from '@wasm-runtime/ui/atoms/input';
-import { Separator } from '@wasm-runtime/ui/atoms/separator';
+import { cn } from 'plec-ui/lib/utils';
+import { Button } from 'plec-ui/atoms/button';
+import { Input } from 'plec-ui/atoms/input';
+import { Separator } from 'plec-ui/atoms/separator';
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
-} from '@wasm-runtime/ui/atoms/sheet';
-import { Skeleton } from '@wasm-runtime/ui/atoms/skeleton';
+} from 'plec-ui/atoms/sheet';
+import { Skeleton } from 'plec-ui/atoms/skeleton';
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from '@wasm-runtime/ui/atoms/tooltip';
+} from 'plec-ui/atoms/tooltip';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { SidebarLeftIcon } from '@hugeicons/core-free-icons';
 

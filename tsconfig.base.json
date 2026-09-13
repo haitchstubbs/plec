@@ -17,10 +17,10 @@
       "plec-browser/compiled-subtree": [
         "./packages/plec-browser/src/compiled-subtree-entry.ts"
       ],
-      "@wasm-runtime/lucide-plec": [
+      "plec-lucide": [
         "./packages/lucide-plec/src/index.ts"
       ],
-      "@wasm-runtime/lucide-plec/icons/*": [
+      "plec-lucide/icons/*": [
         "./packages/lucide-plec/src/icons/*"
       ],
       "plec": ["./packages/plec/src/index.ts"],

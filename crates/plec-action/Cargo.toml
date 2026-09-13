@@ -1,0 +1,11 @@
+[package]
+name = "plec-action"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+plec-ir = { path = "../plec-ir" }
+plec-schema = { path = "../plec-schema" }
+
+[dev-dependencies]
+serde_json.workspace = true

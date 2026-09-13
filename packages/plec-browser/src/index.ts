@@ -1,11 +1,179 @@
+import {
+  MAX_ARTIFACT_JSON_BYTES,
+  MAX_PROVIDER_MANIFEST_JSON_BYTES,
+  MAX_RUNTIME_JS_BYTES,
+  MAX_SNAPSHOT_JSON_BYTES,
+} from './limits.generated';
+
 // The Rust runtime validates the complete manifest. Browser glue only needs
 // this field to decide which independently-produced graph to fetch.
 type PlecRouteManifest = { rootGraphId: string };
 
-// SVG icon function marker and type
-export interface SvgIconFunction {
-  (props: Record<string, unknown>): Element;
-  __plecSvgIcon: true;
+export interface PlecHostComponentLifecycle {
+  mount(boundary: Element, props: Record<string, unknown>): unknown;
+  update?(handle: unknown, props: Record<string, unknown>): void;
+  dispose?(handle: unknown): void;
+  /** Server-only renderer. The private Node sidecar invokes this explicit
+   * opt-in hook; browser mount/update semantics never run in Rust. */
+  render?(props: Record<string, unknown>): string;
+}
+
+export type PlecHostProvider = Record<
+  string,
+  PlecHostComponentLifecycle
+>;
+
+/** Registry contract the WASM runtime resolves provider mounts against.
+ * Returning `undefined` for an unknown provider/component is a
+ * deterministic mount failure. */
+export type PlecHostRegistry = {
+  resolve(
+    provider: string,
+    component: string,
+  ): PlecHostComponentLifecycle | undefined;
+};
+
+const hostProviders = new Map<string, PlecHostProvider>();
+let providerRegistration: Promise<void> | undefined;
+
+type HostProviderManifest = {
+  version: 2;
+  revision: string;
+  providers: {
+    id: string;
+    module: string;
+    components: string[];
+    ssr: boolean;
+  }[];
+};
+
+type HostProviderAdapter = () => PlecHostProvider;
+
+/** Builds the registry bridge the WASM runtime resolves against. The source
+ * map is captured by closure, so a controller's registry is an immutable
+ * snapshot: replacing the module map after mount cannot redirect mounted
+ * lifecycles. */
+export function hostRegistry(
+  providers: ReadonlyMap<string, PlecHostProvider>,
+): PlecHostRegistry {
+  return {
+    resolve(provider, component) {
+      return providers.get(provider)?.[component];
+    },
+  };
+}
+
+/** Registers provider components in the module-level map consumed by
+ * `startPlecRouter` when no explicit `providers` option is supplied. No
+ * global bridge is installed; provider authority is runtime-local. */
+export function registerPlecHostProvider(
+  provider: string,
+  components: PlecHostProvider,
+): () => void {
+  hostProviders.set(provider, components);
+  return () => {
+    if (hostProviders.get(provider) === components)
+      hostProviders.delete(provider);
+  };
+}
+
+/** Installs the browser providers emitted by the current Plec build. */
+export function registerPlecProviders(): Promise<void> {
+  if (providerRegistration) return providerRegistration;
+  providerRegistration = loadPlecProviders().catch((error) => {
+    providerRegistration = undefined;
+    throw error;
+  });
+  return providerRegistration;
+}
+
+async function loadPlecProviders() {
+  const revision = new URL(import.meta.url).searchParams.get('v');
+  const manifestUrl = new URL(
+    '/host-providers.json',
+    window.location.origin,
+  );
+  if (revision) manifestUrl.searchParams.set('v', revision);
+  const response = await fetch(manifestUrl);
+  if (!response.ok)
+    throw new Error(
+      `Failed to load host provider manifest: ${response.status}`,
+    );
+  const manifest = await boundedResponseJson(
+    response,
+    MAX_PROVIDER_MANIFEST_JSON_BYTES,
+    'host provider manifest',
+  );
+  if (!isHostProviderManifest(manifest))
+    throw new Error('Invalid host provider manifest');
+  if (revision && manifest.revision !== revision)
+    throw new Error('Stale host provider manifest');
+  const loaded = await Promise.all(
+    manifest.providers.map(
+      async (entry): Promise<[string, PlecHostProvider]> => {
+        const moduleUrl = providerModuleUrl(entry, manifest.revision);
+        const module = await import(/* @vite-ignore */ moduleUrl.href);
+        if (typeof module.default !== 'function')
+          throw new Error(
+            `Host provider adapter ${entry.id} has no default factory`,
+          );
+        const adapter = module.default as HostProviderAdapter;
+        return [entry.id, adapter()];
+      },
+    ),
+  );
+  // Keep the registry unavailable until every configured adapter loads.
+  for (const [provider, components] of loaded)
+    hostProviders.set(provider, components);
+}
+
+function isHostProviderManifest(
+  value: unknown,
+): value is HostProviderManifest {
+  if (!value || typeof value !== 'object') return false;
+  const manifest = value as Partial<HostProviderManifest>;
+  if (
+    manifest.version !== 2 ||
+    typeof manifest.revision !== 'string' ||
+    manifest.revision.length === 0 ||
+    !Array.isArray(manifest.providers)
+  )
+    return false;
+  const seen = new Set<string>();
+  return manifest.providers.every((entry) => {
+    if (
+      !entry ||
+      typeof entry.id !== 'string' ||
+      typeof entry.module !== 'string' ||
+      typeof entry.ssr !== 'boolean' ||
+      !Array.isArray(entry.components) ||
+      !/^[A-Za-z0-9_-]+$/.test(entry.id) ||
+      seen.has(entry.id)
+    )
+      return false;
+    seen.add(entry.id);
+    return entry.components.every(
+      (component) =>
+        typeof component === 'string' &&
+        /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(component),
+    );
+  });
+}
+
+function providerModuleUrl(
+  entry: HostProviderManifest['providers'][number],
+  revision: string,
+): URL {
+  const url = new URL(entry.module, window.location.origin);
+  if (
+    url.origin !== window.location.origin ||
+    !url.pathname.startsWith('/assets/providers/') ||
+    url.searchParams.get('v') !== revision ||
+    url.searchParams.size !== 1 ||
+    url.hash
+  )
+    throw new Error(`Invalid host provider module URL for ${entry.id}`);
+  return url;
 }
 
 export type RuntimeDelta =
@@ -98,51 +266,6 @@ export function createCompiledInputChannel<T>(
   };
 }
 
-export interface CompiledMountOptions {
-  root: Element;
-  /** Set false when this mount intentionally replaces an existing runtime
-   * subtree, such as a Plec route outlet. */
-  adopt?: boolean;
-  /** Package-neutral producer boundary. Prefer this for new integrations. */
-  inputs?: Record<string, CompiledInputProducer<any>>;
-  /** @deprecated Use inputs. Retained while existing applications migrate. */
-  queries?: Record<string, LiveCollection<any>>;
-  irUrl?: string;
-  runtimeJsUrl?: string;
-  runtimeWasmUrl?: string;
-  onQueryUpdate?: (update: CompiledQueryUpdate) => void;
-  onMount?: (metrics: MountMetrics) => void;
-  hostValues?: {
-    currentYear?: number | string;
-    location?: { pathname: string };
-  };
-  islands?: Record<
-    string,
-    (
-      placeholder: Element,
-      props: Record<string, unknown>,
-    ) => void | (() => void)
-  >;
-  onNavigate?: (navigation: {
-    href: string;
-    replace?: boolean;
-  }) => void;
-}
-export interface CompiledEventContext {
-  type: string;
-  target: Element;
-  currentTarget: Element;
-  rowKey?: string;
-  value?: string;
-  checked?: boolean;
-  button?: number;
-  metaKey: boolean;
-  ctrlKey: boolean;
-  shiftKey: boolean;
-  altKey: boolean;
-  nativeEvent: Event;
-}
-
 export interface CompiledUpdateMetrics {
   reconciliationUs?: number;
   domOperations: number;
@@ -152,6 +275,7 @@ export interface CompiledUpdateMetrics {
   rowInserts: number;
   rowRemoves: number;
   rowMoves: number;
+  domNodesMoved: number;
   wasmDomUs: number;
 }
 export interface RuntimeMountMetrics {
@@ -173,70 +297,40 @@ export interface RuntimeMountMetrics {
   bindings: number;
   domOperations: number;
 }
-export interface MountMetrics extends RuntimeMountMetrics {
-  irFetchMs: number;
-  irParseMs: number;
-  wasmInitMs: number;
-  runtimeLoadMs: number;
-  renderMode: 'adopt' | 'mount';
-}
 export interface CompiledQueryUpdate extends CompiledUpdateMetrics {
   adapterMs: number;
   reconciliationMs?: number;
   deltaCount?: number;
 }
-export interface CompiledControllerDiagnostics {
-  activeQuerySubscriptions: number;
-  activeInputSubscriptions: number;
-  activeActionListeners: number;
-  activeIslands: number;
-  queryIds: string[];
-  inputIds: string[];
-  disposed: boolean;
-}
-export interface CompiledRuntimeController {
-  readonly mountMetrics: MountMetrics;
-  diagnostics(): CompiledControllerDiagnostics;
-  dispose(): void;
-  applyDelta(delta: RuntimeDelta): CompiledUpdateMetrics;
-  applyHostValues(
-    values: NonNullable<CompiledMountOptions['hostValues']>,
-  ): void;
-  outlet(id?: string): Element | null;
-}
-
 interface WasmRuntimeInstance {
   set_host_inputs(values: Record<string, unknown>): void;
   set_cookie_policy(
     policy: PlecRouterMountOptions['cookiePolicy'] | null,
   ): void;
-  load_application(ir: unknown): void;
-  adopt(root: Element): RuntimeMountMetrics | null;
-  mount(root: Element): RuntimeMountMetrics;
+  set_fetch_policy(policy: PlecFetchPolicyGrant[] | null): void;
+  set_tag_policy(
+    policy: PlecRouterMountOptions['tagPolicy'] | null,
+  ): void;
+  set_host_registry(registry: PlecHostRegistry | null): void;
   initialize_input(inputId: string, rows: unknown): RuntimeMountMetrics;
-  initialize_snapshot_input(
-    inputId: string,
-    snapshot: unknown,
-    shape: unknown,
-  ): RuntimeMountMetrics;
-  apply_input_snapshot(
-    inputId: string,
-    snapshot: unknown,
-  ): CompiledUpdateMetrics;
   apply_delta(delta: unknown): CompiledUpdateMetrics;
   apply_deltas(deltas: unknown): CompiledUpdateMetrics;
   dispose(): void;
   register_graph(graphId: string, ir: unknown): void;
   start(root: Element, manifest: unknown): void;
-  start_adopt(root: Element, manifest: unknown): void;
+  start_adopt_snapshot(
+    root: Element,
+    manifest: unknown,
+    snapshot: unknown,
+  ): void;
   abandon_adoption(): void;
   navigate(href: string, replace: boolean): void;
+  ssr_text_divergences(): number;
 }
 interface WasmRuntimeModule {
   default(input?: unknown): Promise<unknown>;
   PlecRuntime: new () => WasmRuntimeInstance;
 }
-const DEFAULT_IR_URL = '/application.ir.json';
 const DEFAULT_RUNTIME_JS_URL = '/runtime/runtime.js';
 const DEFAULT_RUNTIME_WASM_URL = '/runtime/runtime_bg.wasm';
 
@@ -256,20 +350,47 @@ export interface PlecRouterMountOptions {
       path?: string;
     }
   >;
-  islands?: Record<
-    string,
-    (
-      placeholder: Element,
-      props: Record<string, unknown>,
-    ) => void | (() => void)
-  >;
-  /** Optional host-owned reactive inputs for routed compiled graphs. This is
-   * the same producer boundary accepted by `mountPlecApplication`. */
+  /**
+   * Host-owned fetch grants. Default-deny: without a grant matching the
+   * request origin, method, and headers, the runtime rejects the fetch.
+   * Artifact-declared fetch capability requests never widen this surface.
+   * `credentials` controls the credentials mode; the artifact cannot.
+   */
+  fetchPolicy?: PlecFetchPolicyGrant[];
+  /**
+   * Host-owned element-tag capability. Default (omitted or `null`): the
+   * strict policy — standard HTML/SVG elements only. `customElements` lists
+   * the trusted custom element tags executable IR may instantiate; forbidden
+   * tags (`script`, `iframe`, ...) can never be enabled. Must be installed
+   * before graphs load.
+   */
+  tagPolicy?: { customElements?: string[] } | null;
+  /**
+   * Provider implementations this controller's runtime resolves against.
+   * Omitted: a snapshot of every provider registered through
+   * `registerPlecHostProvider` / `registerPlecProviders` at start time.
+   * Supply an explicit map to scope providers to one controller — two
+   * simultaneous runtimes may then use the same provider id with different
+   * implementations. The selected registry serves every graph instance the
+   * controller creates; no process-global bridge exists.
+   */
+  providers?: ReadonlyMap<string, PlecHostProvider>;
+  /** Host-owned reactive inputs for routed compiled graphs. */
   inputs?: Record<string, CompiledInputProducer<any>>;
   onQueryUpdate?: (update: CompiledQueryUpdate) => void;
   /** Development/test visibility for SSR adoption decisions. Production hosts
    * may omit this and transparently take the normal mount path. */
   onAdoptionDiagnostic?: (diagnostic: PlecAdoptionDiagnostic) => void;
+}
+export interface PlecFetchPolicyGrant {
+  /** Exact serialized origin the grant applies to (`https://api.example.com`). */
+  origin: string;
+  /** Allowed request methods; an empty list grants none. */
+  methods?: string[];
+  /** Allowed request header names (case-insensitive); an empty list grants none. */
+  headers?: string[];
+  /** Whether requests under this grant may carry credentials. */
+  credentials?: boolean;
 }
 export interface PlecAdoptionDiagnostic {
   outcome: 'adopted' | 'fallback';
@@ -277,6 +398,12 @@ export interface PlecAdoptionDiagnostic {
   observedRevision?: string;
   routeId?: string | null;
   mismatchCodes: string[];
+  /** True when the adoption consumed a validated SSR execution snapshot. */
+  snapshotImported?: boolean;
+  /** Server-rendered text values the deterministic recompute replaced.
+   * Divergence is allowed and reported only; present for snapshot
+   * adoptions. */
+  textDivergences?: number;
 }
 export interface PlecRouterController {
   dispose(): void;
@@ -345,157 +472,57 @@ export function markPlecTiming(name: PlecTimingMark): void {
     performance.mark(name);
 }
 
-export async function mountPlecApplication(
-  options: CompiledMountOptions,
-): Promise<CompiledRuntimeController> {
-  try {
-    const fetchStart = performance.now();
-    markPlecTiming('plec:artifact-fetch-start');
-    const runtimeModulePromise = loadRuntimeModule(
-      options.runtimeJsUrl ?? DEFAULT_RUNTIME_JS_URL,
-    );
-    const response = await fetch(options.irUrl ?? DEFAULT_IR_URL);
-    const irFetchMs = performance.now() - fetchStart;
-    if (!response.ok)
-      throw new Error(`Failed to load IR: ${response.status}`);
-    markPlecTiming('plec:ir-parse-start');
-    const parseStart = performance.now();
-    //const ir = validateExecutableApplication(await response.json());
-    const ir = await response.json();
-    const irParseMs = performance.now() - parseStart;
-    markPlecTiming('plec:ir-parse-end');
-    markPlecTiming('plec:artifact-ready');
-    const runtimeModule = await runtimeModulePromise;
-    markPlecTiming('plec:runtime-init-start');
-    const wasmStart = performance.now();
-    await runtimeModule.default({
-      module_or_path:
-        options.runtimeWasmUrl ?? DEFAULT_RUNTIME_WASM_URL,
-    });
-    const wasmInitMs = performance.now() - wasmStart;
-    markPlecTiming('plec:runtime-ready');
-    const runtime = new runtimeModule.PlecRuntime();
-    markPlecTiming('plec:runtime-load-start');
-    markPlecTiming('plec:mount-start');
-    const loadStart = performance.now();
-    runtime.load_application(ir);
-    // Executable graphs deliberately own their DOM from the start; adoption
-    // belonged to the removed string-ID renderer.
-    const staticMetrics = runtime.mount(options.root);
-    const renderMode = 'mount' as const;
-    const runtimeLoadMs = performance.now() - loadStart;
-    markPlecTiming('plec:runtime-load-end');
-    const disposeIslands = mountIslands(
-      options.root,
-      ir,
-      options.islands ?? {},
-    );
-    const applyHostValues = (
-      values: NonNullable<CompiledMountOptions['hostValues']>,
-    ) => {
-      void values;
-    };
-    applyHostValues(
-      options.hostValues ?? {
-        location: { pathname: window.location.pathname },
-      },
-    );
-    const inputSchemas = new Map<string, any>(
-      (ir.inputs ?? []).map((input: any): [string, any] => [
-        ir.strings[input.name]!,
-        input,
-      ]),
-    );
-    const inputs: Record<string, CompiledInputProducer<any>> = {
-      ...Object.fromEntries(
-        Object.entries(options.queries ?? {}).map(
-          ([id, collection]) => {
-            const inputId =
-              (ir.inputs ?? []).length === 1
-                ? ir.strings[ir.inputs[0]!.name]!
-                : id;
-            return [inputId, adaptLiveCollection(inputId, collection)];
-          },
-        ),
-      ),
-      ...(options.inputs ?? {}),
-    };
-    const initialMetrics = Object.entries(inputs).flatMap(
-      ([inputId, producer]) => {
-        const shape = inputSchemas.get(inputId);
-        if (shape?.kind !== 'collection') return [];
-        return [
-          isDeltaInput(producer)
-            ? runtime.initialize_input(inputId, producer.getSnapshot())
-            : runtime.initialize_snapshot_input(
-                inputId,
-                producer.getSnapshot(),
-                shape,
-              ),
-        ];
-      },
-    );
-    const mountMetrics = mergeMountMetrics(
-      staticMetrics,
-      initialMetrics,
-      { irFetchMs, irParseMs, wasmInitMs, runtimeLoadMs, renderMode },
-    );
-    options.onMount?.(mountMetrics);
-    const subscriptions = Object.entries(inputs).flatMap(
-      ([inputId, producer]) =>
-        subscribeInput(
-          runtime,
-          inputId,
-          producer,
-          inputSchemas.get(inputId),
-          options.onQueryUpdate,
-        ),
-    );
-    markPlecTiming('plec:mount-end');
-    let disposed = false;
-    const diagnostics = (): CompiledControllerDiagnostics => ({
-      activeQuerySubscriptions: 0,
-      activeInputSubscriptions: disposed ? 0 : subscriptions.length,
-      // DOM listeners are registered by the WASM renderer. TypeScript has no
-      // normal event-execution role.
-      activeActionListeners: 0,
-      activeIslands: disposed ? 0 : disposeIslands.length,
-      queryIds: Object.keys(options.queries ?? {}),
-      inputIds: Object.keys(inputs),
-      disposed,
-    });
-    const outlet = (id = 'main') => {
-      const descriptor = ((ir as any).layout?.routeOutlets ?? []).find(
-        (entry: any) => entry.id === id,
-      );
-      return descriptor
-        ? options.root.querySelector(
-            `[data-runtime-node="${descriptor.elementId}"]`,
-          )
-        : null;
-    };
-    return {
-      mountMetrics,
-      diagnostics,
-      applyDelta: (delta) => apply(runtime, delta),
-      applyHostValues,
-      outlet,
-      dispose: () => {
-        if (disposed) return;
-        disposed = true;
-        runtime.dispose();
-        disposeIslands.forEach((dispose) => dispose());
-        subscriptions.forEach((dispose) => dispose());
-      },
-    };
-  } catch (error) {
-    markPlecTiming('plec:mount-error');
-    throw error;
-  }
-}
-
 /** Transport-only router bootstrap. It fetches immutable artifacts and hands
  * them to WASM; route matching, history and outlet ownership stay in Rust. */
+
+/** Decodes a streamed response body under a hard byte ceiling: the
+ * declared content-length is rejected before reading, and each chunk is
+ * accounted during streaming so an absent, forged, or lying declaration
+ * cannot buffer past the ceiling. Exported for transport-boundary tests. */
+export async function boundedResponseBytes(
+  response: Response,
+  maxBytes: number,
+  label: string,
+): Promise<Uint8Array> {
+  const declared = response.headers.get('content-length');
+  if (declared !== null && Number(declared) > maxBytes)
+    throw new Error(`${label} exceeds byte limit`);
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error(`${label} body is unreadable`);
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      received += value.byteLength;
+      if (received > maxBytes) {
+        await reader.cancel();
+        throw new Error(`${label} exceeds byte limit`);
+      }
+      chunks.push(value);
+    }
+  }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+/** Fetches and parses a JSON response under a hard byte ceiling enforced
+ * while the body streams, before any whole-body text buffering. */
+async function boundedResponseJson(
+  response: Response,
+  maxBytes: number,
+  label: string,
+): Promise<unknown> {
+  const bytes = await boundedResponseBytes(response, maxBytes, label);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
 export async function startPlecRouter(
   options: PlecRouterMountOptions,
 ): Promise<PlecRouterController> {
@@ -510,7 +537,11 @@ export async function startPlecRouter(
     throw new Error(
       `Failed to load route manifest: ${manifestResponse.status}`,
     );
-  const artifact = await manifestResponse.json();
+  const artifact = await boundedResponseJson(
+    manifestResponse,
+    MAX_ARTIFACT_JSON_BYTES,
+    'route manifest',
+  );
   const compiled = options.applicationUrl
     ? (artifact as { manifest: PlecRouteManifest; application: any })
     : undefined;
@@ -525,6 +556,13 @@ export async function startPlecRouter(
   });
   const runtime = new runtimeModule.PlecRuntime();
   runtime.set_cookie_policy(options.cookiePolicy ?? null);
+  runtime.set_fetch_policy(options.fetchPolicy ?? null);
+  if (options.tagPolicy !== undefined) {
+    runtime.set_tag_policy(options.tagPolicy ?? null);
+  }
+  runtime.set_host_registry(
+    hostRegistry(options.providers ?? new Map(hostProviders)),
+  );
   const routedInputs = options.inputs ?? {};
   const hostInputs: Record<string, unknown> = {
     'location.pathname': window.location.pathname,
@@ -541,54 +579,106 @@ export async function startPlecRouter(
       throw new Error(
         `Failed to load graph ${graphId}: ${response.status}`,
       );
-    const graph = await response.json();
+    const graph = await boundedResponseJson(
+      response,
+      MAX_ARTIFACT_JSON_BYTES,
+      `graph ${graphId}`,
+    );
     loadedGraphs.set(graphId, graph);
     runtime.register_graph(graphId, graph);
     return graph;
   };
-  const graphs = compiled
-    ? [compiled.application]
-    : [await loadGraph(manifest.rootGraphId)];
   if (compiled) {
     runtime.register_graph(
       '__rust_application__',
       compiled.application,
     );
+  } else {
+    await loadGraph(manifest.rootGraphId);
   }
   let adopted = false;
-  if (bootstrap) {
-    const expectedRevision = (manifest as any).revision as string | undefined;
-    const route = (manifest as any).routes?.find(
-      (entry: any) => entry.id === bootstrap.routeId,
+  if (bootstrap?.kind === 'invalid') {
+    // A present-but-unparseable bootstrap is an SSR contract failure, never a
+    // silent normal mount.
+    emitAdoptionDiagnostic(options, {
+      outcome: 'fallback',
+      routeId: null,
+      mismatchCodes: ['invalid:ssr-bootstrap'],
+    });
+  } else if (bootstrap) {
+    const expectedRevision = (manifest as any).revision as
+      string | undefined;
+    // The server-published route chain is the adoption cause. The gate only
+    // checks chain shape; whether the chain matches the current URL is the
+    // WASM runtime's cross-validation decision.
+    const chain: unknown = (bootstrap.snapshot as any).routes;
+    const chainDetail = validateSsrRouteChain(
+      (manifest as any).routes ?? [],
+      chain,
     );
-    const currentPath = window.location.pathname.replace(/^\/+/, '');
-    const routeMatches = route && (route.path === currentPath || (route.path === '' && currentPath === '') || route.path === '*');
     if (expectedRevision !== bootstrap.revision) {
       emitAdoptionDiagnostic(options, {
-        outcome: 'fallback', expectedRevision, observedRevision: bootstrap.revision,
-        routeId: bootstrap.routeId, mismatchCodes: ['stale-revision'],
+        outcome: 'fallback',
+        expectedRevision,
+        observedRevision: bootstrap.revision,
+        routeId: bootstrap.routeId,
+        mismatchCodes: ['stale-revision'],
       });
-    } else if (!routeMatches) {
+    } else if (chainDetail !== null) {
       emitAdoptionDiagnostic(options, {
-        outcome: 'fallback', expectedRevision, observedRevision: bootstrap.revision,
-        routeId: bootstrap.routeId, mismatchCodes: ['route-mismatch'],
+        outcome: 'fallback',
+        expectedRevision,
+        observedRevision: bootstrap.revision,
+        routeId: bootstrap.routeId,
+        mismatchCodes: [`mismatch:ssr-route-chain:${chainDetail}`],
       });
     } else {
       try {
-        // The initial route graph is needed before WASM can reconstruct the
-        // existing outlet; later route graphs remain lazy.
-        if (!compiled) await loadGraph(route.graphId);
-        runtime.start_adopt(options.root, manifest);
+        // Every chain graph must be registered before WASM claims DOM; graphs
+        // outside the initial chain stay lazy. A server-rendered error phase
+        // claims DOM built from the route's error graph, so that graph must
+        // be registered too before the snapshot import validates structure.
+        if (!compiled) {
+          for (const entry of chain as Array<{
+            routeId: string;
+            phase?: string;
+          }>) {
+            const route = (manifest as any).routes?.find(
+              (candidate: any) => candidate.id === entry.routeId,
+            );
+            if (route?.graphId) await loadGraph(route.graphId);
+            if (entry.phase === 'error' && route?.errorGraphId)
+              await loadGraph(route.errorGraphId);
+          }
+        }
+        const snapshotImported = true;
+        runtime.start_adopt_snapshot(
+          options.root,
+          manifest,
+          bootstrap.snapshot,
+        );
         adopted = true;
         emitAdoptionDiagnostic(options, {
-          outcome: 'adopted', expectedRevision, observedRevision: bootstrap.revision,
-          routeId: bootstrap.routeId, mismatchCodes: [],
+          outcome: 'adopted',
+          expectedRevision,
+          observedRevision: bootstrap.revision,
+          routeId: bootstrap.routeId,
+          mismatchCodes: [],
+          snapshotImported,
+          ...(snapshotImported
+            ? {
+                textDivergences: runtime.ssr_text_divergences(),
+              }
+            : {}),
         });
       } catch (error) {
         runtime.abandon_adoption();
         emitAdoptionDiagnostic(options, {
-          outcome: 'fallback', expectedRevision, observedRevision: bootstrap.revision,
-          routeId: bootstrap.routeId, mismatchCodes: [adoptionMismatchCode(error)],
+          outcome: 'fallback',
+          expectedRevision,
+          observedRevision: bootstrap.revision,
+          routeId: bootstrap.routeId,
+          mismatchCodes: [adoptionMismatchCode(error)],
         });
       }
     }
@@ -637,14 +727,6 @@ export async function startPlecRouter(
   window.addEventListener('popstate', scheduleRoutedInputHydration);
   markPlecTiming('plec:mount-end');
 
-  // Mount islands for the initial root graph
-  const rootGraph =
-    !compiled &&
-    graphs.find((g: any) => g.graphId === manifest.rootGraphId);
-  const disposeIslands = rootGraph
-    ? mountIslands(options.root, rootGraph, options.islands ?? {})
-    : [];
-
   return {
     dispose: () => {
       window.removeEventListener('plec:graph-needed', onGraphNeeded);
@@ -654,21 +736,118 @@ export async function startPlecRouter(
         scheduleRoutedInputHydration,
       );
       routedInputBridge.dispose();
-      disposeIslands.forEach((dispose) => dispose());
       runtime.dispose();
     },
   };
 }
 
-function readSsrBootstrap(): { revision?: string; routeId?: string | null } | null {
-  const element = document.querySelector('#plec-bootstrap[type="application/json"]');
+/** The `#plec-bootstrap` payload shapes the adoption gate understands. A
+ * page without a v2 snapshot (no script, or any non-v2 payload) mounts
+ * fresh; only `kind: 'invalid'` — a present-but-unparseable script — is an
+ * SSR contract failure. */
+type SsrBootstrap =
+  | null
+  | { kind: 'invalid' }
+  /** v2: the bootstrap carries the typed SSR execution snapshot. */
+  | {
+      kind: 'snapshot';
+      revision?: string;
+      routeId?: string | null;
+      snapshot: unknown;
+    };
+
+/** Exported for adapter tests. */
+export type { SsrBootstrap };
+
+export function readSsrBootstrap(): SsrBootstrap {
+  const element = document.querySelector(
+    '#plec-bootstrap[type="application/json"]',
+  );
   if (!element?.textContent) return null;
-  try { return JSON.parse(element.textContent); } catch { return { }; }
+  if (element.textContent.length > MAX_SNAPSHOT_JSON_BYTES)
+    return { kind: 'invalid' };
+  let parsed: any;
+  try {
+    parsed = JSON.parse(element.textContent);
+  } catch {
+    return { kind: 'invalid' };
+  }
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    parsed.version === 2 &&
+    parsed.snapshot &&
+    typeof parsed.snapshot === 'object'
+  ) {
+    const snapshot = parsed.snapshot;
+    const firstRoute = Array.isArray(snapshot.routes)
+      ? snapshot.routes[0]
+      : undefined;
+    return {
+      kind: 'snapshot',
+      revision:
+        typeof snapshot.revision === 'string'
+          ? snapshot.revision
+          : undefined,
+      routeId:
+        firstRoute && typeof firstRoute.routeId === 'string'
+          ? firstRoute.routeId
+          : null,
+      snapshot,
+    };
+  }
+  // Anything that is not the v2 snapshot shape means there is no execution
+  // state to resume (including the removed v1 non-snapshot shape), so the
+  // page mounts fresh exactly as if no bootstrap were present.
+  return null;
 }
 
 function adoptionMismatchCode(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message =
+    error instanceof Error ? error.message : String(error);
   return message.replace(/^Error:\s*/, '') || 'adoption-error';
+}
+
+/** Structural validation of the server-published route chain. Returns a
+ * mismatch detail string, or null when the chain is well-formed and every
+ * entry references a manifest route. This is deliberately weaker than the
+ * WASM cross-validation: the gate never re-matches routes against the URL. */
+export function validateSsrRouteChain(
+  routes: unknown,
+  chain: unknown,
+): string | null {
+  if (!Array.isArray(chain) || chain.length === 0) return 'empty';
+  const known = Array.isArray(routes)
+    ? new Set(
+        routes
+          .map((entry: any) => entry?.id)
+          .filter((id) => typeof id === 'string'),
+      )
+    : new Set<string>();
+  for (const [index, entry] of chain.entries()) {
+    const routeId = (entry as any)?.routeId;
+    if (typeof routeId !== 'string' || routeId.length === 0)
+      return `instance:${index}`;
+    if (!known.has(routeId)) return `unknown-route:${routeId}`;
+    const params = (entry as any)?.params;
+    if (
+      params !== undefined &&
+      (params === null ||
+        typeof params !== 'object' ||
+        Array.isArray(params) ||
+        Object.values(params).some(
+          (value) => typeof value !== 'string',
+        ))
+    )
+      return `params:${index}`;
+    const phase = (entry as any)?.phase;
+    if (
+      phase !== undefined &&
+      !['active', 'pending', 'error'].includes(phase)
+    )
+      return `phase:${index}`;
+  }
+  return null;
 }
 
 function emitAdoptionDiagnostic(
@@ -677,105 +856,9 @@ function emitAdoptionDiagnostic(
 ) {
   options.onAdoptionDiagnostic?.(diagnostic);
   if (typeof window !== 'undefined')
-    window.dispatchEvent(new CustomEvent('plec:adoption', { detail: diagnostic }));
-}
-
-// SVG instance cache for static icons
-const svgInstanceCache = new Map<string, Element>();
-
-function mountIslands(
-  root: Element,
-  ir: any,
-  registry: NonNullable<CompiledMountOptions['islands']>,
-) {
-  const disposers: Array<() => void> = [];
-
-  // SVG islands (cached)
-  for (const island of (ir.islands ?? []).filter(
-    (i: any) =>
-      (registry[i.componentId] as any)?.__plecSvgIcon === true,
-  )) {
-    const Icon = registry[
-      island.componentId
-    ] as unknown as SvgIconFunction;
-    const placeholder = root.querySelector<HTMLElement>(
-      `[data-runtime-node="${island.placeholderNodeId}"]`,
+    window.dispatchEvent(
+      new CustomEvent('plec:adoption', { detail: diagnostic }),
     );
-    if (!Icon || !placeholder) continue;
-
-    // Build cache key from icon ID and static props
-    const staticProps = ['className', 'size', 'color', 'strokeWidth']
-      .filter((p) => island.props?.[p] !== undefined)
-      .map((p) => `${p}:${String(island.props?.[p])}`)
-      .join(',');
-    const cacheKey = `${island.componentId}:${staticProps}`;
-
-    let svgElement = svgInstanceCache.get(cacheKey);
-    if (!svgElement) {
-      svgElement = Icon(island.props ?? {});
-      if (svgElement) svgInstanceCache.set(cacheKey, svgElement);
-    }
-
-    if (svgElement) {
-      // Clone cached instance (elements can't be in multiple places)
-      const clone = svgElement.cloneNode(true) as Element;
-      placeholder.replaceWith(clone);
-    }
-  }
-
-  // Component islands (existing logic)
-  for (const island of (ir.islands ?? []).filter(
-    (i: any) =>
-      (registry[i.componentId] as any)?.__plecSvgIcon !== true,
-  )) {
-    const mount = registry[island.componentId];
-    const placeholder = root.querySelector<HTMLElement>(
-      `[data-runtime-node="${island.placeholderNodeId}"]`,
-    );
-    if (!mount || !placeholder) continue;
-    const dispose = mount(placeholder, island.props ?? {});
-    if (typeof dispose === 'function') disposers.push(dispose);
-  }
-
-  return disposers;
-}
-
-function mergeMountMetrics(
-  staticMetrics: RuntimeMountMetrics,
-  initial: RuntimeMountMetrics[],
-  browser: Pick<
-    MountMetrics,
-    | 'irFetchMs'
-    | 'irParseMs'
-    | 'wasmInitMs'
-    | 'runtimeLoadMs'
-    | 'renderMode'
-  >,
-): MountMetrics {
-  const total = { ...staticMetrics };
-  let totalRowProgramExecuteUs = 0;
-  for (const metrics of initial) {
-    for (const key of [
-      'decodeUs',
-      'staticMountUs',
-      'rowProgramExecuteUs',
-      'rowStateRegistrationUs',
-      'fragmentAppendUs',
-      'programCompileUs',
-      'rowCount',
-      'createdElements',
-      'createdTexts',
-      'bindings',
-      'domOperations',
-    ] as const)
-      total[key] += metrics[key];
-    totalRowProgramExecuteUs += metrics.rowProgramExecuteUs;
-  }
-  total.averageRowProgramExecuteUs =
-    total.rowCount === 0
-      ? 0
-      : totalRowProgramExecuteUs / total.rowCount;
-  return { ...total, ...browser };
 }
 
 /** Adapt a host collection into the runtime's stable keyed-delta protocol. */
@@ -794,40 +877,6 @@ export function adaptLiveCollection<Row extends object>(
       return () => subscription.unsubscribe();
     },
   };
-}
-
-function subscribeInput(
-  runtime: WasmRuntimeInstance,
-  inputId: string,
-  producer: CompiledInputProducer<any>,
-  input: any,
-  onQueryUpdate?: (update: CompiledQueryUpdate) => void,
-): Array<() => void> {
-  if (isDeltaInput(producer)) {
-    return [
-      producer.subscribeDeltas((deltas) =>
-        publishDeltas(runtime, deltas, onQueryUpdate),
-      ),
-    ];
-  }
-  if (!producer.subscribe) return [];
-  if (!input?.shape) return [];
-  return [
-    producer.subscribe(() => {
-      const start = performance.now();
-      const metrics = runtime.apply_input_snapshot(
-        inputId,
-        producer.getSnapshot(),
-      );
-      const update: CompiledQueryUpdate = {
-        ...metrics,
-        adapterMs: performance.now() - start,
-        reconciliationMs: (metrics.reconciliationUs ?? 0) / 1000,
-      };
-      onQueryUpdate?.(update);
-      return update;
-    }),
-  ];
 }
 
 function isDeltaInput(
@@ -857,6 +906,7 @@ function publishDeltas(
     rowInserts: 0,
     rowRemoves: 0,
     rowMoves: 0,
+    domNodesMoved: 0,
     wasmDomUs: 0,
   };
   if (deltas.length > 0) addMetrics(total, applyBatch(runtime, deltas));
@@ -942,15 +992,10 @@ function addMetrics(
   total.rowInserts += next.rowInserts;
   total.rowRemoves += next.rowRemoves;
   total.rowMoves += next.rowMoves;
+  total.domNodesMoved += next.domNodesMoved;
   total.wasmDomUs += next.wasmDomUs;
 }
 
-function apply(
-  runtime: WasmRuntimeInstance,
-  delta: RuntimeDelta,
-): CompiledUpdateMetrics {
-  return runtime.apply_delta(delta);
-}
 function applyBatch(
   runtime: Pick<WasmRuntimeInstance, 'apply_deltas'>,
   deltas: RuntimeDelta[],
@@ -969,8 +1014,13 @@ async function loadRuntimeModule(
     throw new Error(
       `Failed to load WASM runtime module: ${response.status}`,
     );
+  const bytes = await boundedResponseBytes(
+    response,
+    MAX_RUNTIME_JS_BYTES,
+    'WASM runtime module',
+  );
   const moduleUrl = URL.createObjectURL(
-    new Blob([await response.text()], { type: 'text/javascript' }),
+    new Blob([bytes as BlobPart], { type: 'text/javascript' }),
   );
   try {
     return (await import(

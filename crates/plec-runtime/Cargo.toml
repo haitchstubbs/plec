@@ -1,0 +1,31 @@
+[package]
+name = "plec-runtime"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["router", "fetch"]
+router = []
+fetch = ["plec-client/fetch"]
+
+[dependencies]
+plec-client = { path = "../plec-client" }
+plec-dom = { path = "../plec-dom" }
+plec-eval = { path = "../plec-eval" }
+plec-ir = { path = "../plec-ir" }
+plec-router = { path = "../plec-router" }
+plec-schema = { path = "../plec-schema" }
+js-sys = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde-wasm-bindgen = { workspace = true }
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true }
+
+[dev-dependencies]
+serde-wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+wasm-bindgen-test = { workspace = true }

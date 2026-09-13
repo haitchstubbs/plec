@@ -1,4 +1,4 @@
-@import '@wasm-runtime/ui/globals.css';
+@import 'plec-ui/globals.css';
 
 .plec-development-memory-toggle {
   position: fixed;

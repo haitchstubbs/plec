@@ -1,10 +1,11 @@
 {
   "name": "plec",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": "./bin/plec.js",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -17,11 +18,27 @@
     "./client/effects/development-memory-hud": {
       "types": "./dist/client/effects/development-memory-hud.d.ts",
       "import": "./dist/client/effects/development-memory-hud.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
     }
   },
   "scripts": {
-    "build": "yarn --cwd ../.. exec tsc -p packages/plec/tsconfig.json",
-    "test": "yarn --cwd ../.. exec vitest run packages/plec/src --passWithNoTests",
+    "build": "node scripts/build-artifact.mjs",
+    "build:runtime": "cargo check --locked --manifest-path ../../crates/plec-runtime/Cargo.toml && yarn build:wasm",
+    "build:wasm": "node scripts/build-runtime.mjs",
+    "dev:wasm": "cd ../.. && node scripts/watch-wasm.mjs",
+    "test": "yarn test:ts && yarn test:runtime",
+    "test:ts": "yarn --cwd ../.. exec vitest run packages/plec/src --passWithNoTests",
+    "test:runtime": "node ../../scripts/verify-toolchain.mjs && cargo test --locked --manifest-path ../../crates/plec-runtime/Cargo.toml --lib",
+    "test:runtime:core": "node ../../scripts/verify-toolchain.mjs && cargo test --locked --manifest-path ../../crates/plec-runtime/Cargo.toml --no-default-features",
+    "test:wasm": "node ../plec-e2e/scripts/wasm-harness.mjs",
+    "clean:runtime": "cargo clean --manifest-path ../../crates/plec-runtime/Cargo.toml",
     "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec/tsconfig.json --noEmit"
   }
 }

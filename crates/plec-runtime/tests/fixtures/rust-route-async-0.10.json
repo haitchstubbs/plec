@@ -1,0 +1,81 @@
+{
+  "version": "0.10",
+  "rootNode": 0,
+  "strings": ["main"],
+  "constants": ["", "/route-data"],
+  "nodes": [
+    { "op": "element", "tag": 0, "parent": null, "children": [1] },
+    { "op": "text", "text": 0, "parent": 0 }
+  ],
+  "texts": [{ "binding": 0 }],
+  "bindings": [{ "target": 1, "sink": "text", "expression": 3 }],
+  "propPrograms": [],
+  "events": [],
+  "inputs": [],
+  "stateSlots": [{ "initialExpression": 0, "frameSlot": 0 }],
+  "expressions": [
+    {
+      "instructions": [
+        { "op": "constant", "constant": 0 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "constant", "constant": 1 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadFrame", "slot": 1 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadState", "state": 0 },
+        { "op": "return" }
+      ]
+    },
+    {
+      "instructions": [
+        { "op": "loadFrame", "slot": 0 },
+        { "op": "return" }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "frameSlots": 2,
+      "loaderResultState": 0,
+      "routeLoader": true,
+      "instructions": [
+        {
+          "op": "capabilityRequest",
+          "capability": "fetch",
+          "request": {
+            "url": 1,
+            "method": "GET",
+            "decode": "text",
+            "requireOk": true
+          },
+          "successPc": 1,
+          "failurePc": 2,
+          "resultSlot": 0,
+          "errorSlot": 1
+        },
+        { "op": "return", "value": 4 },
+        { "op": "return", "outcome": "failure", "value": 2 }
+      ]
+    }
+  ],
+  "loops": [],
+  "dependencyEdges": [
+    {
+      "source": { "kind": "state", "handle": 0 },
+      "target": { "kind": "binding", "handle": 0 }
+    }
+  ],
+  "routeOutlets": [{ "id": "main", "node": 0 }]
+}

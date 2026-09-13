@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
   "commands": [
-    "yarn workspace plec-runtime build:wasm",
-    "yarn workspace @wasm-runtime/fullstack build"
+    "yarn workspace plec build:wasm",
+    "yarn workspace fullstack build"
   ],
   "toolchain": {
-    "node": "v22.15.0",
+    "node": "v24.20.0",
     "yarn": "4.17.1",
-    "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
-    "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
-    "wasmPack": "wasm-pack 0.15.0",
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+    "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+    "wasmPack": "wasm-pack 0.13.1",
     "wasmTarget": "wasm32-unknown-unknown"
   },
   "buildProfile": {
@@ -18,76 +18,100 @@
   },
   "artifacts": [
     {
-      "path": "packages/plec-runtime/crates/runtime/dist/runtime/runtime_bg.wasm",
-      "raw": 724862,
-      "gzip": 236289,
-      "brotliQ11": 173641
+      "path": "packages/plec/dist/runtime/runtime_bg.wasm",
+      "raw": 1856070,
+      "gzip": 549934,
+      "brotliQ11": 380589
     },
     {
-      "path": "packages/plec-runtime/crates/runtime/dist/runtime/runtime.js",
-      "raw": 49203,
-      "gzip": 8962,
-      "brotliQ11": 7519
+      "path": "packages/plec/dist/runtime/runtime.js",
+      "raw": 60213,
+      "gzip": 10523,
+      "brotliQ11": 8712
     },
     {
       "path": "apps/fullstack/dist/public/runtime/runtime_bg.wasm",
-      "raw": 724862,
-      "gzip": 236289,
-      "brotliQ11": 173641
+      "raw": 1856070,
+      "gzip": 549934,
+      "brotliQ11": 380589
     },
     {
       "path": "apps/fullstack/dist/public/runtime/runtime.js",
-      "raw": 49203,
-      "gzip": 8962,
-      "brotliQ11": 7519
+      "raw": 60213,
+      "gzip": 10523,
+      "brotliQ11": 8712
     },
     {
       "path": "apps/fullstack/dist/public/route-manifest.json",
-      "raw": 1402,
-      "gzip": 524,
-      "brotliQ11": 448
+      "raw": 2429,
+      "gzip": 600,
+      "brotliQ11": 516
     },
     {
-      "path": "apps/fullstack/dist/public/graphs/g-19yewiq.json",
-      "raw": 46962,
-      "gzip": 4568,
-      "brotliQ11": 3654
+      "path": "apps/fullstack/dist/public/graphs/src--components--about.tsx--AboutPage.json",
+      "raw": 9934,
+      "gzip": 1541,
+      "brotliQ11": 1250
     },
     {
-      "path": "apps/fullstack/dist/public/graphs/g-1baeemh.json",
-      "raw": 3532,
-      "gzip": 866,
-      "brotliQ11": 730
+      "path": "apps/fullstack/dist/public/graphs/src--components--fullstack-layout.tsx--FullstackLayout.json",
+      "raw": 49923,
+      "gzip": 4276,
+      "brotliQ11": 3267
     },
     {
-      "path": "apps/fullstack/dist/public/graphs/g-1djexgi.json",
-      "raw": 11453,
-      "gzip": 1621,
-      "brotliQ11": 1313
+      "path": "apps/fullstack/dist/public/graphs/src--components--home.tsx--HomePage.json",
+      "raw": 14924,
+      "gzip": 1968,
+      "brotliQ11": 1573
     },
     {
-      "path": "apps/fullstack/dist/public/graphs/g-1v46s8b.json",
-      "raw": 3901,
-      "gzip": 831,
-      "brotliQ11": 691
+      "path": "apps/fullstack/dist/public/graphs/src--components--not-found.tsx--NotFoundPage.json",
+      "raw": 3216,
+      "gzip": 687,
+      "brotliQ11": 574
     },
     {
-      "path": "apps/fullstack/dist/public/graphs/g-9ekz2s.json",
-      "raw": 9307,
-      "gzip": 1514,
-      "brotliQ11": 1232
+      "path": "apps/fullstack/dist/public/graphs/src--components--project.tsx--ProjectPage.json",
+      "raw": 9532,
+      "gzip": 1433,
+      "brotliQ11": 1168
     },
     {
-      "path": "apps/fullstack/dist/public/graphs/g-ilwwb8.json",
-      "raw": 73560,
-      "gzip": 6696,
-      "brotliQ11": 5164
+      "path": "apps/fullstack/dist/public/graphs/src--components--runtime-stress.tsx--RuntimeStressPage.json",
+      "raw": 75010,
+      "gzip": 5282,
+      "brotliQ11": 3602
     },
     {
-      "path": "apps/fullstack/dist/public/graphs/g-llshtm.json",
-      "raw": 2742,
-      "gzip": 738,
-      "brotliQ11": 629
+      "path": "apps/fullstack/dist/public/graphs/src--routes--notes.route.tsx--NotesError.json",
+      "raw": 2145,
+      "gzip": 532,
+      "brotliQ11": 435
+    },
+    {
+      "path": "apps/fullstack/dist/public/graphs/src--routes--notes.route.tsx--NotesPage.json",
+      "raw": 3847,
+      "gzip": 711,
+      "brotliQ11": 599
+    },
+    {
+      "path": "apps/fullstack/dist/public/graphs/src--routes--todos.tsx--TodosError.json",
+      "raw": 3604,
+      "gzip": 744,
+      "brotliQ11": 603
+    },
+    {
+      "path": "apps/fullstack/dist/public/graphs/src--routes--todos.tsx--TodosPage.json",
+      "raw": 85894,
+      "gzip": 5723,
+      "brotliQ11": 3902
+    },
+    {
+      "path": "apps/fullstack/dist/public/graphs/src--routes--todos.tsx--TodosPending.json",
+      "raw": 2800,
+      "gzip": 637,
+      "brotliQ11": 528
     }
   ]
 }

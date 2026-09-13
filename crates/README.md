@@ -9,7 +9,7 @@ runtime. Rust is the compiler authority.
 ```text
 TSX source
   plec-parser    -> raw syntax
-  plec-sema      -> name/symbol resolution          (depends on parser)
+  plec-model      -> name/symbol resolution          (depends on parser)
   plec-hir       -> high-level app model (components, nodes, exprs)
   plec-lowering  -> HIR to IR 0.10                  (depends on hir, ir)
   plec-ir        -> shared IR contract (versioned)
@@ -22,13 +22,36 @@ only entry point. Its `plec-route-manifest` binary is what the fullstack
 build invokes (`apps/fullstack/scripts/build.mjs`) to emit the route
 manifest and per-route graphs.
 
-## The runtime crate is a workspace member too
+`plec-build` assembles the application artifact around those compiler
+outputs: clean, in-process artifact emission, browser/server esbuild
+bundles, dependency-boundary validation, revision hashing + brotli
+sidecars, runtime staging (workspace build or installed `plec` package),
+and the document shell. `plec-cli` owns the command surface only: its
+build/compile subcommands parse arguments and delegate.
 
-The WASM runtime lives at `packages/plec-runtime/crates/runtime` and is a
-member of this same Cargo workspace (root `Cargo.toml`), under the crate
-name `plec_runtime`. It decodes and validates the IR these crates emit, with
-feature profiles `full` (default; router + fetch), `core`, `router`, and
-`fetch`.
+## The runtime crates are workspace members too
+
+The WASM runtime is split across workspace members under the root
+`Cargo.toml`. `crates/plec-runtime` is the cdylib: the `#[wasm_bindgen]`
+`PlecRuntime` facade whose exported methods are the JS contract, the
+SSR snapshot tooling (`runtime/snapshots.rs`), and the embedded
+`plec-protocol` custom section. Execution lives in the crates below it:
+
+```text
+plec-schema   -> artifact data model (typed graphs, deltas, routing)
+plec-dom      -> browser host access (window/document/now, cookie policy)
+plec-eval     -> expression VM for typed graph instructions
+plec-client   -> typed graph runtime: RuntimeState, events, cookies,
+                 fetch actions, keyed reorder, action VM, binding sinks,
+                 route-instance transitions
+plec-router   -> URL matching, navigation/adoption, browser listeners
+plec-runtime  -> wasm facade (cdylib) + snapshots + protocol marker
+```
+
+Dependencies point strictly downward (`plec-router` -> `plec-client` -> ...);
+the facade delegates to the crates above it. The `fetch` feature is declared
+by `plec-schema` (validation gating) and forwarded by `plec-client` and
+`plec-runtime`; `router` remains a vestigial no-op kept for compatibility.
 
 ## Where to look next
 

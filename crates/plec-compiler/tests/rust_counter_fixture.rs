@@ -4,8 +4,8 @@ use plec_compiler::{
     discover_root_component, lower_application, lower_application_to_executable,
     lower_component_to_executable, lower_root_component, lower_route_loader_to_executable,
 };
+use plec_model::build_semantic_graph;
 use plec_parser::parse_module;
-use plec_sema::build_semantic_graph;
 
 const SOURCE: &str = r#"
     export function Counter() {
@@ -164,7 +164,8 @@ const GENERAL_ASYNC_ACTION_SOURCE: &str = r#"
         const [done, setDone] = useState(false);
         async function refresh() {
             try {
-                const todo = await fetch("/todo");
+                const response = await fetch("/todo");
+                const todo = await response.json();
                 todos.keyedReplace("one", todo);
             } catch (reason) {
                 setError(reason.message);
@@ -208,7 +209,7 @@ fn rust_counter_artifact_matches_runtime_fixture() {
         "rust-counter.tsx",
         "Counter",
         SOURCE,
-        "rust-counter-0.9.json",
+        "rust-counter-0.10.json",
     );
 }
 
@@ -218,7 +219,7 @@ fn rust_collection_rows_artifact_matches_runtime_fixture() {
         "rust-collection-rows.tsx",
         "Todos",
         COLLECTION_SOURCE,
-        "rust-collection-rows-0.9.json",
+        "rust-collection-rows-0.10.json",
     );
 }
 
@@ -228,7 +229,7 @@ fn rust_static_conditional_artifact_matches_runtime_fixture() {
         "rust-static-conditional.tsx",
         "Conditional",
         CONDITIONAL_SOURCE,
-        "rust-static-conditional-0.9.json",
+        "rust-static-conditional-0.10.json",
     );
 }
 
@@ -249,17 +250,22 @@ fn rust_conditional_action_jumps_to_a_valid_return_instruction() {
     let conditional = app
         .actions
         .iter()
-        .find(|action| action.instructions.iter().any(|instruction| {
-            matches!(instruction, plec_ir::ActionInstruction::JumpIfFalse { .. })
-        }))
+        .find(|action| {
+            action.instructions.iter().any(|instruction| {
+                matches!(instruction, plec_ir::ActionInstruction::JumpIfFalse { .. })
+            })
+        })
         .expect("conditional handler should lower to an action");
-    assert!(conditional.instructions.iter().all(|instruction| match instruction {
-        plec_ir::ActionInstruction::Jump { target }
-        | plec_ir::ActionInstruction::JumpIfFalse { target } => {
-            *target < conditional.instructions.len()
-        }
-        _ => true,
-    }));
+    assert!(conditional
+        .instructions
+        .iter()
+        .all(|instruction| match instruction {
+            plec_ir::ActionInstruction::Jump { target }
+            | plec_ir::ActionInstruction::JumpIfFalse { target } => {
+                *target < conditional.instructions.len()
+            }
+            _ => true,
+        }));
 }
 
 #[test]
@@ -276,14 +282,14 @@ fn rust_component_artifact_matches_runtime_fixture() {
     let executable =
         lower_application_to_executable(&application).expect("App should lower to component IR");
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-component-0.10.json",
+        "{}/../plec-runtime/tests/fixtures/rust-component-0.10.json",
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("runtime fixture should exist");
 
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        component_fixture_value(&fixture)
+        serde_json::from_str::<serde_json::Value>(&fixture).expect("fixture JSON should parse")
     );
 }
 
@@ -306,9 +312,10 @@ fn rust_keyed_component_artifact_matches_runtime_fixture() {
     let executable =
         lower_application_to_executable(&application).expect("Todos should lower to component IR");
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-keyed-component-0.10.json",
+        "{}/../plec-runtime/tests/fixtures/rust-keyed-component-0.10.json",
         env!("CARGO_MANIFEST_DIR")
-    )).expect("runtime fixture should exist");
+    ))
+    .expect("runtime fixture should exist");
 
     assert!(executable.components[0]
         .dependency_edges
@@ -320,7 +327,7 @@ fn rust_keyed_component_artifact_matches_runtime_fixture() {
         .any(|edge| edge.source.kind == "prop" && edge.target.kind == "binding"));
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        component_fixture_value(&fixture)
+        serde_json::from_str::<serde_json::Value>(&fixture).expect("fixture JSON should parse")
     );
 }
 
@@ -343,9 +350,10 @@ fn rust_nested_component_artifact_matches_runtime_fixture() {
     let executable =
         lower_application_to_executable(&application).expect("App should lower to component IR");
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-nested-component-0.10.json",
+        "{}/../plec-runtime/tests/fixtures/rust-nested-component-0.10.json",
         env!("CARGO_MANIFEST_DIR")
-    )).expect("runtime fixture should exist");
+    ))
+    .expect("runtime fixture should exist");
 
     assert_eq!(executable.components.len(), 3);
     assert!(executable.components[0]
@@ -362,7 +370,7 @@ fn rust_nested_component_artifact_matches_runtime_fixture() {
         .any(|edge| edge.source.kind == "prop" && edge.target.kind == "binding"));
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        component_fixture_value(&fixture)
+        serde_json::from_str::<serde_json::Value>(&fixture).expect("fixture JSON should parse")
     );
 }
 
@@ -388,12 +396,13 @@ fn rust_keyed_callback_component_artifact_matches_runtime_fixture() {
     let executable =
         lower_application_to_executable(&application).expect("Todos should lower to component IR");
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-keyed-callback-component-0.10.json",
+        "{}/../plec-runtime/tests/fixtures/rust-keyed-callback-component-0.10.json",
         env!("CARGO_MANIFEST_DIR")
-    )).expect("runtime fixture should exist");
+    ))
+    .expect("runtime fixture should exist");
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        component_fixture_value(&fixture)
+        serde_json::from_str::<serde_json::Value>(&fixture).expect("fixture JSON should parse")
     );
 }
 
@@ -424,13 +433,13 @@ fn rust_keyed_slot_component_artifact_matches_runtime_fixture() {
         .iter()
         .any(|node| matches!(node, plec_ir::Node::Slot { .. })));
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-keyed-slot-component-0.10.json",
+        "{}/../plec-runtime/tests/fixtures/rust-keyed-slot-component-0.10.json",
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("runtime fixture should exist");
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        component_fixture_value(&fixture)
+        serde_json::from_str::<serde_json::Value>(&fixture).expect("fixture JSON should parse")
     );
 }
 
@@ -502,13 +511,13 @@ fn rust_route_async_artifact_matches_runtime_fixture() {
     assert_eq!(executable.route_outlets[0].id, "main");
     assert_eq!(executable.route_outlets[0].node, executable.root_node);
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/rust-route-async-0.9.json",
+        "{}/../plec-runtime/tests/fixtures/rust-route-async-0.10.json",
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("runtime fixture should exist");
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        artifact_fixture_value(&fixture)
+        serde_json::from_str::<serde_json::Value>(&fixture).expect("fixture JSON should parse")
     );
 }
 
@@ -518,7 +527,7 @@ fn rust_general_async_actions_artifact_matches_runtime_fixture() {
         "rust-general-async-actions.tsx",
         "Todos",
         GENERAL_ASYNC_ACTION_SOURCE,
-        "rust-general-async-actions-0.9.json",
+        "rust-general-async-actions-0.10.json",
     );
 }
 
@@ -572,19 +581,41 @@ fn rust_cookie_actions_lower_to_declared_capability_requests() {
     let module = parse_module("rust-cookie-actions.tsx", COOKIE_ACTION_SOURCE).unwrap();
     let modules = vec![module];
     let graph = build_semantic_graph(&modules, &Default::default()).unwrap();
-    let root = discover_root_component(&modules, &graph, "rust-cookie-actions.tsx", Some("CookieActions")).unwrap();
+    let root = discover_root_component(
+        &modules,
+        &graph,
+        "rust-cookie-actions.tsx",
+        Some("CookieActions"),
+    )
+    .unwrap();
     let hir = lower_root_component(&root, &graph).unwrap();
     let executable = lower_component_to_executable(&hir).unwrap();
     assert_eq!(executable.capabilities.len(), 2);
-    let sidebar = executable.capabilities.iter().find(|capability| capability.name == "sidebar").unwrap();
+    let sidebar = executable
+        .capabilities
+        .iter()
+        .find(|capability| capability.name == "sidebar")
+        .unwrap();
     assert_eq!(sidebar.operations, vec!["get", "set"]);
     assert_eq!(sidebar.path, "/");
     assert_eq!(sidebar.same_site.as_deref(), Some("lax"));
     assert_eq!(sidebar.secure, Some(true));
     assert_eq!(sidebar.expiry_modes, vec!["session", "maxAge"]);
-    assert!(executable.actions.iter().flat_map(|action| &action.instructions).any(|instruction| matches!(instruction,
-        plec_ir::ActionInstruction::CapabilityRequest { request: plec_ir::CapabilityRequest::Cookie { operation: "set", max_age: Some(60), .. }, .. }
-    )));
+    assert!(executable
+        .actions
+        .iter()
+        .flat_map(|action| &action.instructions)
+        .any(|instruction| matches!(
+            instruction,
+            plec_ir::ActionInstruction::CapabilityRequest {
+                request: plec_ir::CapabilityRequest::Cookie {
+                    operation: "set",
+                    max_age: Some(60),
+                    ..
+                },
+                ..
+            }
+        )));
     let serialized = serde_json::to_value(executable).unwrap();
     let cookie_request = serialized["actions"]
         .as_array()
@@ -592,8 +623,7 @@ fn rust_cookie_actions_lower_to_declared_capability_requests() {
         .iter()
         .flat_map(|action| action["instructions"].as_array().unwrap())
         .find(|instruction| {
-            instruction["capability"] == "cookie"
-                && instruction["request"]["operation"] == "set"
+            instruction["capability"] == "cookie" && instruction["request"]["operation"] == "set"
         })
         .unwrap();
     assert_eq!(cookie_request["request"]["maxAge"], 60);
@@ -604,26 +634,53 @@ fn rust_cookie_actions_lower_to_declared_capability_requests() {
 fn rust_refs_lower_to_non_reactive_slots_and_explicit_host_attachment() {
     let modules = vec![parse_module("refs.tsx", REF_SOURCE).unwrap()];
     let semantic = build_semantic_graph(&modules, &Default::default()).unwrap();
-    let root = discover_root_component(&modules, &semantic, "refs.tsx", Some("RefCounter")).unwrap();
+    let root =
+        discover_root_component(&modules, &semantic, "refs.tsx", Some("RefCounter")).unwrap();
     let hir = lower_root_component(&root, &semantic).unwrap();
     let app = lower_component_to_executable(&hir).unwrap();
     assert_eq!(app.ref_slots.len(), 1);
     assert_eq!(app.host_refs.len(), 1);
-    assert!(matches!(app.nodes[0], plec_ir::Node::Element { host_ref: Some(0), .. }));
+    assert!(matches!(
+        app.nodes[0],
+        plec_ir::Node::Element {
+            host_ref: Some(0),
+            ..
+        }
+    ));
     assert!(app.dependency_edges.is_empty());
-    assert!(app.actions.iter().flat_map(|action| &action.instructions).any(|instruction| matches!(instruction, plec_ir::ActionInstruction::StoreRef { reference: 0 })));
+    assert!(app
+        .actions
+        .iter()
+        .flat_map(|action| &action.instructions)
+        .any(|instruction| matches!(
+            instruction,
+            plec_ir::ActionInstruction::StoreRef { reference: 0 }
+        )));
 }
 
 #[test]
 fn rust_reactions_lower_to_edges_and_opaque_focus_operations() {
     let modules = vec![parse_module("reactions.tsx", REACTION_SOURCE).unwrap()];
     let semantic = build_semantic_graph(&modules, &Default::default()).unwrap();
-    let root = discover_root_component(&modules, &semantic, "reactions.tsx", Some("Reactions")).unwrap();
+    let root =
+        discover_root_component(&modules, &semantic, "reactions.tsx", Some("Reactions")).unwrap();
     let hir = lower_root_component(&root, &semantic).unwrap();
     let app = lower_component_to_executable(&hir).unwrap();
     assert_eq!(app.reactions.len(), 1);
-    assert!(app.dependency_edges.iter().any(|edge| edge.target.kind == "reaction"));
-    assert!(app.actions.iter().flat_map(|action| &action.instructions).any(|instruction| matches!(instruction, plec_ir::ActionInstruction::CaptureActiveElement { .. } | plec_ir::ActionInstruction::FocusHostRef { .. } | plec_ir::ActionInstruction::FocusRef { .. })));
+    assert!(app
+        .dependency_edges
+        .iter()
+        .any(|edge| edge.target.kind == "reaction"));
+    assert!(app
+        .actions
+        .iter()
+        .flat_map(|action| &action.instructions)
+        .any(|instruction| matches!(
+            instruction,
+            plec_ir::ActionInstruction::CaptureActiveElement { .. }
+                | plec_ir::ActionInstruction::FocusHostRef { .. }
+                | plec_ir::ActionInstruction::FocusRef { .. }
+        )));
 }
 
 #[test]
@@ -632,14 +689,31 @@ fn rust_svg_library_component_uses_namespace_and_explicit_props_spread() {
         parse_module("src/app.tsx", r#"import { Mark } from "@scope/icons/mark"; export function App() { return <Mark className="size-4" />; }"#).unwrap(),
         parse_module("packages/icons/src/mark.tsx", SVG_LIBRARY_SOURCE).unwrap(),
     ];
-    let imports = HashMap::from([(("src/app.tsx".into(), "@scope/icons/mark".into()), "packages/icons/src/mark.tsx".into())]);
+    let imports = HashMap::from([(
+        ("src/app.tsx".into(), "@scope/icons/mark".into()),
+        "packages/icons/src/mark.tsx".into(),
+    )]);
     let semantic = build_semantic_graph(&modules, &imports).unwrap();
     let root = discover_root_component(&modules, &semantic, "src/app.tsx", Some("App")).unwrap();
     let hir = lower_application(&modules, &root, &semantic).unwrap();
     let app = lower_application_to_executable(&hir).unwrap();
-    let mark = app.components.iter().find(|component| component.id.ends_with("#Mark")).unwrap();
-    assert!(matches!(mark.nodes[0], plec_ir::Node::Element { namespace: "svg", .. }));
-    assert!(mark.prop_programs.iter().flat_map(|program| &program.writes).any(|write| write.spread));
+    let mark = app
+        .components
+        .iter()
+        .find(|component| component.id.ends_with("#Mark"))
+        .unwrap();
+    assert!(matches!(
+        mark.nodes[0],
+        plec_ir::Node::Element {
+            namespace: "svg",
+            ..
+        }
+    ));
+    assert!(mark
+        .prop_programs
+        .iter()
+        .flat_map(|program| &program.writes)
+        .any(|write| write.spread));
     assert!(mark.strings.iter().any(|value| value == "stroke-width"));
 }
 
@@ -649,21 +723,39 @@ fn rust_dynamic_component_preserves_value_props_for_direct_props_targets() {
         parse_module("src/app.tsx", DYNAMIC_SVG_COMPONENT_SOURCE).unwrap(),
         parse_module("packages/icons/src/mark.tsx", SVG_LIBRARY_SOURCE).unwrap(),
     ];
-    let imports = HashMap::from([(("src/app.tsx".into(), "@scope/icons/mark".into()), "packages/icons/src/mark.tsx".into())]);
+    let imports = HashMap::from([(
+        ("src/app.tsx".into(), "@scope/icons/mark".into()),
+        "packages/icons/src/mark.tsx".into(),
+    )]);
     let semantic = build_semantic_graph(&modules, &imports).unwrap();
     let root = discover_root_component(&modules, &semantic, "src/app.tsx", Some("App")).unwrap();
     let hir = lower_application(&modules, &root, &semantic).unwrap();
     let app = lower_application_to_executable(&hir).unwrap();
-    let frame = app.components.iter().find(|component| component.id.ends_with("#Frame")).unwrap();
-    let dynamic_props = frame.nodes.iter().find_map(|node| match node {
-        plec_ir::Node::DynamicComponent { props, .. } => Some(props),
-        _ => None,
-    }).expect("Frame should render its component prop dynamically");
+    let frame = app
+        .components
+        .iter()
+        .find(|component| component.id.ends_with("#Frame"))
+        .unwrap();
+    let dynamic_props = frame
+        .nodes
+        .iter()
+        .find_map(|node| match node {
+            plec_ir::Node::DynamicComponent { props, .. } => Some(props),
+            _ => None,
+        })
+        .expect("Frame should render its component prop dynamically");
     assert!(dynamic_props.iter().any(|prop| matches!(prop,
         plec_ir::ComponentProp::Value { name, .. } if frame.strings[*name] == "className"
     )));
-    let mark = app.components.iter().find(|component| component.id.ends_with("#Mark")).unwrap();
-    assert!(mark.parameters.iter().any(|parameter| mark.strings[parameter.name] == "__plec_props"));
+    let mark = app
+        .components
+        .iter()
+        .find(|component| component.id.ends_with("#Mark"))
+        .unwrap();
+    assert!(mark
+        .parameters
+        .iter()
+        .any(|parameter| mark.strings[parameter.name] == "__plec_props"));
 }
 
 fn assert_component_fixture(path: &str, component: &str, source: &str, fixture_name: &str) {
@@ -677,13 +769,13 @@ fn assert_component_fixture(path: &str, component: &str, source: &str, fixture_n
     let executable =
         lower_application_to_executable(&application).expect("HIR should lower to component IR");
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/{fixture_name}",
+        "{}/../plec-runtime/tests/fixtures/{fixture_name}",
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("runtime fixture should exist");
     assert_eq!(
         serde_json::to_value(executable).unwrap(),
-        component_fixture_value(&fixture)
+        serde_json::from_str::<serde_json::Value>(&fixture).expect("fixture JSON should parse")
     );
 }
 
@@ -698,42 +790,13 @@ fn assert_fixture(path: &str, component: &str, source: &str, fixture_name: &str)
     let application = lower_component_to_executable(&hir).expect("Counter should lower to IR");
     let actual = serde_json::to_string_pretty(&application).expect("IR should serialize");
     let fixture = fs::read_to_string(format!(
-        "{}/../../packages/plec-runtime/crates/runtime/tests/fixtures/{fixture_name}",
+        "{}/../plec-runtime/tests/fixtures/{fixture_name}",
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("runtime fixture should exist");
 
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
-        artifact_fixture_value(&fixture)
+        serde_json::from_str::<serde_json::Value>(&fixture).expect("fixture JSON should parse")
     );
-}
-
-fn component_fixture_value(fixture: &str) -> serde_json::Value {
-    upgraded_fixture_value(fixture, plec_ir::COMPONENT_VERSION)
-}
-
-fn artifact_fixture_value(fixture: &str) -> serde_json::Value {
-    upgraded_fixture_value(fixture, plec_ir::VERSION)
-}
-
-fn upgraded_fixture_value(fixture: &str, version: &str) -> serde_json::Value {
-    fn upgrade(value: &mut serde_json::Value) {
-        match value {
-            serde_json::Value::Array(values) => values.iter_mut().for_each(upgrade),
-            serde_json::Value::Object(values) => {
-                if values.get("decode") == Some(&serde_json::Value::String("json".into())) {
-                    values.insert("decode".into(), serde_json::Value::String("responseJson".into()));
-                }
-                values.values_mut().for_each(upgrade);
-            }
-            _ => {}
-        }
-    }
-
-    let mut value: serde_json::Value =
-        serde_json::from_str(fixture).expect("fixture JSON should parse");
-    value["version"] = serde_json::Value::String(version.into());
-    upgrade(&mut value);
-    value
 }

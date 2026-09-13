@@ -1,0 +1,27 @@
+[package]
+name = "plec-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+futures-util.workspace = true
+thiserror.workspace = true
+indexmap.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+getrandom.workspace = true
+
+plec-ir = { path = "../plec-ir" }
+plec-schema = { path = "../plec-schema" }
+plec-action = { path = "../plec-action" }
+
+[dev-dependencies]
+tempfile.workspace = true

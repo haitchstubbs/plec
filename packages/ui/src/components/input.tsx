@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Input as InputPrimitive } from '@base-ui/react/input';
 
-import { cn } from '@wasm-runtime/ui/lib/utils';
+import { cn } from 'plec-ui/lib/utils';
 
 function Input({
   className,

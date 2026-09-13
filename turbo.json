@@ -9,17 +9,47 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**", "build/**"]
     },
-    "plec-runtime#build": {
-      "dependsOn": ["^build"],
+    "plec#build": {
+      "dependsOn": ["plec-browser#build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../../Cargo.lock",
+        "../../Cargo.toml",
+        "../../crates/**"
+      ],
       "outputs": ["dist/**"]
     },
-    "@wasm-runtime/fullstack#build": {
+    "fullstack#build": {
       "cache": false,
-      "dependsOn": ["plec-runtime#build"],
+      "dependsOn": ["plec#build"],
       "outputs": ["dist/**"]
     },
     "test": {
       "outputs": ["coverage/**"]
+    },
+    "test:e2e": {
+      "cache": false,
+      "persistent": false,
+      "dependsOn": ["fullstack#build"],
+      "env": ["E2E_PORT"],
+      "outputs": []
+    },
+    "test:acceptance": {
+      "cache": false,
+      "persistent": false,
+      "dependsOn": ["fullstack#build"],
+      "env": ["E2E_PORT"],
+      "outputs": []
+    },
+    "bench": {
+      "cache": false,
+      "dependsOn": ["fullstack#build"],
+      "env": [
+        "E2E_PORT",
+        "PLEC_BENCH_SAMPLES",
+        "PLEC_BENCHMARK_ORIGIN"
+      ],
+      "outputs": ["benchmarks/results/**"]
     },
     "lint": {
       "outputs": []

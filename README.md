@@ -28,7 +28,7 @@ Rust compiler pipeline (crates/*)
 Application artifact (route manifest + graph JSON)
   |
   v
-WASM runtime (packages/plec-runtime)
+WASM runtime assets (packages/plec/dist/runtime)
   reactive update handling, instruction execution, scheduler
   |
   v
@@ -47,7 +47,7 @@ packages/
   plec/               Framework runtime: jsx-runtime, state hooks, router
   plec-ir/            Shared IR schema (Zod) and validation
   plec-browser/       Browser glue: startPlecRouter, graph loading
-  plec-runtime/       Rust -> WASM runtime (crate under crates/runtime)
+  plec/               Release package and Rust -> WASM runtime assets
   ui/                 React/shadcn UI kit used by tooling pages
   lucide-plec/        Generated Lucide icon components for Plec
 crates/               Rust compiler workspace (parser -> sema -> HIR -> IR)
@@ -62,12 +62,12 @@ troubleshooting live in [docs/getting-started.md](docs/getting-started.md).
 
 ```sh
 yarn install
-yarn workspace plec-runtime build   # cargo check + wasm-pack -> dist/runtime
+yarn workspace plec build:runtime   # cargo check + wasm-pack -> packages/plec/dist/runtime
 yarn build                          # turbo: compile routes, bundle, brotli
-yarn workspace @wasm-runtime/fullstack dev
+yarn workspace fullstack dev
 ```
 
-The demo app serves on `http://localhost:3100` (override with `PORT`).
+The demo app serves on `http://localhost:3000` (override with `PORT`).
 
 ## Documentation
 

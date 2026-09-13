@@ -1,0 +1,103 @@
+{
+  "version": "0.10",
+  "rootComponent": 0,
+  "components": [
+    {
+      "id": "rust-component.tsx#App",
+      "rootNode": 0,
+      "strings": ["div", "title", "button", "click"],
+      "constants": ["one", "two"],
+      "nodes": [
+        {
+          "op": "element",
+          "tag": 0,
+          "parent": null,
+          "children": [1, 2]
+        },
+        {
+          "op": "component",
+          "component": 1,
+          "parent": 0,
+          "props": [{ "kind": "value", "name": 1, "expression": 1 }]
+        },
+        { "op": "element", "tag": 2, "parent": 0, "children": [] }
+      ],
+      "texts": [],
+      "bindings": [],
+      "propPrograms": [],
+      "events": [{ "target": 2, "type": 3, "action": 0 }],
+      "inputs": [],
+      "stateSlots": [{ "initialExpression": 0, "frameSlot": 0 }],
+      "parameters": [],
+      "expressions": [
+        {
+          "instructions": [
+            { "op": "constant", "constant": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "loadState", "state": 0 },
+            { "op": "return" }
+          ]
+        },
+        {
+          "instructions": [
+            { "op": "constant", "constant": 1 },
+            { "op": "return" }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "instructions": [
+            { "op": "evaluate", "expression": 2 },
+            { "op": "storeState", "state": 0 },
+            { "op": "return" }
+          ]
+        }
+      ],
+      "loops": [],
+      "dependencyEdges": [
+        {
+          "source": { "kind": "state", "handle": 0 },
+          "target": { "kind": "component", "handle": 1 }
+        }
+      ]
+    },
+    {
+      "id": "rust-component.tsx#Child",
+      "rootNode": 0,
+      "strings": ["title", "span"],
+      "constants": [],
+      "nodes": [
+        { "op": "element", "tag": 1, "parent": null, "children": [1] },
+        { "op": "text", "text": 0, "parent": 0 }
+      ],
+      "texts": [{ "binding": 0 }],
+      "bindings": [{ "target": 1, "sink": "text", "expression": 0 }],
+      "propPrograms": [],
+      "events": [],
+      "inputs": [],
+      "stateSlots": [],
+      "parameters": [{ "name": 0, "callable": false }],
+      "expressions": [
+        {
+          "instructions": [
+            { "op": "loadProp", "prop": 0 },
+            { "op": "return" }
+          ]
+        }
+      ],
+      "actions": [],
+      "loops": [],
+      "dependencyEdges": [
+        {
+          "source": { "kind": "prop", "handle": 0 },
+          "target": { "kind": "binding", "handle": 0 }
+        }
+      ]
+    }
+  ]
+}

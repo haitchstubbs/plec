@@ -2,14 +2,28 @@ use crate::{BindingId, ComponentId, ExprId, HirCallable, NodeId, SourceSpan};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirProp {
-    Static { name: String, value: String },
-    Expression { name: String, value: ExprId },
-    Callable { name: String, callable: HirCallable },
+    Static {
+        name: String,
+        value: String,
+    },
+    Expression {
+        name: String,
+        value: ExprId,
+    },
+    Callable {
+        name: String,
+        callable: HirCallable,
+    },
     /// A graph component handle.  Components deliberately cannot flow through
     /// the serializable expression/value language.
-    Component { name: String, target: ComponentId },
+    Component {
+        name: String,
+        target: ComponentId,
+    },
     /// A component's single declared props bag forwarded to an intrinsic node.
-    Spread { value: ExprId },
+    Spread {
+        value: ExprId,
+    },
 }
 
 /// DOM event binding on an intrinsic element.
@@ -80,6 +94,12 @@ pub struct HirComponentCall {
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirComponentTarget {
     Static(ComponentId),
+    /// An explicitly registered external renderer target. Host components do
+    /// not have a Plec component graph or descendant HIR.
+    Host {
+        provider: String,
+        component: String,
+    },
     /// A component-valued parameter, selected by the caller at mount time.
     Prop(BindingId),
 }

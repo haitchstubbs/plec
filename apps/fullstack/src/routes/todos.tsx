@@ -16,7 +16,10 @@ export const Route = createRoute({
   pendingComponent: TodosPending,
   errorComponent: TodosError,
   component: TodosPage,
-  meta: { title: 'Plec Todos', description: 'A Plec Todo API demonstration.' },
+  meta: {
+    title: 'Plec Todos',
+    description: 'A Plec Todo API demonstration.',
+  },
 });
 
 export function TodosPending() {

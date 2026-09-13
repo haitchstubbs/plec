@@ -1,0 +1,26 @@
+{
+  "name": "plec-eslint-config",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "A shared ESLint configuration for Haitchstack projects, providing a consistent linting setup across the monorepo",
+  "license": "MIT",
+  "author": {
+    "name": "Haitch Stubbs",
+    "email": "91310812+haitchstubbs@users.noreply.github.com",
+    "url": "https://github.com/haitchstubbs"
+  },
+  "exports": {
+    "./base": "./base.js",
+    "./node-package": "./node-package.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-only-warn": "^1.2.1",
+    "eslint-plugin-turbo": "^2.9.16",
+    "globals": "^16.5.0",
+    "typescript": "^7.0.2",
+    "typescript-eslint": "^8.61.0"
+  }
+}

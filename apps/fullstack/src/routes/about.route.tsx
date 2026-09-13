@@ -6,5 +6,8 @@ export const Route = createRoute({
   getParentRoute: () => rootRoute,
   path: 'about',
   component: AboutPage,
-  meta: { title: 'About Plec', description: 'About the Plec experimental runtime.' },
+  meta: {
+    title: 'About Plec',
+    description: 'About the Plec experimental runtime.',
+  },
 });

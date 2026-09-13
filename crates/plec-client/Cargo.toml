@@ -1,0 +1,38 @@
+[package]
+name = "plec-client"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+# Mirrors the wasm facade's `fetch` feature: compiles the async fetch action
+# VM and enables fetch capability validation in plec-schema.
+fetch = [
+  "dep:wasm-bindgen-futures",
+  "plec-schema/fetch",
+  "web-sys/AbortController",
+  "web-sys/AbortSignal",
+  "web-sys/Headers",
+  "web-sys/Request",
+  "web-sys/RequestCredentials",
+  "web-sys/RequestInit",
+  "web-sys/Response",
+  "web-sys/Url",
+  "web-sys/ReadableStream",
+  "web-sys/ReadableStreamDefaultReader",
+  "web-sys/TextDecoder",
+]
+
+[dependencies]
+plec-action = { path = "../plec-action" }
+js-sys = { workspace = true }
+plec-dom = { path = "../plec-dom" }
+plec-eval = { path = "../plec-eval" }
+plec-ir = { path = "../plec-ir" }
+plec-schema = { path = "../plec-schema" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde-wasm-bindgen = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+web-sys = { workspace = true }

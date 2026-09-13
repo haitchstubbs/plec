@@ -1,0 +1,250 @@
+//! Documented resource limits for untrusted inputs.
+//!
+//! Artifact bytes, runtime values, snapshots, fetch responses, source
+//! modules, and execution work arrive from sources that may be hostile
+//! (browser tabs, build workers, fetched responses). Byte envelopes bound
+//! transport and decode allocation; structural validation then rejects
+//! pathological decoded shapes before runtime execution. Values are generous:
+//! they must never reject
+//! legitimate compiled output, only pathological inputs. See
+//! docs/security-limits.md for the boundary-by-boundary contract.
+
+/// Maximum JSON byte length of a component application artifact or lazy
+/// graph payload decoded at the WASM boundary.
+pub const MAX_ARTIFACT_JSON_BYTES: usize = 16 * 1024 * 1024;
+
+/// Maximum JSON byte length of a workspace manifest read by the compiler.
+pub const MAX_MANIFEST_JSON_BYTES: usize = 1024 * 1024;
+
+/// Maximum JSON byte length of an SSR bootstrap snapshot decoded at the
+/// WASM boundary.
+pub const MAX_SNAPSHOT_JSON_BYTES: usize = 4 * 1024 * 1024;
+
+/// Maximum JavaScript byte length of the browser runtime module.
+pub const MAX_RUNTIME_JS_BYTES: usize = 16 * 1024 * 1024;
+
+/// Maximum JSON byte length of the browser host-provider manifest.
+pub const MAX_PROVIDER_MANIFEST_JSON_BYTES: usize = 1024 * 1024;
+
+/// Maximum JSON byte length of host inputs supplied by the embedding host.
+pub const MAX_HOST_INPUT_JSON_BYTES: usize = 1024 * 1024;
+
+/// Maximum nesting depth of a decoded runtime value (constant pool entry,
+/// host input, fetch response, snapshot export value).
+pub const MAX_VALUE_DEPTH: usize = 64;
+
+/// Maximum total number of nodes (elements across arrays and record
+/// entries) in one decoded runtime value tree.
+pub const MAX_VALUE_NODES: usize = 100_000;
+
+/// Maximum byte length of one string inside a runtime value tree.
+pub const MAX_VALUE_STRING_BYTES: usize = 1024 * 1024;
+
+/// Maximum number of component definitions in one application artifact. This
+/// is a pathological-shape guard; aggregate IR budgets enforce resource use.
+pub const MAX_COMPONENT_COUNT: usize = 65_536;
+
+/// Maximum total entries across executable-IR collections in one application.
+pub const MAX_TOTAL_IR_ENTRIES: usize = 1_000_000;
+
+/// Maximum total expression and action instructions in one application.
+pub const MAX_TOTAL_INSTRUCTIONS: usize = 1_000_000;
+
+/// Maximum total UTF-8 bytes across component string pools in one artifact.
+pub const MAX_TOTAL_STRING_POOL_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum total nodes across constant runtime-value trees in one artifact.
+pub const MAX_TOTAL_CONSTANT_NODES: usize = 1_000_000;
+
+/// Maximum length of any per-component IR collection (nodes, strings,
+/// constants, expressions, actions, bindings, ...).
+pub const MAX_COMPONENT_COLLECTION_LEN: usize = 100_000;
+
+/// Emergency maximum byte length of one string in a component string pool.
+/// Aggregate string-pool bytes are the primary budget.
+pub const MAX_COMPONENT_STRING_BYTES: usize = 1024 * 1024;
+
+/// Maximum instruction count of one expression program.
+pub const MAX_EXPRESSION_INSTRUCTIONS: usize = 10_000;
+
+/// Maximum instruction count of one action program.
+pub const MAX_ACTION_INSTRUCTIONS: usize = 10_000;
+
+/// Maximum JS-object nesting depth walked while normalizing a host-supplied
+/// payload before JSON round-tripping (bounds normalize recursion itself,
+/// independent of the JSON parser's depth guard).
+pub const MAX_DECODE_JS_DEPTH: usize = 128;
+
+/// Maximum total properties, elements, and nodes walked while normalizing a
+/// host-supplied JS payload before JSON round-tripping (bounds normalization
+/// width and allocation before stringification).
+pub const MAX_DECODE_JS_NODES: usize = 1_000_000;
+
+/// Maximum number of observed paths in one snapshot input shape.
+pub const MAX_SNAPSHOT_SHAPE_PATHS: usize = 1_024;
+
+/// Maximum segments in one observed snapshot path of a snapshot input shape.
+pub const MAX_SNAPSHOT_SHAPE_PATH_SEGMENTS: usize = 64;
+
+/// Maximum bytes of one source module file read by the compiler.
+pub const MAX_SOURCE_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Maximum import-chain depth of the compiler source graph traversal.
+pub const MAX_IMPORT_DEPTH: usize = 128;
+
+/// Maximum number of modules in one compiled source graph.
+pub const MAX_MODULE_COUNT: usize = 4_096;
+
+/// Maximum aggregate bytes across every source module read for one compiled
+/// source graph. Without this, per-file caps alone admit roughly
+/// `MAX_MODULE_COUNT * MAX_SOURCE_FILE_BYTES` of source input.
+pub const MAX_TOTAL_SOURCE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Maximum number of workspace packages the compiler indexes from the
+/// repository `packages/` directory while resolving bare import specifiers.
+pub const MAX_WORKSPACE_PACKAGE_COUNT: usize = 1_024;
+
+/// Maximum total HIR nodes and expressions across one compiled application.
+/// Mirrors `MAX_TOTAL_IR_ENTRIES` at the artifact boundary so an oversized
+/// application fails in the compiler instead of growing compiler memory
+/// without bound before serialization.
+pub const MAX_TOTAL_HIR_ENTRIES: usize = 1_000_000;
+
+/// Maximum nesting depth of the compile-time component-call graph. The
+/// component walk in the HIR builder recurses per call target, so this bounds
+/// the compiler's own recursion depth independent of the component count.
+pub const MAX_COMPONENT_NESTING_DEPTH: usize = 128;
+
+/// Maximum interpreter steps for one typed expression evaluation
+/// (including nested Filter/Map predicate work).
+pub const MAX_EXPRESSION_STEPS: usize = 100_000;
+
+/// Maximum Filter/Map nesting depth inside one expression evaluation.
+pub const MAX_EVAL_NESTING: usize = 32;
+
+/// Maximum interpreter steps across one action continuation run.
+pub const MAX_ACTION_STEPS: usize = 1_000_000;
+
+/// Maximum depth of action `Call` continuation stacking.
+pub const MAX_CALL_DEPTH: usize = 64;
+
+/// Maximum total reaction executions in one top-level reaction drain.
+pub const MAX_REACTION_STEPS: usize = 10_000;
+
+/// Maximum nesting depth of reaction drains. Reaction actions re-enter
+/// refresh_state and drain again, so this bounds the recursion itself.
+pub const MAX_REACTION_DRAIN_DEPTH: usize = 32;
+
+/// Maximum byte length of a fetch response body decoded into a runtime
+/// value.
+pub const MAX_FETCH_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum simultaneous browser fetches across all mounted graph instances.
+pub const MAX_IN_FLIGHT_FETCHES: usize = 128;
+
+/// Maximum fetches initiated by one logical action execution, including
+/// continuations, nested calls, and finalizers.
+pub const MAX_FETCHES_PER_ACTION: usize = 128;
+
+/// Maximum aggregate response-body bytes charged to one logical action
+/// execution.
+pub const MAX_FETCH_BYTES_PER_ACTION: usize = 16 * 1024 * 1024;
+
+/// Maximum rows one loop reconcile may project before allocating row state.
+pub const MAX_LOOP_ROWS: usize = 10_000;
+
+/// Maximum live ownership regions across all mounted graph instances. Rows,
+/// conditional branches, and graph instances each hold one region slot.
+pub const MAX_MOUNTED_REGIONS: usize = 100_000;
+
+/// Maximum nesting depth of one `instantiate_node` mount chain. Topology
+/// validation makes node ownership acyclic, but a validated chain may still
+/// reach `MAX_COMPONENT_COLLECTION_LEN` nodes deep; this bounds the mount
+/// recursion itself so a deep linear graph fails with a diagnostic instead of
+/// overflowing the WASM stack.
+pub const MAX_MOUNT_DEPTH: usize = 128;
+
+/// Maximum structural depth of one validated node-ownership tree (graph
+/// root or loop row template to leaf). Topology validation rejects deeper
+/// graphs at the artifact boundary, so mount, adoption, and SSR rendering
+/// recursion only ever walk graphs within this bound — the same ceiling the
+/// mount budget enforces at runtime (`MAX_MOUNT_DEPTH`).
+pub const MAX_NODE_GRAPH_DEPTH: usize = 128;
+
+/// Maximum `frameSlots` of one action program. Slots are a per-frame
+/// `Vec<RuntimeValue>` allocation sized directly from this field, so an
+/// untrusted artifact must not be able to request an arbitrary allocation
+/// (legitimate lowering reserves a handful of slots per action).
+pub const MAX_FRAME_SLOTS: usize = 4096;
+
+/// Maximum number of live values on one expression-evaluation stack.
+/// Legitimate expression trees are shallow; this bounds pathological
+/// constant-pushing programs that instruction fuel alone would only slow.
+pub const MAX_EVAL_STACK_VALUES: usize = 1_000;
+
+/// Maximum estimated byte size of the values live on one expression
+/// evaluation stack. `Constant` deep-clones whole constant-pool trees, so
+/// value-count accounting alone cannot bound memory (one value may hold
+/// `MAX_VALUE_NODES` nodes). Size is charged when a value is pushed.
+pub const MAX_EVAL_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum native call-stack depth of one SSR `render_node` walk. The
+/// native renderer walks compiler-validated acyclic graphs, but graph depth
+/// is bounded by validation, not by the native stack, so the walk fails
+/// closed before deep chains can overflow it.
+pub const MAX_SSR_RENDER_DEPTH: usize = 256;
+
+/// Maximum native call-stack bytes one `instantiate_node` mount chain may
+/// consume. The logical `MAX_MOUNT_DEPTH` budget cannot guarantee stack
+/// safety on its own because instantiation frames vary with node kind and
+/// build profile (debug frames are orders of magnitude larger than release
+/// frames), so mount recursion also tracks a stack watermark from the
+/// outermost frame and fails with a diagnostic before the native stack —
+/// the default 1 MiB wasm32 stack in every profile — can overflow.
+pub const MAX_MOUNT_STACK_BYTES: usize = 512 * 1024;
+
+/// Maximum DOM operations one top-level reconcile transaction may perform,
+/// including deferred component work it causes.
+pub const MAX_DOM_OPERATIONS_PER_RECONCILE: usize = 500_000;
+
+/// Maximum byte length of an inbound HTTP request body buffered by the
+/// dev server.
+pub const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
+
+/// Maximum number of routes in a manifest.
+pub const MAX_MANIFEST_ROUTES: usize = 2_048;
+
+/// Maximum number of route-chain entries, loader outcomes, structure
+/// graphs, and public exports in one SSR snapshot.
+pub const MAX_SNAPSHOT_ENTRIES: usize = 2_048;
+
+/// Maximum number of loop keys recorded for one loop node in a snapshot.
+pub const MAX_SNAPSHOT_LOOP_KEYS: usize = 10_000;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn limits_leave_headroom_above_legitimate_output() {
+        // The compiled demo application is far below every cap; if a limit
+        // ever shrinks below real output, this guards the floor.
+        assert!(MAX_ARTIFACT_JSON_BYTES >= 1024 * 1024);
+        assert!(MAX_RUNTIME_JS_BYTES >= 1024 * 1024);
+        assert!(MAX_PROVIDER_MANIFEST_JSON_BYTES >= 1024 * 1024);
+        assert!(MAX_COMPONENT_COUNT >= 64);
+        assert!(MAX_COMPONENT_COLLECTION_LEN >= 1_000);
+        assert!(MAX_IMPORT_DEPTH >= 16);
+        assert!(MAX_MODULE_COUNT >= 64);
+        assert!(MAX_TOTAL_SOURCE_BYTES >= 1024 * 1024);
+        assert!(MAX_WORKSPACE_PACKAGE_COUNT >= 64);
+        assert!(MAX_TOTAL_HIR_ENTRIES >= 100_000);
+        assert!(MAX_COMPONENT_NESTING_DEPTH >= 64);
+        assert!(MAX_MOUNT_DEPTH >= 64);
+        assert!(MAX_NODE_GRAPH_DEPTH >= 64);
+        assert!(MAX_FRAME_SLOTS >= 64);
+        assert!(MAX_EVAL_STACK_VALUES >= 100);
+        assert!(MAX_EVAL_STACK_BYTES >= 1024 * 1024);
+        assert!(MAX_SSR_RENDER_DEPTH >= 64);
+    }
+}

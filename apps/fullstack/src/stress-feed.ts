@@ -75,7 +75,8 @@ function createDeltaCollection<Row extends { id: string }>(
       },
     },
     values: () => rows,
-    publish: (deltas) => listeners.forEach((listener) => listener(deltas)),
+    publish: (deltas) =>
+      listeners.forEach((listener) => listener(deltas)),
   };
 }
 
@@ -100,7 +101,7 @@ function clock(tick: number): string {
 function initialInstrument(index: number): Instrument {
   const symbol = `PX${String(index + 1).padStart(4, '0')}`;
   const last = money(24 + ((index * 73) % 21_000) / 100);
-  const change = money(((index * 19) % 500 - 250) / 100);
+  const change = money((((index * 19) % 500) - 250) / 100);
   return {
     id: symbol,
     symbol,
@@ -118,7 +119,10 @@ function initialInstrument(index: number): Instrument {
 
 function makeSummary(rows: Instrument[]): Summary {
   const totalValue = rows.reduce((total, row) => total + row.last, 0);
-  const totalVolume = rows.reduce((total, row) => total + row.volume, 0);
+  const totalVolume = rows.reduce(
+    (total, row) => total + row.volume,
+    0,
+  );
   return {
     id: 'summary',
     active: rows.filter((row) => row.status === 'active').length,
@@ -157,7 +161,9 @@ export function createRuntimeStressFeed(): {
   );
   const byId = new Map(instruments.map((row) => [row.id, row]));
   const instrumentInput = createDeltaCollection(instruments);
-  const summaryInput = createDeltaCollection([makeSummary(instruments)]);
+  const summaryInput = createDeltaCollection([
+    makeSummary(instruments),
+  ]);
   const events = Array.from({ length: 20 }, (_, index) => ({
     id: `boot-${index}`,
     time: '14:00:00',
@@ -206,7 +212,8 @@ export function createRuntimeStressFeed(): {
         beforeRowKey: current[1]?.id ?? null,
       },
     ];
-    const removed = current.length > EVENT_LIMIT ? current.pop() : undefined;
+    const removed =
+      current.length > EVENT_LIMIT ? current.pop() : undefined;
     if (removed)
       deltas.push({
         type: 'remove',
@@ -246,7 +253,9 @@ export function createRuntimeStressFeed(): {
         next.updatedAt = clock(tick);
       }
       const changes = Object.fromEntries(
-        Object.entries(next).filter(([key, value]) => value !== previous[key as keyof Instrument]),
+        Object.entries(next).filter(
+          ([key, value]) => value !== previous[key as keyof Instrument],
+        ),
       );
       instruments[index] = next;
       byId.set(next.id, next);
@@ -254,9 +263,13 @@ export function createRuntimeStressFeed(): {
         summary.averageValue + (next.last - previous.last) / ROW_COUNT,
       );
       summary.totalVolume += next.volume - previous.volume;
-      summary.active += Number(next.status === 'active') - Number(previous.status === 'active');
-      summary.positiveMovers += Number(next.change >= 0) - Number(previous.change >= 0);
-      summary.negativeMovers += Number(next.change < 0) - Number(previous.change < 0);
+      summary.active +=
+        Number(next.status === 'active') -
+        Number(previous.status === 'active');
+      summary.positiveMovers +=
+        Number(next.change >= 0) - Number(previous.change >= 0);
+      summary.negativeMovers +=
+        Number(next.change < 0) - Number(previous.change < 0);
       deltas.push({
         type: 'update',
         inputId: 'instruments',
@@ -271,7 +284,10 @@ export function createRuntimeStressFeed(): {
     phase = undefined;
     const elapsed = performance.now() - started;
     rollingCount = Math.min(rollingCount + 1, 50);
-    rollingTotal = rollingTotal + elapsed - (rollingCount === 50 ? rollingTotal / 50 : 0);
+    rollingTotal =
+      rollingTotal +
+      elapsed -
+      (rollingCount === 50 ? rollingTotal / 50 : 0);
     publishSummary({
       averageValue: summary.averageValue,
       totalVolume: summary.totalVolume,
@@ -280,14 +296,30 @@ export function createRuntimeStressFeed(): {
       negativeMovers: summary.negativeMovers,
       latestUpdateMs: elapsed,
       rollingUpdateMs: rollingTotal / rollingCount,
-      domOperations: (runtimeUpdate as CompiledQueryUpdate | undefined)?.domOperations ?? 0,
-      bindingsTouched: (runtimeUpdate as CompiledQueryUpdate | undefined)?.bindingsTouched ?? 0,
-      nodesTouched: (runtimeUpdate as CompiledQueryUpdate | undefined)?.nodesTouched ?? 0,
-      propWrites: (runtimeUpdate as CompiledQueryUpdate | undefined)?.propWrites ?? 0,
-      rowInserts: (runtimeUpdate as CompiledQueryUpdate | undefined)?.rowInserts ?? 0,
-      rowRemoves: (runtimeUpdate as CompiledQueryUpdate | undefined)?.rowRemoves ?? 0,
-      rowMoves: (runtimeUpdate as CompiledQueryUpdate | undefined)?.rowMoves ?? 0,
-      wasmDomUs: (runtimeUpdate as CompiledQueryUpdate | undefined)?.wasmDomUs ?? 0,
+      domOperations:
+        (runtimeUpdate as CompiledQueryUpdate | undefined)
+          ?.domOperations ?? 0,
+      bindingsTouched:
+        (runtimeUpdate as CompiledQueryUpdate | undefined)
+          ?.bindingsTouched ?? 0,
+      nodesTouched:
+        (runtimeUpdate as CompiledQueryUpdate | undefined)
+          ?.nodesTouched ?? 0,
+      propWrites:
+        (runtimeUpdate as CompiledQueryUpdate | undefined)
+          ?.propWrites ?? 0,
+      rowInserts:
+        (runtimeUpdate as CompiledQueryUpdate | undefined)
+          ?.rowInserts ?? 0,
+      rowRemoves:
+        (runtimeUpdate as CompiledQueryUpdate | undefined)
+          ?.rowRemoves ?? 0,
+      rowMoves:
+        (runtimeUpdate as CompiledQueryUpdate | undefined)?.rowMoves ??
+        0,
+      wasmDomUs:
+        (runtimeUpdate as CompiledQueryUpdate | undefined)?.wasmDomUs ??
+        0,
     });
     const firstDelta = deltas[0]!;
     const representative = byId.get(firstDelta.rowKey)!;
@@ -304,7 +336,8 @@ export function createRuntimeStressFeed(): {
       events: eventInput.input,
     },
     start: () => {
-      if (timer === undefined) timer = window.setInterval(runTick, TICK_INTERVAL);
+      if (timer === undefined)
+        timer = window.setInterval(runTick, TICK_INTERVAL);
     },
     stop: () => {
       if (timer !== undefined) window.clearInterval(timer);

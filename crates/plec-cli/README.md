@@ -4,11 +4,32 @@ Command-line tooling for compiling and inspecting Plec applications.
 
 The CLI exposes the Plec compiler pipeline directly, making it possible to inspect executable IR, route manifests, and compiler state without starting a browser runtime or development server.
 
+## Dev CLI vs app CLI
+
+The `plec` binary contains two frontends: the **dev CLI** (compiler inspection: `inspect`, `raw`, `routes`, `build`) and the **app CLI**. Which frontend handles a command is selected at **compile time**, not process startup:
+
+- `crates/plec-cli/build.rs` lifts `PLEC_CLI_VERSION` from `.env.plec` at the workspace root (parsed with `dotenvy`) and bakes it into the crate with `cargo:rustc-env`.
+- `lib.rs` selects the frontend with `option_env!("PLEC_CLI_VERSION")`: `release` selects the app CLI, any other value (or an absent variable) keeps the dev CLI.
+
+Because the selection is baked in, changing `.env.plec` triggers a rebuild of the CLI through the build script's `rerun-if-changed` directive, and an explicitly exported `PLEC_CLI_VERSION` in the build environment wins over the file:
+
+```bash
+# .env.plec
+PLEC_CLI_VERSION='release'
+
+# pick up the change in the binary
+cargo build -p plec-cli
+```
+
 ## Usage
 
 ```bash
 plec <command>
 ```
+
+Both frontends support `plec --version`, which prints the Plec product
+SemVer compiled from the workspace package metadata (see
+[Product version](#product-version)).
 
 Available commands:
 
@@ -16,6 +37,8 @@ Available commands:
 inspect   Query the compiled application
 raw       Print the compiled executable application
 routes    Print the application's route manifest
+build     Compile a routed application into deployable artifacts
+workspace Developer workflow helpers (dev frontend only)
 ```
 
 ## `raw`
@@ -126,34 +149,6 @@ The exact manifest structure is defined by the current Plec route IR.
 
 ---
 
-## Running from the workspace
-
-During development, the CLI can be run directly through Cargo:
-
-```bash
-cargo run -p plec-cli -- raw apps/fullstack/src/main.tsx
-```
-
-```bash
-cargo run -p plec-cli -- routes apps/fullstack/src/main.tsx
-```
-
-```bash
-cargo run -p plec-cli -- inspect apps/fullstack/src/main.tsx '{ components { id } }'
-```
-
-To see Clap's generated help:
-
-```bash
-cargo run -p plec-cli -- --help
-```
-
-or:
-
-```bash
-plec --help
-```
-
 ## Compiler pipeline
 
 The CLI intentionally uses the same compiler crates as the rest of Plec rather than maintaining a separate inspection path.
@@ -177,11 +172,344 @@ This makes the CLI useful as a thin debugging surface over the canonical compile
 
 ## Commands at a glance
 
-| Command        | Input                | Output              | Purpose                            |
-| -------------- | -------------------- | ------------------- | ---------------------------------- |
-| `plec raw`     | Source entry         | Executable IR JSON  | Inspect complete compiler output   |
-| `plec inspect` | Source entry + query | Query result JSON   | Targeted inspection of compiled IR |
-| `plec routes`  | Source entry         | Route manifest JSON | Inspect router compilation         |
+| Command            | Input                | Output              | Purpose                            |
+| ------------------ | -------------------- | ------------------- | ---------------------------------- |
+| `plec raw`         | Source entry         | Executable IR JSON  | Inspect complete compiler output   |
+| `plec inspect`     | Source entry + query | Query result JSON   | Targeted inspection of compiled IR |
+| `plec routes`      | Source entry         | Route manifest JSON | Inspect router compilation         |
+| `plec workspace …` | Workspace state      | Reports/captures    | Developer workflow helpers (below) |
+
+---
+
+# `plec workspace` — developer workflow helpers
+
+The `workspace` group encodes the validation and investigation workflows of
+the Plec workspace itself. Each command exists because agents and developers
+kept rebuilding the same context by hand: repo topology, protocol
+invariants, test-failure details, and artifact provenance.
+
+`workspace` belongs to the **dev CLI frontend only** — the release (app)
+frontend
+never exposes it. Which frontend is built is selected at compile time (see
+[Dev CLI vs app CLI](#dev-cli-vs-app-cli)). For workspace work install the
+dev frontend:
+
+```bash
+yarn install:plec-cli:dev
+```
+
+Every `workspace` command accepts `--json` for machine-readable output.
+
+## `plec workspace compile`
+
+Compile the Plec-owned runtime WASM artifact. The WASM runtime is a Plec
+asset, not a consumer asset: applications stage whatever
+`packages/plec/dist/runtime` contains and never compile it
+themselves, so the build entry point lives in the dev frontend rather than
+in `plec build`. The pipeline itself stays in `scripts/build-wasm.mjs`
+(wasm-pack → wasm-tools strip → protocol stamp → brotli sidecars →
+provenance); this command runs it and reads the result back so the summary
+reports what the fresh binary actually implements.
+
+```bash
+plec workspace compile                    # full profile, optimized
+plec workspace compile --profile fetch    # toolchain profile: full|core|router|fetch
+plec workspace compile --features fetch   # extra cargo features
+plec workspace compile --no-optimize      # skip wasm-tools strip
+plec workspace compile --json             # machine-readable summary
+```
+
+`plec build` deliberately does not invoke this: producer and verifier stay
+separate layers, so `plec workspace artifact stale` audits a build it did not
+perform. `plec build` stages the artifact this command produced and fails
+loudly (with a pointer here) when it is missing.
+
+## `plec workspace version`
+
+Show, set, or verify the canonical Plec product SemVer. The product version
+is declared once in the Cargo workspace (`[workspace.package] version` in the
+root `Cargo.toml`) and mirrored by `packages/plec/package.json`, the release
+artifact's public metadata; the CLI reports the same value through
+`plec --version` because plec-cli inherits the workspace version.
+
+```bash
+plec workspace version                 # print both declarations
+plec workspace version --check         # verify consistency; exit non-zero on drift
+plec workspace version --set 0.2.0     # update every authoritative declaration
+```
+
+`--set` validates SemVer (including prerelease/build metadata) before
+touching disk and updates exactly the two authoritative files — dependency
+pins, protocol constants, and everything else stay byte-identical.
+
+### Product version vs protocol versions
+
+The Plec **release version** (SemVer) is independent from every
+compatibility contract: `plec_ir::VERSION` / `COMPONENT_VERSION`, the route
+manifest schema, `SSR_SNAPSHOT_VERSION`, the Node sidecar protocol, and the
+DOM marker/address protocols. A product bump never modifies those constants,
+and changing a protocol version does not by itself dictate a product bump —
+release policy decides. Build revision/content hashes, not SemVer, remain the
+authority for exact artifact freshness.
+
+## `plec workspace test wasm` / `plec workspace test last`
+
+Run the WASM browser suite once, capture the output, and query it without
+re-running.
+
+```bash
+plec workspace test wasm                        # full suite, live output + capture
+plec workspace test wasm nested_component       # filters forwarded to wasm-pack
+plec workspace test wasm --failures             # print only the parsed failures
+plec workspace test last                        # summary of the last run
+plec workspace test last --failure nested_loop  # failures matching a substring
+plec workspace test last --json                 # the captured report as JSON
+```
+
+The runner spawns `packages/plec-e2e/scripts/wasm-harness.mjs` (the canonical
+Playwright browser-toolchain runner, which single-sources ChromeDriver/Chrome
+resolution for wasm-pack), tees output live, and parses the wasm-bindgen-test
+noise into a structured report:
+
+```text
+2 / 87 failed
+
+nested_component_loop_without_record_fails_closed
+  crates/plec-runtime/tests/typed_events.rs:3857
+  called `Result::unwrap()` on an `Err` value: JsValue("missing:ssr-loop:…")
+```
+
+Captures live in `.cache/plec/test-wasm/` (`last.json` + `last.log`), which
+is gitignored. Agents should never re-run the whole suite just to re-read a
+failure — query the capture instead.
+
+> Note: when wasm test orchestration moves under `packages/plec-e2e`'
+> Playwright ownership, only the spawn step changes; the capture/parse layer
+> is invocation-independent.
+
+## `plec workspace artifact provenance` / `plec workspace artifact stale`
+
+The runtime flows through a pipeline — source crate → wasm-pack →
+`packages/plec/dist/runtime` → staged copy in
+`apps/fullstack/dist/public/runtime` — and sessions keep tripping over
+"am I testing source, package dist, or staged dist?". Two staleness shapes
+are checked:
+
+- **build identity** — the file on disk vs the hash recorded in
+  `provenance.json` at build time, and the staged copy vs package dist;
+- **protocol drift** — which SSR snapshot protocol the binary actually
+  implements, read from the `plec-protocol` WASM custom section
+  (crates/plec-runtime/src/lib.rs embeds it from the plec-ir constants;
+  `scripts/build-wasm.mjs` guarantees it survives optimization).
+
+```bash
+plec workspace artifact provenance runtime   # full report
+plec workspace artifact stale                # terse gate; non-zero on staleness
+```
+
+```text
+package dist               OK
+app staged                 STALE
+  ✗ STALE: implements snapshot protocol 1, source is 2
+```
+
+Both commands exit non-zero on problems, so they gate scripts.
+
+## `plec workspace verify adoption`
+
+Run the complete adoption validation matrix in one command. The command runs
+the runtime compile and unit gates, WASM browser tests, browser package tests,
+browser typecheck, adoption E2E specs, and the staged-artifact freshness gate.
+It continues through every stage so one run exposes the complete failure set.
+
+```bash
+plec workspace verify adoption       # concise stage report
+plec workspace verify adoption --json
+```
+
+WASM output remains captured in `.cache/plec/test-wasm/`, so
+`plec workspace test last` still works after verification. Failed stages print
+matching adoption error codes when available and the final report points to
+`plec workspace doctor adoption` for structural diagnosis.
+
+## `plec workspace contract ssr`
+
+The SSR protocol has three versioned boundaries — snapshot
+(`SSR_SNAPSHOT_VERSION`), bootstrap wrapper, route manifest — that must
+agree across Rust sources/fixtures, the TypeScript server and browser glue,
+e2e tests, and the docs. A bump that misses one site (a loader fixture
+hard-coding the old version) historically surfaced only as a confusing
+runtime failure.
+
+```bash
+plec workspace contract ssr            # report every site's version
+plec workspace contract ssr --check    # exit non-zero on any conflict
+```
+
+```text
+SSR protocol contract
+
+Snapshot
+  canonical version       2  crates/plec-ir/src/lib.rs (compiled into plec-cli: 2)
+  definition                2  crates/plec-ir/src/lib.rs:171  definition ✓
+  runtime gate              —  crates/plec-runtime/src/runtime/lifecycle.rs:460  constant ref
+  runtime fixtures          2  crates/plec-runtime/tests/typed_events.rs:2630  ✓
+  server producer           —  crates/plec-server/src/ssr/snapshot.rs:21  constant ref
+  …
+
+✓ no stale hard-coded protocol versions
+```
+
+Intentional legacy literals (fixtures exercising the fail-closed gates) are
+allowlisted per site and reported with `~` rather than treated as conflicts.
+
+## `plec workspace trace <symbol-or-error-code>`
+
+Categorized search: where a symbol or adoption error code is defined,
+produced, asserted, and documented.
+
+```bash
+plec workspace trace unsupported:ssr-snapshot-version
+plec workspace trace SSR_SNAPSHOT_VERSION
+```
+
+```text
+unsupported:ssr-snapshot-version
+
+RELATED CONTRACT
+  SSR_SNAPSHOT_VERSION = 2 (crates/plec-ir/src/lib.rs)
+
+PRODUCED BY
+  crates/plec-runtime/src/runtime/lifecycle.rs:461  return Err(…)
+
+ASSERTED BY
+  crates/plec-runtime/tests/typed_events.rs:2747  "unsupported:ssr-snapshot-version"
+
+DOCUMENTED BY
+  docs/ssr-architecture.md:81  > **Contract evolution:** …
+```
+
+## `plec workspace impact <symbol-or-protocol-constant>`
+
+Change-impact companion to `trace`: everything a change to a symbol or
+protocol constant would touch, grouped by layer — Rust
+definitions/consumers/fixtures, TypeScript glue/tests, e2e specs, docs. For
+tracked protocol boundaries (`SSR_SNAPSHOT_VERSION`,
+`BOOTSTRAP_WRAPPER_VERSION`, `PROVIDER_MANIFEST_VERSION`, `RouteManifest`)
+it also prints the contract-scanner registry: every versioned site,
+including ones that hard-code literals without naming the symbol. Sites
+allowlisted as intentional legacy literals are marked `review on change` —
+a version bump must consciously re-decide them (the typed-events fixture
+that kept snapshot v1 after the v2 bump hid exactly there).
+
+```bash
+plec workspace impact SSR_SNAPSHOT_VERSION
+plec workspace impact unsupported:ssr-snapshot-version
+plec workspace impact registerPlecProviders --json
+```
+
+The command is informational and always exits zero; `contract ssr --check`
+remains the gate.
+
+## `plec workspace graph resolve` / `plec workspace graph tree`
+
+Compile an application through the route-artifact pipeline and inspect graph
+registry resolution without reconstructing runtime lifecycle rules. Resolution
+first checks a direct registry key, then searches component ids in registered
+applications. Missing graph ids report the runtime's fail-closed outcome and
+exit non-zero.
+
+```bash
+plec workspace graph resolve app
+plec workspace graph resolve Panel --source apps/fullstack/src/router.tsx
+plec workspace graph tree app
+plec workspace graph tree Panel --json
+```
+
+`tree` renders only the resolved component's local node program: elements,
+conditional branches, keyed loop row templates, component calls and call-site
+children, plus dynamic, host, and slot boundaries. Invalid handles or cycles
+are reported in output instead of crashing the debugger.
+
+## `plec workspace markers`
+
+Explain structural addresses or validate required markers against a compiled
+graph. Validation derives the expected marker set by walking the compiled
+graph — element `data-plec-node` addresses, conditional/component/slot
+boundary pairs, keyed loop rows, text marker adjacency — and diffs it against
+the HTML in document order.
+
+```bash
+plec workspace markers explain root/outlet:main/component:1/node:0
+plec workspace markers validate --graph app --html page.html
+plec workspace markers validate --graph app --html page.html --source apps/fullstack/src/router.tsx --json
+```
+
+Structural mode (default): loop rows match any recorded key (`key:*`
+wildcards, extra rows tolerated) and conditional interiors whose selected
+branch is unknown are optional. `--route /path` selects which manifest child
+renders into each route outlet (default: first non-wildcard child in manifest
+order). `--snapshot snapshot.json` switches to strict mode: the snapshot's
+`structure` records select every branch and keyed row, making the expected
+sequence fully concrete — missing markers, unexpected markers, and order
+inversions all fail with the matching adoption error code
+(`missing:ssr-component:...`, `mismatch:ssr-branch:...`).
+
+## `plec workspace context <domain>`
+
+Emit a compact architecture packet for a recurring workspace domain. Packets
+combine curated entry points, invariants, workflows, tests, and documentation
+with live protocol values and source-location checks. Supported domains are
+`ssr-adoption`, `routing`, `typed-events`, `cookies`, and `artifacts`.
+
+```bash
+plec workspace context ssr-adoption
+plec workspace context routing
+plec workspace context artifacts --json
+```
+
+The command fails when a curated source location disappears. This keeps the
+packet useful for new sessions instead of allowing stale architecture notes to
+silently spread.
+
+## `plec workspace doctor adoption`
+
+Health check for the SSR adoption pipeline, composing the checks above plus
+graph resolution:
+
+1. **Protocol** — do all versioned boundaries agree?
+2. **Graph resolution** — compiles the app (default:
+   `apps/fullstack/src/router.tsx`) and resolves every graph reference
+   through the runtime's registry semantics: direct registry key, or via a
+   registered application's components.
+3. **Nested execution** — which conditionals/loops each component contains,
+   i.e. what a snapshot v2 must record.
+4. **DOM markers** — with `--html <file>`: validates `plec:*` boundary
+   pairing and `data-plec-node` address grammar against
+   `docs/dom-address-protocol.md`.
+5. **Artifact provenance** — is built/staged WASM current and
+   protocol-consistent?
+
+```bash
+plec workspace doctor adoption
+plec workspace doctor adoption --route /
+plec workspace doctor adoption --html page.html
+plec workspace doctor adoption --snapshot captured-snapshot.json
+plec workspace doctor adoption --json
+```
+
+Exits non-zero when any section finds problems, and prints hints pointing at
+the specific follow-up command.
+
+## Running from the workspace
+
+During development, the CLI can be run directly through Cargo (note: the
+workspace default `.env.plec` bakes in the **dev** frontend, which carries
+`plec workspace`; the release variant stays app-commands-only):
+
+```bash
+cargo run -p plec-cli -- workspace doctor adoption
+```
 
 ## Status
 

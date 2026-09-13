@@ -1,6 +1,5 @@
 import { AppSidebar } from './app-sidebar';
-import { ChevronRight } from '@wasm-runtime/lucide-plec/icons/chevron-right';
-import { PanelLeft } from '@wasm-runtime/lucide-plec/icons/panel-left';
+import { ChevronRight, PanelLeft } from 'lucide';
 import {
   useState,
   useListener,
@@ -17,7 +16,10 @@ export function FullstackLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
   const setSidebarCollapsed = (next: boolean) => {
-    void cookie.set('sidebar_state', next ? 'false' : 'true', { path: '/', maxAge: 604800 });
+    void cookie.set('sidebar_state', next ? 'false' : 'true', {
+      path: '/',
+      maxAge: 604800,
+    });
     setCollapsed(next);
   };
   const closeMobile = () => setMobileOpen(false);
@@ -40,16 +42,17 @@ export function FullstackLayout() {
         ? 'About'
         : location.pathname === '/todos'
           ? 'Todos'
-          : location.pathname === '/stress'
-            ? 'Runtime stress'
-          : 'Not found';
+          : location.pathname === '/notes'
+            ? 'Notes'
+            : location.pathname === '/stress'
+              ? 'Runtime stress'
+              : 'Not found';
 
   return (
     <div className="min-h-svh md:[&_.plec-sidebar-inset]:ml-[17rem] md:has-[[data-collapsed=true]]:[&_.plec-sidebar-inset]:ml-16">
       <AppSidebar
         collapsed={collapsed}
         mobileOpen={mobileOpen}
-        pathname={location.pathname}
         onMobileToggle={() => {
           setMobileOpen(!mobileOpen);
         }}

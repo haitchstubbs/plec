@@ -1,0 +1,14 @@
+[package]
+name = "plec-router"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+js-sys = { workspace = true }
+plec-client = { path = "../plec-client" }
+plec-dom = { path = "../plec-dom" }
+plec-ir = { path = "../plec-ir" }
+plec-schema = { path = "../plec-schema" }
+serde_json = { workspace = true }
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true }

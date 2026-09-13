@@ -203,7 +203,11 @@ impl From<&ExecutableComponent> for ComponentInfo {
                 .collect(),
             events: component.events.iter().map(EventInfo::from).collect(),
             inputs: component.inputs.iter().map(InputInfo::from).collect(),
-            host_slots: component.host_slots.iter().map(HostSlotInfo::from).collect(),
+            host_slots: component
+                .host_slots
+                .iter()
+                .map(HostSlotInfo::from)
+                .collect(),
             capabilities: component
                 .capabilities
                 .iter()
@@ -446,6 +450,22 @@ impl From<&Node> for NodeInfo {
                 props: props.iter().map(ComponentPropInfo::from).collect(),
                 prop: Some(*prop),
             },
+            Node::HostComponent { parent, props, .. } => Self {
+                op: "hostComponent".into(),
+                tag: None,
+                namespace: None,
+                parent: *parent,
+                children: Vec::new(),
+                host_ref: None,
+                text: None,
+                test: None,
+                consequent: None,
+                alternate: None,
+                loop_: None,
+                component: None,
+                props: props.iter().map(ComponentPropInfo::from).collect(),
+                prop: None,
+            },
             Node::Slot { parent } => Self {
                 op: "slot".into(),
                 tag: None,
@@ -515,8 +535,16 @@ impl From<&plec_ir::ComponentProp> for ComponentPropInfo {
                 action: Some(*action),
                 component: None,
             },
-            plec_ir::ComponentProp::Component { name, component } => Self {
-                kind: "component".into(),
+            plec_ir::ComponentProp::Component {
+                name,
+                component,
+                host,
+            } => Self {
+                kind: if host.is_some() {
+                    "hostComponent".into()
+                } else {
+                    "component".into()
+                },
                 name: *name,
                 expression: None,
                 action: None,

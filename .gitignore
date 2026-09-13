@@ -14,6 +14,7 @@ node_modules/
 # Build outputs
 dist/
 build/
+!crates/plec-cli/src/com/build
 coverage/
 
 # Rust and WASM
@@ -24,6 +25,8 @@ coverage/
 .env
 .env.*
 !.env.benchmark
+!.env.devports
+!.env.example
 *.log
 
 # IDE and OS
@@ -34,8 +37,9 @@ Thumbs.db
 # Benchmark artifacts
 benchmarks/results/*
 
-# Generated Icon Files
-packages/lucide-plec/src/icons/
+# Playwright artifacts
+test-results/
+playwright-report/
 
 # Executable files
 *.exe
@@ -43,5 +47,18 @@ packages/lucide-plec/src/icons/
 # Temporary files
 .tmp
 
-# Chrome Drivers
-.tools/chromedriver-151
+# Local tooling (provisioned by scripts/setup.mjs) and build caches
+.tools/
+.cache/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+
+.vscode
+.yarn
+
+# Napi artifacts
+packages/plec-query/native

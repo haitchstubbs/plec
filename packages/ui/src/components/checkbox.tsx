@@ -1,6 +1,6 @@
 import { Checkbox as CheckboxPrimitive } from '@base-ui/react/checkbox';
 
-import { cn } from '@wasm-runtime/ui/lib/utils';
+import { cn } from 'plec-ui/lib/utils';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Tick02Icon } from '@hugeicons/core-free-icons';
 

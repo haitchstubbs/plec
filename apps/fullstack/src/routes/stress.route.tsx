@@ -6,5 +6,8 @@ export const Route = createRoute({
   getParentRoute: () => rootRoute,
   path: 'stress',
   component: RuntimeStressPage,
-  meta: { title: 'Plec runtime stress', description: 'Plec keyed DOM update stress fixture.' },
+  meta: {
+    title: 'Plec runtime stress',
+    description: 'Plec keyed DOM update stress fixture.',
+  },
 });
