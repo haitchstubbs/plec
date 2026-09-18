@@ -484,19 +484,5 @@ pub fn typed_location(href: &str) -> TypedLocation {
 }
 
 pub fn ssr_snapshot_value(value: &plec_ir::SsrSnapshotValue) -> RuntimeValue {
-    match value {
-        plec_ir::SsrSnapshotValue::Null => RuntimeValue::Null,
-        plec_ir::SsrSnapshotValue::Bool(value) => RuntimeValue::Bool(*value),
-        plec_ir::SsrSnapshotValue::Number(value) => RuntimeValue::Number(*value),
-        plec_ir::SsrSnapshotValue::String(value) => RuntimeValue::String(value.clone()),
-        plec_ir::SsrSnapshotValue::Array(values) => {
-            RuntimeValue::Array(values.iter().map(ssr_snapshot_value).collect())
-        }
-        plec_ir::SsrSnapshotValue::Record(values) => RuntimeValue::Record(
-            values
-                .iter()
-                .map(|(key, value)| (key.clone(), ssr_snapshot_value(value)))
-                .collect(),
-        ),
-    }
+    RuntimeValue::from_ssr_snapshot(value)
 }

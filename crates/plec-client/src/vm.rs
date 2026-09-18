@@ -99,13 +99,7 @@ impl ActionHost for TypedLoaderHost<'_> {
                 let value = self.evaluate(expression, frame)?;
                 match value {
                     RuntimeValue::String(value) => Ok(value),
-                    value => value.json_body().map_err(|error| {
-                        ActionError(
-                            error
-                                .as_string()
-                                .unwrap_or_else(|| "fetch body encoding failed".into()),
-                        )
-                    }),
+                    value => value.json_body().map_err(ActionError),
                 }
             })
             .transpose()?;
@@ -861,7 +855,9 @@ impl TypedRuntime {
                                             // Encoding it again turns `{\"title\":\"Plec\"}` into a JSON
                                             // string literal, which APIs correctly reject as a non-object body.
                                             RuntimeValue::String(value) => Ok(value),
-                                            value => value.json_body(),
+                                            value => value
+                                                .json_body()
+                                                .map_err(|error| JsValue::from_str(&error)),
                                         }
                                     })
                                 })

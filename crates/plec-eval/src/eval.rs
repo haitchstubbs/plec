@@ -50,32 +50,6 @@ pub fn typed_eval_frame(
     )
 }
 
-/// Estimated live byte size of one runtime value. Iterative by contract:
-/// values are validated acyclic trees, but the walk must not trust that for
-/// recursion depth. Sizes are charged to the evaluation stack when a value
-/// is pushed and released when it is popped, so hostile constant-pushing
-/// programs hit a documented memory ceiling instead of only instruction
-/// fuel (which bounds steps, not bytes per step).
-fn value_size_bytes(value: &RuntimeValue) -> usize {
-    let mut bytes = 0usize;
-    let mut pending = vec![value];
-    while let Some(value) = pending.pop() {
-        match value {
-            RuntimeValue::Null | RuntimeValue::Bool(_) | RuntimeValue::Number(_) => bytes += 8,
-            RuntimeValue::String(value) => bytes += value.len(),
-            RuntimeValue::Array(values) => {
-                bytes += 16 + 8 * values.len();
-                pending.extend(values.iter());
-            }
-            RuntimeValue::Record(values) => {
-                bytes += 16 + 8 * values.len();
-                pending.extend(values.values());
-            }
-        }
-    }
-    bytes
-}
-
 fn expression_stack_push(
     stack: &mut Vec<RuntimeValue>,
     sizes: &mut Vec<usize>,
@@ -87,7 +61,7 @@ fn expression_stack_push(
             "expression evaluation stack exceeds value limit",
         ));
     }
-    let size = value_size_bytes(&value);
+    let size = value.estimated_size_bytes();
     if *bytes + size > plec_ir::limits::MAX_EVAL_STACK_BYTES {
         return Err(JsValue::from_str(
             "expression evaluation stack exceeds byte limit",
@@ -625,26 +599,11 @@ fn typed_eval_bounded(
 }
 
 pub fn typed_truthy(value: &RuntimeValue) -> bool {
-    match value {
-        RuntimeValue::Null => false,
-        RuntimeValue::Bool(value) => *value,
-        RuntimeValue::Number(value) => *value != 0.0,
-        RuntimeValue::String(value) => !value.is_empty(),
-        RuntimeValue::Array(value) => !value.is_empty(),
-        RuntimeValue::Record(_) => true,
-    }
+    value.truthy()
 }
 
 pub fn typed_value_string(value: &RuntimeValue) -> String {
-    match value {
-        RuntimeValue::String(value) => value.clone(),
-        RuntimeValue::Null => String::new(),
-        RuntimeValue::Bool(value) => value.to_string(),
-        RuntimeValue::Number(value) => value.to_string(),
-        RuntimeValue::Array(_) | RuntimeValue::Record(_) => {
-            serde_json::to_string(value).unwrap_or_default()
-        }
-    }
+    value.dom_string()
 }
 
 #[cfg(test)]
