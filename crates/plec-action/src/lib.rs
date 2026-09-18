@@ -258,7 +258,7 @@ fn drive<H: ActionHost>(
                         continuation.current.stack.pop().ok_or_else(|| {
                             ActionError("action stack underflow: jumpIfFalse".into())
                         })?;
-                    if !truthy(&value) {
+                    if !value.truthy() {
                         continuation.current.pc = target;
                         continue;
                     }
@@ -502,17 +502,6 @@ fn run_finalizers<H: ActionHost>(
         }
     }
     Ok(Run::Complete(outcome))
-}
-
-fn truthy(value: &RuntimeValue) -> bool {
-    match value {
-        RuntimeValue::Null => false,
-        RuntimeValue::Bool(value) => *value,
-        RuntimeValue::Number(value) => *value != 0.0,
-        RuntimeValue::String(value) => !value.is_empty(),
-        RuntimeValue::Array(value) => !value.is_empty(),
-        RuntimeValue::Record(_) => true,
-    }
 }
 
 fn instruction_name(instruction: &TypedActionInstruction) -> &'static str {

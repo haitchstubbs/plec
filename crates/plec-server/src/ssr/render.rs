@@ -10,6 +10,7 @@ use std::{
 
 use indexmap::IndexMap;
 use plec_ir::{limits::MAX_SNAPSHOT_LOOP_KEYS, SsrSelectedBranch};
+use plec_schema::delta::{json_dom_string, json_estimated_size_bytes, json_truthy};
 use serde_json::Value;
 
 use crate::{
@@ -840,29 +841,6 @@ pub(crate) fn evaluate(
     evaluate_bounded(component, expression, scope, state, &mut fuel, 0)
 }
 
-/// Estimated live byte size of one transport value (iterative; values are
-/// validated acyclic trees). Mirrors the runtime evaluator's stack-byte
-/// accounting so both sides bound `Constant` deep-clone memory the same way.
-fn value_size_bytes(value: &Value) -> usize {
-    let mut bytes = 0usize;
-    let mut pending = vec![value];
-    while let Some(value) = pending.pop() {
-        match value {
-            Value::Null | Value::Bool(_) | Value::Number(_) => bytes += 8,
-            Value::String(value) => bytes += value.len(),
-            Value::Array(values) => {
-                bytes += 16 + 8 * values.len();
-                pending.extend(values.iter());
-            }
-            Value::Object(values) => {
-                bytes += 16 + 8 * values.len();
-                pending.extend(values.values());
-            }
-        }
-    }
-    bytes
-}
-
 /// Pushes one value with the runtime evaluator's stack budgets. Returns
 /// `false` — the caller fails soft to `Value::Null` — when the live value
 /// count or byte estimate would exceed `MAX_EVAL_STACK_VALUES` /
@@ -876,7 +854,7 @@ fn evaluate_stack_push(
     if stack.len() >= plec_ir::limits::MAX_EVAL_STACK_VALUES {
         return false;
     }
-    let size = value_size_bytes(&value);
+    let size = json_estimated_size_bytes(&value);
     if *bytes + size > plec_ir::limits::MAX_EVAL_STACK_BYTES {
         return false;
     }
@@ -1385,29 +1363,13 @@ fn binary(kind: &str, left: Value, right: Value) -> Value {
 /// Mirrors `typed_truthy` so the branch the server instantiates is exactly
 /// the branch the runtime reconciles to.
 pub(crate) fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64().map(|value| value != 0.0).unwrap_or(false),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(values) => !values.is_empty(),
-        Value::Object(_) => true,
-    }
+    json_truthy(value)
 }
 
 /// Mirrors `typed_value_string`: the canonical DOM string and the canonical
 /// loop key are the same runtime function.
 pub(crate) fn dom_string(value: &Value) -> String {
-    match value {
-        Value::String(value) => value.clone(),
-        Value::Null => String::new(),
-        Value::Bool(value) => value.to_string(),
-        Value::Number(value) => value
-            .as_f64()
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
-        Value::Array(_) | Value::Object(_) => serde_json::to_string(value).unwrap_or_default(),
-    }
+    json_dom_string(value)
 }
 
 fn canonical_key(value: &Value) -> String {

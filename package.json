@@ -35,7 +35,8 @@
     "inspect:fixture": "node scripts/inspect-fixture.mjs",
     "measure:runtime-baseline": "node benchmarks/measure-runtime-baseline.mjs",
     "measure:runtime-baseline:verify": "node benchmarks/measure-runtime-baseline.mjs --verify",
-    "clean": "turbo run clean && git clean -xdf .turbo && yarn roadmap:stop"
+    "clean": "turbo run clean && git clean -xdf .turbo && yarn roadmap:stop",
+    "issue": "node scripts/get-gh-issue.mjs"
   },
   "devDependencies": {
     "@puppeteer/browsers": "3.2.2",

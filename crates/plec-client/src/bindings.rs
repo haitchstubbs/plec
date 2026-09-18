@@ -32,7 +32,7 @@ pub fn typed_apply_value(
     value: RuntimeValue,
 ) -> Result<(), JsValue> {
     if sink == "text" {
-        let value = typed_value_string(&value);
+        let value = value.dom_string();
         if let Some(text) = node.dyn_ref::<web_sys::Text>() {
             text.set_data(&value);
         } else {
@@ -101,7 +101,7 @@ pub fn typed_apply_value(
             element.remove_attribute(name)?;
         }
     } else {
-        let value = typed_value_string(&value);
+        let value = value.dom_string();
         if !is_safe_attribute_value(name, &value) {
             return Err(JsValue::from_str("unsafe attribute binding value"));
         }
@@ -157,7 +157,7 @@ pub fn typed_apply_spread(
             continue;
         }
         if !matches!(value, RuntimeValue::Bool(false) | RuntimeValue::Null)
-            && !is_safe_attribute_value(name, &typed_value_string(value))
+            && !is_safe_attribute_value(name, &value.dom_string())
         {
             continue;
         }
@@ -197,7 +197,7 @@ pub fn typed_apply_spread(
         } else {
             element.set_attribute(
                 if name == "className" { "class" } else { &name },
-                &typed_value_string(&value),
+                &value.dom_string(),
             )?;
         }
     }

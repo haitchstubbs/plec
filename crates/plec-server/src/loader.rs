@@ -3,9 +3,7 @@
 use plec_action::{
     charge_response_bytes, resume, start, ActionError, ActionHost, ActionOutcome, Run,
 };
-use plec_ir::{
-    limits::MAX_FETCH_RESPONSE_BYTES, SsrLoaderOutcome, SsrLoaderState, SsrSnapshotValue,
-};
+use plec_ir::{limits::MAX_FETCH_RESPONSE_BYTES, SsrLoaderOutcome, SsrLoaderState};
 use plec_schema::{delta::RuntimeValue, typed::TypedCapabilityRequest};
 
 use crate::{
@@ -62,11 +60,15 @@ impl ActionHost for LoaderHost<'_> {
         frame: &[RuntimeValue],
     ) -> Result<RuntimeValue, ActionError> {
         let scope = ssr::Scope {
-            frame: frame.iter().cloned().map(runtime_to_json).collect(),
+            frame: frame
+                .iter()
+                .cloned()
+                .map(RuntimeValue::into_json_value)
+                .collect(),
             states: self.states.clone(),
             ..ssr::loader_scope(self.context)
         };
-        Ok(json_to_runtime(ssr::evaluate(
+        Ok(RuntimeValue::from_json_value(ssr::evaluate(
             self.component,
             expression,
             &scope,
@@ -84,7 +86,7 @@ impl ActionHost for LoaderHost<'_> {
                 "unsupported route loader capability: cookie".into(),
             ));
         };
-        let url = value_string(&self.evaluate(request.url, frame)?);
+        let url = self.evaluate(request.url, frame)?.dom_string();
         if url.is_empty() {
             return Err(ActionError("fetch URL is empty".into()));
         }
@@ -98,7 +100,7 @@ impl ActionHost for LoaderHost<'_> {
                     .get(header.name)
                     .cloned()
                     .ok_or_else(|| ActionError("header name handle out of range".into()))?;
-                Ok((name, value_string(&self.evaluate(header.value, frame)?)))
+                Ok((name, self.evaluate(header.value, frame)?.dom_string()))
             })
             .collect::<Result<Vec<_>, ActionError>>()?;
         let body = request
@@ -107,7 +109,7 @@ impl ActionHost for LoaderHost<'_> {
                 let value = self.evaluate(expression, frame)?;
                 match value {
                     RuntimeValue::String(value) => Ok(value),
-                    value => serde_json::to_string(&value).map_err(|error| {
+                    value => value.json_body().map_err(|error| {
                         ActionError(format!("fetch body encoding failed: {error}"))
                     }),
                 }
@@ -212,7 +214,7 @@ fn loader_program_error(error: ActionError) -> ServerError {
 fn loader_outcome(route: &Route, action: usize, outcome: ActionOutcome) -> SsrLoaderOutcome {
     let state = match outcome {
         ActionOutcome::Success(value) => SsrLoaderState::Resolved {
-            value: to_snapshot_value(unwrap_response_body(value)),
+            value: unwrap_response_body(value).into_ssr_snapshot(),
         },
         ActionOutcome::Failure(error) => SsrLoaderState::Rejected {
             message: failure_message(&error),
@@ -284,7 +286,7 @@ async fn execute_fetch(
     } else {
         let value: JsonValue = serde_json::from_slice(&bytes)
             .map_err(|error| loader_failure(format!("fetch {} failed: {error}", url.path())))?;
-        json_to_runtime(value)
+        RuntimeValue::from_json_value(value)
     };
     Ok((
         RuntimeValue::Record(std::collections::HashMap::from([
@@ -335,94 +337,10 @@ fn failure_message(value: &RuntimeValue) -> String {
     value
         .record()
         .and_then(|record| record.get("message"))
-        .map(value_string)
-        .unwrap_or_else(|| value_string(value))
+        .map(RuntimeValue::dom_string)
+        .unwrap_or_else(|| value.dom_string())
 }
 
-fn to_snapshot_value(value: RuntimeValue) -> SsrSnapshotValue {
-    match value {
-        RuntimeValue::Null => SsrSnapshotValue::Null,
-        RuntimeValue::Bool(value) => SsrSnapshotValue::Bool(value),
-        RuntimeValue::Number(value) => SsrSnapshotValue::Number(value),
-        RuntimeValue::String(value) => SsrSnapshotValue::String(value),
-        RuntimeValue::Array(values) => {
-            SsrSnapshotValue::Array(values.into_iter().map(to_snapshot_value).collect())
-        }
-        RuntimeValue::Record(fields) => SsrSnapshotValue::Record(
-            fields
-                .into_iter()
-                .map(|(name, value)| (name, to_snapshot_value(value)))
-                .collect(),
-        ),
-    }
-}
-
-pub(crate) fn snapshot_value_to_json(value: &SsrSnapshotValue) -> JsonValue {
-    match value {
-        SsrSnapshotValue::Null => JsonValue::Null,
-        SsrSnapshotValue::Bool(value) => JsonValue::Bool(*value),
-        SsrSnapshotValue::Number(value) => serde_json::Number::from_f64(*value)
-            .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Null),
-        SsrSnapshotValue::String(value) => JsonValue::String(value.clone()),
-        SsrSnapshotValue::Array(values) => {
-            JsonValue::Array(values.iter().map(snapshot_value_to_json).collect())
-        }
-        SsrSnapshotValue::Record(fields) => JsonValue::Object(
-            fields
-                .iter()
-                .map(|(name, value)| (name.clone(), snapshot_value_to_json(value)))
-                .collect(),
-        ),
-    }
-}
-
-fn json_to_runtime(value: JsonValue) -> RuntimeValue {
-    match value {
-        JsonValue::Null => RuntimeValue::Null,
-        JsonValue::Bool(value) => RuntimeValue::Bool(value),
-        JsonValue::Number(value) => RuntimeValue::Number(value.as_f64().unwrap_or(0.0)),
-        JsonValue::String(value) => RuntimeValue::String(value),
-        JsonValue::Array(values) => {
-            RuntimeValue::Array(values.into_iter().map(json_to_runtime).collect())
-        }
-        JsonValue::Object(values) => RuntimeValue::Record(
-            values
-                .into_iter()
-                .map(|(name, value)| (name, json_to_runtime(value)))
-                .collect(),
-        ),
-    }
-}
-
-fn runtime_to_json(value: RuntimeValue) -> JsonValue {
-    match value {
-        RuntimeValue::Null => JsonValue::Null,
-        RuntimeValue::Bool(value) => JsonValue::Bool(value),
-        RuntimeValue::Number(value) => serde_json::Number::from_f64(value)
-            .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Null),
-        RuntimeValue::String(value) => JsonValue::String(value),
-        RuntimeValue::Array(values) => {
-            JsonValue::Array(values.into_iter().map(runtime_to_json).collect())
-        }
-        RuntimeValue::Record(values) => JsonValue::Object(
-            values
-                .into_iter()
-                .map(|(name, value)| (name, runtime_to_json(value)))
-                .collect(),
-        ),
-    }
-}
-
-fn value_string(value: &RuntimeValue) -> String {
-    match value {
-        RuntimeValue::String(value) => value.clone(),
-        RuntimeValue::Null => String::new(),
-        RuntimeValue::Bool(value) => value.to_string(),
-        RuntimeValue::Number(value) => value.to_string(),
-        RuntimeValue::Array(_) | RuntimeValue::Record(_) => {
-            serde_json::to_string(value).unwrap_or_default()
-        }
-    }
+pub(crate) fn snapshot_value_to_json(value: &plec_ir::SsrSnapshotValue) -> JsonValue {
+    RuntimeValue::from_ssr_snapshot(value).into_json_value()
 }

@@ -168,13 +168,10 @@ impl RuntimeState {
     ) -> Result<(), JsValue> {
         let result = match result {
             Ok(value) => {
-                let bytes = value.json_body().map(|body| body.len()).map_err(|error| {
-                    failure(
-                        "decode",
-                        error.as_string().unwrap_or_default(),
-                        &pending.suspension.request.url,
-                    )
-                });
+                let bytes = value
+                    .json_body()
+                    .map(|body| body.len())
+                    .map_err(|error| failure("decode", error, &pending.suspension.request.url));
                 match bytes.and_then(|bytes| {
                     charge_response_bytes(&mut pending.suspension, bytes).map_err(|error| {
                         failure("limit", error.to_string(), &pending.suspension.request.url)
@@ -571,13 +568,10 @@ impl RuntimeState {
     ) -> Result<(), JsValue> {
         let result = match result {
             Ok(value) => {
-                let bytes = value.json_body().map(|body| body.len()).map_err(|error| {
-                    failure(
-                        "decode",
-                        error.as_string().unwrap_or_default(),
-                        &pending.url,
-                    )
-                });
+                let bytes = value
+                    .json_body()
+                    .map(|body| body.len())
+                    .map_err(|error| failure("decode", error, &pending.url));
                 match bytes.and_then(|bytes| {
                     pending
                         .continuation
