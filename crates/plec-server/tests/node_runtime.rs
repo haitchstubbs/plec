@@ -61,13 +61,23 @@ fn runtime_script() -> PathBuf {
         .clone()
 }
 
-/// Writes a fixture bundle and spawns the real sidecar against it.
+/// Writes the production server/public layout and spawns the real sidecar.
 async fn spawn_runtime(bundle_source: &str) -> (NodeApplicationRuntime, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("fixture dir");
-    std::fs::write(dir.path().join("app.mjs"), bundle_source).expect("bundle write");
+    let out_dir = dir.path().join("dist");
+    let server_dir = out_dir.join("server");
+    let public_dir = out_dir.join("public");
+    std::fs::create_dir_all(&server_dir).expect("server fixture dir");
+    std::fs::create_dir_all(&public_dir).expect("public fixture dir");
+    std::fs::write(server_dir.join("app.mjs"), bundle_source).expect("bundle write");
+    std::fs::write(
+        public_dir.join("host-providers.json"),
+        r#"{"version":2,"revision":"test","providers":[]}"#,
+    )
+    .expect("provider manifest write");
     let runtime = NodeApplicationRuntime::spawn(NodeRuntimeOptions::new(
         runtime_script(),
-        dir.path().join("app.mjs"),
+        server_dir.join("app.mjs"),
     ))
     .await
     .expect("sidecar spawn");
