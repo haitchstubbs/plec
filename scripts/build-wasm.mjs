@@ -126,6 +126,13 @@ export async function buildWasm({
       );
     }
 
+    const wasmOpt = await findWasmOpt();
+    if (!wasmOpt) {
+      throw new Error(
+        'wasm-opt is required by the pinned binaryen dependency; run yarn install',
+      );
+    }
+
     // Run wasm-pack
     execFileSync('wasm-pack', args, {
       cwd: repoRoot,
@@ -135,7 +142,11 @@ export async function buildWasm({
         TMP: temporaryDirectory,
         TEMP: temporaryDirectory,
         WASM_PACK_CACHE: wasmPackCachePath,
-        PATH: [wasmBindgenBinPath(), process.env.PATH]
+        PATH: [
+          wasmBindgenBinPath(),
+          path.dirname(wasmOpt),
+          process.env.PATH,
+        ]
           .filter(Boolean)
           .join(path.delimiter),
       },
