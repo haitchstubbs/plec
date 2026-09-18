@@ -6,7 +6,7 @@ short version lives in the root [README](../README.md).
 
 ## Prerequisites
 
-- **Node.js 24.20.0** and **Yarn 4.17.1**. `.node-version` and the root
+- **Node.js 22.20.0** and **Yarn 4.17.1**. `.node-version` and the root
   `packageManager` are authoritative.
 - **Rust 1.98.0** with the `wasm32-unknown-unknown` target. `rust-toolchain.toml`
   installs the target for rustup-managed toolchains.
