@@ -214,6 +214,13 @@ pub(crate) fn lower_component(
         });
         ctx.callables.insert(callable.binding, action);
     }
+    for mutation in &component.mutations {
+        let callback = *ctx
+            .callables
+            .get(&mutation.callback)
+            .ok_or_else(|| ctx.err("mutation callback action missing"))?;
+        ctx.callables.insert(mutation.run, callback);
+    }
     for callable in &component.callables {
         let action = *ctx
             .callables
@@ -222,6 +229,28 @@ pub(crate) fn lower_component(
         ctx.action(&callable.body, &callable.parameters, false)?;
         let lowered = ctx.app.actions.pop().expect("action lowered");
         ctx.app.actions[action] = lowered;
+    }
+    for mutation in &component.mutations {
+        for (binding, value) in [
+            (mutation.pending, plec_ir::Value::Bool(false)),
+            (mutation.error, plec_ir::Value::Null),
+            (mutation.data, plec_ir::Value::Null),
+        ] {
+            let constant = ctx.constant(value);
+            let expression = ctx.app.expressions.len();
+            ctx.app.expressions.push(plec_ir::ExpressionProgram {
+                instructions: vec![
+                    plec_ir::ExpressionInstruction::Constant { constant },
+                    plec_ir::ExpressionInstruction::Return,
+                ],
+            });
+            let state = ctx.app.state_slots.len();
+            ctx.mutation_states.insert(binding, state);
+            ctx.app.state_slots.push(StateSlot {
+                initial_expression: expression,
+                frame_slot: state,
+            });
+        }
     }
     for reaction in &component.reactions {
         let mut dependencies = Vec::new();
