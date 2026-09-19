@@ -101,6 +101,73 @@ pub trait ActionHost {
         request: &TypedCapabilityRequest,
         frame: &[RuntimeValue],
     ) -> Result<Self::Request, ActionError>;
+
+    /// State-slot write. Hosts own state storage and dependent refresh.
+    fn store_state(&mut self, _state: usize, _value: RuntimeValue) -> Result<(), ActionError> {
+        Err(ActionError::unsupported("storeState"))
+    }
+
+    /// Reference-slot write. Hosts own reference storage.
+    fn store_ref(
+        &mut self,
+        _reference: usize,
+        _value: RuntimeValue,
+    ) -> Result<(), ActionError> {
+        Err(ActionError::unsupported("storeRef"))
+    }
+
+    /// Records the host's current active element into a focus reference.
+    fn capture_active_element(&mut self, _reference: usize) -> Result<(), ActionError> {
+        Err(ActionError::unsupported("captureActiveElement"))
+    }
+
+    fn focus_host_ref(&mut self, _reference: usize) -> Result<(), ActionError> {
+        Err(ActionError::unsupported("focusHostRef"))
+    }
+
+    fn focus_ref(&mut self, _reference: usize) -> Result<(), ActionError> {
+        Err(ActionError::unsupported("focusRef"))
+    }
+
+    /// Suppresses the default behavior of the native event backing this run,
+    /// when the host exposes one.
+    fn prevent_default(&mut self) -> Result<(), ActionError> {
+        Err(ActionError::unsupported("preventDefault"))
+    }
+
+    /// Stores a host-named reference; the host resolves the reference handle
+    /// to its own string table.
+    fn store_host_ref(&mut self, _reference: usize) -> Result<(), ActionError> {
+        Err(ActionError::unsupported("storeHostRef"))
+    }
+
+    /// Delivers a callable component prop invocation. A missing required prop
+    /// must fail; a missing optional prop completes without error and control
+    /// simply falls through to the next instruction.
+    fn call_prop(
+        &mut self,
+        _prop: usize,
+        _arguments: Vec<RuntimeValue>,
+        optional: bool,
+    ) -> Result<(), ActionError> {
+        Err(ActionError::unsupported(if optional {
+            "callPropOptional"
+        } else {
+            "callProp"
+        }))
+    }
+
+    /// Applies a keyed collection mutation. Hosts own collection storage,
+    /// ordering, key stringification, and dependent invalidation.
+    fn mutate_collection(
+        &mut self,
+        _input: usize,
+        _kind: &str,
+        _key: RuntimeValue,
+        _value: Option<RuntimeValue>,
+    ) -> Result<(), ActionError> {
+        Err(ActionError::unsupported("collectionMutation"))
+    }
 }
 
 pub fn start<H: ActionHost>(
@@ -384,7 +451,55 @@ fn drive<H: ActionHost>(
                     };
                     return run_finalizers(actions, continuation, outcome, host, finalizers);
                 }
-                _ => return Err(ActionError::unsupported(instruction_name(&instruction))),
+                TypedActionInstruction::StoreState { state } => {
+                    let value = continuation.current.stack.pop().ok_or_else(|| {
+                        ActionError("action stack underflow: storeState".into())
+                    })?;
+                    host.store_state(state, value)?;
+                }
+                TypedActionInstruction::StoreRef { reference } => {
+                    let value = continuation.current.stack.pop().ok_or_else(|| {
+                        ActionError("action stack underflow: storeRef".into())
+                    })?;
+                    host.store_ref(reference, value)?;
+                }
+                TypedActionInstruction::CaptureActiveElement { reference } => {
+                    host.capture_active_element(reference)?;
+                }
+                TypedActionInstruction::FocusHostRef { reference } => {
+                    host.focus_host_ref(reference)?;
+                }
+                TypedActionInstruction::FocusRef { reference } => {
+                    host.focus_ref(reference)?;
+                }
+                TypedActionInstruction::PreventDefault => {
+                    host.prevent_default()?;
+                }
+                TypedActionInstruction::CallProp { prop, arguments } => {
+                    let arguments =
+                        evaluate_arguments(arguments, &continuation.current.frame, host)?;
+                    host.call_prop(prop, arguments, false)?;
+                }
+                TypedActionInstruction::CallPropOptional { prop, arguments } => {
+                    let arguments =
+                        evaluate_arguments(arguments, &continuation.current.frame, host)?;
+                    host.call_prop(prop, arguments, true)?;
+                }
+                TypedActionInstruction::CollectionMutation {
+                    input,
+                    kind,
+                    key,
+                    value,
+                } => {
+                    let key = host.evaluate(key, &continuation.current.frame)?;
+                    let value = value
+                        .map(|expression| host.evaluate(expression, &continuation.current.frame))
+                        .transpose()?;
+                    host.mutate_collection(input, &kind, key, value)?;
+                }
+                TypedActionInstruction::StoreHostRef { r#ref } => {
+                    host.store_host_ref(r#ref)?;
+                }
             }
             continuation.current.pc += 1;
         }
@@ -504,20 +619,15 @@ fn run_finalizers<H: ActionHost>(
     Ok(Run::Complete(outcome))
 }
 
-fn instruction_name(instruction: &TypedActionInstruction) -> &'static str {
-    match instruction {
-        TypedActionInstruction::StoreState { .. } => "storeState",
-        TypedActionInstruction::StoreRef { .. } => "storeRef",
-        TypedActionInstruction::CaptureActiveElement { .. } => "captureActiveElement",
-        TypedActionInstruction::FocusHostRef { .. } => "focusHostRef",
-        TypedActionInstruction::FocusRef { .. } => "focusRef",
-        TypedActionInstruction::PreventDefault => "preventDefault",
-        TypedActionInstruction::CallProp { .. } => "callProp",
-        TypedActionInstruction::CallPropOptional { .. } => "callPropOptional",
-        TypedActionInstruction::CollectionMutation { .. } => "collectionMutation",
-        TypedActionInstruction::StoreHostRef { .. } => "storeHostRef",
-        _ => "unsupported",
-    }
+fn evaluate_arguments<H: ActionHost>(
+    arguments: Vec<usize>,
+    frame: &[RuntimeValue],
+    host: &mut H,
+) -> Result<Vec<RuntimeValue>, ActionError> {
+    arguments
+        .into_iter()
+        .map(|expression| host.evaluate(expression, frame))
+        .collect()
 }
 
 #[cfg(test)]
@@ -645,5 +755,404 @@ mod tests {
         }]));
         let error = start(&actions, 0, vec![RuntimeValue::Null; 2], &mut TestHost).unwrap_err();
         assert_eq!(error.0, "unsupported route loader capability: cookie");
+    }
+
+    struct RecordingHost {
+        effects: Vec<String>,
+    }
+
+    impl ActionHost for RecordingHost {
+        type Request = String;
+
+        fn evaluate(
+            &mut self,
+            expression: usize,
+            frame: &[RuntimeValue],
+        ) -> Result<RuntimeValue, ActionError> {
+            Ok(match expression {
+                0 => frame.first().cloned().unwrap_or(RuntimeValue::Null),
+                _ => RuntimeValue::Number(42.0),
+            })
+        }
+
+        fn prepare_capability(
+            &mut self,
+            _request: &TypedCapabilityRequest,
+            _frame: &[RuntimeValue],
+        ) -> Result<Self::Request, ActionError> {
+            Err(ActionError("unexpected capability request".into()))
+        }
+
+        fn store_state(
+            &mut self,
+            state: usize,
+            value: RuntimeValue,
+        ) -> Result<(), ActionError> {
+            self.effects.push(format!("storeState:{state}:{value:?}"));
+            Ok(())
+        }
+
+        fn store_ref(
+            &mut self,
+            reference: usize,
+            value: RuntimeValue,
+        ) -> Result<(), ActionError> {
+            self.effects.push(format!("storeRef:{reference}:{value:?}"));
+            Ok(())
+        }
+
+        fn capture_active_element(&mut self, reference: usize) -> Result<(), ActionError> {
+            self.effects.push(format!("captureActiveElement:{reference}"));
+            Ok(())
+        }
+
+        fn focus_host_ref(&mut self, reference: usize) -> Result<(), ActionError> {
+            self.effects.push(format!("focusHostRef:{reference}"));
+            Ok(())
+        }
+
+        fn focus_ref(&mut self, reference: usize) -> Result<(), ActionError> {
+            self.effects.push(format!("focusRef:{reference}"));
+            Ok(())
+        }
+
+        fn prevent_default(&mut self) -> Result<(), ActionError> {
+            self.effects.push("preventDefault".into());
+            Ok(())
+        }
+
+        fn store_host_ref(&mut self, reference: usize) -> Result<(), ActionError> {
+            self.effects.push(format!("storeHostRef:{reference}"));
+            Ok(())
+        }
+
+        fn call_prop(
+            &mut self,
+            prop: usize,
+            arguments: Vec<RuntimeValue>,
+            optional: bool,
+        ) -> Result<(), ActionError> {
+            self.effects
+                .push(format!("callProp:{optional}:{prop}:{arguments:?}"));
+            Ok(())
+        }
+
+        fn mutate_collection(
+            &mut self,
+            input: usize,
+            kind: &str,
+            key: RuntimeValue,
+            value: Option<RuntimeValue>,
+        ) -> Result<(), ActionError> {
+            self.effects
+                .push(format!("mutateCollection:{input}:{kind}:{key:?}:{value:?}"));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn browser_effects_dispatch_to_host_in_order() {
+        let actions = actions(serde_json::json!([{
+            "frameSlots":1,
+            "instructions":[
+                {"op":"evaluate","expression":2},
+                {"op":"storeState","state":7},
+                {"op":"evaluate","expression":2},
+                {"op":"storeRef","reference":8},
+                {"op":"captureActiveElement","reference":9},
+                {"op":"focusHostRef","reference":10},
+                {"op":"focusRef","reference":11},
+                {"op":"preventDefault"},
+                {"op":"callProp","prop":12,"arguments":[0]},
+                {"op":"callPropOptional","prop":13,"arguments":[]},
+                {"op":"collectionMutation","input":14,"kind":"keyedReplace","key":0,"value":2},
+                {"op":"storeHostRef","ref":15},
+                {"op":"return"}
+            ]
+        }]));
+        let mut host = RecordingHost { effects: Vec::new() };
+        let Run::Complete(ActionOutcome::Success(_)) =
+            start(&actions, 0, vec![RuntimeValue::Null; 1], &mut host).unwrap()
+        else {
+            panic!("expected completed success");
+        };
+        assert_eq!(
+            host.effects,
+            vec![
+                "storeState:7:Number(42.0)",
+                "storeRef:8:Number(42.0)",
+                "captureActiveElement:9",
+                "focusHostRef:10",
+                "focusRef:11",
+                "preventDefault",
+                "callProp:false:12:[Null]",
+                "callProp:true:13:[]",
+                "mutateCollection:14:keyedReplace:Null:Some(Number(42.0))",
+                "storeHostRef:15",
+            ]
+        );
+    }
+
+    #[test]
+    fn loader_hosts_reject_browser_effects_deterministically() {
+        for (instruction, name) in [
+            (serde_json::json!({"op":"storeState","state":0}), "storeState"),
+            (serde_json::json!({"op":"storeRef","reference":0}), "storeRef"),
+            (
+                serde_json::json!({"op":"captureActiveElement","reference":0}),
+                "captureActiveElement",
+            ),
+            (
+                serde_json::json!({"op":"focusHostRef","reference":0}),
+                "focusHostRef",
+            ),
+            (serde_json::json!({"op":"focusRef","reference":0}), "focusRef"),
+            (serde_json::json!({"op":"preventDefault"}), "preventDefault"),
+            (
+                serde_json::json!({"op":"callProp","prop":0,"arguments":[]}),
+                "callProp",
+            ),
+            (
+                serde_json::json!({"op":"callPropOptional","prop":0,"arguments":[]}),
+                "callPropOptional",
+            ),
+            (
+                serde_json::json!({"op":"collectionMutation","input":0,"kind":"append","key":0}),
+                "collectionMutation",
+            ),
+            (serde_json::json!({"op":"storeHostRef","ref":0}), "storeHostRef"),
+        ] {
+            let actions = actions(serde_json::json!([{
+                "frameSlots":1,
+                "instructions":[
+                    {"op":"evaluate","expression":0},
+                    instruction,
+                ]
+            }]));
+            let error = start(&actions, 0, vec![RuntimeValue::Null; 1], &mut TestHost)
+                .unwrap_err();
+            assert_eq!(error.0, format!("unsupported action instruction: {name}"));
+        }
+    }
+
+    #[test]
+    fn store_effects_require_stack_values() {
+        for (instruction, message) in [
+            (serde_json::json!({"op":"storeState","state":0}), "storeState"),
+            (serde_json::json!({"op":"storeRef","reference":0}), "storeRef"),
+        ] {
+            let actions = actions(serde_json::json!([{
+                "frameSlots":1,
+                "instructions":[instruction]
+            }]));
+            let error = start(&actions, 0, vec![RuntimeValue::Null; 1], &mut TestHost)
+                .unwrap_err();
+            assert_eq!(error.0, format!("action stack underflow: {message}"));
+        }
+    }
+
+    struct MissingPropHost;
+
+    impl ActionHost for MissingPropHost {
+        type Request = String;
+
+        fn evaluate(
+            &mut self,
+            expression: usize,
+            frame: &[RuntimeValue],
+        ) -> Result<RuntimeValue, ActionError> {
+            Ok(match expression {
+                0 => frame.first().cloned().unwrap_or(RuntimeValue::Null),
+                _ => RuntimeValue::Number(42.0),
+            })
+        }
+
+        fn prepare_capability(
+            &mut self,
+            _request: &TypedCapabilityRequest,
+            _frame: &[RuntimeValue],
+        ) -> Result<Self::Request, ActionError> {
+            Err(ActionError("unexpected capability request".into()))
+        }
+
+        fn call_prop(
+            &mut self,
+            _prop: usize,
+            _arguments: Vec<RuntimeValue>,
+            optional: bool,
+        ) -> Result<(), ActionError> {
+            if optional {
+                return Ok(());
+            }
+            Err(ActionError("callable component prop missing".into()))
+        }
+    }
+
+    #[test]
+    fn required_call_prop_failure_propagates_from_host() {
+        let actions = actions(serde_json::json!([{
+            "frameSlots":1,
+            "instructions":[
+                {"op":"callProp","prop":1,"arguments":[]},
+                {"op":"return"}
+            ]
+        }]));
+        let error =
+            start(&actions, 0, vec![RuntimeValue::Null; 1], &mut MissingPropHost).unwrap_err();
+        assert_eq!(error.0, "callable component prop missing");
+    }
+
+    #[test]
+    fn optional_call_prop_missing_falls_through_to_next_instruction() {
+        let actions = actions(serde_json::json!([{
+            "frameSlots":1,
+            "instructions":[
+                {"op":"callPropOptional","prop":1,"arguments":[]},
+                {"op":"evaluate","expression":2},
+                {"op":"storeFrame","slot":0},
+                {"op":"return","value":0}
+            ]
+        }]));
+        let Run::Complete(ActionOutcome::Success(value)) =
+            start(&actions, 0, vec![RuntimeValue::Null; 1], &mut MissingPropHost).unwrap()
+        else {
+            panic!("expected completed success");
+        };
+        assert_eq!(value, RuntimeValue::Number(42.0));
+    }
+
+    struct CookieHost {
+        effects: Vec<String>,
+    }
+
+    impl ActionHost for CookieHost {
+        type Request = String;
+
+        fn evaluate(
+            &mut self,
+            expression: usize,
+            frame: &[RuntimeValue],
+        ) -> Result<RuntimeValue, ActionError> {
+            Ok(frame
+                .get(expression)
+                .cloned()
+                .unwrap_or(RuntimeValue::Number(42.0)))
+        }
+
+        fn prepare_capability(
+            &mut self,
+            request: &TypedCapabilityRequest,
+            frame: &[RuntimeValue],
+        ) -> Result<Self::Request, ActionError> {
+            match request {
+                TypedCapabilityRequest::Cookie(request) => {
+                    let value = request
+                        .value
+                        .map(|expression| self.evaluate(expression, frame))
+                        .transpose()?;
+                    self.effects.push(format!(
+                        "prepareCookie:{}:{}",
+                        request.operation,
+                        value.is_some()
+                    ));
+                    Ok("cookie".into())
+                }
+                TypedCapabilityRequest::Fetch(_) => Ok("fetch".into()),
+            }
+        }
+
+        fn prevent_default(&mut self) -> Result<(), ActionError> {
+            self.effects.push("preventDefault".into());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cookie_capability_suspends_and_resumes_success() {
+        let actions = actions(serde_json::json!([{
+            "frameSlots":2,
+            "instructions":[
+                {"op":"capabilityRequest","capability":"cookie","request":{"operation":"set","name":0,"value":2},"successPc":1,"failurePc":2,"resultSlot":0,"errorSlot":1},
+                {"op":"return","value":0},
+                {"op":"return","outcome":"failure","value":1}
+            ]
+        }]));
+        let mut host = CookieHost { effects: Vec::new() };
+        let Run::Suspended(suspension) =
+            start(&actions, 0, vec![RuntimeValue::Null; 2], &mut host).unwrap()
+        else {
+            panic!("expected suspension");
+        };
+        assert_eq!(suspension.request, "cookie");
+        assert_eq!(host.effects, vec!["prepareCookie:set:true"]);
+        let Run::Complete(ActionOutcome::Success(value)) = resume(
+            &actions,
+            suspension,
+            Ok(RuntimeValue::String("cookie-value".into())),
+            &mut host,
+        )
+        .unwrap() else {
+            panic!("expected completed success");
+        };
+        assert_eq!(value, RuntimeValue::String("cookie-value".into()));
+    }
+
+    #[test]
+    fn cookie_capability_resume_failure_writes_error_slot() {
+        let actions = actions(serde_json::json!([{
+            "frameSlots":2,
+            "instructions":[
+                {"op":"capabilityRequest","capability":"cookie","request":{"operation":"set","name":0,"value":2},"successPc":1,"failurePc":2,"resultSlot":0,"errorSlot":1},
+                {"op":"return","value":0},
+                {"op":"return","outcome":"failure","value":1}
+            ]
+        }]));
+        let mut host = CookieHost { effects: Vec::new() };
+        let Run::Suspended(suspension) =
+            start(&actions, 0, vec![RuntimeValue::Null; 2], &mut host).unwrap()
+        else {
+            panic!("expected suspension");
+        };
+        let Run::Complete(ActionOutcome::Failure(value)) = resume(
+            &actions,
+            suspension,
+            Err(RuntimeValue::String("denied".into())),
+            &mut host,
+        )
+        .unwrap() else {
+            panic!("expected completed failure");
+        };
+        assert_eq!(value, RuntimeValue::String("denied".into()));
+    }
+
+    #[test]
+    fn cookie_finalizer_runs_after_terminal_resume() {
+        let actions = actions(serde_json::json!([{
+            "frameSlots":2,
+            "instructions":[
+                {"op":"capabilityRequest","capability":"cookie","request":{"operation":"get","name":0},"successPc":1,"failurePc":1,"finallyPc":3,"resultSlot":0,"errorSlot":1},
+                {"op":"return","value":0},
+                {"op":"return"},
+                {"op":"preventDefault"},
+                {"op":"return"}
+            ]
+        }]));
+        let mut host = CookieHost { effects: Vec::new() };
+        let Run::Suspended(suspension) =
+            start(&actions, 0, vec![RuntimeValue::Null; 2], &mut host).unwrap()
+        else {
+            panic!("expected suspension");
+        };
+        let Run::Complete(ActionOutcome::Success(value)) = resume(
+            &actions,
+            suspension,
+            Ok(RuntimeValue::String("loaded".into())),
+            &mut host,
+        )
+        .unwrap() else {
+            panic!("expected completed success");
+        };
+        assert_eq!(value, RuntimeValue::String("loaded".into()));
+        assert_eq!(host.effects, vec!["prepareCookie:get:false", "preventDefault"]);
     }
 }
