@@ -13,8 +13,6 @@
     "install:build-tools": "node scripts/setup.mjs",
     "install:plec-cli": "cargo install --path crates/plec-cli",
     "install:plec-cli:dev": "PLEC_CLI_VERSION=dev cargo install --path crates/plec-cli --force",
-    "roadmap": "dotenv -e .env.devports -- sh -c 'bdui start --port \"$BEADS_UI_PORT\"'",
-    "roadmap:stop": "yarn bdui stop",
     "setup": "yarn install --immutable && yarn install:build-tools && yarn build --force",
     "toolchain:verify": "node scripts/verify-toolchain.mjs",
     "toolchain:verify:browser": "node scripts/verify-toolchain.mjs --browser",
@@ -35,13 +33,12 @@
     "inspect:fixture": "node scripts/inspect-fixture.mjs",
     "measure:runtime-baseline": "node benchmarks/measure-runtime-baseline.mjs",
     "measure:runtime-baseline:verify": "node benchmarks/measure-runtime-baseline.mjs --verify",
-    "clean": "turbo run clean && git clean -xdf .turbo && yarn roadmap:stop",
+    "clean": "turbo run clean && git clean -xdf .turbo",
     "issue": "node scripts/get-gh-issue.mjs"
   },
   "devDependencies": {
     "@puppeteer/browsers": "3.2.2",
     "@types/node": "^24.4.0",
-    "beads-ui": "^0.12.6",
     "binaryen": "^131.0.0",
     "dotenv-cli": "^11.0.0",
     "prettier": "^3.9.6",
