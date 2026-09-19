@@ -1,6 +1,7 @@
 use crate::prelude::*;
 use crate::runtime::*;
 use crate::vm::*;
+use plec_action::{Run, Suspension};
 use plec_dom::cookie::CookiePolicy;
 use plec_dom::platform::document;
 use plec_schema::typed::TypedCookieRequest;
@@ -10,15 +11,13 @@ use wasm_bindgen::JsCast;
 pub struct TypedPendingCookie {
     pub instance_id: String,
     pub request_id: u64,
-    pub continuation: TypedContinuationStack,
-    pub success_pc: usize,
-    pub failure_pc: usize,
-    pub finally_pc: Option<usize>,
-    pub result_slot: usize,
-    pub error_slot: usize,
-    pub request: TypedCookieRequest,
-    pub value: Option<String>,
+    pub suspension: Suspension<BrowserRequest>,
+    pub context: ActionRunContext,
     pub graph_generation: u64,
+    /// Entry action of the suspended run carried the route-loader flag; a
+    /// later fetch suspension in the same run must complete through the
+    /// shared loader pipeline.
+    pub route_loader: bool,
 }
 
 impl TypedRuntime {
@@ -41,16 +40,25 @@ impl RuntimeState {
             runtime.next_cookie_id += 1;
             pending.request_id = runtime.next_cookie_id;
         }
+        let (request, value) = match &pending.suspension.request {
+            BrowserRequest::Cookie { request, value } => (request.clone(), value.clone()),
+            #[cfg(feature = "fetch")]
+            BrowserRequest::Fetch(_) => {
+                return Err(JsValue::from_str(
+                    "fetch suspension routed through cookie transport",
+                ));
+            }
+        };
         let name = self
             .typed
             .borrow()
             .get(&pending.instance_id)
-            .and_then(|typed| typed.runtime.app.strings.get(pending.request.name))
+            .and_then(|typed| typed.runtime.app.strings.get(request.name))
             .cloned()
             .ok_or_else(|| JsValue::from_str("cookie name handle out of range"))?;
         let instance_id = pending.instance_id.clone();
         let request_id = pending.request_id;
-        let result = self.execute_cookie(&name, &pending.request, pending.value.as_deref());
+        let result = self.execute_cookie(&name, &request, value.as_deref());
         self.typed
             .borrow_mut()
             .get_mut(&pending.instance_id)
@@ -186,50 +194,30 @@ impl RuntimeState {
         let Some(pending) = pending else {
             return Ok(());
         };
-        let more = {
+        let graph_generation = pending.graph_generation;
+        let route_loader = pending.route_loader;
+        let run = {
             let mut typed = self.typed.borrow_mut();
-            let runtime = &mut typed.get_mut(&instance_id).unwrap().runtime;
-            if runtime.graph_generation != pending.graph_generation || runtime.root.is_none() {
+            let runtime = &mut typed
+                .get_mut(&instance_id)
+                .ok_or_else(|| JsValue::from_str("typed application missing"))?
+                .runtime;
+            if runtime.graph_generation != graph_generation || runtime.root.is_none() {
                 return Ok(());
             }
-            let mut continuation = pending.continuation;
-            let pc = match result {
-                Ok(value) => {
-                    continuation.current.frame[pending.result_slot] = value;
-                    pending.success_pc
-                }
-                Err(error) => {
-                    continuation.current.frame[pending.error_slot] = error;
-                    pending.failure_pc
-                }
-            };
-            continuation.current.pc = pc;
-            runtime.execute_continuation(
-                continuation.clone(),
-                None,
-                &mut UpdateMetrics::default(),
-            )?;
-            let mut more = runtime.take_pending_cookies();
-            if more.is_empty() {
-                if let Some(finally_pc) = pending.finally_pc {
-                    runtime.execute_action_at_with_fetch_accounting(
-                        continuation.current.action,
-                        finally_pc,
-                        continuation.current.frame,
-                        &continuation.current.event,
-                        continuation.current.row,
-                        None,
-                        &mut UpdateMetrics::default(),
-                        continuation.fetch_accounting.clone(),
-                    )?;
-                    more.extend(runtime.take_pending_cookies());
-                }
-            }
-            more
+            runtime
+                .resume_browser_action(pending.suspension, result, pending.context.clone())
+                .map_err(|error| JsValue::from_str(&error.to_string()))?
         };
-        for mut next in more {
-            next.instance_id = instance_id.clone();
-            self.start_typed_cookie(next)?;
+        if let Run::Suspended(suspension) = run {
+            let next = pending_browser_capability(
+                instance_id,
+                graph_generation,
+                route_loader,
+                suspension,
+                pending.context,
+            );
+            self.start_browser_capability(next)?;
         }
         self.install_typed_event_listeners()?;
         Ok(())
