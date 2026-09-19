@@ -5,9 +5,9 @@ use plec_hir::{
     BindingId, ComponentId, ExprId, HirApplication, HirArrayItem, HirBinaryOp, HirBinding,
     HirBindingKind, HirCallable, HirCallableBody, HirCallableDecl, HirComponent, HirComponentCall,
     HirComponentTarget, HirConditional, HirElement, HirEventBinding, HirExpr, HirExprNode,
-    HirForEach, HirFragment, HirInput, HirListener, HirLocal, HirLogicalOp, HirNode, HirObjectItem,
-    HirParameter, HirParameterSource, HirProp, HirReaction, HirRefSlot, HirSlot, HirState, HirStmt,
-    HirTemplatePart, HirText, HirUnaryOp, HirValue, NodeId, SourceSpan,
+    HirForEach, HirFragment, HirInput, HirListener, HirLocal, HirLogicalOp, HirMutation, HirNode,
+    HirObjectItem, HirParameter, HirParameterSource, HirProp, HirReaction, HirRefSlot, HirSlot,
+    HirState, HirStmt, HirTemplatePart, HirText, HirUnaryOp, HirValue, NodeId, SourceSpan,
 };
 use plec_ir::limits::{
     MAX_COMPONENT_COLLECTION_LEN, MAX_COMPONENT_COUNT, MAX_COMPONENT_NESTING_DEPTH,
@@ -163,6 +163,7 @@ struct HirLoweringCtx<'a> {
     locals: Vec<HirLocal>,
     states: Vec<HirState>,
     ref_slots: Vec<HirRefSlot>,
+    mutations: Vec<HirMutation>,
     reactions: Vec<HirReaction>,
     listeners: Vec<HirListener>,
     callables: Vec<HirCallableDecl>,
@@ -196,6 +197,7 @@ impl<'a> HirLoweringCtx<'a> {
             locals: Vec::new(),
             states: Vec::new(),
             ref_slots: Vec::new(),
+            mutations: Vec::new(),
             reactions: Vec::new(),
             listeners: Vec::new(),
             callables: Vec::new(),
@@ -267,7 +269,9 @@ impl<'a> HirLoweringCtx<'a> {
     fn is_callable_binding(&self, id: BindingId) -> bool {
         matches!(
             self.binding_kind(id),
-            HirBindingKind::Callable | HirBindingKind::Parameter { callable: true }
+            HirBindingKind::Callable
+                | HirBindingKind::MutationRun { .. }
+                | HirBindingKind::Parameter { callable: true }
         )
     }
 
@@ -344,6 +348,7 @@ pub fn lower_root_component_with_options(
         locals: ctx.locals,
         states: ctx.states,
         ref_slots: ctx.ref_slots,
+        mutations: ctx.mutations,
         reactions: ctx.reactions,
         listeners: ctx.listeners,
         callables: ctx.callables,
@@ -844,6 +849,9 @@ fn lower_component_var(
             ctx,
         ),
         Pat::Ident(ident) => match init {
+            Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useMutation")) => {
+                lower_mutation_declaration(ident, call, ctx)
+            }
             Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useRef")) =>
             {
                 if call.args.len() != 1 || call.args[0].spread.is_some() {
@@ -967,6 +975,91 @@ fn lower_component_var(
         },
         _ => Err("Unsupported component declaration pattern".to_string()),
     }
+}
+
+fn lower_mutation_declaration(
+    ident: &swc_ecma_ast::BindingIdent,
+    call: &swc_ecma_ast::CallExpr,
+    ctx: &mut HirLoweringCtx<'_>,
+) -> Result<(), String> {
+    if call.args.len() != 1 || call.args[0].spread.is_some() {
+        return Err("useMutation requires one non-spread async callback".into());
+    }
+    let Expr::Arrow(callback) = call.args[0].expr.as_ref() else {
+        return Err("useMutation callback must be a direct async arrow".into());
+    };
+    if !callback.is_async {
+        return Err("useMutation callback must be async".into());
+    }
+    if callback.params.len() != 1 {
+        return Err("useMutation callback must accept exactly one parameter".into());
+    }
+    let span = source_span_from_swc(ident.id.span, ctx.module_id);
+    let binding = ctx.declare_binding(
+        ident.id.sym.to_string(),
+        HirBindingKind::Mutation,
+        span.clone(),
+    )?;
+    let callback_binding = ctx.declare_binding(
+        format!("{}.__mutation_callback", ident.id.sym),
+        HirBindingKind::Callable,
+        span.clone(),
+    )?;
+    let (parameters, body) = lower_arrow_callable(callback, ctx)?;
+    ctx.callables.push(HirCallableDecl {
+        binding: callback_binding,
+        parameters,
+        body,
+        span: span.clone(),
+    });
+    let run = ctx.declare_binding(
+        format!("{}.__run", ident.id.sym),
+        HirBindingKind::MutationRun { mutation: binding },
+        span.clone(),
+    )?;
+    let pending = ctx.declare_binding(
+        format!("{}.__pending", ident.id.sym),
+        HirBindingKind::MutationPending { mutation: binding },
+        span.clone(),
+    )?;
+    let error = ctx.declare_binding(
+        format!("{}.__error", ident.id.sym),
+        HirBindingKind::MutationError { mutation: binding },
+        span.clone(),
+    )?;
+    let data = ctx.declare_binding(
+        format!("{}.__data", ident.id.sym),
+        HirBindingKind::MutationData { mutation: binding },
+        span.clone(),
+    )?;
+    ctx.mutations.push(HirMutation {
+        binding,
+        run,
+        pending,
+        error,
+        data,
+        callback: callback_binding,
+        span,
+    });
+    Ok(())
+}
+
+fn mutation_field_binding(
+    mutation: BindingId,
+    property: &str,
+    ctx: &HirLoweringCtx<'_>,
+) -> Result<Option<BindingId>, String> {
+    let Some(declaration) = ctx.mutations.iter().find(|item| item.binding == mutation) else {
+        return Ok(None);
+    };
+    let binding = match property {
+        "run" => declaration.run,
+        "pending" => declaration.pending,
+        "error" => declaration.error,
+        "data" => declaration.data,
+        _ => return Err(format!("unsupported useMutation field '.{property}'")),
+    };
+    Ok(Some(binding))
 }
 
 fn component_target_from_symbol(symbol: &plec_model::ResolvedSymbol) -> HirComponentTarget {
@@ -1208,6 +1301,25 @@ fn lower_awaited_call(
         return Err("await must call fetch or a local action".into());
     };
     if let Expr::Member(member) = callee.as_ref() {
+        if matches!(&member.prop, swc_ecma_ast::MemberProp::Ident(name) if name.sym == "run")
+            && call.args.iter().all(|argument| argument.spread.is_none())
+        {
+            if let Expr::Ident(object) = member.obj.as_ref() {
+                let mutation = ctx.resolve_binding(&object.sym)?;
+                if let Some(run) = mutation_field_binding(mutation, "run", ctx)? {
+                    return Ok(HirStmt::AwaitCall {
+                        target,
+                        callee: run,
+                        arguments: call
+                            .args
+                            .iter()
+                            .map(|arg| lower_expression(&arg.expr, ctx))
+                            .collect::<Result<_, _>>()?,
+                        span,
+                    });
+                }
+            }
+        }
         if matches!(&member.prop, swc_ecma_ast::MemberProp::Ident(name) if name.sym == "json" || name.sym == "text")
             && call.args.is_empty()
         {
@@ -2841,10 +2953,16 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
                 }
                 swc_ecma_ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
-                    if property == "current" {
-                        if let HirExpr::Binding(binding) =
-                            ctx.expressions[object_id.0 as usize].expression
-                        {
+                    if let HirExpr::Binding(binding) =
+                        ctx.expressions[object_id.0 as usize].expression
+                    {
+                        if matches!(ctx.binding_kind(binding), HirBindingKind::Mutation) {
+                            let field_binding = mutation_field_binding(binding, &property, ctx)?
+                                .ok_or_else(|| {
+                                    format!("mutation field '.{property}' unavailable")
+                                })?;
+                            HirExpr::Binding(field_binding)
+                        } else if property == "current" {
                             match ctx.bindings[binding.0 as usize].kind {
                                 HirBindingKind::RefSlot => {
                                     HirExpr::RefCurrent { reference: binding }
@@ -2862,6 +2980,11 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
                                 object: object_id,
                                 property,
                             }
+                        }
+                    } else if property == "current" {
+                        HirExpr::Member {
+                            object: object_id,
+                            property,
                         }
                     } else {
                         HirExpr::Member {
@@ -4315,6 +4438,85 @@ mod tests {
         assert!(
             matches!(button.events[0].callable, HirCallable::Reference { binding } if binding == save.binding)
         );
+    }
+
+    #[test]
+    fn lowers_direct_use_mutation_with_typed_fields() {
+        let source = r#"
+            export function App() {
+                const mutation = useMutation(async (value) => { return value; });
+                return <button disabled={mutation.pending} onClick={() => mutation.run("x")}>{mutation.data}</button>;
+            }
+        "#;
+        let hir = build_and_lower(source).unwrap();
+        assert_eq!(hir.mutations.len(), 1);
+        let mutation = &hir.mutations[0];
+        assert!(matches!(
+            hir.bindings[mutation.binding.0 as usize].kind,
+            HirBindingKind::Mutation
+        ));
+        assert!(matches!(
+            hir.bindings[mutation.run.0 as usize].kind,
+            HirBindingKind::MutationRun { .. }
+        ));
+        assert!(matches!(
+            hir.bindings[mutation.pending.0 as usize].kind,
+            HirBindingKind::MutationPending { .. }
+        ));
+        assert!(matches!(
+            hir.bindings[mutation.error.0 as usize].kind,
+            HirBindingKind::MutationError { .. }
+        ));
+        assert!(matches!(
+            hir.bindings[mutation.data.0 as usize].kind,
+            HirBindingKind::MutationData { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_non_direct_use_mutation_callback() {
+        let error = build_and_lower(
+            "export function App() { const mutation = useMutation(callback); return <button />; }",
+        )
+        .unwrap_err();
+        assert!(error.contains("useMutation callback must be a direct async arrow"));
+    }
+
+    #[test]
+    fn rejects_unknown_use_mutation_field() {
+        let error = build_and_lower(
+            "export function App() { const mutation = useMutation(async (value) => { return value; }); return <p>{mutation.status}</p>; }",
+        )
+        .unwrap_err();
+        assert!(error.contains("unsupported useMutation field '.status'"));
+    }
+
+    #[test]
+    fn lowers_awaited_mutation_run_as_an_action_call() {
+        let source = r#"
+            export function App() {
+                const mutation = useMutation(async (value) => { return value; });
+                async function save() {
+                    await mutation.run("x");
+                }
+                return <button onClick={save}>Save</button>;
+            }
+        "#;
+        let hir = build_and_lower(source).unwrap();
+        let save = hir
+            .callables
+            .iter()
+            .find(|callable| hir.bindings[callable.binding.0 as usize].name == "save")
+            .unwrap();
+        assert!(matches!(
+            save.body,
+            HirCallableBody::Block(ref statements)
+                if matches!(statements.first(), Some(HirStmt::AwaitCall { callee, .. })
+                    if *callee == hir.mutations[0].run)
+        ));
+        let executable = crate::lower_component_to_executable(&hir).unwrap();
+        assert_eq!(executable.state_slots.len(), 3);
+        assert!(!executable.actions.is_empty());
     }
 
     #[test]

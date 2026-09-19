@@ -112,6 +112,35 @@ impl Ctx<'_> {
                     deps.insert(state);
                     code.push(ExpressionInstruction::LoadState { state });
                 }
+                Some(HirBindingKind::MutationPending { mutation })
+                | Some(HirBindingKind::MutationError { mutation })
+                | Some(HirBindingKind::MutationData { mutation }) => {
+                    let state = *self.mutation_states.get(&binding).ok_or_else(|| {
+                        self.err(&format!(
+                            "mutation field '{}' used before lowering",
+                            self.component.bindings[binding.0 as usize].name
+                        ))
+                    })?;
+                    deps.insert(state);
+                    code.push(ExpressionInstruction::LoadState { state });
+                    let _ = mutation;
+                }
+                Some(HirBindingKind::MutationRun { mutation }) => {
+                    let callback = self
+                        .component
+                        .mutations
+                        .iter()
+                        .find(|candidate| candidate.binding == *mutation)
+                        .map(|candidate| candidate.callback)
+                        .ok_or_else(|| self.err("mutation declaration missing"))?;
+                    let action = *self
+                        .callables
+                        .get(&callback)
+                        .ok_or_else(|| self.err("mutation action used before lowering"))?;
+                    code.push(ExpressionInstruction::Constant {
+                        constant: self.constant(plec_ir::Value::Number(action as f64)),
+                    });
+                }
                 Some(HirBindingKind::Input { kind }) if kind == "location" => {
                     let host = *self
                         .hosts

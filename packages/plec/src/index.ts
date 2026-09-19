@@ -1,6 +1,7 @@
 import { Fragment, jsx, jsxs } from './client/jsx';
 import { createRoot } from './client/root/create-root';
 import { useState } from './client/state/use-state';
+import { useMutation } from './client/state/use-mutation';
 import { useHostRef, useRef } from './client/state/use-ref';
 import { useReaction } from './client/state/use-reaction';
 import { useListener } from './client/state/use-listener';
@@ -22,6 +23,7 @@ export {
   jsxs,
   createRoot,
   useState,
+  useMutation,
   useRef,
   useHostRef,
   useReaction,
@@ -37,11 +39,13 @@ export {
   Outlet,
 };
 export type { PlecChild, PlecComponent, PlecNode } from './client/jsx';
+export type { PlecMutation } from './client/state/use-mutation';
 export type { PlecController } from './client/root/root-state';
 
 export const Plec = {
   createRoot,
   useState,
+  useMutation,
   useRef,
   useHostRef,
   useReaction,

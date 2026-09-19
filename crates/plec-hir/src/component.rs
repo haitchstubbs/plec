@@ -31,6 +31,19 @@ pub enum HirBindingKind {
     RefSlot,
     /// A lifecycle-bound handle to one intrinsic host node.
     HostRef,
+    Mutation,
+    MutationRun {
+        mutation: BindingId,
+    },
+    MutationPending {
+        mutation: BindingId,
+    },
+    MutationError {
+        mutation: BindingId,
+    },
+    MutationData {
+        mutation: BindingId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +86,17 @@ pub struct HirState {
 pub struct HirRefSlot {
     pub binding: BindingId,
     pub initializer: ExprId,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirMutation {
+    pub binding: BindingId,
+    pub run: BindingId,
+    pub pending: BindingId,
+    pub error: BindingId,
+    pub data: BindingId,
+    pub callback: BindingId,
     pub span: SourceSpan,
 }
 
@@ -214,6 +238,7 @@ pub struct HirComponent {
     pub locals: Vec<HirLocal>,
     pub states: Vec<HirState>,
     pub ref_slots: Vec<HirRefSlot>,
+    pub mutations: Vec<HirMutation>,
     pub reactions: Vec<HirReaction>,
     pub listeners: Vec<HirListener>,
     pub callables: Vec<HirCallableDecl>,
@@ -268,6 +293,7 @@ impl HirComponent {
             locals: Vec::new(),
             states: Vec::new(),
             ref_slots: Vec::new(),
+            mutations: Vec::new(),
             reactions: Vec::new(),
             listeners: Vec::new(),
             callables: Vec::new(),
