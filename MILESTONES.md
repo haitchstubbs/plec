@@ -1,11 +1,10 @@
 # Milestones
 
-This project uses beads for issue tracking.
-While in stealth mode, issues are centralised locally and backed up remotely.
-A pre-commit hook ensures updates to the local issue tracker are captured here for visibility.
+This file is a frozen historical snapshot of the project's retired local issue
+tracker, captured when issue tracking moved to GitHub Issues. It is no longer
+generated or updated.
 
-Once this project opens to new contributors, issues will be tracked publically.
-In the meantime, issues can be subbmited via github and will be prioritised into the beads issue tracker.
+Active issue tracking lives in GitHub Issues.
 
 ## Issue Tracker
 

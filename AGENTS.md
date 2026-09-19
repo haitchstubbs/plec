@@ -13,7 +13,7 @@ When instructions conflict, use this order:
 3. This file.
 4. Issue text, old plans, comments, and historical documentation.
 
-Never use a stale plan or Beads description to override code/tests that establish the current contract.
+Never use a stale plan or issue description to override code/tests that establish the current contract.
 
 ## Core invariants
 
@@ -319,7 +319,7 @@ Keep changes narrow.
 - Do not create speculative interfaces, registries, providers, or abstractions for hypothetical future implementations.
 - Prefer obvious ownership and concrete types.
 - Comment non-obvious invariants and architectural decisions, not routine code.
-- If you discover adjacent work that is real but not required, create a linked Beads issue instead of expanding the current task.
+- If you discover adjacent work that is real but not required, create a linked issue instead of expanding the current task.
 
 ## Multi-agent safety
 
@@ -327,7 +327,7 @@ Assume other agents may be working in the same worktree or nearby files.
 
 - Inspect `git status --short` before making broad edits.
 - Do not revert, reset, stash, overwrite, or “clean up” changes you did not create unless explicitly instructed.
-- Stay within the claimed Beads issue/task boundary. If another issue owns adjacent work, link it rather than absorbing it.
+- Stay within the claimed issue/task boundary. If another issue owns adjacent work, link it rather than absorbing it.
 - Prefer additive/local edits over sweeping rewrites when unrelated working-tree changes exist.
 - Do not use destructive Git commands (`reset --hard`, `clean -fd`, forced checkout, history rewrite) without explicit authorization.
 - If concurrent changes make a required edit ambiguous, preserve both intents where possible and report the collision at handoff.
@@ -340,47 +340,12 @@ Pass arguments inline, pipe stdin, or use the tool's batching/interface support.
 
 Files are allowed when they are actual task outputs: source, tests, fixtures, config, docs, benchmark results required by the repository, etc.
 
-## Issue tracking: `bd` / Beads
+## Issue tracking
 
-This repository uses **Beads for task tracking**. Do not create markdown TODO lists or a parallel issue system.
-
-Use JSON output for agent/programmatic workflows.
-
-Common commands:
-
-```bash
-bd ready --json
-bd show <id> --json
-bd update <id> --claim --json
-bd create "Issue title" --description="Detailed context" -t task -p 2 --json
-bd create "Found bug" --description="Details" -t bug -p 1 --deps discovered-from:<parent-id> --json
-bd close <id> --reason "Completed" --json
-```
-
-Issue types:
-
-- `bug`: broken behavior
-- `feature`: new user-visible capability
-- `task`: implementation/refactor/test/docs work
-- `epic`: multi-issue body of work
-- `chore`: maintenance/tooling/dependencies
-
-Priorities:
-
-- `0`: critical
-- `1`: high
-- `2`: normal/default
-- `3`: low
-- `4`: backlog
+Issue tracking lives in **GitHub Issues**. Do not create markdown TODO lists or a parallel local issue system.
 
 Rules:
 
-- Check `bd ready --json` when selecting unblocked work.
-- Claim an issue before implementing it when working from the queue.
-- Use `discovered-from:<parent-id>` for adjacent work found during implementation.
-- Use `--acceptance` / `--design` for issues where those fields materially reduce ambiguity.
-- Use `bd lint`, `bd stale`, and `bd orphans` for hygiene when relevant.
-- Beads data syncs through Dolt; do not treat `.beads/issues.jsonl` as the authoritative sync protocol.
 - Task-tracking guidance never grants permission to commit or push.
 
 ## Git and sync policy
@@ -391,7 +356,6 @@ Unless the current user/orchestrator or an explicit repository profile authorize
 
 - do not commit,
 - do not push Git,
-- do not run `bd dolt push` / remote sync,
 - do not rewrite history.
 
 At handoff, report changed files, validation performed, issue status, and any suggested commit/sync commands.
@@ -405,7 +369,7 @@ If code changed:
 1. run the narrow relevant tests/checks,
 2. run broader gates when the change crosses compiler/runtime/browser/server boundaries,
 3. verify runtime artifact freshness when WASM changed,
-4. update/close the Beads issue if the active workflow calls for it,
+4. update/close the tracking issue if the active workflow calls for it,
 5. create linked issues for genuine remaining work rather than hiding TODOs in prose/code,
 6. report what changed and what was validated.
 
