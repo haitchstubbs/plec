@@ -1,9 +1,10 @@
-import { createRoute, useState } from 'plec';
+import { createRoute, useMutation, useState } from 'plec';
 import { PageFrame, PageKicker } from '../components/page-primitives';
 import { Route as rootRoute } from './index';
 
 type Todo = { id: string; title: string; completed: boolean };
 type TodoPatch = Pick<Todo, 'completed'> | Pick<Todo, 'title'>;
+type TodoMutationInput = { id: string; body: string };
 
 export const Route = createRoute({
   getParentRoute: () => rootRoute,
@@ -49,7 +50,6 @@ export function TodosPage() {
   const [title, setTitle] = useState('');
   const [search, setSearch] = useState('');
   const [pending, setPending] = useState<string | undefined>(undefined);
-  const [error, setError] = useState<string | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(
     undefined,
   );
@@ -59,86 +59,89 @@ export function TodosPage() {
   );
   const openCount = todos.filter((todo) => !todo.completed).length;
 
-  async function createTodo(event: Event) {
+  const createTodo = useMutation(async (nextTitle: string) => {
+    const response = await fetch('/api/todos', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: nextTitle }),
+    });
+    if (!response.ok)
+      throw new Error('The Todo API rejected this change.');
+    const todo = (await response.json()) as Todo;
+    setTodos((items) => [...items, todo]);
+    setTitle('');
+    return todo;
+  });
+
+  const updateTodo = useMutation(async (input: TodoMutationInput) => {
+    const response = await fetch(
+      `/api/todos/${encodeURIComponent(input.id)}`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: input.body,
+      },
+    );
+    if (!response.ok)
+      throw new Error('The Todo API rejected this change.');
+    const updated = (await response.json()) as Todo;
+    return updated;
+  });
+
+  const removeTodo = useMutation(async (id: string) => {
+    const response = await fetch(
+      `/api/todos/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok)
+      throw new Error('The Todo API rejected this change.');
+    return id;
+  });
+
+  function submitTodo(event: Event) {
     event.preventDefault();
     const nextTitle = title.trim();
     if (!nextTitle) return;
-    setPending('create');
-    setError(undefined);
-    try {
-      const response = await fetch('/api/todos', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: nextTitle }),
-      });
-      if (!response.ok)
-        throw new Error('The Todo API rejected this change.');
-      const todo = (await response.json()) as Todo;
-      setTodos((items) => [...items, todo]);
-      setTitle('');
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : 'Could not update todo.',
-      );
-    } finally {
-      setPending(undefined);
-    }
+    void createTodo.run(nextTitle);
   }
 
-  async function updateTodo(todo: Todo, patch: TodoPatch) {
+  async function updateTodoFor(todo: Todo, patch: TodoPatch) {
     setPending(`update:${todo.id}`);
-    setError(undefined);
     try {
-      const response = await fetch(
-        `/api/todos/${encodeURIComponent(todo.id)}`,
-        {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(patch),
-        },
-      );
-      if (!response.ok)
-        throw new Error('The Todo API rejected this change.');
-      const updated = (await response.json()) as Todo;
+      const updated = await updateTodo.run({
+        id: todo.id,
+        body: JSON.stringify(patch),
+      });
+      setPending(undefined);
       setTodos((items) =>
         items.map((item) => (item.id === updated.id ? updated : item)),
       );
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : 'Could not update todo.',
-      );
-    } finally {
+    } catch (_) {
       setPending(undefined);
     }
   }
 
-  async function removeTodo(todo: Todo) {
+  async function removeTodoFor(todo: Todo) {
     setPending(`remove:${todo.id}`);
-    setError(undefined);
     try {
-      const response = await fetch(
-        `/api/todos/${encodeURIComponent(todo.id)}`,
-        {
-          method: 'DELETE',
-        },
+      const removedId = await removeTodo.run(todo.id);
+      setPending(undefined);
+      setTodos((items) =>
+        items.filter((item) => item.id !== removedId),
       );
-      if (!response.ok)
-        throw new Error('The Todo API rejected this change.');
-      setTodos((items) => items.filter((item) => item.id !== todo.id));
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : 'Could not update todo.',
-      );
-    } finally {
+    } catch (_) {
       setPending(undefined);
     }
   }
+
+  const mutationError =
+    createTodo.error || updateTodo.error || removeTodo.error;
+  const createError =
+    mutationError instanceof Error
+      ? mutationError.message
+      : mutationError
+        ? 'Could not update todo.'
+        : null;
 
   return (
     <PageFrame>
@@ -152,7 +155,7 @@ export function TodosPage() {
         </p>
       </header>
 
-      <form className="flex flex-wrap gap-2" onSubmit={createTodo}>
+      <form className="flex flex-wrap gap-2" onSubmit={submitTodo}>
         <input
           id="todo-new-title"
           className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2"
@@ -162,14 +165,14 @@ export function TodosPage() {
           }
           placeholder="What needs doing?"
           aria-label="New todo"
-          disabled={pending === 'create'}
+          disabled={createTodo.pending}
         />
         <button
           type="submit"
           className="rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground disabled:opacity-50"
-          disabled={pending === 'create' || !title.trim()}
+          disabled={createTodo.pending || !title.trim()}
         >
-          {pending === 'create' ? 'Adding…' : 'Add todo'}
+          {createTodo.pending ? 'Adding…' : 'Add todo'}
         </button>
       </form>
 
@@ -184,9 +187,9 @@ export function TodosPage() {
         aria-label="Search todos"
       />
 
-      {error && (
+      {createError && (
         <p role="alert" className="m-0 text-destructive">
-          {error}
+          {createError}
         </p>
       )}
 
@@ -203,21 +206,21 @@ export function TodosPage() {
                 pending === `remove:${todo.id}`
               }
               onToggle={() =>
-                updateTodo(todo, { completed: !todo.completed })
+                updateTodoFor(todo, { completed: !todo.completed })
               }
               onStartEdit={() => {
                 setEditingId(todo.id);
                 setEditingTitle(todo.title);
               }}
               onEditTitle={setEditingTitle}
+              onCancel={() => setEditingId(undefined)}
               onSave={() => {
                 const nextTitle = editingTitle.trim();
                 if (nextTitle && nextTitle !== todo.title)
-                  void updateTodo(todo, { title: nextTitle });
+                  updateTodoFor(todo, { title: nextTitle });
                 setEditingId(undefined);
               }}
-              onCancel={() => setEditingId(undefined)}
-              onRemove={() => removeTodo(todo)}
+              onRemove={() => removeTodoFor(todo)}
             />
           ))}
         </ul>

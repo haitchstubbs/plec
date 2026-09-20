@@ -890,6 +890,56 @@ mod tests {
 
     #[test]
     #[cfg(feature = "fetch")]
+    fn mutation_completion_after_graph_disposal_cannot_publish_state() {
+        let runtime = TypedRuntime::new(
+            mutation_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
+        let mut instance = TypedGraphInstance {
+            parent_id: None,
+            outlet_id: "outlet".into(),
+            graph_id: "graph".into(),
+            route_id: None,
+            match_key: None,
+            route_state: None,
+            loader_data: None,
+            loader_runtime: None,
+            component_call: None,
+            component_start: None,
+            runtime,
+        };
+        let context = ActionRunContext::default();
+        let mut metrics = UpdateMetrics::default();
+        let suspended = instance
+            .runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("input".into()); 4],
+                context,
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(_suspension) = suspended else { panic!("expected suspension") };
+        assert_eq!(instance.runtime.states[0], RuntimeValue::Bool(true));
+        // Capability completions capture the graph generation at suspension
+        // time (fetch.rs/cookie.rs) and resolve the owning runtime through
+        // `runtime_for_generation_mut` before resuming; disposal bumps the
+        // generation, so the continuation holding `mutationPublish` must
+        // never run.
+        let suspended_generation = instance.runtime.graph_generation;
+        instance.runtime.invalidate_fetches();
+        assert!(instance
+            .runtime_for_generation_mut(suspended_generation)
+            .is_none());
+        assert_eq!(instance.runtime.states[0], RuntimeValue::Bool(true));
+        assert_eq!(instance.runtime.states[1], RuntimeValue::Null);
+        assert_eq!(instance.runtime.states[2], RuntimeValue::Null);
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
     fn fetch_uses_json_stringify_results_as_raw_request_bodies() {
         let app: TypedApplication = serde_json::from_value(json!({
             "rootNode": 0,

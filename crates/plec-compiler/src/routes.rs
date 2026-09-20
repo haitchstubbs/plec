@@ -845,4 +845,77 @@ mod tests {
             "route revision must not depend on artifact ordering"
         );
     }
+
+    #[test]
+    fn lowers_route_component_with_mutation_and_callable_props() {
+        let modules = vec![
+            parse_module("routes.tsx", r#"
+            import { useMutation } from "./hooks";
+            type Todo = { id: string; title: string; completed: boolean };
+            function Row({ todo, onUpdated }: { todo: Todo; onUpdated(updated: Todo): void }) {
+                const update = useMutation(async (patch: { title: string }) => {
+                    const response = await fetch(`/api/todos/${encodeURIComponent(todo.id)}`, {
+                        method: 'PATCH',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify(patch),
+                    });
+                    if (!response.ok) throw new Error('rejected');
+                    const updated = (await response.json()) as Todo;
+                    return updated;
+                });
+                return <li>{todo.title}{update.pending ? 'Saving…' : ''}</li>;
+            }
+            function Todos() {
+                const [todos, setTodos] = useState([{ id: '1', title: 'x', completed: false }]);
+                const create = useMutation(async (title: string) => {
+                    const response = await fetch('/api/todos', {
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({ title }),
+                    });
+                    if (!response.ok) throw new Error('rejected');
+                    const todo = (await response.json()) as Todo;
+                    return todo;
+                });
+                const message = create.error instanceof Error ? create.error.message : 'idle';
+                function submit(event: Event) {
+                    event.preventDefault();
+                    void create.run('next');
+                }
+                return <form onSubmit={submit}><Row todo={todos[0]} onUpdated={(updated: Todo) => setTodos([updated])} />{message && <p role="alert">{message}</p>}</form>;
+            }
+            export const Root = createRootRoute({ component: Todos });
+            export const router = createRouter({ routeTree: Root });
+        "#).unwrap(),
+            parse_module("hooks.ts", r#"
+            export function useMutation(callback: unknown) { return callback; }
+        "#).unwrap(),
+        ];
+        let resolved_imports = HashMap::from([(
+            ("routes.tsx".to_string(), "./hooks".to_string()),
+            "hooks.ts".to_string(),
+        )]);
+        let graph = build_semantic_graph(&modules, &resolved_imports).unwrap();
+        let routes = lower_routes(&modules, &graph).unwrap();
+        let artifacts = lower_route_artifacts(&modules, &graph, &routes).unwrap();
+        assert_eq!(artifacts.graphs.len(), 1);
+        // The serialized artifact is loaded by hosts through the schema's
+        // typed application contract; mutation instructions must round-trip
+        // through that deserialization (camelCase slot fields).
+        let serialized = serde_json::to_value(&artifacts.graphs[0].graph).unwrap();
+        let loaded: plec_schema::typed::TypedComponentApplication =
+            serde_json::from_value(serialized).unwrap();
+        assert!(loaded.components.iter().any(|component| {
+            component
+                .actions
+                .iter()
+                .flat_map(|action| action.instructions.iter())
+                .any(|instruction| {
+                    matches!(
+                        instruction,
+                        plec_schema::typed::TypedActionInstruction::MutationPublish { .. }
+                    )
+                })
+        }));
+    }
 }
