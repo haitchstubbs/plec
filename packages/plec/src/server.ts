@@ -14,6 +14,12 @@ export type ApiRouteHandler = (
   context: RequestContext,
 ) => Response | Promise<Response>;
 
+export type ApiMiddleware = (
+  request: Request,
+  context: RequestContext,
+  next: () => Promise<Response>,
+) => Response | Promise<Response>;
+
 /** Application-owned `/api/*` handler executed by the native host's sidecar. */
 export type AppRequestHandler = (
   request: Request,
