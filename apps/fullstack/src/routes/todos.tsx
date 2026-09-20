@@ -49,8 +49,12 @@ export function TodosPage() {
   const [todos, setTodos] = useState(initialTodos);
   const [title, setTitle] = useState('');
   const [search, setSearch] = useState('');
-  const [updatingId, setUpdatingId] = useState<string | undefined>(undefined);
-  const [removingId, setRemovingId] = useState<string | undefined>(undefined);
+  const [updatingId, setUpdatingId] = useState<string | undefined>(
+    undefined,
+  );
+  const [removingId, setRemovingId] = useState<string | undefined>(
+    undefined,
+  );
   const [editingId, setEditingId] = useState<string | undefined>(
     undefined,
   );

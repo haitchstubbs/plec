@@ -116,13 +116,13 @@ Browser execution is primarily Rust compiled to WebAssembly.
 
 The runtime is split across focused crates rather than implemented as a single monolithic executor:
 
-* `plec-schema` - runtime-facing artifact structures
-* `plec-eval`- expression evaluation
-* `plec-action` - host-neutral action control flow, continuations, suspension, and execution budgets
-* `plec-client` - client state, events, actions, bindings, keyed collections, and runtime ownership
-* `plec-dom` - browser host access
-* `plec-router` - client routing and navigation
-* `plec-runtime` - WASM-facing runtime façade and protocol boundary
+- `plec-schema` - runtime-facing artifact structures
+- `plec-eval`- expression evaluation
+- `plec-action` - host-neutral action control flow, continuations, suspension, and execution budgets
+- `plec-client` - client state, events, actions, bindings, keyed collections, and runtime ownership
+- `plec-dom` - browser host access
+- `plec-router` - client routing and navigation
+- `plec-runtime` - WASM-facing runtime façade and protocol boundary
 
 Browser TypeScript acts as host glue: it loads artifacts, initializes the runtime, wires host providers and capabilities, and manages transport boundaries. It does not own Plec's application semantics.
 
@@ -132,14 +132,14 @@ Plec's production HTTP host is native Rust.
 
 `plec-server` owns:
 
-* HTTP serving
-* application artifact loading
-* routing
-* route loader execution
-* server-side rendering
-* SSR execution snapshots
-* static assets
-* server manifest handling
+- HTTP serving
+- application artifact loading
+- routing
+- route loader execution
+- server-side rendering
+- SSR execution snapshots
+- static assets
+- server manifest handling
 
 Application-authored server and API code remains TypeScript/JavaScript and executes behind the `ApplicationRuntime` boundary through the private Node sidecar.
 
@@ -225,11 +225,11 @@ Compiled semantics do not automatically receive unrestricted browser authority.
 
 Plec exposes explicit host boundaries for capabilities such as:
 
-* network requests
-* cookies
-* custom elements
-* external host components
-* browser-owned inputs
+- network requests
+- cookies
+- custom elements
+- external host components
+- browser-owned inputs
 
 Host components are declared through application configuration and resolved through runtime-local provider registries.
 
@@ -286,10 +286,10 @@ docs/                     Architecture, protocols, limits and development guides
 
 Plec currently targets the repository-pinned development toolchain:
 
-* Node.js `22.20.0`
-* Yarn `4.17.1`
-* Rust `1.98.0`
-* the `wasm32-unknown-unknown` Rust target
+- Node.js `22.20.0`
+- Yarn `4.17.1`
+- Rust `1.98.0`
+- the `wasm32-unknown-unknown` Rust target
 
 Additional WASM and browser tooling is pinned by the repository and installed through the setup scripts.
 
@@ -351,14 +351,14 @@ yarn build
 
 ## Documentation
 
-* [docs/why-plec.md](docs/why-plec.md) — architectural motivation and comparison with existing framework models
-* [docs/getting-started.md](docs/getting-started.md) — toolchain, first build, development loop, tests and benchmarks
-* [docs/ssr-architecture.md](docs/ssr-architecture.md) — SSR and client adoption architecture
-* [docs/dom-address-protocol.md](docs/dom-address-protocol.md) — DOM ownership and addressing protocol
-* [docs/mutations.md](docs/mutations.md) — mutation semantics
-* [docs/security-limits.md](docs/security-limits.md) — runtime and artifact safety limits
-* [crates/README.md](crates/README.md) — Rust compiler and runtime workspace
-* [AGENTS.md](AGENTS.md) — current repository architecture, invariants and development rules
+- [docs/why-plec.md](docs/why-plec.md) — architectural motivation and comparison with existing framework models
+- [docs/getting-started.md](docs/getting-started.md) — toolchain, first build, development loop, tests and benchmarks
+- [docs/ssr-architecture.md](docs/ssr-architecture.md) — SSR and client adoption architecture
+- [docs/dom-address-protocol.md](docs/dom-address-protocol.md) — DOM ownership and addressing protocol
+- [docs/mutations.md](docs/mutations.md) — mutation semantics
+- [docs/security-limits.md](docs/security-limits.md) — runtime and artifact safety limits
+- [crates/README.md](crates/README.md) — Rust compiler and runtime workspace
+- [AGENTS.md](AGENTS.md) — current repository architecture, invariants and development rules
 
 ## Status
 
@@ -366,10 +366,10 @@ Plec is under active development.
 
 Its current goal is to validate an architecture in which:
 
-* applications are authored with familiar typed components,
-* meaningful application behavior is compiled into inspectable semantics,
-* client and server execute those same contracts,
-* runtime ownership and capabilities remain explicit,
-* and updates can be applied without runtime component-tree reconciliation.
+- applications are authored with familiar typed components,
+- meaningful application behavior is compiled into inspectable semantics,
+- client and server execute those same contracts,
+- runtime ownership and capabilities remain explicit,
+- and updates can be applied without runtime component-tree reconciliation.
 
 APIs, artifact formats, protocol versions, package boundaries, and implementation details should be expected to change while those ideas are being developed.
