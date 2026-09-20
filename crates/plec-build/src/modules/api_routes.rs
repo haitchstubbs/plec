@@ -14,6 +14,13 @@ pub struct ApiRoute {
     pub source: PathBuf,
     pub import_path: String,
     pub segments: Vec<Segment>,
+    pub middleware: Vec<ApiMiddleware>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiMiddleware {
+    pub source: PathBuf,
+    pub import_path: String,
 }
 
 impl ApiRoute {
@@ -43,7 +50,7 @@ pub fn discover(app_dir: &Path) -> Result<Vec<ApiRoute>, String> {
     }
 
     let mut routes = Vec::new();
-    discover_directory(&root, &root, &mut routes)?;
+    discover_directory(&root, &root, &mut routes, &[])?;
 
     let mut collisions = BTreeMap::<String, ApiRoute>::new();
     for route in &routes {
@@ -90,12 +97,48 @@ fn discover_directory(
     root: &Path,
     directory: &Path,
     routes: &mut Vec<ApiRoute>,
+    inherited_middleware: &[ApiMiddleware],
 ) -> Result<(), String> {
     let mut entries = fs::read_dir(directory)
         .map_err(|error| format!("cannot scan API directory {}: {error}", directory.display()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("cannot read API directory {}: {error}", directory.display()))?;
     entries.sort_by_key(|entry| entry.file_name());
+
+    let middleware = entries
+        .iter()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if entry.path().is_file() && is_middleware_file(&name) {
+                Some(entry.path())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    if middleware.len() > 1 {
+        return Err(format!(
+            "API directory {} defines both _middleware.ts and _middleware.js",
+            directory.display()
+        ));
+    }
+
+    let mut middleware_scope = inherited_middleware.to_vec();
+    if let Some(path) = middleware.first() {
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| format!("cannot relativize API middleware {}", path.display()))?;
+        middleware_scope.push(ApiMiddleware {
+            source: path.clone(),
+            import_path: format!(
+                "./api/{}",
+                relative
+                    .to_string_lossy()
+                    .replace(std::path::MAIN_SEPARATOR, "/")
+            ),
+        });
+    }
 
     for entry in entries {
         let name = entry.file_name();
@@ -105,7 +148,7 @@ fn discover_directory(
         }
         let path = entry.path();
         if path.is_dir() {
-            discover_directory(root, &path, routes)?;
+            discover_directory(root, &path, routes, &middleware_scope)?;
             continue;
         }
         if !path.is_file() || ignored_file(&name) {
@@ -142,9 +185,14 @@ fn discover_directory(
                     .replace(std::path::MAIN_SEPARATOR, "/")
             ),
             segments,
+            middleware: middleware_scope.clone(),
         });
     }
     Ok(())
+}
+
+fn is_middleware_file(name: &str) -> bool {
+    name == "_middleware.ts" || name == "_middleware.js"
 }
 
 fn parse_segment(value: &str) -> Result<Segment, String> {
@@ -216,6 +264,7 @@ mod tests {
         assert_eq!(routes[1].matcher(), "/api/orgs/:param/users");
         assert_eq!(routes[2].matcher(), "/api/users/me");
         assert_eq!(routes[3].matcher(), "/api/users/:param");
+        assert!(routes.iter().all(|route| route.middleware.is_empty()));
     }
 
     #[test]
@@ -251,5 +300,61 @@ mod tests {
         .expect("routes");
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].matcher(), "/api/todos");
+    }
+
+    #[test]
+    fn resolves_outer_to_inner_middleware_scopes() {
+        let routes = scan(&[
+            "api/_middleware.ts",
+            "api/index.ts",
+            "api/admin/_middleware.js",
+            "api/admin/projects.ts",
+            "api/other.ts",
+        ])
+        .expect("routes");
+
+        let root = routes
+            .iter()
+            .find(|route| route.matcher() == "/api")
+            .expect("root route");
+        assert_eq!(root.middleware.len(), 1);
+        assert_eq!(root.middleware[0].import_path, "./api/_middleware.ts");
+
+        let admin = routes
+            .iter()
+            .find(|route| route.matcher() == "/api/admin/projects")
+            .expect("admin route");
+        assert_eq!(
+            admin
+                .middleware
+                .iter()
+                .map(|middleware| middleware.import_path.as_str())
+                .collect::<Vec<_>>(),
+            ["./api/_middleware.ts", "./api/admin/_middleware.js"]
+        );
+
+        let other = routes
+            .iter()
+            .find(|route| route.matcher() == "/api/other")
+            .expect("sibling route");
+        assert_eq!(other.middleware.len(), 1);
+    }
+
+    #[test]
+    fn rejects_duplicate_middleware_files() {
+        let error = scan(&["api/_middleware.ts", "api/_middleware.js", "api/todos.ts"])
+            .expect_err("duplicate middleware");
+        assert!(error.contains("both _middleware.ts and _middleware.js"));
+    }
+
+    #[test]
+    fn middleware_files_are_not_routes_and_private_helpers_stay_ignored() {
+        let routes = scan(&[
+            "api/_middleware.ts",
+            "api/_private.ts",
+            "api/_lib/helper.ts",
+        ]);
+        let routes = routes.expect("routes");
+        assert!(routes.is_empty());
     }
 }

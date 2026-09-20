@@ -46,6 +46,12 @@ fn generated_source(app_dir: &Path, fallback_entry: Option<&Path>, routes: &[Api
             "import * as route{index} from \"{}\";\n",
             route.import_path
         ));
+        for (middleware_index, middleware) in route.middleware.iter().enumerate() {
+            source.push_str(&format!(
+                "import {{ middleware as middleware{index}_{middleware_index} }} from \"{}\";\n",
+                middleware.import_path
+            ));
+        }
     }
     if fallback_entry.is_some() {
         source.push_str("import * as fallbackModule from \"");
@@ -57,9 +63,10 @@ fn generated_source(app_dir: &Path, fallback_entry: Option<&Path>, routes: &[Api
     source.push_str("\nconst routes = [\n");
     for (index, route) in routes.iter().enumerate() {
         source.push_str(&format!(
-            "  {{ module: route{index}, segments: {}, methods: {} }},\n",
+            "  {{ module: route{index}, segments: {}, methods: {}, middleware: {} }},\n",
             segments_source(route),
-            methods_source()
+            methods_source(),
+            middleware_source(index, route)
         ));
     }
     source.push_str(r#"];
@@ -91,23 +98,38 @@ function matchRoute(pathname) {
   return undefined;
 }
 
-export async function handleRequest(request, context) {
-  const matched = matchRoute(context.pathname);
-  if (matched) {
-    const routeContext = { ...context, params: matched.params };
-    const method = request.method.toUpperCase();
-    const handler = matched.route.module[method];
-    const allow = matched.route.methods.filter((name) =>
-      typeof matched.route.module[name] === 'function',
-    );
-    if (method === 'OPTIONS' && typeof handler !== 'function') {
-      return new Response(null, { status: 204, headers: { Allow: [...allow, 'OPTIONS'].join(', ') } });
-    }
-    if (typeof handler !== 'function') {
-      return new Response(null, { status: 405, headers: { Allow: [...allow, 'OPTIONS'].join(', ') } });
-    }
-    return handler(request, routeContext);
-  }
+ function dispatchRoute(route, request, context, middlewareIndex) {
+   if (middlewareIndex < route.middleware.length) {
+     const middleware = route.middleware[middlewareIndex];
+     let nextCalled = false;
+      const next = async () => {
+        if (nextCalled) throw new Error('middleware next() called more than once');
+        nextCalled = true;
+        return dispatchRoute(route, request, context, middlewareIndex + 1);
+     };
+     return middleware(request, context, next);
+   }
+
+   const method = request.method.toUpperCase();
+   const handler = route.module[method];
+   const allow = route.methods.filter((name) =>
+     typeof route.module[name] === 'function',
+   );
+   if (method === 'OPTIONS' && typeof handler !== 'function') {
+     return new Response(null, { status: 204, headers: { Allow: [...allow, 'OPTIONS'].join(', ') } });
+   }
+   if (typeof handler !== 'function') {
+     return new Response(null, { status: 405, headers: { Allow: [...allow, 'OPTIONS'].join(', ') } });
+   }
+   return handler(request, context);
+ }
+
+ export async function handleRequest(request, context) {
+   const matched = matchRoute(context.pathname);
+   if (matched) {
+     const routeContext = { ...context, params: matched.params };
+     return dispatchRoute(matched.route, request, routeContext, 0);
+   }
 
   return typeof fallbackHandleRequest === 'function'
     ? fallbackHandleRequest(request, context)
@@ -144,6 +166,16 @@ fn methods_source() -> &'static str {
     "['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']"
 }
 
+fn middleware_source(route_index: usize, route: &ApiRoute) -> String {
+    let values = route
+        .middleware
+        .iter()
+        .enumerate()
+        .map(|(middleware_index, _)| format!("middleware{route_index}_{middleware_index}"))
+        .collect::<Vec<_>>();
+    format!("[{}]", values.join(", "))
+}
+
 fn js_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
 }
@@ -161,6 +193,7 @@ mod tests {
                 Segment::Static("todos".into()),
                 Segment::Dynamic("id".into()),
             ],
+            middleware: Vec::new(),
         };
         let source = generated_source(
             Path::new("/app"),
@@ -171,5 +204,50 @@ mod tests {
         assert!(source.contains("fallbackModule.handleRequest"));
         assert!(source.contains("status: 405"));
         assert!(source.contains("status: 204"));
+    }
+
+    #[test]
+    fn generated_dispatch_composes_middleware_around_terminal_route() {
+        let route = ApiRoute {
+            source: "api/admin/todos.ts".into(),
+            import_path: "./api/admin/todos.ts".into(),
+            segments: vec![
+                Segment::Static("admin".into()),
+                Segment::Static("todos".into()),
+            ],
+            middleware: vec![
+                super::super::api_routes::ApiMiddleware {
+                    source: "api/_middleware.ts".into(),
+                    import_path: "./api/_middleware.ts".into(),
+                },
+                super::super::api_routes::ApiMiddleware {
+                    source: "api/admin/_middleware.js".into(),
+                    import_path: "./api/admin/_middleware.js".into(),
+                },
+            ],
+        };
+        let source = generated_source(Path::new("/app"), None, &[route]);
+
+        assert!(source
+            .contains("import { middleware as middleware0_0 } from \"./api/_middleware.ts\";"));
+        assert!(source.contains(
+            "import { middleware as middleware0_1 } from \"./api/admin/_middleware.js\";"
+        ));
+        assert!(source.contains("middleware: [middleware0_0, middleware0_1]"));
+        assert!(source.contains("const next = async () =>"));
+        assert!(source.contains("return middleware(request, context, next);"));
+        assert!(source.contains("middleware next() called more than once"));
+        assert!(source.contains("return dispatchRoute(matched.route, request, routeContext, 0);"));
+
+        let outer = source.find("middleware0_0").expect("outer middleware");
+        let inner = source.find("middleware0_1").expect("inner middleware");
+        assert!(
+            outer < inner,
+            "middleware imports should stay outer-to-inner"
+        );
+
+        let fallback = source.find("fallbackHandleRequest(request, context)");
+        let dispatcher = source.find("dispatchRoute(matched.route");
+        assert!(fallback.expect("fallback") > dispatcher.expect("dispatcher"));
     }
 }
