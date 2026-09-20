@@ -2013,6 +2013,7 @@ dependencies = [
  "plec-lowering",
  "plec-model",
  "plec-parser",
+ "plec-schema",
  "serde",
  "serde_json",
  "swc_common",

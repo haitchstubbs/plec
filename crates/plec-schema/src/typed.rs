@@ -570,6 +570,22 @@ pub enum TypedActionInstruction {
     StoreState {
         state: usize,
     },
+    MutationStart {
+        generation: usize,
+        pending: usize,
+        error: usize,
+    },
+    MutationPublish {
+        generation: usize,
+        pending: usize,
+        error: usize,
+        data: usize,
+        #[serde(rename = "invocationSlot")]
+        invocation_slot: usize,
+        #[serde(rename = "valueSlot")]
+        value_slot: usize,
+        success: bool,
+    },
     StoreFrame {
         slot: usize,
     },
@@ -1584,6 +1600,32 @@ impl TypedApplication {
                         if *state >= self.state_slots.len() =>
                     {
                         return Err("action state handle out of range")
+                    }
+                    TypedActionInstruction::MutationStart {
+                        generation,
+                        pending,
+                        error,
+                    } if [generation, pending, error]
+                        .iter()
+                        .any(|state| **state >= self.state_slots.len()) =>
+                    {
+                        return Err("mutation state handle out of range")
+                    }
+                    TypedActionInstruction::MutationPublish {
+                        generation,
+                        pending,
+                        error,
+                        data,
+                        invocation_slot,
+                        value_slot,
+                        ..
+                    } if [generation, pending, error, data]
+                        .iter()
+                        .any(|state| **state >= self.state_slots.len())
+                        || *invocation_slot >= action.frame_slots
+                        || *value_slot >= action.frame_slots =>
+                    {
+                        return Err("invalid mutation publication")
                     }
                     TypedActionInstruction::StoreRef { reference }
                         if *reference >= self.ref_slots.len() =>

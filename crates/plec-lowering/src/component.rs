@@ -214,6 +214,119 @@ pub(crate) fn lower_component(
         });
         ctx.callables.insert(callable.binding, action);
     }
+    for mutation in &component.mutations {
+        for (binding, value) in [
+            (mutation.pending, plec_ir::Value::Bool(false)),
+            (mutation.error, plec_ir::Value::Null),
+            (mutation.data, plec_ir::Value::Null),
+        ] {
+            let constant = ctx.constant(value);
+            let expression = ctx.app.expressions.len();
+            ctx.app.expressions.push(plec_ir::ExpressionProgram {
+                instructions: vec![
+                    plec_ir::ExpressionInstruction::Constant { constant },
+                    plec_ir::ExpressionInstruction::Return,
+                ],
+            });
+            let state = ctx.app.state_slots.len();
+            ctx.mutation_states.insert(binding, state);
+            ctx.app.state_slots.push(StateSlot {
+                initial_expression: expression,
+                frame_slot: state,
+            });
+        }
+        let generation_expression = ctx.constant(plec_ir::Value::Number(0.0));
+        let generation_initializer = ctx.app.expressions.len();
+        ctx.app.expressions.push(plec_ir::ExpressionProgram {
+            instructions: vec![
+                plec_ir::ExpressionInstruction::Constant {
+                    constant: generation_expression,
+                },
+                plec_ir::ExpressionInstruction::Return,
+            ],
+        });
+        let generation = ctx.app.state_slots.len();
+        ctx.app.state_slots.push(StateSlot {
+            initial_expression: generation_initializer,
+            frame_slot: generation,
+        });
+
+        let callback = *ctx
+            .callables
+            .get(&mutation.callback)
+            .ok_or_else(|| ctx.err("mutation callback action missing"))?;
+        let argument_expression = ctx.app.expressions.len();
+        ctx.app.expressions.push(plec_ir::ExpressionProgram {
+            instructions: vec![
+                plec_ir::ExpressionInstruction::LoadFrame { slot: 0 },
+                plec_ir::ExpressionInstruction::Return,
+            ],
+        });
+        let result_expression = ctx.app.expressions.len();
+        ctx.app.expressions.push(plec_ir::ExpressionProgram {
+            instructions: vec![
+                plec_ir::ExpressionInstruction::LoadFrame { slot: 2 },
+                plec_ir::ExpressionInstruction::Return,
+            ],
+        });
+        let error_expression = ctx.app.expressions.len();
+        ctx.app.expressions.push(plec_ir::ExpressionProgram {
+            instructions: vec![
+                plec_ir::ExpressionInstruction::LoadFrame { slot: 3 },
+                plec_ir::ExpressionInstruction::Return,
+            ],
+        });
+        let wrapper = ctx.app.actions.len();
+        ctx.app.actions.push(ActionProgram {
+            frame_slots: 4,
+            parameter_slots: vec![0],
+            loader_result_state: None,
+            route_loader: false,
+            instructions: vec![
+                ActionInstruction::MutationStart {
+                    generation,
+                    pending: ctx.mutation_states[&mutation.pending],
+                    error: ctx.mutation_states[&mutation.error],
+                },
+                ActionInstruction::StoreFrame { slot: 1 },
+                ActionInstruction::Call {
+                    action: callback,
+                    arguments: vec![argument_expression],
+                    success_pc: Some(3),
+                    failure_pc: Some(5),
+                    result_slot: Some(2),
+                    error_slot: Some(3),
+                },
+                ActionInstruction::MutationPublish {
+                    generation,
+                    pending: ctx.mutation_states[&mutation.pending],
+                    error: ctx.mutation_states[&mutation.error],
+                    data: ctx.mutation_states[&mutation.data],
+                    invocation_slot: 1,
+                    value_slot: 2,
+                    success: true,
+                },
+                ActionInstruction::Return {
+                    outcome: plec_ir::ReturnOutcome::Success,
+                    value: Some(result_expression),
+                },
+                ActionInstruction::MutationPublish {
+                    generation,
+                    pending: ctx.mutation_states[&mutation.pending],
+                    error: ctx.mutation_states[&mutation.error],
+                    data: ctx.mutation_states[&mutation.data],
+                    invocation_slot: 1,
+                    value_slot: 3,
+                    success: false,
+                },
+                ActionInstruction::Return {
+                    outcome: plec_ir::ReturnOutcome::Failure,
+                    value: Some(error_expression),
+                },
+            ],
+        });
+        ctx.callables.insert(mutation.run, wrapper);
+    }
     for callable in &component.callables {
         let action = *ctx
             .callables

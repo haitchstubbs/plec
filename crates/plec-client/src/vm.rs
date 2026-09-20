@@ -4,22 +4,17 @@ use crate::cookie::*;
 use crate::fetch::*;
 use crate::prelude::*;
 use crate::runtime::*;
-#[cfg(feature = "fetch")]
-use plec_action::{ActionError, ActionHost, Run};
+use plec_action::{ActionError, ActionHost, Run, Suspension};
 use plec_dom::platform::document;
 use plec_eval::eval::*;
-use plec_schema::typed::TypedCapabilityRequest;
+use plec_schema::typed::{TypedCapabilityRequest, TypedCookieRequest, TypedFetchRequest};
 use wasm_bindgen::JsCast;
-use web_sys::HtmlElement;
-
-/// Result-slot sentinel for tail-call continuations: a tail call discards
-/// the callee result, so no caller frame slot receives it.
-const TAIL_CALL_NO_SLOT: usize = usize::MAX;
+use web_sys::{Event, HtmlElement};
 
 /// Fully evaluated browser fetch request. Transport remains in `fetch.rs`;
 /// shared action execution only decides when capability suspension occurs.
 #[cfg(feature = "fetch")]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TypedLoaderFetchRequest {
     pub url: String,
     pub method: String,
@@ -114,66 +109,414 @@ impl ActionHost for TypedLoaderHost<'_> {
     }
 }
 
-#[derive(Clone)]
-pub struct TypedActionFrame {
-    pub action: usize,
-    pub pc: usize,
-    pub stack: Vec<RuntimeValue>,
-    pub frame: Vec<RuntimeValue>,
+/// Host-owned context for one browser action run. `event` and `row` are
+/// constant for the lifetime of the run (set at entry, never mutated), so
+/// they live here instead of per-frame action data and survive suspension.
+#[derive(Clone, Default)]
+pub struct ActionRunContext {
     pub event: Vec<RuntimeValue>,
     pub row: Option<HashMap<String, RuntimeValue>>,
 }
 
-#[derive(Clone)]
-pub struct TypedCallerContinuation {
-    pub frame: TypedActionFrame,
-    pub success_pc: usize,
-    pub failure_pc: usize,
-    pub result_slot: usize,
-    pub error_slot: usize,
+/// A browser capability request suspended by the shared action machine.
+#[derive(Clone, Debug)]
+pub enum BrowserRequest {
+    #[cfg(feature = "fetch")]
+    Fetch(TypedLoaderFetchRequest),
+    Cookie {
+        request: TypedCookieRequest,
+        value: Option<String>,
+    },
 }
 
-#[derive(Clone)]
-pub struct TypedContinuationStack {
-    pub current: TypedActionFrame,
-    pub callers: Vec<TypedCallerContinuation>,
-    pub fetch_accounting: Rc<RefCell<ActionFetchAccounting>>,
+/// One browser capability suspension, routed to its host transport.
+pub(crate) enum PendingBrowserCapability {
+    #[cfg(feature = "fetch")]
+    Fetch(TypedPendingFetch),
+    Cookie(TypedPendingCookie),
 }
 
-#[derive(Default)]
-pub struct ActionFetchAccounting {
+pub(crate) fn pending_browser_capability(
+    instance_id: String,
+    graph_generation: u64,
+    route_loader: bool,
+    suspension: Suspension<BrowserRequest>,
+    context: ActionRunContext,
+) -> PendingBrowserCapability {
     #[cfg(feature = "fetch")]
-    fetches: usize,
+    let is_fetch = matches!(suspension.request, BrowserRequest::Fetch(_));
     #[cfg(feature = "fetch")]
-    bytes: usize,
+    if is_fetch {
+        return PendingBrowserCapability::Fetch(TypedPendingFetch {
+            instance_id,
+            suspension,
+            context,
+            graph_generation,
+            request_id: 0,
+            route_loader,
+        });
+    }
+    PendingBrowserCapability::Cookie(TypedPendingCookie {
+        instance_id,
+        request_id: 0,
+        suspension,
+        context,
+        graph_generation,
+        route_loader,
+    })
 }
 
-impl ActionFetchAccounting {
-    #[cfg(feature = "fetch")]
-    fn reserve_fetch(&mut self) -> Result<(), JsValue> {
-        if self.fetches >= plec_ir::limits::MAX_FETCHES_PER_ACTION {
-            return Err(JsValue::from_str(&format!(
-                "fetch count exceeds the {} per-action limit",
-                plec_ir::limits::MAX_FETCHES_PER_ACTION
-            )));
+impl RuntimeState {
+    pub(crate) fn start_browser_capability(
+        &self,
+        pending: PendingBrowserCapability,
+    ) -> Result<(), JsValue> {
+        match pending {
+            #[cfg(feature = "fetch")]
+            PendingBrowserCapability::Fetch(request) => self.start_typed_fetch(request),
+            PendingBrowserCapability::Cookie(cookie) => self.start_typed_cookie(cookie),
         }
-        self.fetches += 1;
+    }
+}
+
+/// Browser adapter for the shared action machine in `plec-action`. All
+/// browser effects (DOM, state, callbacks, cookie declarations) live here;
+/// frames, continuations, budgets, and suspension stay host-neutral.
+pub(crate) struct BrowserActionHost<'a> {
+    runtime: &'a mut TypedRuntime,
+    context: ActionRunContext,
+    /// Only valid during the synchronous run; resume paths pass `None`.
+    native_event: Option<&'a Event>,
+    metrics: &'a mut UpdateMetrics,
+}
+
+fn action_error(error: JsValue) -> ActionError {
+    ActionError(
+        error
+            .as_string()
+            .unwrap_or_else(|| "action effect failed".into()),
+    )
+}
+
+impl ActionHost for BrowserActionHost<'_> {
+    type Request = BrowserRequest;
+
+    fn evaluate(
+        &mut self,
+        expression: usize,
+        frame: &[RuntimeValue],
+    ) -> Result<RuntimeValue, ActionError> {
+        typed_eval_frame(
+            &self.runtime.app,
+            self.runtime.cookie_policy.borrow().as_ref(),
+            expression,
+            &self.runtime.states,
+            self.context.row.as_ref(),
+            0,
+            frame,
+            &self.context.event,
+        )
+        .map_err(action_error)
+    }
+
+    fn prepare_capability(
+        &mut self,
+        request: &TypedCapabilityRequest,
+        frame: &[RuntimeValue],
+    ) -> Result<BrowserRequest, ActionError> {
+        match request {
+            TypedCapabilityRequest::Fetch(request) => self.prepare_fetch_capability(request, frame),
+            TypedCapabilityRequest::Cookie(request) => {
+                self.prepare_cookie_capability(request, frame)
+            }
+        }
+    }
+
+    fn store_state(&mut self, state: usize, value: RuntimeValue) -> Result<(), ActionError> {
+        if state >= self.runtime.states.len() {
+            return Err(ActionError("state handle out of range".into()));
+        }
+        self.runtime.states[state] = value;
+        self.runtime
+            .refresh_state(state, self.metrics)
+            .map_err(action_error)
+    }
+
+    fn mutation_start(
+        &mut self,
+        generation: usize,
+        pending: usize,
+        error: usize,
+    ) -> Result<RuntimeValue, ActionError> {
+        let current = match self.runtime.states.get(generation) {
+            Some(RuntimeValue::Number(value)) => *value,
+            Some(_) => return Err(ActionError("mutation generation is not numeric".into())),
+            None => return Err(ActionError("mutation generation state out of range".into())),
+        };
+        let next = current + 1.0;
+        if !next.is_finite() {
+            return Err(ActionError("mutation invocation generation overflow".into()));
+        }
+        if pending >= self.runtime.states.len() || error >= self.runtime.states.len() {
+            return Err(ActionError("mutation state handle out of range".into()));
+        }
+        self.runtime.states[generation] = RuntimeValue::Number(next);
+        self.runtime.states[pending] = RuntimeValue::Bool(true);
+        self.runtime.states[error] = RuntimeValue::Null;
+        self.runtime.refresh_state(pending, self.metrics).map_err(action_error)?;
+        self.runtime.refresh_state(error, self.metrics).map_err(action_error)?;
+        Ok(RuntimeValue::Number(next))
+    }
+
+    fn mutation_publish(
+        &mut self,
+        generation: usize,
+        pending: usize,
+        error: usize,
+        data: usize,
+        invocation: RuntimeValue,
+        value: RuntimeValue,
+        success: bool,
+    ) -> Result<(), ActionError> {
+        let current = self
+            .runtime
+            .states
+            .get(generation)
+            .ok_or_else(|| ActionError("mutation generation state out of range".into()))?;
+        if *current != invocation {
+            return Ok(());
+        }
+        if [pending, error, data].iter().any(|state| *state >= self.runtime.states.len()) {
+            return Err(ActionError("mutation state handle out of range".into()));
+        }
+        if success {
+            self.runtime.states[data] = value;
+            self.runtime.states[error] = RuntimeValue::Null;
+        } else {
+            self.runtime.states[error] = value;
+        }
+        self.runtime.states[pending] = RuntimeValue::Bool(false);
+        for state in if success { vec![data, error, pending] } else { vec![error, pending] } {
+            self.runtime.refresh_state(state, self.metrics).map_err(action_error)?;
+        }
         Ok(())
     }
 
-    #[cfg(feature = "fetch")]
-    pub(crate) fn charge_response_bytes(&mut self, bytes: usize) -> Result<(), JsValue> {
-        let total = self.bytes.checked_add(bytes).ok_or_else(|| {
-            JsValue::from_str("fetch response bytes overflow the per-action accounting")
-        })?;
-        if total > plec_ir::limits::MAX_FETCH_BYTES_PER_ACTION {
-            return Err(JsValue::from_str(&format!(
-                "fetch response bytes exceed the {} per-action limit",
-                plec_ir::limits::MAX_FETCH_BYTES_PER_ACTION
-            )));
-        }
-        self.bytes = total;
+    fn store_ref(&mut self, reference: usize, value: RuntimeValue) -> Result<(), ActionError> {
+        let slot = self
+            .runtime
+            .app
+            .ref_values
+            .get_mut(reference)
+            .ok_or_else(|| ActionError("ref handle out of range".into()))?;
+        *slot = value;
         Ok(())
+    }
+
+    fn capture_active_element(&mut self, reference: usize) -> Result<(), ActionError> {
+        let slot = self
+            .runtime
+            .focus_refs
+            .get_mut(reference)
+            .ok_or_else(|| ActionError("focus ref handle out of range".into()))?;
+        *slot = document().map_err(action_error)?.active_element();
+        Ok(())
+    }
+
+    fn focus_host_ref(&mut self, reference: usize) -> Result<(), ActionError> {
+        if let Some(node) = self
+            .runtime
+            .host_ref_nodes
+            .get(reference)
+            .and_then(Option::as_ref)
+        {
+            if let Some(element) = node.dyn_ref::<HtmlElement>() {
+                let _ = element.focus();
+            }
+        }
+        Ok(())
+    }
+
+    fn focus_ref(&mut self, reference: usize) -> Result<(), ActionError> {
+        if let Some(element) = self
+            .runtime
+            .focus_refs
+            .get(reference)
+            .and_then(Option::as_ref)
+        {
+            if element.is_connected() {
+                if let Some(element) = element.dyn_ref::<HtmlElement>() {
+                    let _ = element.focus();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn prevent_default(&mut self) -> Result<(), ActionError> {
+        if let Some(event) = self.native_event {
+            event.prevent_default();
+        }
+        Ok(())
+    }
+
+    fn call_prop(
+        &mut self,
+        prop: usize,
+        arguments: Vec<RuntimeValue>,
+        optional: bool,
+    ) -> Result<(), ActionError> {
+        let Some(mut callback) = self.runtime.callbacks.get(prop).and_then(Clone::clone) else {
+            // A missing optional prop completes without error and control
+            // simply falls through to the next instruction.
+            if optional {
+                return Ok(());
+            }
+            return Err(ActionError("callable component prop missing".into()));
+        };
+        callback.arguments = arguments;
+        self.runtime.callback_requests.push(callback);
+        Ok(())
+    }
+
+    fn mutate_collection(
+        &mut self,
+        input: usize,
+        kind: &str,
+        key: RuntimeValue,
+        value: Option<RuntimeValue>,
+    ) -> Result<(), ActionError> {
+        let key = typed_value_string(&key);
+        self.runtime
+            .mutate_collection(input, kind, key, value, self.metrics)
+            .map_err(action_error)
+    }
+
+    fn store_host_ref(&mut self, reference: usize) -> Result<(), ActionError> {
+        let name = self
+            .runtime
+            .app
+            .strings
+            .get(reference)
+            .cloned()
+            .ok_or_else(|| ActionError("host ref handle out of range".into()))?;
+        if let Some(active) = document().map_err(action_error)?.active_element() {
+            self.runtime.host_refs.insert(name, active.into());
+        } else {
+            self.runtime.host_refs.remove(&name);
+        }
+        Ok(())
+    }
+}
+
+impl BrowserActionHost<'_> {
+    #[cfg(feature = "fetch")]
+    fn prepare_fetch_capability(
+        &mut self,
+        request: &TypedFetchRequest,
+        frame: &[RuntimeValue],
+    ) -> Result<BrowserRequest, ActionError> {
+        Ok(BrowserRequest::Fetch(self.prepare_fetch(request, frame)?))
+    }
+
+    #[cfg(not(feature = "fetch"))]
+    fn prepare_fetch_capability(
+        &mut self,
+        _request: &TypedFetchRequest,
+        _frame: &[RuntimeValue],
+    ) -> Result<BrowserRequest, ActionError> {
+        Err(ActionError("fetch capability is disabled".into()))
+    }
+
+    fn prepare_cookie_capability(
+        &mut self,
+        request: &TypedCookieRequest,
+        frame: &[RuntimeValue],
+    ) -> Result<BrowserRequest, ActionError> {
+        // Name is validated here, before control crosses the host boundary.
+        let name = self
+            .runtime
+            .app
+            .strings
+            .get(request.name)
+            .cloned()
+            .ok_or_else(|| ActionError("cookie name handle out of range".into()))?;
+        let value = request
+            .value
+            .map(|expression| {
+                self.evaluate(expression, frame)
+                    .map(|value| typed_value_string(&value))
+            })
+            .transpose()?;
+        let operation = request.operation.clone();
+        if !self.runtime.app.capabilities.iter().any(|entry| {
+            entry.kind == "cookie"
+                && entry.name == name
+                && entry.operations.iter().any(|allowed| allowed == &operation)
+                && entry.path == request.path
+                && entry.same_site == request.same_site
+                && entry.secure == request.secure
+                && entry
+                    .expiry_modes
+                    .iter()
+                    .any(|mode| mode == &request.expiry)
+        }) {
+            return Err(ActionError("cookie request is not declared".into()));
+        }
+        Ok(BrowserRequest::Cookie {
+            request: request.clone(),
+            value,
+        })
+    }
+
+    #[cfg(feature = "fetch")]
+    fn prepare_fetch(
+        &mut self,
+        request: &TypedFetchRequest,
+        frame: &[RuntimeValue],
+    ) -> Result<TypedLoaderFetchRequest, ActionError> {
+        let url = typed_value_string(&self.evaluate(request.url, frame)?);
+        if url.is_empty() {
+            return Err(ActionError("fetch URL is empty".into()));
+        }
+        let headers = request
+            .headers
+            .iter()
+            .map(|header| {
+                let name = self
+                    .runtime
+                    .app
+                    .strings
+                    .get(header.name)
+                    .cloned()
+                    .ok_or_else(|| ActionError("header name handle out of range".into()))?;
+                Ok((
+                    name,
+                    typed_value_string(&self.evaluate(header.value, frame)?),
+                ))
+            })
+            .collect::<Result<Vec<_>, ActionError>>()?;
+        let body = request
+            .body
+            .map(|expression| {
+                let value = self.evaluate(expression, frame)?;
+                match value {
+                    // JSON.stringify already produces a fetch-ready string.
+                    // Encoding it again turns `{\"title\":\"Plec\"}` into a JSON
+                    // string literal, which APIs correctly reject as a non-object body.
+                    RuntimeValue::String(value) => Ok(value),
+                    value => value.json_body().map_err(ActionError),
+                }
+            })
+            .transpose()?;
+        Ok(TypedLoaderFetchRequest {
+            url,
+            method: request.method.clone(),
+            headers,
+            body,
+            decode: request.decode.clone(),
+            require_ok: request.require_ok,
+        })
     }
 }
 
@@ -184,22 +527,40 @@ impl TypedRuntime {
         action: usize,
         frame: Vec<RuntimeValue>,
     ) -> Result<Run<TypedLoaderFetchRequest>, JsValue> {
+        self.start_loader_run(action, frame)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    #[cfg(feature = "fetch")]
+    pub(crate) fn start_loader_run(
+        &mut self,
+        action: usize,
+        frame: Vec<RuntimeValue>,
+    ) -> Result<Run<TypedLoaderFetchRequest>, ActionError> {
         let actions = self.app.actions.clone();
         let mut host = TypedLoaderHost { runtime: self };
         plec_action::start(&actions, action, frame, &mut host)
-            .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     #[cfg(feature = "fetch")]
     pub(crate) fn resume_shared_route_loader(
         &mut self,
-        suspension: plec_action::Suspension<TypedLoaderFetchRequest>,
+        suspension: Suspension<TypedLoaderFetchRequest>,
         result: Result<RuntimeValue, RuntimeValue>,
     ) -> Result<Run<TypedLoaderFetchRequest>, JsValue> {
+        self.resume_loader_run(suspension, result)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    #[cfg(feature = "fetch")]
+    pub(crate) fn resume_loader_run(
+        &mut self,
+        suspension: Suspension<TypedLoaderFetchRequest>,
+        result: Result<RuntimeValue, RuntimeValue>,
+    ) -> Result<Run<TypedLoaderFetchRequest>, ActionError> {
         let actions = self.app.actions.clone();
         let mut host = TypedLoaderHost { runtime: self };
         plec_action::resume(&actions, suspension, result, &mut host)
-            .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     pub fn execute_action(
@@ -213,9 +574,7 @@ impl TypedRuntime {
         let slots = event.iter().cloned().enumerate().collect::<Vec<_>>();
         self.execute_action_with_frame(action, &slots, row, native_event, metrics)
     }
-}
 
-impl TypedRuntime {
     pub fn execute_action_with_frame(
         &mut self,
         action: usize,
@@ -237,744 +596,81 @@ impl TypedRuntime {
             }
             frame[*slot] = value.clone();
         }
-        let event_values = event
-            .iter()
-            .map(|(_, value)| value.clone())
-            .collect::<Vec<_>>();
-        self.execute_action_at(action, 0, frame, &event_values, row, native_event, metrics)
+        let context = ActionRunContext {
+            event: event.iter().map(|(_, value)| value.clone()).collect(),
+            row,
+        };
+        let run = self
+            .start_browser_action(action, frame, context.clone(), native_event, metrics)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        self.queue_browser_suspension(action, run, context);
+        Ok(())
     }
-}
 
-impl TypedRuntime {
-    pub fn execute_action_at(
+    /// Starts one browser action run on the shared machine. Errors keep the
+    /// shared machine's exact strings (budgets, arity, depth).
+    pub(crate) fn start_browser_action(
         &mut self,
         action: usize,
-        pc: usize,
         frame: Vec<RuntimeValue>,
-        event: &[RuntimeValue],
-        row: Option<HashMap<String, RuntimeValue>>,
+        context: ActionRunContext,
         native_event: Option<&Event>,
         metrics: &mut UpdateMetrics,
-    ) -> Result<(), JsValue> {
-        self.execute_continuation(
-            TypedContinuationStack {
-                current: TypedActionFrame {
-                    action,
-                    pc,
-                    stack: Vec::new(),
-                    frame,
-                    event: event.to_vec(),
-                    row,
-                },
-                callers: Vec::new(),
-                fetch_accounting: Rc::new(RefCell::new(ActionFetchAccounting::default())),
-            },
+    ) -> Result<Run<BrowserRequest>, ActionError> {
+        let actions = self.app.actions.clone();
+        let mut host = BrowserActionHost {
+            runtime: self,
+            context,
             native_event,
             metrics,
-        )
+        };
+        plec_action::start(&actions, action, frame, &mut host)
     }
 
-    pub(crate) fn execute_action_at_with_fetch_accounting(
+    /// Resumes a browser action suspension. The native event is gone by the
+    /// time a capability transport completes, and metrics restart per resume.
+    pub(crate) fn resume_browser_action(
+        &mut self,
+        suspension: Suspension<BrowserRequest>,
+        result: Result<RuntimeValue, RuntimeValue>,
+        context: ActionRunContext,
+    ) -> Result<Run<BrowserRequest>, ActionError> {
+        let actions = self.app.actions.clone();
+        let mut metrics = UpdateMetrics::default();
+        let mut host = BrowserActionHost {
+            runtime: self,
+            context,
+            native_event: None,
+            metrics: &mut metrics,
+        };
+        plec_action::resume(&actions, suspension, result, &mut host)
+    }
+
+    fn queue_browser_suspension(
         &mut self,
         action: usize,
-        pc: usize,
-        frame: Vec<RuntimeValue>,
-        event: &[RuntimeValue],
-        row: Option<HashMap<String, RuntimeValue>>,
-        native_event: Option<&Event>,
-        metrics: &mut UpdateMetrics,
-        fetch_accounting: Rc<RefCell<ActionFetchAccounting>>,
-    ) -> Result<(), JsValue> {
-        self.execute_continuation(
-            TypedContinuationStack {
-                current: TypedActionFrame {
-                    action,
-                    pc,
-                    stack: Vec::new(),
-                    frame,
-                    event: event.to_vec(),
-                    row,
-                },
-                callers: Vec::new(),
-                fetch_accounting,
-            },
-            native_event,
-            metrics,
-        )
-    }
-
-    pub fn execute_continuation(
-        &mut self,
-        mut continuation: TypedContinuationStack,
-        native_event: Option<&Event>,
-        metrics: &mut UpdateMetrics,
-    ) -> Result<(), JsValue> {
-        // One shared step budget across every frame of this run: crafted
-        // backward jumps or mutually recursive actions exhaust a documented
-        // budget instead of pinning the event loop.
-        let mut fuel = plec_ir::limits::MAX_ACTION_STEPS;
-        'run: loop {
-            let action = continuation.current.action;
-            let mut pc = continuation.current.pc;
-            let mut frame = continuation.current.frame.clone();
-            let event = continuation.current.event.clone();
-            let row = continuation.current.row.clone();
-            let program = self
-                .app
-                .actions
-                .get(action)
-                .cloned()
-                .ok_or_else(|| JsValue::from_str("action handle out of range"))?;
-            let mut stack = continuation.current.stack.clone();
-            while let Some(instruction) = program.instructions.get(pc).cloned() {
-                if fuel == 0 {
-                    return Err(JsValue::from_str("action execution budget exceeded"));
-                }
-                fuel -= 1;
-                match instruction {
-                    TypedActionInstruction::Evaluate { expression } => {
-                        stack.push(typed_eval_frame(
-                            &self.app,
-                            self.cookie_policy.borrow().as_ref(),
-                            expression,
-                            &self.states,
-                            row.as_ref(),
-                            0,
-                            &frame,
-                            &event,
-                        )?)
-                    }
-                    TypedActionInstruction::StoreState { state } => {
-                        let value = stack.pop().ok_or_else(|| {
-                            JsValue::from_str("action stack underflow: storeState")
-                        })?;
-                        if state >= self.states.len() {
-                            return Err(JsValue::from_str("state handle out of range"));
-                        }
-                        self.states[state] = value;
-                        self.refresh_state(state, metrics)?;
-                    }
-                    TypedActionInstruction::StoreFrame { slot } => {
-                        let value = stack.pop().ok_or_else(|| {
-                            JsValue::from_str("action stack underflow: storeFrame")
-                        })?;
-                        if slot >= frame.len() {
-                            return Err(JsValue::from_str("action frame slot out of range"));
-                        }
-                        frame[slot] = value;
-                    }
-                    TypedActionInstruction::StoreRef { reference } => {
-                        let value = stack
-                            .pop()
-                            .ok_or_else(|| JsValue::from_str("action stack underflow: storeRef"))?;
-                        let slot = self
-                            .app
-                            .ref_values
-                            .get_mut(reference)
-                            .ok_or_else(|| JsValue::from_str("ref handle out of range"))?;
-                        *slot = value;
-                    }
-                    TypedActionInstruction::CaptureActiveElement { reference } => {
-                        let slot = self
-                            .focus_refs
-                            .get_mut(reference)
-                            .ok_or_else(|| JsValue::from_str("focus ref handle out of range"))?;
-                        *slot = document()?.active_element();
-                    }
-                    TypedActionInstruction::FocusHostRef { reference } => {
-                        if let Some(node) =
-                            self.host_ref_nodes.get(reference).and_then(Option::as_ref)
-                        {
-                            if let Some(element) = node.dyn_ref::<HtmlElement>() {
-                                let _ = element.focus();
-                            }
-                        }
-                    }
-                    TypedActionInstruction::FocusRef { reference } => {
-                        if let Some(element) =
-                            self.focus_refs.get(reference).and_then(Option::as_ref)
-                        {
-                            if element.is_connected() {
-                                if let Some(element) = element.dyn_ref::<HtmlElement>() {
-                                    let _ = element.focus();
-                                }
-                            }
-                        }
-                    }
-                    TypedActionInstruction::PreventDefault => {
-                        if let Some(event) = native_event {
-                            event.prevent_default();
-                        }
-                    }
-                    TypedActionInstruction::CallProp { prop, arguments } => {
-                        let mut callback = self
-                            .callbacks
-                            .get(prop)
-                            .and_then(Clone::clone)
-                            .ok_or_else(|| JsValue::from_str("callable component prop missing"))?;
-                        callback.arguments = arguments
-                            .into_iter()
-                            .map(|expression| {
-                                typed_eval_frame(
-                                    &self.app,
-                                    self.cookie_policy.borrow().as_ref(),
-                                    expression,
-                                    &self.states,
-                                    row.as_ref(),
-                                    0,
-                                    &frame,
-                                    &event,
-                                )
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        self.callback_requests.push(callback);
-                    }
-                    TypedActionInstruction::CallPropOptional { prop, arguments } => {
-                        let Some(mut callback) = self.callbacks.get(prop).and_then(Clone::clone)
-                        else {
-                            pc += 1;
-                            continue;
-                        };
-                        callback.arguments = arguments
-                            .into_iter()
-                            .map(|expression| {
-                                typed_eval_frame(
-                                    &self.app,
-                                    self.cookie_policy.borrow().as_ref(),
-                                    expression,
-                                    &self.states,
-                                    row.as_ref(),
-                                    0,
-                                    &frame,
-                                    &event,
-                                )
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        self.callback_requests.push(callback);
-                    }
-                    TypedActionInstruction::StoreHostRef { r#ref } => {
-                        let name = self
-                            .app
-                            .strings
-                            .get(r#ref)
-                            .cloned()
-                            .ok_or_else(|| JsValue::from_str("host ref handle out of range"))?;
-                        if let Some(active) = document()?.active_element() {
-                            self.host_refs.insert(name, active.into());
-                        } else {
-                            self.host_refs.remove(&name);
-                        }
-                    }
-                    TypedActionInstruction::Jump { target } => {
-                        pc = target;
-                        continue;
-                    }
-                    TypedActionInstruction::JumpIfFalse { target } => {
-                        if !typed_truthy(&stack.pop().ok_or_else(|| {
-                            JsValue::from_str("action stack underflow: jumpIfFalse")
-                        })?) {
-                            pc = target;
-                            continue;
-                        }
-                    }
-                    TypedActionInstruction::Call {
-                        action: target,
-                        arguments,
-                        success_pc,
-                        failure_pc,
-                        result_slot,
-                        error_slot,
-                    } => {
-                        let target_program = self
-                            .app
-                            .actions
-                            .get(target)
-                            .cloned()
-                            .ok_or_else(|| JsValue::from_str("action handle out of range"))?;
-                        if arguments.len() != target_program.parameter_slots.len() {
-                            return Err(JsValue::from_str("action call arity mismatch"));
-                        }
-                        let mut child = vec![RuntimeValue::Null; target_program.frame_slots];
-                        for (expression, slot) in
-                            arguments.into_iter().zip(target_program.parameter_slots)
-                        {
-                            child[slot] = typed_eval_frame(
-                                &self.app,
-                                self.cookie_policy.borrow().as_ref(),
-                                expression,
-                                &self.states,
-                                row.as_ref(),
-                                0,
-                                &frame,
-                                &event,
-                            )?;
-                        }
-                        match (success_pc, failure_pc, result_slot, error_slot) {
-                            (
-                                Some(success_pc),
-                                Some(failure_pc),
-                                Some(result_slot),
-                                Some(error_slot),
-                            ) => {
-                                if continuation.callers.len() >= plec_ir::limits::MAX_CALL_DEPTH {
-                                    return Err(JsValue::from_str(
-                                        "action call depth exceeds limit",
-                                    ));
-                                }
-                                continuation.callers.push(TypedCallerContinuation {
-                                    frame: TypedActionFrame {
-                                        action,
-                                        pc: pc + 1,
-                                        stack: stack.clone(),
-                                        frame: frame.clone(),
-                                        event: event.clone(),
-                                        row: row.clone(),
-                                    },
-                                    success_pc,
-                                    failure_pc,
-                                    result_slot,
-                                    error_slot,
-                                });
-                                continuation.current = TypedActionFrame {
-                                    action: target,
-                                    pc: 0,
-                                    stack: Vec::new(),
-                                    frame: child,
-                                    event: event.clone(),
-                                    row: row.clone(),
-                                };
-                                continue 'run;
-                            }
-                            (None, None, None, None) => {
-                                // Tail call: reuse the continuation machinery
-                                // instead of native recursion, so one shared
-                                // step budget and one call-depth bound cover
-                                // self-referential tail calls too.
-                                if continuation.callers.len() >= plec_ir::limits::MAX_CALL_DEPTH {
-                                    return Err(JsValue::from_str(
-                                        "action call depth exceeds limit",
-                                    ));
-                                }
-                                continuation.callers.push(TypedCallerContinuation {
-                                    frame: TypedActionFrame {
-                                        action,
-                                        pc: pc + 1,
-                                        stack,
-                                        frame,
-                                        event: event.clone(),
-                                        row: row.clone(),
-                                    },
-                                    success_pc: pc + 1,
-                                    failure_pc: pc + 1,
-                                    result_slot: TAIL_CALL_NO_SLOT,
-                                    error_slot: TAIL_CALL_NO_SLOT,
-                                });
-                                continuation.current = TypedActionFrame {
-                                    action: target,
-                                    pc: 0,
-                                    stack: Vec::new(),
-                                    frame: child,
-                                    event,
-                                    row,
-                                };
-                                continue 'run;
-                            }
-                            _ => return Err(JsValue::from_str("partial action call continuation")),
-                        }
-                    }
-                    TypedActionInstruction::CallFrame {
-                        parameter,
-                        arguments,
-                        success_pc,
-                        failure_pc,
-                        result_slot,
-                        error_slot,
-                    } => {
-                        let RuntimeValue::Number(target) =
-                            frame.get(parameter).cloned().unwrap_or(RuntimeValue::Null)
-                        else {
-                            return Err(JsValue::from_str(
-                                "callFrame parameter must be an action handle",
-                            ));
-                        };
-                        let target = target as usize;
-                        let target_program =
-                            self.app.actions.get(target).cloned().ok_or_else(|| {
-                                JsValue::from_str("callFrame action handle out of range")
-                            })?;
-                        if arguments.len() != target_program.parameter_slots.len() {
-                            return Err(JsValue::from_str("callFrame action arity mismatch"));
-                        }
-                        let mut child = vec![RuntimeValue::Null; target_program.frame_slots];
-                        for (expression, slot) in
-                            arguments.into_iter().zip(target_program.parameter_slots)
-                        {
-                            child[slot] = typed_eval_frame(
-                                &self.app,
-                                self.cookie_policy.borrow().as_ref(),
-                                expression,
-                                &self.states,
-                                row.as_ref(),
-                                0,
-                                &frame,
-                                &event,
-                            )?;
-                        }
-                        match (success_pc, failure_pc, result_slot, error_slot) {
-                            (
-                                Some(success_pc),
-                                Some(failure_pc),
-                                Some(result_slot),
-                                Some(error_slot),
-                            ) => {
-                                if continuation.callers.len() >= plec_ir::limits::MAX_CALL_DEPTH {
-                                    return Err(JsValue::from_str(
-                                        "action call depth exceeds limit",
-                                    ));
-                                }
-                                continuation.callers.push(TypedCallerContinuation {
-                                    frame: TypedActionFrame {
-                                        action,
-                                        pc: pc + 1,
-                                        stack: stack.clone(),
-                                        frame: frame.clone(),
-                                        event: event.clone(),
-                                        row: row.clone(),
-                                    },
-                                    success_pc,
-                                    failure_pc,
-                                    result_slot,
-                                    error_slot,
-                                });
-                                continuation.current = TypedActionFrame {
-                                    action: target,
-                                    pc: 0,
-                                    stack: Vec::new(),
-                                    frame: child,
-                                    event: event.clone(),
-                                    row: row.clone(),
-                                };
-                                continue 'run;
-                            }
-                            (None, None, None, None) => {
-                                // Tail call: same continuation-based bound as
-                                // the `Call` arm above.
-                                if continuation.callers.len() >= plec_ir::limits::MAX_CALL_DEPTH {
-                                    return Err(JsValue::from_str(
-                                        "action call depth exceeds limit",
-                                    ));
-                                }
-                                continuation.callers.push(TypedCallerContinuation {
-                                    frame: TypedActionFrame {
-                                        action,
-                                        pc: pc + 1,
-                                        stack,
-                                        frame,
-                                        event: event.clone(),
-                                        row: row.clone(),
-                                    },
-                                    success_pc: pc + 1,
-                                    failure_pc: pc + 1,
-                                    result_slot: TAIL_CALL_NO_SLOT,
-                                    error_slot: TAIL_CALL_NO_SLOT,
-                                });
-                                continuation.current = TypedActionFrame {
-                                    action: target,
-                                    pc: 0,
-                                    stack: Vec::new(),
-                                    frame: child,
-                                    event,
-                                    row,
-                                };
-                                continue 'run;
-                            }
-                            _ => {
-                                return Err(JsValue::from_str(
-                                    "partial action callFrame continuation",
-                                ))
-                            }
-                        }
-                    }
-                    TypedActionInstruction::CollectionMutation {
-                        input,
-                        kind,
-                        key,
-                        value,
-                    } => {
-                        let key = typed_value_string(&typed_eval_frame(
-                            &self.app,
-                            self.cookie_policy.borrow().as_ref(),
-                            key,
-                            &self.states,
-                            row.as_ref(),
-                            0,
-                            &frame,
-                            &event,
-                        )?);
-                        let value = value
-                            .map(|program| {
-                                typed_eval_frame(
-                                    &self.app,
-                                    self.cookie_policy.borrow().as_ref(),
-                                    program,
-                                    &self.states,
-                                    row.as_ref(),
-                                    0,
-                                    &frame,
-                                    &event,
-                                )
-                            })
-                            .transpose()?;
-                        self.mutate_collection(input, &kind, key, value, metrics)?;
-                    }
-                    TypedActionInstruction::CapabilityRequest {
-                        request,
-                        success_pc,
-                        failure_pc,
-                        finally_pc,
-                        result_slot,
-                        error_slot,
-                    } => {
-                        if let TypedCapabilityRequest::Cookie(request) = request {
-                            let name =
-                                self.app.strings.get(request.name).cloned().ok_or_else(|| {
-                                    JsValue::from_str("cookie name handle out of range")
-                                })?;
-                            let value = request
-                                .value
-                                .map(|expression| {
-                                    typed_eval_frame(
-                                        &self.app,
-                                        self.cookie_policy.borrow().as_ref(),
-                                        expression,
-                                        &self.states,
-                                        row.as_ref(),
-                                        0,
-                                        &frame,
-                                        &event,
-                                    )
-                                    .map(|value| typed_value_string(&value))
-                                })
-                                .transpose()?;
-                            let operation = request.operation.clone();
-                            // Name is validated here, before control crosses the host boundary.
-                            if !self.app.capabilities.iter().any(|entry| {
-                                entry.kind == "cookie"
-                                    && entry.name == name
-                                    && entry.operations.iter().any(|allowed| allowed == &operation)
-                                    && entry.path == request.path
-                                    && entry.same_site == request.same_site
-                                    && entry.secure == request.secure
-                                    && entry
-                                        .expiry_modes
-                                        .iter()
-                                        .any(|mode| mode == &request.expiry)
-                            }) {
-                                return Err(JsValue::from_str("cookie request is not declared"));
-                            }
-                            continuation.current = TypedActionFrame {
-                                action,
-                                pc,
-                                stack,
-                                frame,
-                                event,
-                                row,
-                            };
-                            self.pending_cookies.push(TypedPendingCookie {
-                                instance_id: String::new(),
-                                request_id: 0,
-                                continuation,
-                                success_pc,
-                                failure_pc,
-                                finally_pc,
-                                result_slot,
-                                error_slot,
-                                request,
-                                value,
-                                graph_generation: self.graph_generation,
-                            });
-                            return Ok(());
-                        }
-                        #[cfg(not(feature = "fetch"))]
-                        return Err(JsValue::from_str("fetch capability is disabled"));
-                        #[cfg(feature = "fetch")]
-                        {
-                            let TypedCapabilityRequest::Fetch(request) = request else {
-                                return Err(JsValue::from_str("unsupported typed capability"));
-                            };
-                            let url = typed_value_string(&typed_eval_frame(
-                                &self.app,
-                                self.cookie_policy.borrow().as_ref(),
-                                request.url,
-                                &self.states,
-                                row.as_ref(),
-                                0,
-                                &frame,
-                                &event,
-                            )?);
-                            if url.is_empty() {
-                                return Err(JsValue::from_str("fetch URL is empty"));
-                            }
-                            let headers = request
-                                .headers
-                                .iter()
-                                .map(|header| {
-                                    Ok((
-                                        self.app.strings.get(header.name).cloned().ok_or_else(
-                                            || JsValue::from_str("header name handle out of range"),
-                                        )?,
-                                        typed_value_string(&typed_eval_frame(
-                                            &self.app,
-                                            self.cookie_policy.borrow().as_ref(),
-                                            header.value,
-                                            &self.states,
-                                            row.as_ref(),
-                                            0,
-                                            &frame,
-                                            &event,
-                                        )?),
-                                    ))
-                                })
-                                .collect::<Result<Vec<_>, JsValue>>()?;
-                            let body = request
-                                .body
-                                .map(|expression| {
-                                    typed_eval_frame(
-                                        &self.app,
-                                        self.cookie_policy.borrow().as_ref(),
-                                        expression,
-                                        &self.states,
-                                        row.as_ref(),
-                                        0,
-                                        &frame,
-                                        &event,
-                                    )
-                                    .and_then(|value| {
-                                        match value {
-                                            // JSON.stringify already produces a fetch-ready string.
-                                            // Encoding it again turns `{\"title\":\"Plec\"}` into a JSON
-                                            // string literal, which APIs correctly reject as a non-object body.
-                                            RuntimeValue::String(value) => Ok(value),
-                                            value => value
-                                                .json_body()
-                                                .map_err(|error| JsValue::from_str(&error)),
-                                        }
-                                    })
-                                })
-                                .transpose()?;
-                            continuation.fetch_accounting.borrow_mut().reserve_fetch()?;
-                            continuation.current = TypedActionFrame {
-                                action,
-                                pc,
-                                stack,
-                                frame,
-                                event,
-                                row,
-                            };
-                            self.pending_fetches.push(TypedPendingFetch {
-                                instance_id: String::new(),
-                                continuation,
-                                success_pc,
-                                failure_pc,
-                                finally_pc,
-                                finalizers: Vec::new(),
-                                result_slot,
-                                error_slot,
-                                url,
-                                method: request.method,
-                                headers,
-                                body,
-                                decode: request.decode,
-                                require_ok: request.require_ok,
-                                graph_generation: self.graph_generation,
-                                request_id: 0,
-                            });
-                            return Ok(());
-                        }
-                    }
-                    TypedActionInstruction::Return { outcome, value } => {
-                        let value = value
-                            .map(|expression| {
-                                typed_eval_frame(
-                                    &self.app,
-                                    self.cookie_policy.borrow().as_ref(),
-                                    expression,
-                                    &self.states,
-                                    row.as_ref(),
-                                    0,
-                                    &frame,
-                                    &event,
-                                )
-                            })
-                            .transpose()?
-                            .unwrap_or(RuntimeValue::Null);
-                        if let Some(caller) = continuation.callers.pop() {
-                            let mut caller_frame = caller.frame;
-                            let (slot, next_pc) = match outcome {
-                                plec_schema::typed::TypedReturnOutcome::Success => {
-                                    (caller.result_slot, caller.success_pc)
-                                }
-                                plec_schema::typed::TypedReturnOutcome::Failure => {
-                                    (caller.error_slot, caller.failure_pc)
-                                }
-                            };
-                            // Tail-call continuations discard the result, so
-                            // there is no caller frame slot to receive it.
-                            if slot != TAIL_CALL_NO_SLOT {
-                                if slot >= caller_frame.frame.len() {
-                                    return Err(JsValue::from_str(
-                                        "caller continuation slot out of range",
-                                    ));
-                                }
-                                caller_frame.frame[slot] = value;
-                                let other = if slot == caller.result_slot {
-                                    caller.error_slot
-                                } else {
-                                    caller.result_slot
-                                };
-                                if other >= caller_frame.frame.len() {
-                                    return Err(JsValue::from_str(
-                                        "caller continuation slot out of range",
-                                    ));
-                                }
-                                caller_frame.frame[other] = RuntimeValue::Null;
-                            }
-                            caller_frame.pc = next_pc;
-                            continuation.current = caller_frame;
-                            continue 'run;
-                        }
-                        return Ok(());
-                    }
-                }
-                pc += 1;
-                continuation.current = TypedActionFrame {
-                    action,
-                    pc,
-                    stack: stack.clone(),
-                    frame: frame.clone(),
-                    event: event.clone(),
-                    row: row.clone(),
-                };
-            }
-            if let Some(caller) = continuation.callers.pop() {
-                let mut caller_frame = caller.frame;
-                if caller.result_slot == TAIL_CALL_NO_SLOT {
-                    caller_frame.pc = caller.success_pc;
-                    continuation.current = caller_frame;
-                    continue 'run;
-                }
-                if caller.result_slot >= caller_frame.frame.len()
-                    || caller.error_slot >= caller_frame.frame.len()
-                {
-                    return Err(JsValue::from_str("caller continuation slot out of range"));
-                }
-                caller_frame.frame[caller.result_slot] = RuntimeValue::Null;
-                caller_frame.frame[caller.error_slot] = RuntimeValue::Null;
-                caller_frame.pc = caller.success_pc;
-                continuation.current = caller_frame;
-                continue 'run;
-            }
-            return Ok(());
+        run: Run<BrowserRequest>,
+        context: ActionRunContext,
+    ) {
+        let Run::Suspended(suspension) = run else {
+            return;
+        };
+        let route_loader = self
+            .app
+            .actions
+            .get(action)
+            .map(|action| action.route_loader)
+            .unwrap_or(false);
+        match pending_browser_capability(
+            String::new(),
+            self.graph_generation,
+            route_loader,
+            suspension,
+            context,
+        ) {
+            #[cfg(feature = "fetch")]
+            PendingBrowserCapability::Fetch(request) => self.pending_fetches.push(request),
+            PendingBrowserCapability::Cookie(cookie) => self.pending_cookies.push(cookie),
         }
     }
 }
@@ -982,6 +678,8 @@ impl TypedRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "fetch")]
+    use plec_action::ActionOutcome;
     use plec_schema::typed::TypedApplication;
     use serde_json::json;
 
@@ -1017,6 +715,48 @@ mod tests {
         .unwrap()
     }
 
+    #[cfg(feature = "fetch")]
+    fn mutation_application() -> TypedApplication {
+        serde_json::from_value(json!({
+            "rootNode": 0,
+            "strings": ["div"],
+            "constants": ["/mutation", false, null, 0],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "stateSlots": [
+                {"initialExpression": 1, "frameSlot": 0},
+                {"initialExpression": 2, "frameSlot": 1},
+                {"initialExpression": 2, "frameSlot": 2},
+                {"initialExpression": 3, "frameSlot": 3}
+            ],
+            "expressions": [
+                {"instructions": [{"op": "loadFrame", "slot": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 1}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 2}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 3}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 1}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 2}, {"op": "return"}]}
+            ],
+            "actions": [
+                {"frameSlots": 4, "parameterSlots": [0], "instructions": [
+                    {"op": "mutationStart", "generation": 3, "pending": 0, "error": 1},
+                    {"op": "storeFrame", "slot": 1},
+                    {"op": "call", "action": 1, "arguments": [0], "successPc": 3, "failurePc": 5, "resultSlot": 2, "errorSlot": 3},
+                    {"op": "mutationPublish", "generation": 3, "pending": 0, "error": 1, "data": 2, "invocationSlot": 1, "valueSlot": 2, "success": true},
+                    {"op": "return", "value": 0},
+                    {"op": "mutationPublish", "generation": 3, "pending": 0, "error": 1, "data": 2, "invocationSlot": 1, "valueSlot": 3, "success": false},
+                    {"op": "return", "outcome": "failure", "value": 0}
+                ]},
+                {"frameSlots": 3, "parameterSlots": [0], "instructions": [
+                    {"op": "capabilityRequest", "capability": "fetch", "request": {"url": 4, "method": "GET", "decode": "responseJson"}, "successPc": 1, "failurePc": 2, "resultSlot": 1, "errorSlot": 2},
+                    {"op": "return", "value": 5},
+                    {"op": "return", "outcome": "failure", "value": 6}
+                ]}
+            ]
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn call_frame_executes_action_handles_from_frame_slots_with_both_continuations() {
         let mut runtime = TypedRuntime::new(
@@ -1047,6 +787,281 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(runtime.states[0], RuntimeValue::String(ref value) if value == "failure"));
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
+    fn mutation_latest_success_cannot_be_overwritten_by_stale_completion() {
+        let mut runtime = TypedRuntime::new(
+            mutation_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
+        let context = ActionRunContext::default();
+        let mut metrics = UpdateMetrics::default();
+        let first = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("first".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(first) = first else { panic!("expected first suspension") };
+        let second = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("second".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(second) = second else { panic!("expected second suspension") };
+
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(second, Ok(RuntimeValue::String("new".into())), context.clone())
+            .unwrap()
+        else {
+            panic!("expected second completion");
+        };
+        assert_eq!(runtime.states[1], RuntimeValue::Null);
+        assert_eq!(runtime.states[2], RuntimeValue::String("new".into()));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(false));
+
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(first, Ok(RuntimeValue::String("old".into())), context)
+            .unwrap()
+        else {
+            panic!("expected stale completion");
+        };
+        assert_eq!(runtime.states[2], RuntimeValue::String("new".into()));
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
+    fn mutation_latest_failure_cannot_be_overwritten_by_stale_success() {
+        let mut runtime = TypedRuntime::new(
+            mutation_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
+        let context = ActionRunContext::default();
+        let mut metrics = UpdateMetrics::default();
+        let first = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("first".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(first) = first else { panic!("expected first suspension") };
+        let second = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("second".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(second) = second else { panic!("expected second suspension") };
+
+        let Run::Complete(ActionOutcome::Failure(_)) = runtime
+            .resume_browser_action(second, Err(RuntimeValue::String("new error".into())), context.clone())
+            .unwrap()
+        else {
+            panic!("expected second failure");
+        };
+        assert_eq!(runtime.states[1], RuntimeValue::String("new error".into()));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(false));
+
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(first, Ok(RuntimeValue::String("old".into())), context)
+            .unwrap()
+        else {
+            panic!("expected stale completion");
+        };
+        assert_eq!(runtime.states[1], RuntimeValue::String("new error".into()));
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
+    fn mutation_stale_failure_cannot_overwrite_latest_success_state() {
+        let mut runtime = TypedRuntime::new(
+            mutation_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
+        let context = ActionRunContext::default();
+        let mut metrics = UpdateMetrics::default();
+        let first = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("first".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(first) = first else {
+            panic!("expected first suspension")
+        };
+        let second = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("second".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(second) = second else {
+            panic!("expected second suspension")
+        };
+
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(
+                second,
+                Ok(RuntimeValue::String("new".into())),
+                context.clone(),
+            )
+            .unwrap()
+        else {
+            panic!("expected second completion");
+        };
+        let Run::Complete(ActionOutcome::Failure(_error)) = runtime
+            .resume_browser_action(
+                first,
+                Err(RuntimeValue::String("old error".into())),
+                context,
+            )
+            .unwrap()
+        else {
+            panic!("expected stale first failure");
+        };
+        assert_eq!(runtime.states[1], RuntimeValue::Null);
+        assert_eq!(runtime.states[2], RuntimeValue::String("new".into()));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(false));
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
+    fn mutation_sequential_invocations_advance_generation_and_settle_state() {
+        let mut runtime = TypedRuntime::new(
+            mutation_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
+        let context = ActionRunContext::default();
+        let mut metrics = UpdateMetrics::default();
+
+        let Run::Suspended(first) = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("first".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap()
+        else {
+            panic!("expected first suspension");
+        };
+        assert_eq!(runtime.states[3], RuntimeValue::Number(1.0));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(true));
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(
+                first,
+                Ok(RuntimeValue::String("one".into())),
+                context.clone(),
+            )
+            .unwrap()
+        else {
+            panic!("expected first completion");
+        };
+        assert_eq!(runtime.states[3], RuntimeValue::Number(1.0));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(false));
+        assert_eq!(runtime.states[1], RuntimeValue::Null);
+        assert_eq!(runtime.states[2], RuntimeValue::String("one".into()));
+
+        let Run::Suspended(second) = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("second".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap()
+        else {
+            panic!("expected second suspension");
+        };
+        assert_eq!(runtime.states[3], RuntimeValue::Number(2.0));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(true));
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(second, Ok(RuntimeValue::String("two".into())), context)
+            .unwrap()
+        else {
+            panic!("expected second completion");
+        };
+        assert_eq!(runtime.states[3], RuntimeValue::Number(2.0));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(false));
+        assert_eq!(runtime.states[1], RuntimeValue::Null);
+        assert_eq!(runtime.states[2], RuntimeValue::String("two".into()));
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
+    fn mutation_completion_after_graph_disposal_cannot_publish_state() {
+        let runtime = TypedRuntime::new(
+            mutation_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
+        let mut instance = TypedGraphInstance {
+            parent_id: None,
+            outlet_id: "outlet".into(),
+            graph_id: "graph".into(),
+            route_id: None,
+            match_key: None,
+            route_state: None,
+            loader_data: None,
+            loader_runtime: None,
+            component_call: None,
+            component_start: None,
+            runtime,
+        };
+        let context = ActionRunContext::default();
+        let mut metrics = UpdateMetrics::default();
+        let suspended = instance
+            .runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("input".into()); 4],
+                context,
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(_suspension) = suspended else { panic!("expected suspension") };
+        assert_eq!(instance.runtime.states[0], RuntimeValue::Bool(true));
+        // Capability completions capture the graph generation at suspension
+        // time (fetch.rs/cookie.rs) and resolve the owning runtime through
+        // `runtime_for_generation_mut` before resuming; disposal bumps the
+        // generation, so the continuation holding `mutationPublish` must
+        // never run.
+        let suspended_generation = instance.runtime.graph_generation;
+        instance.runtime.invalidate_fetches();
+        assert!(instance
+            .runtime_for_generation_mut(suspended_generation)
+            .is_none());
+        assert_eq!(instance.runtime.states[0], RuntimeValue::Bool(true));
+        assert_eq!(instance.runtime.states[1], RuntimeValue::Null);
+        assert_eq!(instance.runtime.states[2], RuntimeValue::Null);
     }
 
     #[test]
@@ -1092,26 +1107,365 @@ mod tests {
 
         let first = runtime.take_pending_fetches();
         assert_eq!(first.len(), 1);
-        assert_eq!(first[0].body.as_deref(), Some(r#"{"title":"Plec"}"#));
-        assert_eq!(first[0].continuation.fetch_accounting.borrow().fetches, 1);
-        assert_eq!(first[0].continuation.fetch_accounting.borrow().bytes, 0);
-        first[0]
-            .continuation
-            .fetch_accounting
-            .borrow_mut()
-            .charge_response_bytes(64)
-            .unwrap();
+        let request = match &first[0].suspension.request {
+            BrowserRequest::Fetch(request) => request,
+            BrowserRequest::Cookie { .. } => panic!("expected fetch suspension"),
+        };
+        assert_eq!(request.url, "/todos");
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.body.as_deref(), Some(r#"{"title":"Plec"}"#));
+        assert_eq!(request.decode, "responseJson");
+        assert!(request.require_ok);
 
+        // A separate action run receives its own suspension and budget;
+        // nothing from the first run leaks into the second.
         runtime
             .execute_action_with_frame(0, &[], None, None, &mut metrics)
             .unwrap();
         let second = runtime.take_pending_fetches();
         assert_eq!(second.len(), 1);
-        assert!(!Rc::ptr_eq(
-            &first[0].continuation.fetch_accounting,
-            &second[0].continuation.fetch_accounting,
+    }
+
+    #[test]
+    fn undeclared_cookie_request_is_rejected_before_suspension() {
+        let app: TypedApplication = serde_json::from_value(json!({
+            "rootNode": 0,
+            "strings": ["div", "session"],
+            "constants": [null],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "expressions": [
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]}
+            ],
+            "actions": [{
+                "frameSlots": 2,
+                "instructions": [
+                    {"op": "capabilityRequest", "capability": "cookie",
+                     "request": {"operation": "get", "name": 1},
+                     "successPc": 1, "failurePc": 1, "resultSlot": 0, "errorSlot": 1},
+                    {"op": "return", "value": 0}
+                ]
+            }]
+        }))
+        .unwrap();
+        let mut runtime =
+            TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
+        let error = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::Null; 2],
+                ActionRunContext::default(),
+                None,
+                &mut UpdateMetrics::default(),
+            )
+            .unwrap_err();
+        assert_eq!(error.0, "cookie request is not declared");
+        assert!(runtime.take_pending_cookies().is_empty());
+    }
+
+    #[cfg(feature = "fetch")]
+    fn control_flow_application() -> TypedApplication {
+        serde_json::from_value(json!({
+            "rootNode": 0,
+            "strings": ["div"],
+            "constants": ["/api/data"],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "expressions": [
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 1}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 2}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 3}, {"op": "return"}]}
+            ],
+            "actions": [
+                {
+                    "frameSlots": 4,
+                    "instructions": [
+                        {"op": "call", "action": 1, "arguments": [], "successPc": 1, "failurePc": 3, "resultSlot": 2, "errorSlot": 3},
+                        {"op": "return", "value": 3},
+                        {"op": "return"},
+                        {"op": "return", "outcome": "failure", "value": 4}
+                    ]
+                },
+                {
+                    "frameSlots": 2,
+                    "instructions": [
+                        {"op": "capabilityRequest", "capability": "fetch",
+                         "request": {"url": 0, "method": "GET", "decode": "responseJson"},
+                         "successPc": 1, "failurePc": 2, "finallyPc": 3,
+                         "resultSlot": 0, "errorSlot": 1},
+                        {"op": "return", "value": 1},
+                        {"op": "return", "outcome": "failure", "value": 2},
+                        {"op": "return"}
+                    ]
+                }
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[cfg(feature = "fetch")]
+    fn assert_same_fetch_suspension(
+        browser: &Suspension<BrowserRequest>,
+        loader: &Suspension<TypedLoaderFetchRequest>,
+    ) {
+        let request = match &browser.request {
+            BrowserRequest::Fetch(request) => request,
+            BrowserRequest::Cookie { .. } => panic!("expected fetch suspension"),
+        };
+        assert_eq!(request.url, loader.request.url);
+        assert_eq!(request.method, loader.request.method);
+        assert_eq!(request.headers, loader.request.headers);
+        assert_eq!(request.body, loader.request.body);
+        assert_eq!(request.decode, loader.request.decode);
+        assert_eq!(request.require_ok, loader.request.require_ok);
+        assert_eq!(browser.success_pc, loader.success_pc);
+        assert_eq!(browser.failure_pc, loader.failure_pc);
+        assert_eq!(browser.finally_pc, loader.finally_pc);
+        assert_eq!(browser.result_slot, loader.result_slot);
+        assert_eq!(browser.error_slot, loader.error_slot);
+    }
+
+    /// Runs one representative action program (local call with success and
+    /// failure continuations, a fetch suspension with a deferred finalizer)
+    /// through both browser and loader hosts and asserts the machines and
+    /// hosts agree on every observable suspension field and terminal outcome.
+    #[cfg(feature = "fetch")]
+    fn resume_parity(result: Result<RuntimeValue, RuntimeValue>) -> ActionOutcome {
+        let mut browser_runtime = TypedRuntime::new(
+            control_flow_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
+        let mut loader_runtime = TypedRuntime::new(
+            control_flow_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
+
+        let Run::Suspended(browser) = browser_runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::Null; 4],
+                ActionRunContext::default(),
+                None,
+                &mut UpdateMetrics::default(),
+            )
+            .unwrap()
+        else {
+            panic!("expected browser suspension");
+        };
+        let Run::Suspended(loader) = loader_runtime
+            .start_loader_run(0, vec![RuntimeValue::Null; 4])
+            .unwrap()
+        else {
+            panic!("expected loader suspension");
+        };
+        assert_same_fetch_suspension(&browser, &loader);
+
+        let Run::Complete(browser_outcome) = browser_runtime
+            .resume_browser_action(browser, result.clone(), ActionRunContext::default())
+            .unwrap()
+        else {
+            panic!("expected browser completion");
+        };
+        let Run::Complete(loader_outcome) =
+            loader_runtime.resume_loader_run(loader, result).unwrap()
+        else {
+            panic!("expected loader completion");
+        };
+        assert_eq!(browser_outcome, loader_outcome);
+        browser_outcome
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
+    fn browser_and_loader_hosts_agree_on_fetch_suspensions_and_outcomes() {
+        let success = resume_parity(Ok(RuntimeValue::String("loaded".into())));
+        assert!(matches!(
+            &success,
+            ActionOutcome::Success(RuntimeValue::String(value)) if value == "loaded"
         ));
-        assert_eq!(second[0].continuation.fetch_accounting.borrow().bytes, 0);
+        let failure = resume_parity(Err(RuntimeValue::String("denied".into())));
+        assert!(matches!(
+            &failure,
+            ActionOutcome::Failure(RuntimeValue::String(value)) if value == "denied"
+        ));
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
+    fn budget_exhaustion_error_matches_between_hosts() {
+        let app: TypedApplication = serde_json::from_value(json!({
+            "rootNode": 0,
+            "strings": ["div"],
+            "constants": [],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "expressions": [],
+            "actions": [{"frameSlots": 0, "instructions": [{"op": "jump", "target": 0}]}]
+        }))
+        .unwrap();
+        let mut browser_runtime =
+            TypedRuntime::new(app.clone(), std::rc::Rc::new(std::cell::RefCell::new(None)))
+                .unwrap();
+        let mut loader_runtime =
+            TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
+        let browser_error = browser_runtime
+            .start_browser_action(
+                0,
+                Vec::new(),
+                ActionRunContext::default(),
+                None,
+                &mut UpdateMetrics::default(),
+            )
+            .unwrap_err();
+        let loader_error = loader_runtime.start_loader_run(0, Vec::new()).unwrap_err();
+        assert_eq!(browser_error.0, loader_error.0);
+        assert_eq!(browser_error.0, "action execution budget exceeded");
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
+    fn fetch_count_limit_error_matches_between_hosts() {
+        let limit = plec_ir::limits::MAX_FETCHES_PER_ACTION;
+        let mut instructions: Vec<_> = (0..=limit)
+            .map(|index| {
+                json!({
+                    "op": "capabilityRequest", "capability": "fetch",
+                    "request": {"url": 0, "method": "GET", "decode": "empty"},
+                    "successPc": index + 1, "failurePc": index + 1,
+                    "resultSlot": 0, "errorSlot": 1
+                })
+            })
+            .collect();
+        instructions.push(json!({"op": "return", "value": 0}));
+        let app: TypedApplication = serde_json::from_value(json!({
+            "rootNode": 0,
+            "strings": ["div"],
+            "constants": ["/api/data"],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "expressions": [
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]}
+            ],
+            "actions": [{"frameSlots": 2, "instructions": instructions}]
+        }))
+        .unwrap();
+        let mut browser_runtime =
+            TypedRuntime::new(app.clone(), std::rc::Rc::new(std::cell::RefCell::new(None)))
+                .unwrap();
+        let mut loader_runtime =
+            TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
+
+        let Run::Suspended(mut browser) = browser_runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::Null; 2],
+                ActionRunContext::default(),
+                None,
+                &mut UpdateMetrics::default(),
+            )
+            .unwrap()
+        else {
+            panic!("expected first suspension");
+        };
+        let browser_error = loop {
+            match browser_runtime.resume_browser_action(
+                browser,
+                Ok(RuntimeValue::Null),
+                ActionRunContext::default(),
+            ) {
+                Ok(Run::Suspended(next)) => browser = next,
+                Ok(Run::Complete(_)) => panic!("expected the fetch limit to reject the run"),
+                Err(error) => break error,
+            }
+        };
+        let Run::Suspended(mut loader) = loader_runtime
+            .start_loader_run(0, vec![RuntimeValue::Null; 2])
+            .unwrap()
+        else {
+            panic!("expected first suspension");
+        };
+        let loader_error = loop {
+            match loader_runtime.resume_loader_run(loader, Ok(RuntimeValue::Null)) {
+                Ok(Run::Suspended(next)) => loader = next,
+                Ok(Run::Complete(_)) => panic!("expected the fetch limit to reject the run"),
+                Err(error) => break error,
+            }
+        };
+        assert_eq!(browser_error.0, loader_error.0);
+        assert_eq!(
+            browser_error.0,
+            format!("fetch count exceeds the {limit} per-action limit")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
+    fn action_budget_spans_capability_suspensions() {
+        // Two half-budget loops around one fetch: the run's single fuel
+        // budget carries across the suspension, so the second loop exhausts
+        // it after resume instead of starting from a fresh per-resume budget.
+        let iterations = 180_000.0;
+        let app: TypedApplication = serde_json::from_value(json!({
+            "rootNode": 0,
+            "strings": ["div"],
+            "constants": [1.0, "/api/data"],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "expressions": [
+                {"instructions": [{"op": "loadFrame", "slot": 0}, {"op": "constant", "constant": 0}, {"op": "binary", "kind": "subtract"}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 1}, {"op": "constant", "constant": 0}, {"op": "binary", "kind": "subtract"}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 1}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 1}, {"op": "return"}]}
+            ],
+            "actions": [{
+                "frameSlots": 4,
+                "instructions": [
+                    {"op": "evaluate", "expression": 0},
+                    {"op": "storeFrame", "slot": 0},
+                    {"op": "evaluate", "expression": 1},
+                    {"op": "jumpIfFalse", "target": 5},
+                    {"op": "jump", "target": 0},
+                    {"op": "capabilityRequest", "capability": "fetch",
+                     "request": {"url": 4, "method": "GET", "decode": "empty"},
+                     "successPc": 6, "failurePc": 12, "resultSlot": 2, "errorSlot": 3},
+                    {"op": "evaluate", "expression": 2},
+                    {"op": "storeFrame", "slot": 1},
+                    {"op": "evaluate", "expression": 3},
+                    {"op": "jumpIfFalse", "target": 11},
+                    {"op": "jump", "target": 6},
+                    {"op": "return", "value": 2},
+                    {"op": "return", "outcome": "failure", "value": 3}
+                ]
+            }]
+        }))
+        .unwrap();
+        let mut runtime =
+            TypedRuntime::new(app, std::rc::Rc::new(std::cell::RefCell::new(None))).unwrap();
+        let Run::Suspended(suspension) = runtime
+            .start_browser_action(
+                0,
+                vec![
+                    RuntimeValue::Number(iterations),
+                    RuntimeValue::Number(iterations),
+                    RuntimeValue::Null,
+                    RuntimeValue::Null,
+                ],
+                ActionRunContext::default(),
+                None,
+                &mut UpdateMetrics::default(),
+            )
+            .unwrap()
+        else {
+            panic!("expected suspension");
+        };
+        let error = runtime
+            .resume_browser_action(
+                suspension,
+                Ok(RuntimeValue::Null),
+                ActionRunContext::default(),
+            )
+            .unwrap_err();
+        assert_eq!(error.0, "action execution budget exceeded");
     }
 
     // Error-path budget tests (action loop, self-requeuing reaction) live in

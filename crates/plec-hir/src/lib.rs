@@ -22,7 +22,7 @@ pub use component::{
 };
 pub use component::{
     HirBinding, HirBindingKind, HirCallableBody, HirCallableDecl, HirInput, HirListener, HirLocal,
-    HirParameter, HirParameterSource, HirReaction, HirRefSlot, HirState, HirStmt,
+    HirMutation, HirParameter, HirParameterSource, HirReaction, HirRefSlot, HirState, HirStmt,
 };
 
 mod component;
@@ -93,6 +93,7 @@ mod tests {
             locals: vec![],
             states: vec![],
             ref_slots: vec![],
+            mutations: vec![],
             reactions: vec![],
             listeners: vec![],
             callables: vec![],

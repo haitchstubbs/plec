@@ -8,21 +8,14 @@ use web_sys::{ReadableStreamDefaultReader, RequestCredentials, TextDecoder};
 #[derive(Clone)]
 pub struct TypedPendingFetch {
     pub instance_id: String,
-    pub continuation: TypedContinuationStack,
-    pub success_pc: usize,
-    pub failure_pc: usize,
-    pub finally_pc: Option<usize>,
-    pub finalizers: Vec<usize>,
-    pub result_slot: usize,
-    pub error_slot: usize,
-    pub url: String,
-    pub method: String,
-    pub headers: Vec<(String, String)>,
-    pub body: Option<String>,
-    pub decode: String,
-    pub require_ok: bool,
+    pub suspension: Suspension<BrowserRequest>,
+    pub context: ActionRunContext,
     pub graph_generation: u64,
     pub request_id: u64,
+    /// Entry action of the suspended run carried the route-loader flag; a
+    /// completed route-loader browser action finishes through the shared
+    /// loader pipeline instead of the browser completion tail.
+    pub route_loader: bool,
 }
 
 #[derive(Clone)]
@@ -436,21 +429,29 @@ fn bounded_response_value(value: JsValue, url: &str) -> Result<RuntimeValue, Run
 
 impl RuntimeState {
     pub fn start_typed_fetch(&self, mut pending: TypedPendingFetch) -> Result<(), JsValue> {
+        let request = match pending.suspension.request.clone() {
+            BrowserRequest::Fetch(request) => request,
+            BrowserRequest::Cookie { .. } => {
+                return Err(JsValue::from_str(
+                    "cookie suspension routed through fetch transport",
+                ));
+            }
+        };
         // Host-policy gate before any browser resource is touched. A denial
         // completes the action through its failure path without a network
         // request, exactly like any other fetch failure.
         let credentials =
-            match self.authorize_fetch(&pending.url, &pending.method, &pending.headers) {
+            match self.authorize_fetch(&request.url, &request.method, &request.headers) {
                 Ok(credentials) => credentials,
                 Err(message) => {
-                    let url = pending.url.clone();
+                    let url = request.url.clone();
                     return self
                         .complete_typed_fetch(pending, Err(failure("policy", message, &url)));
                 }
             };
         let controller = AbortController::new()?;
         let init = RequestInit::new();
-        init.set_method(&pending.method);
+        init.set_method(&request.method);
         init.set_signal(Some(&controller.signal()));
         // The credentials mode is host-owned: artifact code cannot widen it.
         init.set_credentials(if credentials {
@@ -459,11 +460,11 @@ impl RuntimeState {
             RequestCredentials::Omit
         });
         let headers = web_sys::Headers::new()?;
-        for (name, value) in &pending.headers {
+        for (name, value) in &request.headers {
             headers.set(name, value)?;
         }
         init.set_headers(&headers);
-        if let Some(body) = &pending.body {
+        if let Some(body) = &request.body {
             init.set_body(&JsValue::from_str(body));
         }
         let browser = window()?;
@@ -484,29 +485,29 @@ impl RuntimeState {
         }
         // Start the browser request before yielding. Disposal can then abort an
         // in-flight promise even when it happens in the same event turn.
-        let request = browser.fetch_with_str_and_init(&pending.url, &init);
+        let browser_request = browser.fetch_with_str_and_init(&request.url, &init);
         let runtime = self.clone();
         spawn_local(async move {
-            let result = match JsFuture::from(request).await {
+            let result = match JsFuture::from(browser_request).await {
                 Ok(value) => match value.dyn_into::<Response>() {
-                    Ok(response) if pending.require_ok && !response.ok() => {
-                        Err(http_failure(response, &pending.url).await)
+                    Ok(response) if request.require_ok && !response.ok() => {
+                        Err(http_failure(response, &request.url).await)
                     }
                     Ok(response) => {
-                        if let Some(rejected) = declared_length_failure(&response, &pending.url) {
+                        if let Some(rejected) = declared_length_failure(&response, &request.url) {
                             Err(rejected)
                         } else {
-                            match pending.decode.as_str() {
+                            match request.decode.as_str() {
                                 // Every decode below streams the body through
                                 // `bounded_body_bytes`, so the byte ceiling is
                                 // enforced before any whole-body buffering.
-                                "empty" => bounded_body_bytes(&response, &pending.url)
+                                "empty" => bounded_body_bytes(&response, &request.url)
                                     .await
                                     .map(|_| RuntimeValue::Null),
-                                "text" => bounded_body_bytes(&response, &pending.url)
+                                "text" => bounded_body_bytes(&response, &request.url)
                                     .await
                                     .and_then(|bytes| {
-                                        decode_body_text(bytes, &pending.url)
+                                        decode_body_text(bytes, &request.url)
                                             .map(RuntimeValue::String)
                                     }),
                                 "responseJson" => {
@@ -525,10 +526,10 @@ impl RuntimeState {
                                             ("body".into(), RuntimeValue::Null),
                                         ])))
                                     } else {
-                                        bounded_body_bytes(&response, &pending.url)
+                                        bounded_body_bytes(&response, &request.url)
                                             .await
-                                            .and_then(|bytes| decode_body_text(bytes, &pending.url))
-                                            .and_then(|text| parse_body_json(&text, &pending.url))
+                                            .and_then(|bytes| decode_body_text(bytes, &request.url))
+                                            .and_then(|text| parse_body_json(&text, &request.url))
                                             .map(|body| {
                                                 RuntimeValue::Record(
                                                     std::collections::HashMap::from([
@@ -543,16 +544,16 @@ impl RuntimeState {
                                             })
                                     }
                                 }
-                                _ => bounded_body_bytes(&response, &pending.url)
+                                _ => bounded_body_bytes(&response, &request.url)
                                     .await
-                                    .and_then(|bytes| decode_body_text(bytes, &pending.url))
-                                    .and_then(|text| parse_body_json(&text, &pending.url)),
+                                    .and_then(|bytes| decode_body_text(bytes, &request.url))
+                                    .and_then(|text| parse_body_json(&text, &request.url)),
                             }
                         }
                     }
-                    Err(error) => Err(js_failure(error, &pending.url)),
+                    Err(error) => Err(js_failure(error, &request.url)),
                 },
-                Err(error) => Err(js_failure(error, &pending.url)),
+                Err(error) => Err(js_failure(error, &request.url)),
             };
             if let Err(error) = runtime.complete_typed_fetch(pending, result) {
                 web_sys::console::error_1(&error);
@@ -563,24 +564,22 @@ impl RuntimeState {
 
     pub fn complete_typed_fetch(
         &self,
-        pending: TypedPendingFetch,
+        mut pending: TypedPendingFetch,
         result: Result<RuntimeValue, RuntimeValue>,
     ) -> Result<(), JsValue> {
+        let url = match &pending.suspension.request {
+            BrowserRequest::Fetch(request) => request.url.clone(),
+            BrowserRequest::Cookie { .. } => String::new(),
+        };
         let result = match result {
             Ok(value) => {
                 let bytes = value
                     .json_body()
                     .map(|body| body.len())
-                    .map_err(|error| failure("decode", error, &pending.url));
+                    .map_err(|error| failure("decode", error, &url));
                 match bytes.and_then(|bytes| {
-                    pending
-                        .continuation
-                        .fetch_accounting
-                        .borrow_mut()
-                        .charge_response_bytes(bytes)
-                        .map_err(|error| {
-                            failure("limit", error.as_string().unwrap_or_default(), &pending.url)
-                        })
+                    charge_response_bytes(&mut pending.suspension, bytes)
+                        .map_err(|error| failure("limit", error.to_string(), &url))
                 }) {
                     Ok(()) => Ok(value),
                     Err(error) => Err(error),
@@ -588,13 +587,14 @@ impl RuntimeState {
             }
             Err(error) => Err(error),
         };
-        let route_loader = {
+        let graph_generation = pending.graph_generation;
+        let route_loader = pending.route_loader;
+        let run = {
             let mut typed = self.typed.borrow_mut();
             let Some(instance) = typed.get_mut(&pending.instance_id) else {
                 return Ok(());
             };
-            let Some(runtime) = instance.runtime_for_generation_mut(pending.graph_generation)
-            else {
+            let Some(runtime) = instance.runtime_for_generation_mut(graph_generation) else {
                 return Ok(());
             };
             if runtime
@@ -604,202 +604,47 @@ impl RuntimeState {
             {
                 self.region_tracker.release_fetch();
             }
+            if runtime.root.is_none() {
+                return Ok(());
+            }
             runtime
-                .app
-                .actions
-                .get(pending.continuation.current.action)
-                .map(|action| action.route_loader)
-                .unwrap_or(false)
+                .resume_browser_action(pending.suspension, result, pending.context.clone())
+                .map_err(|error| JsValue::from_str(&error.to_string()))?
         };
-        if route_loader {
-            return self.complete_typed_route_loader(pending, result);
-        }
         let instance_id = pending.instance_id.clone();
-        let more = {
-            let mut typed = self.typed.borrow_mut();
-            let Some(typed) = typed.get_mut(&pending.instance_id) else {
-                return Ok(());
-            };
-            let Some(typed) = typed.runtime_for_generation_mut(pending.graph_generation) else {
-                return Ok(());
-            };
-            if typed.root.is_none() {
-                return Ok(());
+        match run {
+            Run::Suspended(suspension) => {
+                let next = pending_browser_capability(
+                    instance_id,
+                    graph_generation,
+                    route_loader,
+                    suspension,
+                    pending.context,
+                );
+                self.start_browser_capability(next)?;
+                self.mount_component_requests()?;
+                self.flush_component_work()?;
+                self.install_typed_event_listeners()
             }
-            let mut continuation = pending.continuation;
-            let frame = &mut continuation.current.frame;
-            let pc = match result {
-                Ok(value) => {
-                    if pending.result_slot >= frame.len() {
-                        return Err(JsValue::from_str("result frame slot out of range"));
-                    }
-                    frame[pending.result_slot] = value.clone();
-                    if let Some(state) = typed
-                        .app
-                        .actions
-                        .get(continuation.current.action)
-                        .and_then(|action| {
-                            action
-                                .route_loader
-                                .then_some(action.loader_result_state)
-                                .flatten()
-                        })
-                    {
-                        if state >= typed.states.len() {
-                            return Err(JsValue::from_str("loader state handle out of range"));
-                        }
-                        typed.states[state] = value;
-                        typed.refresh_state(state, &mut UpdateMetrics::default())?;
-                    }
-                    pending.success_pc
+            Run::Complete(outcome) => {
+                if route_loader {
+                    // Route-loader browser actions complete through the same
+                    // shared-loader pipeline (exported-body unwrapping, loader
+                    // result state, route restore) as route-initiated loaders.
+                    return self.complete_shared_route_loader(
+                        &instance_id,
+                        graph_generation,
+                        outcome,
+                    );
                 }
-                Err(error) => {
-                    if pending.error_slot >= frame.len() {
-                        return Err(JsValue::from_str("error frame slot out of range"));
-                    }
-                    frame[pending.error_slot] = error;
-                    pending.failure_pc
-                }
-            };
-            let mut metrics = UpdateMetrics::default();
-            continuation.current.pc = pc;
-            typed.execute_continuation(continuation.clone(), None, &mut metrics)?;
-            let mut requests = typed.take_pending_fetches();
-            if requests.is_empty() {
-                let mut finalizers = pending.finalizers.clone();
-                if let Some(finally_pc) = pending.finally_pc {
-                    finalizers.push(finally_pc);
-                }
-                for finally_pc in finalizers.into_iter().rev() {
-                    typed.execute_action_at_with_fetch_accounting(
-                        continuation.current.action,
-                        finally_pc,
-                        continuation.current.frame.clone(),
-                        &continuation.current.event,
-                        continuation.current.row.clone(),
-                        None,
-                        &mut metrics,
-                        continuation.fetch_accounting.clone(),
-                    )?;
-                    requests.extend(typed.take_pending_fetches());
-                }
-            } else {
-                for request in &mut requests {
-                    request
-                        .finalizers
-                        .extend(pending.finalizers.iter().copied());
-                    if let Some(finally_pc) = pending.finally_pc {
-                        request.finalizers.push(finally_pc);
-                    }
-                }
-            }
-            requests
-        };
-        for mut request in more {
-            request.instance_id = instance_id.clone();
-            self.start_typed_fetch(request)?;
-        }
-        self.mount_component_requests()?;
-        // Continuation state writes queue row component refreshes; without this
-        // drain the child components keep their pre-fetch props forever.
-        self.flush_component_work()?;
-        self.install_typed_event_listeners()?;
-        Ok(())
-    }
-
-    fn complete_typed_route_loader(
-        &self,
-        pending: TypedPendingFetch,
-        result: Result<RuntimeValue, RuntimeValue>,
-    ) -> Result<(), JsValue> {
-        let instance_id = pending.instance_id.clone();
-        match result {
-            Err(error) => {
-                if self.typed.borrow().contains_key(&instance_id) {
-                    self.show_typed_route_error(&instance_id, error)?;
-                    self.install_typed_event_listeners()?;
-                }
-            }
-            Ok(value) => {
-                // Route loader data is an explicit host input to the normal
-                // route graph. It never crosses the VM as a browser Response.
-                // `responseJson` decodes receive an {ok,status,body}
-                // envelope so they can branch on transport outcome themselves;
-                // loader consumers asked for the payload alone, so export the
-                // unwrapped body here. The exported payload is also the
-                // loader result state value: SSR resolves the same outcome
-                // (loader.rs `execute_route_loader`) as the bare body, so a
-                // slot that is both `loaderResultState` and
-                // `loadHost("loaderData")`-initialised must never observe the
-                // transport envelope.
-                let exported = match &value {
-                    RuntimeValue::Record(record)
-                        if record.len() == 3
-                            && record.contains_key("ok")
-                            && record.contains_key("status")
-                            && record.contains_key("body") =>
-                    {
-                        record.get("body").cloned().unwrap_or_else(|| value.clone())
-                    }
-                    _ => value.clone(),
-                };
-                let restore = {
-                    let mut typed = self.typed.borrow_mut();
-                    let instance = match typed.get_mut(&instance_id) {
-                        Some(instance) => instance,
-                        None => return Ok(()),
-                    };
-                    let restore = instance.loader_runtime.is_some();
-                    instance.loader_data = Some(exported.clone());
-                    let host_inputs = self.typed_host_inputs_for(instance.loader_data.as_ref());
-                    let Some(runtime) =
-                        instance.runtime_for_generation_mut(pending.graph_generation)
-                    else {
-                        return Ok(());
-                    };
-                    let state = runtime
-                        .app
-                        .actions
-                        .get(pending.continuation.current.action)
-                        .and_then(|action| action.loader_result_state)
-                        .ok_or_else(|| {
-                            JsValue::from_str("typed route loader result state missing")
-                        })?;
-                    if state >= runtime.states.len() {
-                        return Err(JsValue::from_str("loader state handle out of range"));
-                    }
-                    if !restore {
-                        // Without a preserved loader runtime there is no
-                        // restore path: the fetch completed against the live
-                        // normal graph, so its host inputs must be re-applied
-                        // before the loader data becomes visible.
-                        //
-                        // Re-application alone only rewrites values in
-                        // place: bindings compiled against host slots (the
-                        // `useLoaderData` shape reads
-                        // `loadHost("loaderData")` directly and carries no
-                        // dependency edges) keep their pre-fetch DOM until
-                        // the static bindings are re-applied, mirroring how
-                        // location host inputs refresh on navigation.
-                        runtime.set_host_inputs(host_inputs)?;
-                        runtime.apply_static_bindings()?;
-                        runtime.queue_static_component_refreshes()?;
-                    }
-                    runtime.states[state] = exported;
-                    runtime.refresh_state(state, &mut UpdateMetrics::default())?;
-                    restore
-                };
-                if restore {
-                    self.restore_typed_route_normal(&instance_id)?;
-                }
-                // Re-applied bindings can queue component refreshes; without
-                // this drain child components keep their pre-fetch props,
-                // mirroring the plain fetch completion path.
+                self.mount_component_requests()?;
+                // Continuation state writes queue row component refreshes; without this
+                // drain the child components keep their pre-fetch props forever.
                 self.flush_component_work()?;
                 self.install_typed_event_listeners()?;
+                Ok(())
             }
         }
-        Ok(())
     }
 
     pub(crate) fn complete_shared_route_loader(

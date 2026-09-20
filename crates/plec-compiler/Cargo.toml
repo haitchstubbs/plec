@@ -17,3 +17,4 @@ serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+plec-schema = { path = "../plec-schema" }

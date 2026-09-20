@@ -722,10 +722,32 @@ impl Ctx<'_> {
         else {
             return false;
         };
-        self.component
+        if let Some(callable) = self
+            .component
             .callables
             .iter()
             .find(|callable| callable.binding == *binding)
+        {
+            return callable_body_may_suspend(&callable.body);
+        }
+        let Some(HirBindingKind::MutationRun { mutation }) = self
+            .component
+            .bindings
+            .get(binding.0 as usize)
+            .map(|binding| &binding.kind)
+        else {
+            return false;
+        };
+        self.component
+            .mutations
+            .iter()
+            .find(|candidate| candidate.binding == *mutation)
+            .and_then(|mutation| {
+                self.component
+                    .callables
+                    .iter()
+                    .find(|callable| callable.binding == mutation.callback)
+            })
             .is_some_and(|callable| callable_body_may_suspend(&callable.body))
     }
 

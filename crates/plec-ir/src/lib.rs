@@ -1229,6 +1229,22 @@ pub enum ActionInstruction {
     StoreState {
         state: usize,
     },
+    MutationStart {
+        generation: usize,
+        pending: usize,
+        error: usize,
+    },
+    MutationPublish {
+        generation: usize,
+        pending: usize,
+        error: usize,
+        data: usize,
+        #[serde(rename = "invocationSlot")]
+        invocation_slot: usize,
+        #[serde(rename = "valueSlot")]
+        value_slot: usize,
+        success: bool,
+    },
     StoreFrame {
         slot: usize,
     },
@@ -1397,6 +1413,25 @@ pub struct RouteOutlet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mutation_publish_serializes_slot_fields_in_camel_case() {
+        let value = serde_json::to_value(ActionInstruction::MutationPublish {
+            generation: 0,
+            pending: 1,
+            error: 2,
+            data: 3,
+            invocation_slot: 4,
+            value_slot: 5,
+            success: true,
+        })
+        .unwrap();
+        let object = value.as_object().unwrap();
+        assert!(object.contains_key("invocationSlot"));
+        assert!(object.contains_key("valueSlot"));
+        assert!(!object.contains_key("invocation_slot"));
+        assert!(!object.contains_key("value_slot"));
+    }
 
     #[test]
     fn route_manifest_round_trips_the_active_transport_schema() {

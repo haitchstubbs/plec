@@ -112,6 +112,42 @@ test('todo create, complete, rename, and delete stay targeted', async ({
     await expect(
       page.getByText('Renamed acceptance todo'),
     ).toBeVisible();
+
+    let patch = 'reject';
+    await page.route(
+      (url) => /\/api\/todos\/[^/]+$/.test(url.pathname),
+      async (route) => {
+        if (
+          route.request().method() === 'PATCH' &&
+          patch === 'reject'
+        ) {
+          patch = 'done';
+          await route.fulfill({
+            status: 500,
+            contentType: 'application/json',
+            body: '{}',
+          });
+        } else {
+          await forwardTodoRequest(route);
+        }
+      },
+    );
+    row = page
+      .locator('li')
+      .filter({ hasText: 'Renamed acceptance todo' });
+    await row.locator('button', { hasText: 'Edit' }).click();
+    const rejected = row.locator('input:not([type="checkbox"])');
+    await rejected.fill('Should not stick');
+    await rejected.press('Enter');
+    await expect(
+      page.getByText('The Todo API rejected this change.', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByText('Renamed acceptance todo'),
+    ).toBeVisible();
+
     row = page
       .locator('li')
       .filter({ hasText: 'Renamed acceptance todo' });
