@@ -102,10 +102,10 @@ function matchRoute(pathname) {
    if (middlewareIndex < route.middleware.length) {
      const middleware = route.middleware[middlewareIndex];
      let nextCalled = false;
-     const next = () => {
-       if (nextCalled) throw new Error('middleware next() called more than once');
-       nextCalled = true;
-       return dispatchRoute(route, request, context, middlewareIndex + 1);
+      const next = async () => {
+        if (nextCalled) throw new Error('middleware next() called more than once');
+        nextCalled = true;
+        return dispatchRoute(route, request, context, middlewareIndex + 1);
      };
      return middleware(request, context, next);
    }
@@ -234,6 +234,7 @@ mod tests {
             "import { middleware as middleware0_1 } from \"./api/admin/_middleware.js\";"
         ));
         assert!(source.contains("middleware: [middleware0_0, middleware0_1]"));
+        assert!(source.contains("const next = async () =>"));
         assert!(source.contains("return middleware(request, context, next);"));
         assert!(source.contains("middleware next() called more than once"));
         assert!(source.contains("return dispatchRoute(matched.route, request, routeContext, 0);"));

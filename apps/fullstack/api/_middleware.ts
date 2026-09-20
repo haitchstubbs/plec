@@ -14,6 +14,11 @@ export const middleware: ApiMiddleware = async (
     });
   }
 
+  if (request.headers.get('x-plec-middleware-double-next') === '1') {
+    await next();
+    return next();
+  }
+
   const response = await next();
   const order = response.headers.get('x-plec-middleware') ?? '';
   response.headers.set(

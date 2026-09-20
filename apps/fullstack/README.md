@@ -39,8 +39,12 @@ Prerequisites, the WASM rebuild loop, and the stale-`.br` trap:
 Place `middleware` exports in `api/_middleware.ts` or `api/_middleware.js`.
 They apply only to matched file routes in that directory and its children.
 Parent middleware runs before child middleware; responses unwind in reverse
-order. Call `next()` once to continue, or return a `Response` to short-circuit.
-Unmatched paths and the application fallback do not run filesystem middleware.
+order. Call `next()` exactly once to continue, or return a `Response` to
+short-circuit. Calling `next()` more than once raises a deterministic error.
+Thrown or rejected middleware errors use the existing application-runtime error
+path. Unmatched paths and the application fallback do not run filesystem
+middleware.
 
 Middleware receives the normal `Request`, `Response`, and `RequestContext`
-contract. V1 does not support typed context extension or mutation.
+contract, including decoded route params. V1 does not support typed context
+extension or mutation.

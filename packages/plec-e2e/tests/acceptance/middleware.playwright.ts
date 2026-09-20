@@ -40,3 +40,13 @@ test('scoped API middleware can short-circuit and misses stay outside scope', as
   expect(unmatched.status()).toBe(404);
   expect(unmatched.headers()['x-plec-middleware']).toBeUndefined();
 });
+
+test('middleware rejects duplicate next calls through the application error path', async ({
+  request,
+}) => {
+  const response = await request.get('/api/admin/projects', {
+    headers: { 'x-plec-middleware-double-next': '1' },
+  });
+
+  expect(response.status()).toBe(500);
+});
