@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./assets/plec-full-logo-transparent.png" alt="Plec Banner" width="480">
+</p>
+
 # Plec
 
 A full-stack framework for building data-intensive web applications around a
