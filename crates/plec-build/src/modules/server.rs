@@ -161,6 +161,7 @@ mod tests {
                 Segment::Static("todos".into()),
                 Segment::Dynamic("id".into()),
             ],
+            middleware: Vec::new(),
         };
         let source = generated_source(
             Path::new("/app"),
