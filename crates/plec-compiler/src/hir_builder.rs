@@ -4515,7 +4515,12 @@ mod tests {
                     if *callee == hir.mutations[0].run)
         ));
         let executable = crate::lower_component_to_executable(&hir).unwrap();
-        assert_eq!(executable.state_slots.len(), 3);
+        assert_eq!(executable.state_slots.len(), 4);
+        assert!(executable.actions.iter().any(|action| {
+            action.instructions.iter().any(|instruction| {
+                matches!(instruction, plec_ir::ActionInstruction::MutationStart { .. })
+            })
+        }));
         assert!(!executable.actions.is_empty());
     }
 

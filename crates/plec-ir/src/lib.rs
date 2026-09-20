@@ -1229,6 +1229,20 @@ pub enum ActionInstruction {
     StoreState {
         state: usize,
     },
+    MutationStart {
+        generation: usize,
+        pending: usize,
+        error: usize,
+    },
+    MutationPublish {
+        generation: usize,
+        pending: usize,
+        error: usize,
+        data: usize,
+        invocation_slot: usize,
+        value_slot: usize,
+        success: bool,
+    },
     StoreFrame {
         slot: usize,
     },

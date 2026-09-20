@@ -107,6 +107,28 @@ pub trait ActionHost {
         Err(ActionError::unsupported("storeState"))
     }
 
+    fn mutation_start(
+        &mut self,
+        _generation: usize,
+        _pending: usize,
+        _error: usize,
+    ) -> Result<RuntimeValue, ActionError> {
+        Err(ActionError::unsupported("mutationStart"))
+    }
+
+    fn mutation_publish(
+        &mut self,
+        _generation: usize,
+        _pending: usize,
+        _error: usize,
+        _data: usize,
+        _invocation: RuntimeValue,
+        _value: RuntimeValue,
+        _success: bool,
+    ) -> Result<(), ActionError> {
+        Err(ActionError::unsupported("mutationPublish"))
+    }
+
     /// Reference-slot write. Hosts own reference storage.
     fn store_ref(
         &mut self,
@@ -456,6 +478,45 @@ fn drive<H: ActionHost>(
                         ActionError("action stack underflow: storeState".into())
                     })?;
                     host.store_state(state, value)?;
+                }
+                TypedActionInstruction::MutationStart {
+                    generation,
+                    pending,
+                    error,
+                } => {
+                    let invocation = host.mutation_start(generation, pending, error)?;
+                    continuation.current.stack.push(invocation);
+                }
+                TypedActionInstruction::MutationPublish {
+                    generation,
+                    pending,
+                    error,
+                    data,
+                    invocation_slot,
+                    value_slot,
+                    success,
+                } => {
+                    let invocation = continuation
+                        .current
+                        .frame
+                        .get(invocation_slot)
+                        .cloned()
+                        .ok_or_else(|| ActionError("mutation invocation slot out of range".into()))?;
+                    let value = continuation
+                        .current
+                        .frame
+                        .get(value_slot)
+                        .cloned()
+                        .ok_or_else(|| ActionError("mutation value slot out of range".into()))?;
+                    host.mutation_publish(
+                        generation,
+                        pending,
+                        error,
+                        data,
+                        invocation,
+                        value,
+                        success,
+                    )?;
                 }
                 TypedActionInstruction::StoreRef { reference } => {
                     let value = continuation.current.stack.pop().ok_or_else(|| {

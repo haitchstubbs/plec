@@ -93,6 +93,7 @@ mod tests {
             locals: vec![],
             states: vec![],
             ref_slots: vec![],
+            mutations: vec![],
             reactions: vec![],
             listeners: vec![],
             callables: vec![],

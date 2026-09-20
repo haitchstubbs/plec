@@ -242,6 +242,66 @@ impl ActionHost for BrowserActionHost<'_> {
             .map_err(action_error)
     }
 
+    fn mutation_start(
+        &mut self,
+        generation: usize,
+        pending: usize,
+        error: usize,
+    ) -> Result<RuntimeValue, ActionError> {
+        let current = match self.runtime.states.get(generation) {
+            Some(RuntimeValue::Number(value)) => *value,
+            Some(_) => return Err(ActionError("mutation generation is not numeric".into())),
+            None => return Err(ActionError("mutation generation state out of range".into())),
+        };
+        let next = current + 1.0;
+        if !next.is_finite() {
+            return Err(ActionError("mutation invocation generation overflow".into()));
+        }
+        if pending >= self.runtime.states.len() || error >= self.runtime.states.len() {
+            return Err(ActionError("mutation state handle out of range".into()));
+        }
+        self.runtime.states[generation] = RuntimeValue::Number(next);
+        self.runtime.states[pending] = RuntimeValue::Bool(true);
+        self.runtime.refresh_state(pending, self.metrics).map_err(action_error)?;
+        self.runtime.states[error] = RuntimeValue::Null;
+        self.runtime.refresh_state(error, self.metrics).map_err(action_error)?;
+        Ok(RuntimeValue::Number(next))
+    }
+
+    fn mutation_publish(
+        &mut self,
+        generation: usize,
+        pending: usize,
+        error: usize,
+        data: usize,
+        invocation: RuntimeValue,
+        value: RuntimeValue,
+        success: bool,
+    ) -> Result<(), ActionError> {
+        let current = self
+            .runtime
+            .states
+            .get(generation)
+            .ok_or_else(|| ActionError("mutation generation state out of range".into()))?;
+        if *current != invocation {
+            return Ok(());
+        }
+        if [pending, error, data].iter().any(|state| *state >= self.runtime.states.len()) {
+            return Err(ActionError("mutation state handle out of range".into()));
+        }
+        if success {
+            self.runtime.states[data] = value;
+            self.runtime.states[error] = RuntimeValue::Null;
+        } else {
+            self.runtime.states[error] = value;
+        }
+        self.runtime.states[pending] = RuntimeValue::Bool(false);
+        for state in if success { vec![data, error, pending] } else { vec![error, pending] } {
+            self.runtime.refresh_state(state, self.metrics).map_err(action_error)?;
+        }
+        Ok(())
+    }
+
     fn store_ref(&mut self, reference: usize, value: RuntimeValue) -> Result<(), ActionError> {
         let slot = self
             .runtime
@@ -655,6 +715,48 @@ mod tests {
         .unwrap()
     }
 
+    #[cfg(feature = "fetch")]
+    fn mutation_application() -> TypedApplication {
+        serde_json::from_value(json!({
+            "rootNode": 0,
+            "strings": ["div"],
+            "constants": ["/mutation", false, null, 0],
+            "nodes": [{"op": "element", "tag": 0, "parent": null}],
+            "stateSlots": [
+                {"initialExpression": 1, "frameSlot": 0},
+                {"initialExpression": 2, "frameSlot": 1},
+                {"initialExpression": 2, "frameSlot": 2},
+                {"initialExpression": 3, "frameSlot": 3}
+            ],
+            "expressions": [
+                {"instructions": [{"op": "loadFrame", "slot": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 1}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 2}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 3}, {"op": "return"}]},
+                {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 1}, {"op": "return"}]},
+                {"instructions": [{"op": "loadFrame", "slot": 2}, {"op": "return"}]}
+            ],
+            "actions": [
+                {"frameSlots": 4, "parameterSlots": [0], "instructions": [
+                    {"op": "mutationStart", "generation": 3, "pending": 0, "error": 1},
+                    {"op": "storeFrame", "slot": 1},
+                    {"op": "call", "action": 1, "arguments": [0], "successPc": 3, "failurePc": 5, "resultSlot": 2, "errorSlot": 3},
+                    {"op": "mutationPublish", "generation": 3, "pending": 0, "error": 1, "data": 2, "invocationSlot": 1, "valueSlot": 2, "success": true},
+                    {"op": "return", "value": 0},
+                    {"op": "mutationPublish", "generation": 3, "pending": 0, "error": 1, "data": 2, "invocationSlot": 1, "valueSlot": 3, "success": false},
+                    {"op": "return", "outcome": "failure", "value": 0}
+                ]},
+                {"frameSlots": 3, "parameterSlots": [0], "instructions": [
+                    {"op": "capabilityRequest", "capability": "fetch", "request": {"url": 4, "method": "GET", "decode": "responseJson"}, "successPc": 1, "failurePc": 2, "resultSlot": 1, "errorSlot": 2},
+                    {"op": "return", "value": 5},
+                    {"op": "return", "outcome": "failure", "value": 6}
+                ]}
+            ]
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn call_frame_executes_action_handles_from_frame_slots_with_both_continuations() {
         let mut runtime = TypedRuntime::new(
@@ -685,6 +787,105 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(runtime.states[0], RuntimeValue::String(ref value) if value == "failure"));
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
+    fn mutation_latest_success_cannot_be_overwritten_by_stale_completion() {
+        let mut runtime = TypedRuntime::new(
+            mutation_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
+        let context = ActionRunContext::default();
+        let mut metrics = UpdateMetrics::default();
+        let first = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("first".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(first) = first else { panic!("expected first suspension") };
+        let second = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("second".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(second) = second else { panic!("expected second suspension") };
+
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(second, Ok(RuntimeValue::String("new".into())), context.clone())
+            .unwrap()
+        else {
+            panic!("expected second completion");
+        };
+        assert_eq!(runtime.states[1], RuntimeValue::Null);
+        assert_eq!(runtime.states[2], RuntimeValue::String("new".into()));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(false));
+
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(first, Ok(RuntimeValue::String("old".into())), context)
+            .unwrap()
+        else {
+            panic!("expected stale completion");
+        };
+        assert_eq!(runtime.states[2], RuntimeValue::String("new".into()));
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
+    fn mutation_latest_failure_cannot_be_overwritten_by_stale_success() {
+        let mut runtime = TypedRuntime::new(
+            mutation_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
+        let context = ActionRunContext::default();
+        let mut metrics = UpdateMetrics::default();
+        let first = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("first".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(first) = first else { panic!("expected first suspension") };
+        let second = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("second".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(second) = second else { panic!("expected second suspension") };
+
+        let Run::Complete(ActionOutcome::Failure(_)) = runtime
+            .resume_browser_action(second, Err(RuntimeValue::String("new error".into())), context.clone())
+            .unwrap()
+        else {
+            panic!("expected second failure");
+        };
+        assert_eq!(runtime.states[1], RuntimeValue::String("new error".into()));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(false));
+
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(first, Ok(RuntimeValue::String("old".into())), context)
+            .unwrap()
+        else {
+            panic!("expected stale completion");
+        };
+        assert_eq!(runtime.states[1], RuntimeValue::String("new error".into()));
     }
 
     #[test]
