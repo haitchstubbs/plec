@@ -123,7 +123,9 @@ export function TodosPage() {
     } catch (_) {
       // The mutation owns async lifecycle state; this handler only tracks row context.
     } finally {
-      setUpdatingId(undefined);
+      setUpdatingId((current) =>
+        current === todo.id ? undefined : current,
+      );
     }
   }
 
@@ -137,7 +139,9 @@ export function TodosPage() {
     } catch (_) {
       // The mutation owns async lifecycle state; this handler only tracks row context.
     } finally {
-      setRemovingId(undefined);
+      setRemovingId((current) =>
+        current === todo.id ? undefined : current,
+      );
     }
   }
 

@@ -262,8 +262,8 @@ impl ActionHost for BrowserActionHost<'_> {
         }
         self.runtime.states[generation] = RuntimeValue::Number(next);
         self.runtime.states[pending] = RuntimeValue::Bool(true);
-        self.runtime.refresh_state(pending, self.metrics).map_err(action_error)?;
         self.runtime.states[error] = RuntimeValue::Null;
+        self.runtime.refresh_state(pending, self.metrics).map_err(action_error)?;
         self.runtime.refresh_state(error, self.metrics).map_err(action_error)?;
         Ok(RuntimeValue::Number(next))
     }
