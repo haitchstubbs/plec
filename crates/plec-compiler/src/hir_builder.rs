@@ -4495,7 +4495,10 @@ mod tests {
     fn lowers_awaited_mutation_run_as_an_action_call() {
         let source = r#"
             export function App() {
-                const mutation = useMutation(async (value) => { return value; });
+                const mutation = useMutation(async (value) => {
+                    await fetch("/mutation");
+                    return value;
+                });
                 async function save() {
                     await mutation.run("x");
                 }
@@ -4516,12 +4519,101 @@ mod tests {
         ));
         let executable = crate::lower_component_to_executable(&hir).unwrap();
         assert_eq!(executable.state_slots.len(), 4);
-        assert!(executable.actions.iter().any(|action| {
-            action.instructions.iter().any(|instruction| {
-                matches!(instruction, plec_ir::ActionInstruction::MutationStart { .. })
-            })
+        let callback_action = hir
+            .callables
+            .iter()
+            .position(|callable| callable.binding == hir.mutations[0].callback)
+            .unwrap();
+        let save_action = hir
+            .callables
+            .iter()
+            .position(|callable| callable.binding == save.binding)
+            .unwrap();
+        let wrapper_action = hir.callables.len();
+        assert_ne!(wrapper_action, callback_action);
+        assert!(matches!(
+            executable.actions[wrapper_action].instructions.first(),
+            Some(plec_ir::ActionInstruction::MutationStart { .. })
+        ));
+        assert!(
+            !executable.actions[callback_action]
+                .instructions
+                .iter()
+                .any(|instruction| matches!(
+                    instruction,
+                    plec_ir::ActionInstruction::MutationStart { .. }
+                ))
+        );
+        assert!(executable.actions[save_action].instructions.iter().any(|instruction| {
+            matches!(instruction, plec_ir::ActionInstruction::Call { action, .. } if *action == wrapper_action)
         }));
-        assert!(!executable.actions.is_empty());
+        let call = executable.actions[save_action]
+            .instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                plec_ir::ActionInstruction::Call { action, .. } => Some(action),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(*call, wrapper_action);
+        assert!(matches!(
+            executable.actions[save_action]
+                .instructions
+                .iter()
+                .find(|instruction| matches!(instruction, plec_ir::ActionInstruction::Call { .. })),
+            Some(plec_ir::ActionInstruction::Call {
+                result_slot: Some(_),
+                error_slot: Some(_),
+                failure_pc: Some(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn lowers_fire_and_forget_mutation_run_with_suspending_continuation() {
+        let hir = build_and_lower(
+            r#"
+                export function App() {
+                    const mutation = useMutation(async (value) => {
+                        await fetch("/mutation");
+                        return value;
+                    });
+                    function save() {
+                        void mutation.run("x");
+                    }
+                    return <button onClick={save}>Save</button>;
+                }
+            "#,
+        )
+        .unwrap();
+        let executable = crate::lower_component_to_executable(&hir).unwrap();
+        let save_action = hir
+            .callables
+            .iter()
+            .position(|callable| hir.bindings[callable.binding.0 as usize].name == "save")
+            .unwrap();
+        let wrapper_action = hir.callables.len();
+        let call = executable.actions[save_action]
+            .instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                plec_ir::ActionInstruction::Call {
+                    action,
+                    success_pc,
+                    failure_pc,
+                    result_slot,
+                    error_slot,
+                    ..
+                } => Some((*action, *success_pc, *failure_pc, *result_slot, *error_slot)),
+                _ => None,
+            })
+            .expect("fire-and-forget mutation should lower to a call");
+        assert_eq!(call.0, wrapper_action);
+        assert!(call.1.is_some());
+        assert!(call.2.is_some());
+        assert!(call.3.is_some());
+        assert!(call.4.is_some());
     }
 
     #[test]

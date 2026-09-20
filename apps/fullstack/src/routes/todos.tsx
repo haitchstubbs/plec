@@ -49,7 +49,8 @@ export function TodosPage() {
   const [todos, setTodos] = useState(initialTodos);
   const [title, setTitle] = useState('');
   const [search, setSearch] = useState('');
-  const [pending, setPending] = useState<string | undefined>(undefined);
+  const [updatingId, setUpdatingId] = useState<string | undefined>(undefined);
+  const [removingId, setRemovingId] = useState<string | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(
     undefined,
   );
@@ -106,31 +107,33 @@ export function TodosPage() {
   }
 
   async function updateTodoFor(todo: Todo, patch: TodoPatch) {
-    setPending(`update:${todo.id}`);
+    setUpdatingId(todo.id);
     try {
       const updated = await updateTodo.run({
         id: todo.id,
         body: JSON.stringify(patch),
       });
-      setPending(undefined);
       setTodos((items) =>
         items.map((item) => (item.id === updated.id ? updated : item)),
       );
     } catch (_) {
-      setPending(undefined);
+      // The mutation owns async lifecycle state; this handler only tracks row context.
+    } finally {
+      setUpdatingId(undefined);
     }
   }
 
   async function removeTodoFor(todo: Todo) {
-    setPending(`remove:${todo.id}`);
+    setRemovingId(todo.id);
     try {
       const removedId = await removeTodo.run(todo.id);
-      setPending(undefined);
       setTodos((items) =>
         items.filter((item) => item.id !== removedId),
       );
     } catch (_) {
-      setPending(undefined);
+      // The mutation owns async lifecycle state; this handler only tracks row context.
+    } finally {
+      setRemovingId(undefined);
     }
   }
 
@@ -202,8 +205,8 @@ export function TodosPage() {
               editing={editingId === todo.id}
               editingTitle={editingTitle}
               pending={
-                pending === `update:${todo.id}` ||
-                pending === `remove:${todo.id}`
+                (updateTodo.pending && updatingId === todo.id) ||
+                (removeTodo.pending && removingId === todo.id)
               }
               onToggle={() =>
                 updateTodoFor(todo, { completed: !todo.completed })

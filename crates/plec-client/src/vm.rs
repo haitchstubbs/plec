@@ -890,6 +890,132 @@ mod tests {
 
     #[test]
     #[cfg(feature = "fetch")]
+    fn mutation_stale_failure_cannot_overwrite_latest_success_state() {
+        let mut runtime = TypedRuntime::new(
+            mutation_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
+        let context = ActionRunContext::default();
+        let mut metrics = UpdateMetrics::default();
+        let first = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("first".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(first) = first else {
+            panic!("expected first suspension")
+        };
+        let second = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("second".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(second) = second else {
+            panic!("expected second suspension")
+        };
+
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(
+                second,
+                Ok(RuntimeValue::String("new".into())),
+                context.clone(),
+            )
+            .unwrap()
+        else {
+            panic!("expected second completion");
+        };
+        let Run::Complete(ActionOutcome::Failure(_error)) = runtime
+            .resume_browser_action(
+                first,
+                Err(RuntimeValue::String("old error".into())),
+                context,
+            )
+            .unwrap()
+        else {
+            panic!("expected stale first failure");
+        };
+        assert_eq!(runtime.states[1], RuntimeValue::Null);
+        assert_eq!(runtime.states[2], RuntimeValue::String("new".into()));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(false));
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
+    fn mutation_sequential_invocations_advance_generation_and_settle_state() {
+        let mut runtime = TypedRuntime::new(
+            mutation_application(),
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+        .unwrap();
+        let context = ActionRunContext::default();
+        let mut metrics = UpdateMetrics::default();
+
+        let Run::Suspended(first) = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("first".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap()
+        else {
+            panic!("expected first suspension");
+        };
+        assert_eq!(runtime.states[3], RuntimeValue::Number(1.0));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(true));
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(
+                first,
+                Ok(RuntimeValue::String("one".into())),
+                context.clone(),
+            )
+            .unwrap()
+        else {
+            panic!("expected first completion");
+        };
+        assert_eq!(runtime.states[3], RuntimeValue::Number(1.0));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(false));
+        assert_eq!(runtime.states[1], RuntimeValue::Null);
+        assert_eq!(runtime.states[2], RuntimeValue::String("one".into()));
+
+        let Run::Suspended(second) = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("second".into()); 4],
+                context.clone(),
+                None,
+                &mut metrics,
+            )
+            .unwrap()
+        else {
+            panic!("expected second suspension");
+        };
+        assert_eq!(runtime.states[3], RuntimeValue::Number(2.0));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(true));
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(second, Ok(RuntimeValue::String("two".into())), context)
+            .unwrap()
+        else {
+            panic!("expected second completion");
+        };
+        assert_eq!(runtime.states[3], RuntimeValue::Number(2.0));
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(false));
+        assert_eq!(runtime.states[1], RuntimeValue::Null);
+        assert_eq!(runtime.states[2], RuntimeValue::String("two".into()));
+    }
+
+    #[test]
+    #[cfg(feature = "fetch")]
     fn mutation_completion_after_graph_disposal_cannot_publish_state() {
         let runtime = TypedRuntime::new(
             mutation_application(),
