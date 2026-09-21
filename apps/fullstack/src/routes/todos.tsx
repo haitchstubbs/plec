@@ -64,7 +64,9 @@ export function TodosPage() {
   );
   const openCount = todos.filter((todo) => !todo.completed).length;
 
-  const createTodo = useMutation(async (nextTitle: string) => {
+  const createTodo = useMutation(async (_event: Event) => {
+    const nextTitle = title.trim();
+    if (!nextTitle) return;
     const response = await fetch('/api/todos', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -102,13 +104,6 @@ export function TodosPage() {
       throw new Error('The Todo API rejected this change.');
     return id;
   });
-
-  function submitTodo(event: Event) {
-    event.preventDefault();
-    const nextTitle = title.trim();
-    if (!nextTitle) return;
-    void createTodo.run(nextTitle);
-  }
 
   async function updateTodoFor(todo: Todo, patch: TodoPatch) {
     setUpdatingId(todo.id);
@@ -166,7 +161,7 @@ export function TodosPage() {
         </p>
       </header>
 
-      <form className="flex flex-wrap gap-2" onSubmit={submitTodo}>
+      <form className="flex flex-wrap gap-2" onSubmit={createTodo}>
         <input
           id="todo-new-title"
           className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2"

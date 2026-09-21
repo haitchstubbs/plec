@@ -145,12 +145,14 @@ export class PlecRouter {
 
   reloadRoute(route: RouteDefinition) {
     const location = locationFromWindow();
-    const current = matchRoutes(this.routeTree, location.pathname)?.find(
+    const current = matchRoutes(
+      this.routeTree,
+      location.pathname,
+    )?.find((candidate) => candidate.route === route);
+    const match = this.matches.find(
       (candidate) => candidate.route === route,
     );
-    const match = this.matches.find((candidate) => candidate.route === route);
-    if (!match || !current || !route.loader)
-      return Promise.resolve();
+    if (!match || !current || !route.loader) return Promise.resolve();
     match.params = current.params;
     return this.loadMatch(match, location);
   }

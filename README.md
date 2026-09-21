@@ -60,7 +60,12 @@ function Todos() {
   const initialTodos = Route.useLoaderData();
   const [todos, setTodos] = useState(initialTodos);
 
-  const addTodo = useMutation(async (title: string) => {
+  const addTodo = useMutation(async (event: SubmitEvent) => {
+    const title = String(
+      new FormData(event.currentTarget as HTMLFormElement).get(
+        'title',
+      ) ?? '',
+    );
     const response = await fetch('/api/todos', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -75,14 +80,24 @@ function Todos() {
   });
 
   return (
-    <ul>
-      {todos.map((todo) => (
-        <li key={todo.id}>{todo.title}</li>
-      ))}
-    </ul>
+    <div>
+      <form onSubmit={addTodo}>
+        <input name="title" />
+        <button type="submit">Add todo</button>
+      </form>
+      <ul>
+        {todos.map((todo) => (
+          <li key={todo.id}>{todo.title}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 ```
+
+Mutations can bind directly to a form's `onSubmit`. Plec preserves native form
+validation and keyboard submission while forwarding the submit event to the
+mutation callback.
 
 This resembles ordinary application code, but Plec's compiler extracts the executable semantics rather than shipping the source component as the browser's application program.
 

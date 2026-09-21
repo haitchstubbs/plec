@@ -1,11 +1,29 @@
 {
   "name": "plec",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.1.0-alpha.0",
+  "description": "A full-stack web framework built around a compiled semantic application graph.",
+  "private": false,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": "./bin/plec.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/haitchstubbs/plec.git",
+    "directory": "packages/plec"
+  },
+  "bugs": {
+    "url": "https://github.com/haitchstubbs/plec/issues"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/haitchstubbs/plec#readme",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

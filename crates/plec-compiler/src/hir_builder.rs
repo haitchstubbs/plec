@@ -2193,6 +2193,7 @@ fn lower_jsx_element_with_consumed_key(
                     &mut props,
                     static_target,
                     host_target,
+                    tag_name == "form",
                     &mut events,
                 )?;
                 if router_link && jsx_attr_name(attr).as_deref() == Some("to") {
@@ -2368,6 +2369,7 @@ fn lower_jsx_attr(
     props: &mut Vec<HirProp>,
     component_target: Option<&ComponentId>,
     host_target: bool,
+    is_form: bool,
     events: &mut Vec<HirEventBinding>,
 ) -> Result<(), String> {
     let name = jsx_attr_name(attr).expect("JSX attribute has a name");
@@ -2415,6 +2417,49 @@ fn lower_jsx_attr(
                 // Check if this is a DOM event binding (only for intrinsic elements)
                 if component_target.is_none() && !host_target {
                     if let Some(event_name) = normalize_event_name(&name) {
+                        if is_form && event_name == "submit" {
+                            if let Expr::Ident(ident) = expr.as_ref() {
+                                let binding = ctx.resolve_binding(&ident.sym)?;
+                                if let Some(mutation) = ctx
+                                    .mutations
+                                    .iter()
+                                    .find(|mutation| mutation.binding == binding)
+                                {
+                                    let span = source_span_from_swc(container.span, ctx.module_id);
+                                    let run = mutation.run;
+                                    ctx.push_scope();
+                                    let parameter = ctx.declare_binding(
+                                        format!("__plec_form_event_{}", ctx.bindings.len()),
+                                        HirBindingKind::Parameter { callable: false },
+                                        span.clone(),
+                                    )?;
+                                    let event = ctx.alloc_expr_id();
+                                    ctx.add_expression(HirExprNode::new(
+                                        event,
+                                        HirExpr::Binding(parameter),
+                                        span.clone(),
+                                    ));
+                                    ctx.pop_scope();
+                                    events.push(HirEventBinding {
+                                        event: event_name,
+                                        callable: HirCallable::Inline {
+                                            parameters: vec![parameter],
+                                            body: HirCallableBody::Block(vec![
+                                                HirStmt::PreventDefault { span: span.clone() },
+                                                HirStmt::AwaitCall {
+                                                    target: None,
+                                                    callee: run,
+                                                    arguments: vec![event],
+                                                    span,
+                                                },
+                                            ]),
+                                        },
+                                        span: source_span_from_swc(container.span, ctx.module_id),
+                                    });
+                                    return Ok(());
+                                }
+                            }
+                        }
                         // For DOM events, all valid expressions are treated as callables
                         if let Some(callable) =
                             lower_callable(expr, CallablePolicy::CallableValue, ctx)?
@@ -4471,6 +4516,33 @@ mod tests {
             hir.bindings[mutation.data.0 as usize].kind,
             HirBindingKind::MutationData { .. }
         ));
+    }
+
+    #[test]
+    fn lowers_mutation_binding_as_form_submit_handler() {
+        let source = r#"
+            export function App() {
+                const mutation = useMutation(async (event) => { return event; });
+                return <form onSubmit={mutation}><button type="submit">Save</button></form>;
+            }
+        "#;
+        let hir = build_and_lower(source).unwrap();
+        let form = hir
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                HirNode::Element(element) if element.tag == "form" => Some(element),
+                _ => None,
+            })
+            .unwrap();
+        let HirCallable::Inline { parameters, body } = &form.events[0].callable else {
+            panic!("form mutation handler should be compiler-generated");
+        };
+        assert_eq!(parameters.len(), 1);
+        assert!(matches!(body, HirCallableBody::Block(statements)
+            if matches!(statements.first(), Some(HirStmt::PreventDefault { .. }))
+            && matches!(statements.get(1), Some(HirStmt::AwaitCall { callee, arguments, .. })
+                if *callee == hir.mutations[0].run && arguments.len() == 1)));
     }
 
     #[test]

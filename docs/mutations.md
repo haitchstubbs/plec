@@ -18,6 +18,30 @@ saveTodo.error;
 saveTodo.data;
 ```
 
+Forms can use a mutation directly as their submit handler. Plec prevents the
+native navigation and forwards the submit event to the mutation callback:
+
+```tsx
+const saveTodo = useMutation(async (event: SubmitEvent) => {
+  const form = event.currentTarget as HTMLFormElement;
+  const title = new FormData(form).get('title');
+  return saveTodoRequest(String(title ?? ''));
+});
+
+return (
+  <form onSubmit={saveTodo}>
+    <input name="title" />
+    <button type="submit">Save</button>
+  </form>
+);
+```
+
+This preserves browser validation, keyboard submission, submitter semantics,
+and ordinary SSR form markup. Direct form submissions follow normal mutation
+semantics: every submit starts an invocation, while the latest invocation owns
+published state. Use `mutation.pending` to disable duplicate submission when
+the form should allow only one request.
+
 Mutation state belongs to component or graph region that creates mutation. When
 that owner is disposed, later completion cannot publish mutation state.
 
