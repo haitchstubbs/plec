@@ -1,4 +1,8 @@
-import type { Todo } from 'plec/server';
+export type Todo = {
+  id: string;
+  title: string;
+  completed: boolean;
+};
 
 let failure = false;
 export const api = (() => {

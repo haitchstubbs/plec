@@ -5,6 +5,7 @@ import {
   createRouter,
   matchRoutes,
 } from './router';
+import { withRendering } from '../client/root/render-context';
 
 const View = () => null;
 const originalWindow = globalThis.window;
@@ -111,5 +112,55 @@ describe('code-first routes', () => {
       status: 'error',
       error: expect.any(Error),
     });
+  });
+
+  it('reloads only the selected route and rejects stale results', async () => {
+    setLocation('/todos');
+    let calls = 0;
+    let resolveFirst!: (value: string[]) => void;
+    let resolveSecond!: (value: string[]) => void;
+    const root = createRootRoute({ component: View });
+    const todos = createRoute({
+      getParentRoute: () => root,
+      path: 'todos',
+      component: View,
+      loader: () => {
+        calls += 1;
+        if (calls === 1) return ['initial'];
+        return new Promise<string[]>((resolve) => {
+          if (calls === 2) resolveFirst = resolve;
+          else resolveSecond = resolve;
+        });
+      },
+    });
+    const other = createRoute({
+      getParentRoute: () => root,
+      path: 'other',
+      component: View,
+      loader: async () => ['other'],
+    });
+    root.addChildren([todos, other]);
+    const router = createRouter({ routeTree: root });
+    router.start();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const state = {
+      router,
+      activeRouteMatch: router.matches[1],
+    } as Parameters<typeof withRendering>[0];
+    const reload = withRendering(state, () => todos.useReload());
+    const first = reload();
+    const second = reload();
+    resolveFirst(['stale']);
+    resolveSecond(['fresh']);
+    await Promise.all([first, second]);
+
+    expect(router.matches[1]).toMatchObject({
+      status: 'ready',
+      data: ['fresh'],
+    });
+    expect(router.matches[0]?.status).toBe('ready');
+    expect(router.matches[0]?.data).toBeUndefined();
   });
 });
