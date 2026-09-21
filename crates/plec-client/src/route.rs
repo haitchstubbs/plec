@@ -15,6 +15,33 @@ pub struct TypedLocation {
 }
 
 impl RuntimeState {
+    pub fn reload_typed_route(&self, id: &str) -> Result<(), JsValue> {
+        let (action, params, location) = {
+            let mut typed = self.typed.borrow_mut();
+            let instance = typed
+                .get_mut(id)
+                .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
+            instance.runtime.route_reload_requested = false;
+            let route = instance
+                .route_state
+                .as_ref()
+                .ok_or_else(|| JsValue::from_str("typed loader route state missing"))?;
+            let action = route
+                .loader_action
+                .ok_or_else(|| JsValue::from_str("typed route has no loader"))?;
+            (
+                action,
+                route.params.clone(),
+                TypedLocation {
+                    pathname: route.location.0.clone(),
+                    search: route.location.1.clone(),
+                    hash: route.location.2.clone(),
+                },
+            )
+        };
+        self.run_typed_loader(id, action, params, &location)
+    }
+
     pub fn typed_outlet_element(
         &self,
         parent_id: &str,

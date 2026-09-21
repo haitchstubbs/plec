@@ -1261,6 +1261,7 @@ pub enum ActionInstruction {
         reference: usize,
     },
     PreventDefault,
+    RouteReload,
     CallProp {
         prop: usize,
         #[serde(skip_serializing_if = "Vec::is_empty", default)]

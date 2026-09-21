@@ -214,6 +214,25 @@ pub(crate) fn lower_component(
         });
         ctx.callables.insert(callable.binding, action);
     }
+    for binding in &component.bindings {
+        if matches!(binding.kind, HirBindingKind::RouteReload) {
+            let action = ctx.app.actions.len();
+            ctx.app.actions.push(ActionProgram {
+                frame_slots: 0,
+                parameter_slots: vec![],
+                loader_result_state: None,
+                route_loader: false,
+                instructions: vec![
+                    ActionInstruction::RouteReload,
+                    ActionInstruction::Return {
+                        outcome: plec_ir::ReturnOutcome::Success,
+                        value: None,
+                    },
+                ],
+            });
+            ctx.callables.insert(binding.id, action);
+        }
+    }
     for mutation in &component.mutations {
         for (binding, value) in [
             (mutation.pending, plec_ir::Value::Bool(false)),

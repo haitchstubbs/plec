@@ -142,8 +142,7 @@ describe('code-first routes', () => {
     root.addChildren([todos, other]);
     const router = createRouter({ routeTree: root });
     router.start();
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let index = 0; index < 6; index++) await Promise.resolve();
 
     const state = {
       router,
@@ -162,5 +161,100 @@ describe('code-first routes', () => {
     });
     expect(router.matches[0]?.status).toBe('ready');
     expect(router.matches[0]?.data).toBeUndefined();
+  });
+
+  it('commits a navigation only after the complete route chain resolves', async () => {
+    setLocation('/parent/old');
+    let resolveChild!: (value: string) => void;
+    const root = createRootRoute({ component: View });
+    const parent = createRoute({
+      getParentRoute: () => root,
+      path: 'parent',
+      component: View,
+      loader: async () => 'parent',
+    });
+    const old = createRoute({
+      getParentRoute: () => parent,
+      path: 'old',
+      component: View,
+      loader: async () => 'old',
+    });
+    const next = createRoute({
+      getParentRoute: () => parent,
+      path: 'next',
+      component: View,
+      loader: () =>
+        new Promise<string>((resolve) => (resolveChild = resolve)),
+    });
+    root.addChildren([parent]);
+    parent.addChildren([old, next]);
+    const router = createRouter({ routeTree: root });
+    router.start();
+    for (let index = 0; index < 8; index++) await Promise.resolve();
+    expect(router.committedMatches.at(-1)?.route).toBe(old);
+
+    setLocation('/parent/next');
+    router.reload();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(router.matches.map((match) => match.route)).toEqual([
+      root,
+      parent,
+      next,
+    ]);
+    expect(router.matches[1]?.status).toBe('ready');
+    expect(router.matches[2]?.status).toBe('pending');
+    expect(router.committedMatches.map((match) => match.route)).toEqual(
+      [root, parent, old],
+    );
+
+    resolveChild('next');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(router.committedMatches.map((match) => match.route)).toEqual(
+      [root, parent, next],
+    );
+  });
+
+  it('does not cancel revalidation of a different route', async () => {
+    setLocation('/todos');
+    let resolveTodos!: (value: string) => void;
+    let resolveOther!: (value: string) => void;
+    const root = createRootRoute({ component: View });
+    const todos = createRoute({
+      getParentRoute: () => root,
+      path: 'todos',
+      component: View,
+      loader: () =>
+        new Promise<string>((resolve) => (resolveTodos = resolve)),
+    });
+    const other = createRoute({
+      getParentRoute: () => root,
+      path: 'other',
+      component: View,
+      loader: () =>
+        new Promise<string>((resolve) => (resolveOther = resolve)),
+    });
+    root.addChildren([todos, other]);
+    const router = createRouter({ routeTree: root });
+    router.matches = [
+      { route: root, params: {}, status: 'ready' },
+      { route: todos, params: {}, status: 'ready', data: 'initial' },
+      { route: other, params: {}, status: 'ready', data: 'initial' },
+    ];
+    setLocation('/todos');
+    const first = router.reloadRoute(todos);
+    setLocation('/other');
+    const second = router.reloadRoute(other);
+    resolveTodos('todos');
+    resolveOther('other');
+    await Promise.all([first, second]);
+    expect(
+      router.matches.find((match) => match.route === todos)?.data,
+    ).toBe('todos');
+    expect(
+      router.matches.find((match) => match.route === other)?.data,
+    ).toBe('other');
   });
 });

@@ -602,6 +602,7 @@ pub enum TypedActionInstruction {
         reference: usize,
     },
     PreventDefault,
+    RouteReload,
     CallProp {
         prop: usize,
         #[serde(default)]

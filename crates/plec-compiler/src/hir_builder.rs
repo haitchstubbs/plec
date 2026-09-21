@@ -270,6 +270,7 @@ impl<'a> HirLoweringCtx<'a> {
         matches!(
             self.binding_kind(id),
             HirBindingKind::Callable
+                | HirBindingKind::RouteReload
                 | HirBindingKind::MutationRun { .. }
                 | HirBindingKind::Parameter { callable: true }
         )
@@ -851,6 +852,15 @@ fn lower_component_var(
         Pat::Ident(ident) => match init {
             Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useMutation")) => {
                 lower_mutation_declaration(ident, call, ctx)
+            }
+            Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.obj.as_ref(), Expr::Ident(object) if object.sym == "Route") && matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref property) if property.sym == "useReload"))) =>
+            {
+                if !call.args.is_empty() {
+                    return Err("Route.useReload() accepts no arguments".into());
+                }
+                let span = source_span_from_swc(ident.id.span, ctx.module_id);
+                ctx.declare_binding(ident.id.sym.to_string(), HirBindingKind::RouteReload, span)?;
+                Ok(())
             }
             Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useRef")) =>
             {
@@ -2486,6 +2496,7 @@ fn lower_jsx_attr(
                                 matches!(
                                     ctx.bindings[binding.0 as usize].kind,
                                     HirBindingKind::Callable
+                                        | HirBindingKind::RouteReload
                                         | HirBindingKind::Parameter { callable: true }
                                 )
                             })
@@ -2934,6 +2945,19 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
                 ctx.loader_data_binding = Some(binding);
                 binding
             };
+            HirExpr::Binding(binding)
+        }
+        Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.obj.as_ref(), Expr::Ident(object) if object.sym == "Route") && matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref name) if name.sym == "useReload"))) =>
+        {
+            if !call.args.is_empty() {
+                return Err("Route.useReload() accepts no arguments".into());
+            }
+            let span = source_span_from_swc(call.span, ctx.module_id);
+            let binding = ctx.declare_binding(
+                format!("__plec_route_reload_{}", ctx.bindings.len()),
+                HirBindingKind::RouteReload,
+                span,
+            )?;
             HirExpr::Binding(binding)
         }
         Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.obj.as_ref(), Expr::Ident(object) if object.sym == "JSON") && matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref property) if property.sym == "stringify"))) =>
@@ -4983,6 +5007,31 @@ mod tests {
             "export function Page() { const todos = Route.useLoaderData(); return <p>{todos.length}</p>; }",
         ).unwrap();
         assert!(hir.inputs.iter().any(|input| input.kind == "loaderData"));
+    }
+
+    #[test]
+    fn lowers_route_use_reload_as_a_typed_callable() {
+        let hir = build_and_lower(
+            r#"
+                export function Page() {
+                    const reload = Route.useReload();
+                    async function save() { await reload(); }
+                    return <button onClick={save}>Save</button>;
+                }
+            "#,
+        )
+        .unwrap();
+        assert!(hir
+            .bindings
+            .iter()
+            .any(|binding| matches!(binding.kind, HirBindingKind::RouteReload)));
+        let executable = crate::lower_component_to_executable(&hir).unwrap();
+        assert!(executable.actions.iter().any(|action| {
+            action
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, plec_ir::ActionInstruction::RouteReload))
+        }));
     }
 
     #[test]

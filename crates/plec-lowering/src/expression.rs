@@ -135,6 +135,15 @@ impl Ctx<'_> {
                     });
                     let _ = mutation;
                 }
+                Some(HirBindingKind::RouteReload) => {
+                    let action = *self
+                        .callables
+                        .get(&binding)
+                        .ok_or_else(|| self.err("route reload used before lowering"))?;
+                    code.push(ExpressionInstruction::Constant {
+                        constant: self.constant(plec_ir::Value::Number(action as f64)),
+                    });
+                }
                 Some(HirBindingKind::Input { kind }) if kind == "location" => {
                     let host = *self
                         .hosts

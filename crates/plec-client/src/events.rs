@@ -501,7 +501,7 @@ impl RuntimeState {
             return self.retry_typed_route(instance_id);
         }
         #[cfg(feature = "fetch")]
-        let (pending, cookies) = {
+        {
             let Ok(mut typed) = self.typed.try_borrow_mut() else {
                 return Ok(());
             };
@@ -511,6 +511,18 @@ impl RuntimeState {
                 .unwrap()
                 .runtime
                 .execute_action_with_frame(action, &values, row, Some(&event), &mut metrics)?;
+        }
+        if self
+            .typed
+            .borrow()
+            .get(instance_id)
+            .is_some_and(|instance| instance.runtime.route_reload_requested)
+        {
+            self.reload_typed_route(instance_id)?;
+        }
+        #[cfg(feature = "fetch")]
+        let (pending, cookies) = {
+            let mut typed = self.typed.borrow_mut();
             let runtime = &mut typed.get_mut(instance_id).unwrap().runtime;
             (
                 runtime.take_pending_fetches(),
@@ -557,11 +569,27 @@ impl RuntimeState {
     pub(crate) fn complete_typed_action(
         &self,
         instance_id: String,
-        pending: Vec<TypedPendingFetch>,
+        mut pending: Vec<TypedPendingFetch>,
         cookies: Vec<TypedPendingCookie>,
         defer_listener_install: bool,
     ) -> Result<(), JsValue> {
         self.dispatch_typed_callbacks(&instance_id)?;
+        if self
+            .typed
+            .borrow()
+            .get(&instance_id)
+            .is_some_and(|instance| instance.runtime.route_reload_requested)
+        {
+            self.reload_typed_route(&instance_id)?;
+            pending.extend(
+                self.typed
+                    .borrow_mut()
+                    .get_mut(&instance_id)
+                    .unwrap()
+                    .runtime
+                    .take_pending_fetches(),
+            );
+        }
         let has_pending_fetch = !pending.is_empty();
         #[cfg(feature = "fetch")]
         for mut request in pending {
@@ -691,6 +719,11 @@ pub fn typed_event_field(
             ("target".into(), typed_event_element(target)),
             ("currentTarget".into(), typed_event_element(current_target)),
             (
+                "formData".into(),
+                typed_form_data(current_target).unwrap_or(RuntimeValue::Null),
+            ),
+            ("submitter".into(), typed_submitter(event, current_target)),
+            (
                 "key".into(),
                 event
                     .clone()
@@ -780,6 +813,86 @@ fn typed_event_element(element: Option<&Element>) -> RuntimeValue {
         })
         .unwrap_or(RuntimeValue::Record(std::collections::HashMap::new()));
     value
+}
+
+fn typed_form_data(form: Option<&Element>) -> Option<RuntimeValue> {
+    let form = form?.clone().dyn_into::<web_sys::HtmlFormElement>().ok()?;
+    let mut values = std::collections::HashMap::new();
+    let elements = form.elements();
+    for index in 0..elements.length() {
+        let Some(element) = elements.item(index) else {
+            continue;
+        };
+        let Some(name) = element
+            .get_attribute("name")
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        let value = if let Ok(input) = element.clone().dyn_into::<HtmlInputElement>() {
+            if matches!(input.type_().as_str(), "checkbox" | "radio") && !input.checked() {
+                continue;
+            }
+            input.value()
+        } else if let Ok(select) = element.clone().dyn_into::<HtmlSelectElement>() {
+            select.value()
+        } else if let Ok(textarea) = element.dyn_into::<HtmlTextAreaElement>() {
+            textarea.value()
+        } else {
+            continue;
+        };
+        match values.remove(&name) {
+            Some(RuntimeValue::Array(mut entries)) => {
+                entries.push(RuntimeValue::String(value));
+                values.insert(name, RuntimeValue::Array(entries));
+            }
+            Some(previous) => {
+                values.insert(
+                    name,
+                    RuntimeValue::Array(vec![previous, RuntimeValue::String(value)]),
+                );
+            }
+            None => {
+                values.insert(name, RuntimeValue::String(value));
+            }
+        }
+    }
+    Some(RuntimeValue::Record(values))
+}
+
+fn typed_submitter(event: &Event, form: Option<&Element>) -> RuntimeValue {
+    let Some(submitter) = event
+        .clone()
+        .dyn_into::<SubmitEvent>()
+        .ok()
+        .and_then(|event| event.submitter())
+        .and_then(|element| element.dyn_into::<Element>().ok())
+    else {
+        return RuntimeValue::Null;
+    };
+    if form.is_none() || !form.unwrap().contains(Some(&submitter)) {
+        return RuntimeValue::Null;
+    }
+    RuntimeValue::Record(
+        [
+            (
+                "name".into(),
+                submitter
+                    .get_attribute("name")
+                    .map(RuntimeValue::String)
+                    .unwrap_or(RuntimeValue::Null),
+            ),
+            (
+                "value".into(),
+                submitter
+                    .get_attribute("value")
+                    .map(RuntimeValue::String)
+                    .unwrap_or(RuntimeValue::String(String::new())),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    )
 }
 
 #[cfg(test)]
