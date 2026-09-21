@@ -255,7 +255,9 @@ impl ActionHost for BrowserActionHost<'_> {
         };
         let next = current + 1.0;
         if !next.is_finite() {
-            return Err(ActionError("mutation invocation generation overflow".into()));
+            return Err(ActionError(
+                "mutation invocation generation overflow".into(),
+            ));
         }
         if pending >= self.runtime.states.len() || error >= self.runtime.states.len() {
             return Err(ActionError("mutation state handle out of range".into()));
@@ -263,8 +265,12 @@ impl ActionHost for BrowserActionHost<'_> {
         self.runtime.states[generation] = RuntimeValue::Number(next);
         self.runtime.states[pending] = RuntimeValue::Bool(true);
         self.runtime.states[error] = RuntimeValue::Null;
-        self.runtime.refresh_state(pending, self.metrics).map_err(action_error)?;
-        self.runtime.refresh_state(error, self.metrics).map_err(action_error)?;
+        self.runtime
+            .refresh_state(pending, self.metrics)
+            .map_err(action_error)?;
+        self.runtime
+            .refresh_state(error, self.metrics)
+            .map_err(action_error)?;
         Ok(RuntimeValue::Number(next))
     }
 
@@ -286,7 +292,10 @@ impl ActionHost for BrowserActionHost<'_> {
         if *current != invocation {
             return Ok(());
         }
-        if [pending, error, data].iter().any(|state| *state >= self.runtime.states.len()) {
+        if [pending, error, data]
+            .iter()
+            .any(|state| *state >= self.runtime.states.len())
+        {
             return Err(ActionError("mutation state handle out of range".into()));
         }
         if success {
@@ -296,8 +305,14 @@ impl ActionHost for BrowserActionHost<'_> {
             self.runtime.states[error] = value;
         }
         self.runtime.states[pending] = RuntimeValue::Bool(false);
-        for state in if success { vec![data, error, pending] } else { vec![error, pending] } {
-            self.runtime.refresh_state(state, self.metrics).map_err(action_error)?;
+        for state in if success {
+            vec![data, error, pending]
+        } else {
+            vec![error, pending]
+        } {
+            self.runtime
+                .refresh_state(state, self.metrics)
+                .map_err(action_error)?;
         }
         Ok(())
     }
@@ -357,6 +372,11 @@ impl ActionHost for BrowserActionHost<'_> {
         if let Some(event) = self.native_event {
             event.prevent_default();
         }
+        Ok(())
+    }
+
+    fn route_reload(&mut self) -> Result<(), ActionError> {
+        self.runtime.route_reload_requested = true;
         Ok(())
     }
 
@@ -808,7 +828,9 @@ mod tests {
                 &mut metrics,
             )
             .unwrap();
-        let Run::Suspended(first) = first else { panic!("expected first suspension") };
+        let Run::Suspended(first) = first else {
+            panic!("expected first suspension")
+        };
         let second = runtime
             .start_browser_action(
                 0,
@@ -818,10 +840,16 @@ mod tests {
                 &mut metrics,
             )
             .unwrap();
-        let Run::Suspended(second) = second else { panic!("expected second suspension") };
+        let Run::Suspended(second) = second else {
+            panic!("expected second suspension")
+        };
 
         let Run::Complete(ActionOutcome::Success(_)) = runtime
-            .resume_browser_action(second, Ok(RuntimeValue::String("new".into())), context.clone())
+            .resume_browser_action(
+                second,
+                Ok(RuntimeValue::String("new".into())),
+                context.clone(),
+            )
             .unwrap()
         else {
             panic!("expected second completion");
@@ -858,7 +886,9 @@ mod tests {
                 &mut metrics,
             )
             .unwrap();
-        let Run::Suspended(first) = first else { panic!("expected first suspension") };
+        let Run::Suspended(first) = first else {
+            panic!("expected first suspension")
+        };
         let second = runtime
             .start_browser_action(
                 0,
@@ -868,10 +898,16 @@ mod tests {
                 &mut metrics,
             )
             .unwrap();
-        let Run::Suspended(second) = second else { panic!("expected second suspension") };
+        let Run::Suspended(second) = second else {
+            panic!("expected second suspension")
+        };
 
         let Run::Complete(ActionOutcome::Failure(_)) = runtime
-            .resume_browser_action(second, Err(RuntimeValue::String("new error".into())), context.clone())
+            .resume_browser_action(
+                second,
+                Err(RuntimeValue::String("new error".into())),
+                context.clone(),
+            )
             .unwrap()
         else {
             panic!("expected second failure");
@@ -1047,7 +1083,9 @@ mod tests {
                 &mut metrics,
             )
             .unwrap();
-        let Run::Suspended(_suspension) = suspended else { panic!("expected suspension") };
+        let Run::Suspended(_suspension) = suspended else {
+            panic!("expected suspension")
+        };
         assert_eq!(instance.runtime.states[0], RuntimeValue::Bool(true));
         // Capability completions capture the graph generation at suspension
         // time (fetch.rs/cookie.rs) and resolve the owning runtime through

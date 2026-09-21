@@ -44,6 +44,8 @@ pub enum HirBindingKind {
     MutationData {
         mutation: BindingId,
     },
+    /// A route-owned loader revalidation callable.
+    RouteReload,
 }
 
 #[derive(Debug, Clone, PartialEq)]

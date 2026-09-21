@@ -130,11 +130,7 @@ pub trait ActionHost {
     }
 
     /// Reference-slot write. Hosts own reference storage.
-    fn store_ref(
-        &mut self,
-        _reference: usize,
-        _value: RuntimeValue,
-    ) -> Result<(), ActionError> {
+    fn store_ref(&mut self, _reference: usize, _value: RuntimeValue) -> Result<(), ActionError> {
         Err(ActionError::unsupported("storeRef"))
     }
 
@@ -155,6 +151,10 @@ pub trait ActionHost {
     /// when the host exposes one.
     fn prevent_default(&mut self) -> Result<(), ActionError> {
         Err(ActionError::unsupported("preventDefault"))
+    }
+
+    fn route_reload(&mut self) -> Result<(), ActionError> {
+        Err(ActionError::unsupported("routeReload"))
     }
 
     /// Stores a host-named reference; the host resolves the reference handle
@@ -474,9 +474,10 @@ fn drive<H: ActionHost>(
                     return run_finalizers(actions, continuation, outcome, host, finalizers);
                 }
                 TypedActionInstruction::StoreState { state } => {
-                    let value = continuation.current.stack.pop().ok_or_else(|| {
-                        ActionError("action stack underflow: storeState".into())
-                    })?;
+                    let value =
+                        continuation.current.stack.pop().ok_or_else(|| {
+                            ActionError("action stack underflow: storeState".into())
+                        })?;
                     host.store_state(state, value)?;
                 }
                 TypedActionInstruction::MutationStart {
@@ -501,7 +502,9 @@ fn drive<H: ActionHost>(
                         .frame
                         .get(invocation_slot)
                         .cloned()
-                        .ok_or_else(|| ActionError("mutation invocation slot out of range".into()))?;
+                        .ok_or_else(|| {
+                            ActionError("mutation invocation slot out of range".into())
+                        })?;
                     let value = continuation
                         .current
                         .frame
@@ -509,19 +512,14 @@ fn drive<H: ActionHost>(
                         .cloned()
                         .ok_or_else(|| ActionError("mutation value slot out of range".into()))?;
                     host.mutation_publish(
-                        generation,
-                        pending,
-                        error,
-                        data,
-                        invocation,
-                        value,
-                        success,
+                        generation, pending, error, data, invocation, value, success,
                     )?;
                 }
                 TypedActionInstruction::StoreRef { reference } => {
-                    let value = continuation.current.stack.pop().ok_or_else(|| {
-                        ActionError("action stack underflow: storeRef".into())
-                    })?;
+                    let value =
+                        continuation.current.stack.pop().ok_or_else(|| {
+                            ActionError("action stack underflow: storeRef".into())
+                        })?;
                     host.store_ref(reference, value)?;
                 }
                 TypedActionInstruction::CaptureActiveElement { reference } => {
@@ -535,6 +533,9 @@ fn drive<H: ActionHost>(
                 }
                 TypedActionInstruction::PreventDefault => {
                     host.prevent_default()?;
+                }
+                TypedActionInstruction::RouteReload => {
+                    host.route_reload()?;
                 }
                 TypedActionInstruction::CallProp { prop, arguments } => {
                     let arguments =
@@ -844,26 +845,19 @@ mod tests {
             Err(ActionError("unexpected capability request".into()))
         }
 
-        fn store_state(
-            &mut self,
-            state: usize,
-            value: RuntimeValue,
-        ) -> Result<(), ActionError> {
+        fn store_state(&mut self, state: usize, value: RuntimeValue) -> Result<(), ActionError> {
             self.effects.push(format!("storeState:{state}:{value:?}"));
             Ok(())
         }
 
-        fn store_ref(
-            &mut self,
-            reference: usize,
-            value: RuntimeValue,
-        ) -> Result<(), ActionError> {
+        fn store_ref(&mut self, reference: usize, value: RuntimeValue) -> Result<(), ActionError> {
             self.effects.push(format!("storeRef:{reference}:{value:?}"));
             Ok(())
         }
 
         fn capture_active_element(&mut self, reference: usize) -> Result<(), ActionError> {
-            self.effects.push(format!("captureActiveElement:{reference}"));
+            self.effects
+                .push(format!("captureActiveElement:{reference}"));
             Ok(())
         }
 
@@ -931,7 +925,9 @@ mod tests {
                 {"op":"return"}
             ]
         }]));
-        let mut host = RecordingHost { effects: Vec::new() };
+        let mut host = RecordingHost {
+            effects: Vec::new(),
+        };
         let Run::Complete(ActionOutcome::Success(_)) =
             start(&actions, 0, vec![RuntimeValue::Null; 1], &mut host).unwrap()
         else {
@@ -957,8 +953,14 @@ mod tests {
     #[test]
     fn loader_hosts_reject_browser_effects_deterministically() {
         for (instruction, name) in [
-            (serde_json::json!({"op":"storeState","state":0}), "storeState"),
-            (serde_json::json!({"op":"storeRef","reference":0}), "storeRef"),
+            (
+                serde_json::json!({"op":"storeState","state":0}),
+                "storeState",
+            ),
+            (
+                serde_json::json!({"op":"storeRef","reference":0}),
+                "storeRef",
+            ),
             (
                 serde_json::json!({"op":"captureActiveElement","reference":0}),
                 "captureActiveElement",
@@ -967,7 +969,10 @@ mod tests {
                 serde_json::json!({"op":"focusHostRef","reference":0}),
                 "focusHostRef",
             ),
-            (serde_json::json!({"op":"focusRef","reference":0}), "focusRef"),
+            (
+                serde_json::json!({"op":"focusRef","reference":0}),
+                "focusRef",
+            ),
             (serde_json::json!({"op":"preventDefault"}), "preventDefault"),
             (
                 serde_json::json!({"op":"callProp","prop":0,"arguments":[]}),
@@ -981,7 +986,10 @@ mod tests {
                 serde_json::json!({"op":"collectionMutation","input":0,"kind":"append","key":0}),
                 "collectionMutation",
             ),
-            (serde_json::json!({"op":"storeHostRef","ref":0}), "storeHostRef"),
+            (
+                serde_json::json!({"op":"storeHostRef","ref":0}),
+                "storeHostRef",
+            ),
         ] {
             let actions = actions(serde_json::json!([{
                 "frameSlots":1,
@@ -990,8 +998,7 @@ mod tests {
                     instruction,
                 ]
             }]));
-            let error = start(&actions, 0, vec![RuntimeValue::Null; 1], &mut TestHost)
-                .unwrap_err();
+            let error = start(&actions, 0, vec![RuntimeValue::Null; 1], &mut TestHost).unwrap_err();
             assert_eq!(error.0, format!("unsupported action instruction: {name}"));
         }
     }
@@ -999,15 +1006,20 @@ mod tests {
     #[test]
     fn store_effects_require_stack_values() {
         for (instruction, message) in [
-            (serde_json::json!({"op":"storeState","state":0}), "storeState"),
-            (serde_json::json!({"op":"storeRef","reference":0}), "storeRef"),
+            (
+                serde_json::json!({"op":"storeState","state":0}),
+                "storeState",
+            ),
+            (
+                serde_json::json!({"op":"storeRef","reference":0}),
+                "storeRef",
+            ),
         ] {
             let actions = actions(serde_json::json!([{
                 "frameSlots":1,
                 "instructions":[instruction]
             }]));
-            let error = start(&actions, 0, vec![RuntimeValue::Null; 1], &mut TestHost)
-                .unwrap_err();
+            let error = start(&actions, 0, vec![RuntimeValue::Null; 1], &mut TestHost).unwrap_err();
             assert_eq!(error.0, format!("action stack underflow: {message}"));
         }
     }
@@ -1058,8 +1070,13 @@ mod tests {
                 {"op":"return"}
             ]
         }]));
-        let error =
-            start(&actions, 0, vec![RuntimeValue::Null; 1], &mut MissingPropHost).unwrap_err();
+        let error = start(
+            &actions,
+            0,
+            vec![RuntimeValue::Null; 1],
+            &mut MissingPropHost,
+        )
+        .unwrap_err();
         assert_eq!(error.0, "callable component prop missing");
     }
 
@@ -1074,9 +1091,13 @@ mod tests {
                 {"op":"return","value":0}
             ]
         }]));
-        let Run::Complete(ActionOutcome::Success(value)) =
-            start(&actions, 0, vec![RuntimeValue::Null; 1], &mut MissingPropHost).unwrap()
-        else {
+        let Run::Complete(ActionOutcome::Success(value)) = start(
+            &actions,
+            0,
+            vec![RuntimeValue::Null; 1],
+            &mut MissingPropHost,
+        )
+        .unwrap() else {
             panic!("expected completed success");
         };
         assert_eq!(value, RuntimeValue::Number(42.0));
@@ -1138,7 +1159,9 @@ mod tests {
                 {"op":"return","outcome":"failure","value":1}
             ]
         }]));
-        let mut host = CookieHost { effects: Vec::new() };
+        let mut host = CookieHost {
+            effects: Vec::new(),
+        };
         let Run::Suspended(suspension) =
             start(&actions, 0, vec![RuntimeValue::Null; 2], &mut host).unwrap()
         else {
@@ -1168,7 +1191,9 @@ mod tests {
                 {"op":"return","outcome":"failure","value":1}
             ]
         }]));
-        let mut host = CookieHost { effects: Vec::new() };
+        let mut host = CookieHost {
+            effects: Vec::new(),
+        };
         let Run::Suspended(suspension) =
             start(&actions, 0, vec![RuntimeValue::Null; 2], &mut host).unwrap()
         else {
@@ -1198,7 +1223,9 @@ mod tests {
                 {"op":"return"}
             ]
         }]));
-        let mut host = CookieHost { effects: Vec::new() };
+        let mut host = CookieHost {
+            effects: Vec::new(),
+        };
         let Run::Suspended(suspension) =
             start(&actions, 0, vec![RuntimeValue::Null; 2], &mut host).unwrap()
         else {
@@ -1214,6 +1241,9 @@ mod tests {
             panic!("expected completed success");
         };
         assert_eq!(value, RuntimeValue::String("loaded".into()));
-        assert_eq!(host.effects, vec!["prepareCookie:get:false", "preventDefault"]);
+        assert_eq!(
+            host.effects,
+            vec!["prepareCookie:get:false", "preventDefault"]
+        );
     }
 }

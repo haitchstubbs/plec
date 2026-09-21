@@ -14,7 +14,8 @@ pub use wasm_bindgen_futures::{spawn_local, JsFuture};
 #[cfg(feature = "fetch")]
 pub use web_sys::{AbortController, RequestInit, Response};
 pub use web_sys::{
-    Document, Element, Event, EventTarget, HtmlInputElement, KeyboardEvent, MouseEvent, Node,
+    Document, Element, Event, EventTarget, HtmlInputElement, HtmlSelectElement,
+    HtmlTextAreaElement, KeyboardEvent, MouseEvent, Node, SubmitEvent,
 };
 
 pub use plec_schema::{

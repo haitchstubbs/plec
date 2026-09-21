@@ -270,6 +270,7 @@ impl<'a> HirLoweringCtx<'a> {
         matches!(
             self.binding_kind(id),
             HirBindingKind::Callable
+                | HirBindingKind::RouteReload
                 | HirBindingKind::MutationRun { .. }
                 | HirBindingKind::Parameter { callable: true }
         )
@@ -851,6 +852,15 @@ fn lower_component_var(
         Pat::Ident(ident) => match init {
             Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useMutation")) => {
                 lower_mutation_declaration(ident, call, ctx)
+            }
+            Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.obj.as_ref(), Expr::Ident(object) if object.sym == "Route") && matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref property) if property.sym == "useReload"))) =>
+            {
+                if !call.args.is_empty() {
+                    return Err("Route.useReload() accepts no arguments".into());
+                }
+                let span = source_span_from_swc(ident.id.span, ctx.module_id);
+                ctx.declare_binding(ident.id.sym.to_string(), HirBindingKind::RouteReload, span)?;
+                Ok(())
             }
             Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(callee) if callee.sym == "useRef")) =>
             {
@@ -2193,6 +2203,7 @@ fn lower_jsx_element_with_consumed_key(
                     &mut props,
                     static_target,
                     host_target,
+                    tag_name == "form",
                     &mut events,
                 )?;
                 if router_link && jsx_attr_name(attr).as_deref() == Some("to") {
@@ -2368,6 +2379,7 @@ fn lower_jsx_attr(
     props: &mut Vec<HirProp>,
     component_target: Option<&ComponentId>,
     host_target: bool,
+    is_form: bool,
     events: &mut Vec<HirEventBinding>,
 ) -> Result<(), String> {
     let name = jsx_attr_name(attr).expect("JSX attribute has a name");
@@ -2415,6 +2427,49 @@ fn lower_jsx_attr(
                 // Check if this is a DOM event binding (only for intrinsic elements)
                 if component_target.is_none() && !host_target {
                     if let Some(event_name) = normalize_event_name(&name) {
+                        if is_form && event_name == "submit" {
+                            if let Expr::Ident(ident) = expr.as_ref() {
+                                let binding = ctx.resolve_binding(&ident.sym)?;
+                                if let Some(mutation) = ctx
+                                    .mutations
+                                    .iter()
+                                    .find(|mutation| mutation.binding == binding)
+                                {
+                                    let span = source_span_from_swc(container.span, ctx.module_id);
+                                    let run = mutation.run;
+                                    ctx.push_scope();
+                                    let parameter = ctx.declare_binding(
+                                        format!("__plec_form_event_{}", ctx.bindings.len()),
+                                        HirBindingKind::Parameter { callable: false },
+                                        span.clone(),
+                                    )?;
+                                    let event = ctx.alloc_expr_id();
+                                    ctx.add_expression(HirExprNode::new(
+                                        event,
+                                        HirExpr::Binding(parameter),
+                                        span.clone(),
+                                    ));
+                                    ctx.pop_scope();
+                                    events.push(HirEventBinding {
+                                        event: event_name,
+                                        callable: HirCallable::Inline {
+                                            parameters: vec![parameter],
+                                            body: HirCallableBody::Block(vec![
+                                                HirStmt::PreventDefault { span: span.clone() },
+                                                HirStmt::AwaitCall {
+                                                    target: None,
+                                                    callee: run,
+                                                    arguments: vec![event],
+                                                    span,
+                                                },
+                                            ]),
+                                        },
+                                        span: source_span_from_swc(container.span, ctx.module_id),
+                                    });
+                                    return Ok(());
+                                }
+                            }
+                        }
                         // For DOM events, all valid expressions are treated as callables
                         if let Some(callable) =
                             lower_callable(expr, CallablePolicy::CallableValue, ctx)?
@@ -2441,6 +2496,7 @@ fn lower_jsx_attr(
                                 matches!(
                                     ctx.bindings[binding.0 as usize].kind,
                                     HirBindingKind::Callable
+                                        | HirBindingKind::RouteReload
                                         | HirBindingKind::Parameter { callable: true }
                                 )
                             })
@@ -2889,6 +2945,19 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
                 ctx.loader_data_binding = Some(binding);
                 binding
             };
+            HirExpr::Binding(binding)
+        }
+        Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.obj.as_ref(), Expr::Ident(object) if object.sym == "Route") && matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref name) if name.sym == "useReload"))) =>
+        {
+            if !call.args.is_empty() {
+                return Err("Route.useReload() accepts no arguments".into());
+            }
+            let span = source_span_from_swc(call.span, ctx.module_id);
+            let binding = ctx.declare_binding(
+                format!("__plec_route_reload_{}", ctx.bindings.len()),
+                HirBindingKind::RouteReload,
+                span,
+            )?;
             HirExpr::Binding(binding)
         }
         Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.obj.as_ref(), Expr::Ident(object) if object.sym == "JSON") && matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref property) if property.sym == "stringify"))) =>
@@ -4474,6 +4543,33 @@ mod tests {
     }
 
     #[test]
+    fn lowers_mutation_binding_as_form_submit_handler() {
+        let source = r#"
+            export function App() {
+                const mutation = useMutation(async (event) => { return event; });
+                return <form onSubmit={mutation}><button type="submit">Save</button></form>;
+            }
+        "#;
+        let hir = build_and_lower(source).unwrap();
+        let form = hir
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                HirNode::Element(element) if element.tag == "form" => Some(element),
+                _ => None,
+            })
+            .unwrap();
+        let HirCallable::Inline { parameters, body } = &form.events[0].callable else {
+            panic!("form mutation handler should be compiler-generated");
+        };
+        assert_eq!(parameters.len(), 1);
+        assert!(matches!(body, HirCallableBody::Block(statements)
+            if matches!(statements.first(), Some(HirStmt::PreventDefault { .. }))
+            && matches!(statements.get(1), Some(HirStmt::AwaitCall { callee, arguments, .. })
+                if *callee == hir.mutations[0].run && arguments.len() == 1)));
+    }
+
+    #[test]
     fn rejects_non_direct_use_mutation_callback() {
         let error = build_and_lower(
             "export function App() { const mutation = useMutation(callback); return <button />; }",
@@ -4911,6 +5007,31 @@ mod tests {
             "export function Page() { const todos = Route.useLoaderData(); return <p>{todos.length}</p>; }",
         ).unwrap();
         assert!(hir.inputs.iter().any(|input| input.kind == "loaderData"));
+    }
+
+    #[test]
+    fn lowers_route_use_reload_as_a_typed_callable() {
+        let hir = build_and_lower(
+            r#"
+                export function Page() {
+                    const reload = Route.useReload();
+                    async function save() { await reload(); }
+                    return <button onClick={save}>Save</button>;
+                }
+            "#,
+        )
+        .unwrap();
+        assert!(hir
+            .bindings
+            .iter()
+            .any(|binding| matches!(binding.kind, HirBindingKind::RouteReload)));
+        let executable = crate::lower_component_to_executable(&hir).unwrap();
+        assert!(executable.actions.iter().any(|action| {
+            action
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, plec_ir::ActionInstruction::RouteReload))
+        }));
     }
 
     #[test]

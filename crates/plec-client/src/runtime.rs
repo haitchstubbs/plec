@@ -381,6 +381,7 @@ pub struct TypedRuntime {
     /// Component indices in a 0.10 node are local to its graph artifact.
     pub component_definitions: Option<Vec<TypedApplication>>,
     pub pending_cookies: Vec<TypedPendingCookie>,
+    pub route_reload_requested: bool,
     pub next_cookie_id: u64,
     pub next_component_instance: u64,
     #[cfg(feature = "fetch")]
@@ -1179,6 +1180,7 @@ impl TypedRuntime {
             host_instances: Vec::new(),
             component_definitions: None,
             pending_cookies: Vec::new(),
+            route_reload_requested: false,
             next_cookie_id: 0,
             next_component_instance: 0,
             cookie_policy,

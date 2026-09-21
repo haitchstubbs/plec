@@ -38,6 +38,7 @@ export type RouteDefinition<TData = unknown> = RouteOptions<TData> & {
   parent?: RouteDefinition;
   addChildren(children: RouteDefinition[]): RouteDefinition<TData>;
   useLoaderData(): TData;
+  useReload(): () => Promise<void>;
 };
 
 export type RouteMatch = {
@@ -49,6 +50,10 @@ export type RouteMatch = {
 };
 
 type RouteMatchSeed = Pick<RouteMatch, 'route' | 'params'>;
+type RouteReloadRequest = {
+  controller: AbortController;
+  version: number;
+};
 
 export function createRootRoute<TData = unknown>(
   options: Omit<RouteOptions<TData>, 'path'>,
@@ -86,6 +91,15 @@ function makeRoute<TData>(
         );
       return match.data as TData;
     },
+    useReload() {
+      const state = currentRendering();
+      const match = state?.activeRouteMatch;
+      if (!state || !match || match.route !== route || !state.router)
+        throw new Error(
+          'Route.useReload() can only run while rendering its matching route.',
+        );
+      return () => state.router!.reloadRoute(route);
+    },
   };
   return route;
 }
@@ -93,6 +107,8 @@ function makeRoute<TData>(
 export class PlecRouter {
   private listeners = new Set<() => void>();
   private controller?: AbortController;
+  private requestVersion = 0;
+  private routeReloads = new Map<RouteDefinition, RouteReloadRequest>();
   private started = false;
   matches: RouteMatch[] = [];
   committedMatches: RouteMatch[] = [];
@@ -102,7 +118,7 @@ export class PlecRouter {
   start() {
     if (this.started) return;
     this.started = true;
-    void this.load(locationFromWindow(), false);
+    void this.load(locationFromWindow());
   }
 
   subscribe(listener: () => void) {
@@ -125,14 +141,43 @@ export class PlecRouter {
       '',
       `${target.pathname}${target.search}${target.hash}`,
     );
-    void this.load(locationFromWindow(), true);
+    void this.load(locationFromWindow());
   }
 
   reload() {
-    void this.load(locationFromWindow(), false);
+    return this.load(locationFromWindow());
   }
 
-  private async load(location: PlecLocation, retainCommitted: boolean) {
+  reloadRoute(route: RouteDefinition) {
+    const location = locationFromWindow();
+    const current = matchRoutes(
+      this.routeTree,
+      location.pathname,
+    )?.find((candidate) => candidate.route === route);
+    const match = this.matches.find(
+      (candidate) => candidate.route === route,
+    );
+    if (!match || !current || !route.loader) return Promise.resolve();
+    match.params = current.params;
+    const previous = this.routeReloads.get(route);
+    previous?.controller.abort();
+    const request = {
+      controller: new AbortController(),
+      version: (previous?.version ?? 0) + 1,
+    };
+    this.routeReloads.set(route, request);
+    return this.loadMatch(
+      match,
+      location,
+      request.controller,
+      request.version,
+      true,
+      route,
+    );
+  }
+
+  private async load(location: PlecLocation) {
+    const version = ++this.requestVersion;
     this.controller?.abort();
     const controller = new AbortController();
     this.controller = controller;
@@ -143,30 +188,42 @@ export class PlecRouter {
       ...match,
       status: match.route.loader ? 'pending' : 'ready',
     }));
-    if (!retainCommitted) this.committedMatches = [];
+    // A navigation is committed atomically after every active loader succeeds.
+    // Keep the prior chain available while the replacement chain is pending.
     this.emit();
     try {
       for (const match of this.matches) {
         if (!match.route.loader) continue;
-        const data = await match.route.loader({
-          params: match.params,
+        await this.loadMatch(
+          match,
           location,
-          signal: controller.signal,
-        });
-        if (controller.signal.aborted || this.controller !== controller)
+          controller,
+          version,
+          false,
+        );
+        if (
+          controller.signal.aborted ||
+          this.controller !== controller ||
+          this.requestVersion !== version
+        )
           return;
-        match.data = data;
-        match.status = 'ready';
-        this.emit();
+        if (match.status === 'error') return;
       }
-      if (this.controller === controller) {
+      if (
+        this.controller === controller &&
+        this.requestVersion === version
+      ) {
         this.committedMatches = this.matches.map((match) => ({
           ...match,
         }));
         this.emit();
       }
     } catch (error) {
-      if (controller.signal.aborted || this.controller !== controller)
+      if (
+        controller.signal.aborted ||
+        this.controller !== controller ||
+        this.requestVersion !== version
+      )
         return;
       const failed = this.matches.find(
         (match) => match.status === 'pending',
@@ -175,6 +232,67 @@ export class PlecRouter {
         failed.status = 'error';
         failed.error = error;
       }
+      this.emit();
+    }
+  }
+
+  private async loadMatch(
+    match: RouteMatch,
+    location: PlecLocation,
+    controller: AbortController,
+    version: number,
+    commit: boolean,
+    reloadRoute?: RouteDefinition,
+  ) {
+    match.status = 'pending';
+    match.error = undefined;
+    this.emit();
+    try {
+      const data = await match.route.loader!({
+        params: match.params,
+        location,
+        signal: controller.signal,
+      });
+      if (
+        controller.signal.aborted ||
+        (reloadRoute
+          ? this.routeReloads.get(reloadRoute)?.version !== version
+          : this.controller !== controller ||
+            this.requestVersion !== version)
+      )
+        return;
+      match.data = data;
+      match.status = 'ready';
+      if (commit) {
+        if (reloadRoute) {
+          const committed = this.committedMatches.find(
+            (candidate) => candidate.route === reloadRoute,
+          );
+          if (committed) {
+            Object.assign(committed, match);
+          } else {
+            this.committedMatches = this.matches.map((candidate) => ({
+              ...candidate,
+            }));
+          }
+        } else {
+          this.committedMatches = this.matches.map((candidate) => ({
+            ...candidate,
+          }));
+        }
+      }
+      this.emit();
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        (reloadRoute
+          ? this.routeReloads.get(reloadRoute)?.version !== version
+          : this.controller !== controller ||
+            this.requestVersion !== version)
+      )
+        return;
+      match.status = 'error';
+      match.error = error;
       this.emit();
     }
   }
