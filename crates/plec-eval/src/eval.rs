@@ -261,6 +261,7 @@ fn typed_eval_bounded(
                             js_sys::Date::new_0().get_full_year() as f64,
                         )),
                         "loaderData" => app.host_inputs.get("loaderData").cloned(),
+                        "routeParams" => app.host_inputs.get("routeParams").cloned(),
                         _ => None,
                     })
                     .unwrap_or(RuntimeValue::Null);

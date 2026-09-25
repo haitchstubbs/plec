@@ -154,6 +154,10 @@ pub(crate) fn lower_component(
                 let host = ctx.host("loaderData", None)?;
                 ctx.hosts.insert(input.binding, host);
             }
+            "routeParams" => {
+                let host = ctx.host("routeParams", None)?;
+                ctx.hosts.insert(input.binding, host);
+            }
             _ => return Err(Ctx::new(component, targets).err("input kind is not executable")),
         }
     }

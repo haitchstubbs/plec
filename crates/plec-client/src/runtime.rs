@@ -837,7 +837,15 @@ impl RuntimeState {
                     .borrow()
                     .get(&parent_id)
                     .and_then(|instance| instance.loader_data.clone());
-                runtime.set_host_inputs(self.typed_host_inputs_for(loader_data.as_ref()))?;
+                let route_params = self
+                    .typed
+                    .borrow()
+                    .get(&parent_id)
+                    .and_then(|instance| instance.route_state.as_ref())
+                    .map(|state| state.params.clone());
+                runtime.set_host_inputs(
+                    self.typed_host_inputs_for_route(loader_data.as_ref(), route_params.as_ref()),
+                )?;
                 runtime.graph_generation = self.next_typed_generation();
                 if let Some(adoption) = request.adoption.as_ref() {
                     runtime.adopt(

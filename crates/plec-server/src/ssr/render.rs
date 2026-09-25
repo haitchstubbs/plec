@@ -52,6 +52,7 @@ pub(crate) struct Scope<'a> {
     /// The implicit `children` prop content, owned by the caller.
     pub slot: Option<Rc<SlotFrame<'a>>>,
     pub loader_data: Value,
+    pub route_params: Value,
     pub instance: String,
     pub root_component: usize,
     /// Marker path of the nested component instance currently being
@@ -80,6 +81,7 @@ impl<'a> Scope<'a> {
             row_root: false,
             slot: None,
             loader_data: Value::Null,
+            route_params: Value::Object(serde_json::Map::new()),
             instance: String::new(),
             root_component: 0,
             nested_key: None,
@@ -752,6 +754,13 @@ fn render_element(
                     }
                     _ => Value::Null,
                 },
+                route_params: Value::Object(
+                    route
+                        .params
+                        .iter()
+                        .map(|(name, value)| (name.clone(), Value::String(value.clone())))
+                        .collect(),
+                ),
                 ..scope.clone()
             },
             state,
@@ -980,6 +989,16 @@ fn evaluate_bounded(
                             &mut stack_sizes,
                             &mut stack_bytes,
                             scope.loader_data.clone(),
+                        ) {
+                            return Value::Null;
+                        }
+                    }
+                    Some("routeParams") => {
+                        if !evaluate_stack_push(
+                            &mut stack,
+                            &mut stack_sizes,
+                            &mut stack_bytes,
+                            scope.route_params.clone(),
                         ) {
                             return Value::Null;
                         }

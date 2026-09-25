@@ -31,6 +31,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
         root,
         "root".into(),
         root_loader_data.as_ref(),
+        None,
     )?;
     let mut parent_id = root_id;
     let mut path = "root".to_owned();
@@ -98,6 +99,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                 outlet,
                 child_path.clone(),
                 None,
+                Some(&matched.params),
             )?;
             let mut typed = state.typed.borrow_mut();
             let instance = typed.get_mut(&id).expect("adopted route exists");
@@ -143,6 +145,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                 outlet,
                 child_path.clone(),
                 loader_data.as_ref(),
+                Some(&matched.params),
             )?;
             // Chain agreement above proves these params equal the
             // snapshot's imported values, so this stamps the transferred
@@ -325,6 +328,7 @@ pub fn navigate_typed_route(
             root,
             "root".into(),
             true,
+            None,
         )?;
     }
     let mut parent_id = root_id;
@@ -458,6 +462,7 @@ fn mount_typed_child(
         state.typed_outlet_element(parent_id, &route.outlet_id)?,
         path,
         false,
+        Some(params),
     )?;
     state.typed.borrow_mut().get_mut(&id).unwrap().route_state = Some(TypedRouteState {
         normal_graph_id: route.graph_id.clone(),
@@ -486,6 +491,7 @@ fn mount_typed_graph(
     root: Element,
     path: String,
     replace: bool,
+    route_params: Option<&HashMap<String, String>>,
 ) -> Result<(), JsValue> {
     state.ensure_typed_instance_absent(
         &id,
@@ -512,7 +518,7 @@ fn mount_typed_graph(
     runtime.set_component_definitions(graph.components);
     runtime.host_registry = state.host_registry.clone();
     runtime.host_dispatch = Some(state.clone());
-    runtime.set_host_inputs(state.typed_host_inputs_for(None))?;
+    runtime.set_host_inputs(state.typed_host_inputs_for_route(None, route_params))?;
     runtime.graph_generation = state.next_typed_generation();
     // Fresh client mounts use the exact structural address the server
     // renderer would have given this route position, so CSR-created DOM
@@ -553,6 +559,7 @@ fn adopt_typed_graph(
     root: Element,
     path: String,
     loader_data: Option<&RuntimeValue>,
+    route_params: Option<&HashMap<String, String>>,
 ) -> Result<(), JsValue> {
     state.ensure_typed_instance_absent(
         &id,
@@ -586,7 +593,7 @@ fn adopt_typed_graph(
     let host_inputs = if parent_id.is_none() {
         state.typed_host_inputs.borrow().clone()
     } else {
-        state.typed_host_inputs_for(loader_data)
+        state.typed_host_inputs_for_route(loader_data, route_params)
     };
     runtime.set_host_inputs(host_inputs)?;
     runtime.graph_generation = state.next_typed_generation();

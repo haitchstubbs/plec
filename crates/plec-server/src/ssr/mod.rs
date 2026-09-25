@@ -105,6 +105,7 @@ pub(crate) struct ChildGraph {
 
 pub(crate) struct RouteRender<'a> {
     route: &'a Route,
+    params: &'a std::collections::HashMap<String, String>,
     graph: &'a ComponentApplication,
     graph_id: String,
     loader: Option<&'a plec_ir::SsrLoaderOutcome>,
@@ -214,6 +215,7 @@ pub(crate) fn render_application(
         row_root: false,
         slot: None,
         loader_data: serde_json::Value::Null,
+        route_params: serde_json::Value::Object(serde_json::Map::new()),
         instance: ROOT_GRAPH_INSTANCE_ID.to_owned(),
         root_component: root.root_component,
         nested_key: None,
@@ -260,6 +262,7 @@ fn build_route_tree<'a>(
     );
     Ok(Some(Box::new(RouteRender {
         route,
+        params: &execution.route_match.params,
         graph,
         graph_id: graph_id.to_owned(),
         loader: execution.loader.as_ref(),

@@ -114,6 +114,80 @@ describe('code-first routes', () => {
     });
   });
 
+  it('exposes decoded params from matching route', () => {
+    const root = createRootRoute({ component: View });
+    const project = createRoute({
+      getParentRoute: () => root,
+      path: '$projectId',
+      component: View,
+    });
+    root.addChildren([project]);
+    const router = createRouter({ routeTree: root });
+    const state = {
+      router,
+      activeRouteMatch: { route: project, params: { projectId: 'a b' } },
+    } as unknown as Parameters<typeof withRendering>[0];
+
+    expect(withRendering(state, () => project.useParams())).toEqual({
+      projectId: 'a b',
+    });
+  });
+
+  it('exposes accumulated nested params and rejects non-matching access', () => {
+    const root = createRootRoute({ component: View });
+    const organization = createRoute({
+      getParentRoute: () => root,
+      path: '$organizationId',
+      component: View,
+    });
+    const project = createRoute({
+      getParentRoute: () => organization,
+      path: '$projectId',
+      component: View,
+    });
+    root.addChildren([organization]);
+    organization.addChildren([project]);
+    const state = {
+      activeRouteMatch: {
+        route: project,
+        params: { organizationId: 'acme', projectId: '42' },
+      },
+    } as unknown as Parameters<typeof withRendering>[0];
+
+    expect(withRendering(state, () => project.useParams())).toEqual({
+      organizationId: 'acme',
+      projectId: '42',
+    });
+    expect(() => withRendering(state, () => organization.useParams())).toThrow(
+      'Route.useParams() can only run while rendering its matching route.',
+    );
+  });
+
+  it('updates params after client navigation', async () => {
+    setLocation('/projects/old');
+    const root = createRootRoute({ component: View });
+    const projects = createRoute({
+      getParentRoute: () => root,
+      path: 'projects',
+      component: View,
+    });
+    const project = createRoute({
+      getParentRoute: () => projects,
+      path: '$projectId',
+      component: View,
+    });
+    root.addChildren([projects]);
+    projects.addChildren([project]);
+    const router = createRouter({ routeTree: root });
+    router.start();
+    await Promise.resolve();
+    expect(router.matches.at(-1)?.params).toEqual({ projectId: 'old' });
+
+    setLocation('/projects/new');
+    await router.reload();
+    expect(router.matches.at(-1)?.params).toEqual({ projectId: 'new' });
+  });
+
   it('reloads only the selected route and rejects stale results', async () => {
     setLocation('/todos');
     let calls = 0;

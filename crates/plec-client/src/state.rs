@@ -274,12 +274,30 @@ impl RuntimeState {
         &self,
         loader_data: Option<&RuntimeValue>,
     ) -> HashMap<String, RuntimeValue> {
+        self.typed_host_inputs_for_route(loader_data, None)
+    }
+
+    pub fn typed_host_inputs_for_route(
+        &self,
+        loader_data: Option<&RuntimeValue>,
+        route_params: Option<&HashMap<String, String>>,
+    ) -> HashMap<String, RuntimeValue> {
         let mut inputs = self.typed_host_inputs.borrow().clone();
         if let Some(value) = loader_data {
             inputs.insert("loaderData".into(), value.clone());
         } else {
             inputs.remove("loaderData");
         }
+        inputs.insert(
+            "routeParams".into(),
+            RuntimeValue::Record(
+                route_params
+                    .into_iter()
+                    .flat_map(|params| params.iter())
+                    .map(|(key, value)| (key.clone(), RuntimeValue::String(value.clone())))
+                    .collect(),
+            ),
+        );
         inputs
     }
 

@@ -681,7 +681,9 @@ impl RuntimeState {
                 .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
             let restore = instance.loader_runtime.is_some();
             instance.loader_data = Some(exported.clone());
-            let host_inputs = self.typed_host_inputs_for(instance.loader_data.as_ref());
+            let route_params = instance.route_state.as_ref().map(|state| &state.params);
+            let host_inputs =
+                self.typed_host_inputs_for_route(instance.loader_data.as_ref(), route_params);
             let runtime = instance
                 .runtime_for_generation_mut(graph_generation)
                 .ok_or_else(|| JsValue::from_str("typed route loader runtime is stale"))?;

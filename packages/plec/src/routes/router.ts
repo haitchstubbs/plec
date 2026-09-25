@@ -38,6 +38,7 @@ export type RouteDefinition<TData = unknown> = RouteOptions<TData> & {
   parent?: RouteDefinition;
   addChildren(children: RouteDefinition[]): RouteDefinition<TData>;
   useLoaderData(): TData;
+  useParams(): Record<string, string>;
   useReload(): () => Promise<void>;
 };
 
@@ -90,6 +91,15 @@ function makeRoute<TData>(
           'Route.useLoaderData() can only run while rendering its matching route.',
         );
       return match.data as TData;
+    },
+    useParams() {
+      const state = currentRendering();
+      const match = state?.activeRouteMatch;
+      if (!state || !match || match.route !== route)
+        throw new Error(
+          'Route.useParams() can only run while rendering its matching route.',
+        );
+      return match.params;
     },
     useReload() {
       const state = currentRendering();

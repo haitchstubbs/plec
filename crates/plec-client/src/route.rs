@@ -299,7 +299,15 @@ impl RuntimeState {
             .borrow()
             .get(id)
             .and_then(|instance| instance.loader_data.clone());
-        next.set_host_inputs(self.typed_host_inputs_for(loader_data.as_ref()))?;
+        let route_params = self
+            .typed
+            .borrow()
+            .get(id)
+            .and_then(|instance| instance.route_state.as_ref())
+            .map(|state| state.params.clone());
+        next.set_host_inputs(
+            self.typed_host_inputs_for_route(loader_data.as_ref(), route_params.as_ref()),
+        )?;
         next.graph_generation = self.next_typed_generation();
         if let Some(error) = error {
             next.set_route_error(error)?;
@@ -396,7 +404,10 @@ impl RuntimeState {
             // Loader data is a host input: state initializers such as
             // loadHost("loaderData") only re-evaluate when host inputs are
             // (re)applied, so seed the graph before its first paint.
-            loader.set_host_inputs(self.typed_host_inputs_for(instance.loader_data.as_ref()))?;
+            let route_params = instance.route_state.as_ref().map(|state| &state.params);
+            loader.set_host_inputs(
+                self.typed_host_inputs_for_route(instance.loader_data.as_ref(), route_params),
+            )?;
             loader.mount(root)?;
             let mut previous = std::mem::replace(&mut instance.runtime, loader);
             previous.invalidate_fetches();
