@@ -1,4 +1,4 @@
-import type { ApiMiddleware } from 'plec/server';
+import type { ApiMiddleware } from '@plec/core/server';
 
 export const middleware: ApiMiddleware = async (
   request,

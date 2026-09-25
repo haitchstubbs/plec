@@ -1,4 +1,4 @@
-import { createRootRoute } from 'plec';
+import { createRootRoute } from '@plec/core';
 import { Home } from '../home';
 
 export const Route = createRootRoute({

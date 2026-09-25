@@ -27,9 +27,9 @@ function ensureBuilt(label, markerPath, workspace, script) {
 
 export async function buildWorkspaceSurface() {
   ensureBuilt(
-    'plec-browser',
+    '@plec/browser',
     'packages/plec-browser/dist/index.js',
-    'plec-browser',
+    '@plec/browser',
     'build',
   );
   console.log('Cleaning previous plec package build...');
@@ -37,11 +37,11 @@ export async function buildWorkspaceSurface() {
   ensureBuilt(
     'plec-runtime WASM',
     'packages/plec/dist/runtime/runtime_bg.wasm',
-    'plec',
+    '@plec/core',
     'build:wasm',
   );
   ensureBuilt(
-    'plec-node-runtime',
+    '@plec/node-runtime',
     'packages/plec-node-runtime/dist/runtime.mjs',
     'plec-node-runtime',
     'build',

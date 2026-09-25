@@ -1,4 +1,4 @@
-# `plec-lucide`
+# `@plec/lucide`
 
 > **Unofficial and experimental.** This package is not affiliated with, endorsed by, maintained by, or supported by the Lucide project or its maintainers.
 

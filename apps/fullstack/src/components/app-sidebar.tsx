@@ -12,7 +12,7 @@ import {
   useLocation,
   useReaction,
   useRef,
-} from 'plec';
+} from '@plec/core';
 
 const NavLink = ({
   href,

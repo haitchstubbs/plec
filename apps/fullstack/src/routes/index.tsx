@@ -1,4 +1,4 @@
-import { createRootRoute } from 'plec';
+import { createRootRoute } from '@plec/core';
 import { FullstackLayout } from '../components/fullstack-layout';
 
 export const Route = createRootRoute({

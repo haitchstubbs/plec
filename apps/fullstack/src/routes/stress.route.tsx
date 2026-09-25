@@ -1,4 +1,4 @@
-import { createRoute } from 'plec';
+import { createRoute } from '@plec/core';
 import { RuntimeStressPage } from '../components/runtime-stress';
 import { Route as rootRoute } from './index';
 

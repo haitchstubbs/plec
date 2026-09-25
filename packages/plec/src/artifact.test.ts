@@ -75,7 +75,7 @@ describe.skipIf(!built)('plec release artifact', () => {
         if (item.name.includes('.test.')) continue;
         const source = fs.readFileSync(entry, 'utf8');
         if (
-          /(?:from|import)\s*['"]plec-browser['"]/.test(source) ||
+          /(?:from|import)\s*['"]@plec\/browser['"]/.test(source) ||
           source.includes('workspace:')
         )
           offenders.push(path.relative(distDir, entry));

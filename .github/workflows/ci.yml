@@ -139,4 +139,4 @@ jobs:
       - name: Install build tools
         run: yarn install:build-tools
       - name: Build release artifact
-        run: yarn workspace plec build:artifact
+        run: yarn workspace @plec/core build:artifact

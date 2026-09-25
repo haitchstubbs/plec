@@ -1,5 +1,5 @@
 import { PageFrame, PageKicker } from './page-primitives';
-import { useLocation, useState } from 'plec';
+import { useLocation, useState } from '@plec/core';
 
 export function ProjectPage() {
   const location = useLocation();

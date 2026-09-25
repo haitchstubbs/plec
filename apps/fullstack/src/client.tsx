@@ -1,6 +1,9 @@
-import { registerPlecProviders, startPlecRouter } from 'plec/browser';
+import {
+  registerPlecProviders,
+  startPlecRouter,
+} from '@plec/core/browser';
 import { installPlecPerformance } from './performance';
-import { installDevelopmentMemoryHud } from 'plec/client/effects/development-memory-hud';
+import { installDevelopmentMemoryHud } from '@plec/core/client/effects/development-memory-hud';
 import { createRuntimeStressFeed } from './stress-feed';
 
 installPlecPerformance();

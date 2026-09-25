@@ -1,17 +1,17 @@
-# `plec`
+# `@plec/core`
 
 The Plec framework runtime: the package applications import. It provides the
-`plec` jsx-import-source, client state hooks, and the router primitives.
+`@plec/core` jsx-import-source, client state hooks, and the router primitives.
 
 ## Exports
 
-- `plec` — `Fragment`, `jsx`, `jsxs`, `createRoot`, `useState`, `useRef`,
+- `@plec/core` — `Fragment`, `jsx`, `jsxs`, `createRoot`, `useState`, `useRef`,
   `useHostRef`, `useReaction`, `useListener`, `useLocation`, `cookie`,
   router primitives (`createRootRoute`, `createRoute`, `createRouter`,
   `Link`, `Outlet`, `RouterProvider`, `useNavigate`)
-- `plec/jsx-runtime` — the automatic JSX runtime (set
-  `jsxImportSource: "plec"`)
-- `plec/client/effects/development-memory-hud` — development-only memory HUD
+- `@plec/core/jsx-runtime` — the automatic JSX runtime (set
+  `jsxImportSource: "@plec/core"`)
+- `@plec/core/client/effects/development-memory-hud` — development-only memory HUD
 
 ## CLI
 
@@ -30,7 +30,7 @@ Resolution order:
 
 Which variant wins where:
 
-- Inside `yarn`/`npx` in a project that depends on `plec`, the shim wins and
+- Inside `yarn`/`npx` in a project that depends on `@plec/core`, the shim wins and
   serves the packaged **release** variant (app commands only: `inspect`,
   `raw`, `routes`, `build`).
 - A bare `plec` in the shell resolves via the system `PATH`, typically the
@@ -39,12 +39,12 @@ Which variant wins where:
 - `PLEC_BIN` forces a specific binary anywhere.
 
 Out-of-repo apps get the same command by adding the built artifact folder as
-a file dependency (`"plec": "file:../path/to/packages/plec"`): yarn links
+a file dependency (`"@plec/core": "file:../path/to/packages/plec"`): yarn links
 `node_modules/.bin/plec` and package scripts invoke the shim like any other
 bin. Calling `node <artifact>/bin/plec.js …` directly works too.
 
 If no binary is found, the shim prints every searched path and points at the
-release artifact build (`yarn workspace plec build:artifact`; `PLEC_CLI_VERSION`
+release artifact build (`yarn workspace @plec/core build:artifact`; `PLEC_CLI_VERSION`
 in `.env.plec` selects the variant).
 
 ## Version
@@ -60,27 +60,27 @@ contracts and are deliberately not coupled to this SemVer.
 ## Commands
 
 ```sh
-yarn workspace plec build
-yarn workspace plec build:artifact
-yarn workspace plec test
-yarn workspace plec typecheck
+yarn workspace @plec/core build
+yarn workspace @plec/core build:artifact
+yarn workspace @plec/core test
+yarn workspace @plec/core typecheck
 ```
 
 ## Runtime development
 
 The Rust runtime crate remains [`crates/plec-runtime`](../../crates/plec-runtime).
 `plec` publishes its validated WASM assets into `dist/runtime`, which is the
-same package directory applications stage from through `node_modules/plec`.
+same package directory applications stage from through `node_modules/@plec/core`.
 
 ```sh
-yarn workspace plec build:runtime      # cargo check + WASM publish
-yarn workspace plec build:wasm         # WASM publish only
-yarn workspace plec dev:wasm           # watch and republish
-yarn workspace plec test:runtime       # cargo test --lib
-yarn workspace plec test:runtime:core  # cargo test --no-default-features
-yarn workspace plec test:wasm          # plec-e2e browser harness
+yarn workspace @plec/core build:runtime      # cargo check + WASM publish
+yarn workspace @plec/core build:wasm         # WASM publish only
+yarn workspace @plec/core dev:wasm           # watch and republish
+yarn workspace @plec/core test:runtime       # cargo test --lib
+yarn workspace @plec/core test:runtime:core  # cargo test --no-default-features
+yarn workspace @plec/core test:wasm          # @plec/e2e browser harness
 ```
 
 WASM builds use a temporary release directory, verify hashes, Brotli sidecars,
 and the protocol marker, then publish `dist/runtime` as one complete tree.
-Browser startup (`startPlecRouter`) lives in [`plec-browser`](../plec-browser).
+Browser startup (`startPlecRouter`) lives in [`@plec/browser`](../plec-browser).

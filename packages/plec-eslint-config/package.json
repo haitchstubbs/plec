@@ -1,5 +1,5 @@
 {
-  "name": "plec-eslint-config",
+  "name": "@plec/eslint-config",
   "version": "0.0.1",
   "type": "module",
   "description": "A shared ESLint configuration for Haitchstack projects, providing a consistent linting setup across the monorepo",

@@ -1,4 +1,4 @@
-# plec-e2e
+# @plec/e2e
 
 Canonical Playwright runner for the monorepo. Playwright owns the fullstack
 server: turbo builds `fullstack`, the `webServer` entry starts

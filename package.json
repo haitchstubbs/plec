@@ -1,5 +1,5 @@
 {
-  "name": "plecjs",
+  "name": "plec-js",
   "private": true,
   "packageManager": "yarn@4.17.1",
   "engines": {
@@ -17,12 +17,12 @@
     "toolchain:verify": "node scripts/verify-toolchain.mjs",
     "toolchain:verify:browser": "node scripts/verify-toolchain.mjs --browser",
     "dev": "turbo run dev --parallel",
-    "dev:wasm": "yarn workspace plec dev:wasm",
+    "dev:wasm": "yarn workspace @plec/core dev:wasm",
     "build": "turbo run build",
     "test": "turbo run test",
     "test:acceptance": "turbo run test:acceptance",
     "test:e2e": "turbo run test:e2e",
-    "test:runtime": "yarn workspace plec test:runtime",
+    "test:runtime": "yarn workspace @plec/core test:runtime",
     "test:wasm": "node packages/plec/bin/plec.js workspace test wasm",
     "test:wasm:query": "node packages/plec/bin/plec.js workspace test last",
     "bench": "turbo run bench",

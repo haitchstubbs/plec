@@ -3,7 +3,7 @@ import {
   PageFrame,
   PageKicker,
 } from '../components/page-primitives';
-import { useLocation, useState } from 'plec';
+import { useLocation, useState } from '@plec/core';
 
 export function HomePage() {
   const location = useLocation();

@@ -2,7 +2,7 @@ import type {
   CompiledInputProducer,
   CompiledQueryUpdate,
   RuntimeDelta,
-} from 'plec-browser';
+} from '@plec/browser';
 
 export type Instrument = {
   id: string;

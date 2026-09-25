@@ -1,4 +1,4 @@
-import { createRouter } from 'plec';
+import { createRouter } from '@plec/core';
 import { Route as rootRoute } from './routes/index';
 import { Route as listRoute } from './routes/list.route';
 import { Route as aboutRoute } from './routes/about.route';

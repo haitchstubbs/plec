@@ -29,7 +29,7 @@ async function sha256(file) {
     .digest('hex');
 }
 
-run(yarn, ['workspace', 'plec', 'build:wasm']);
+run(yarn, ['workspace', '@plec/core', 'build:wasm']);
 run(process.execPath, ['packages/plec/scripts/build-artifact.mjs']);
 
 const runtime = path.join(root, 'packages/plec/dist/runtime');

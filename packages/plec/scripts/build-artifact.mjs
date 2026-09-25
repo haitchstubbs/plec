@@ -85,7 +85,7 @@ if (!isWindows) fs.chmodSync(path.join(binDir, binaryName), 0o755);
 // ---------------------------------------------------------------------------
 // Self-containment audit: the artifact must be inspectable as a folder alone.
 // ---------------------------------------------------------------------------
-const workspaceSpecifier = /(?:from|import)\s*['"]plec-browser['"]/;
+const workspaceSpecifier = /(?:from|import)\s*['"]@plec\/browser['"]/;
 const failures = [];
 for (const entry of walk(distDir)) {
   // Test files ship in dist by existing convention; they are not runtime
