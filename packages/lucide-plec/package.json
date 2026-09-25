@@ -5,6 +5,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "license": "MIT",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -15,7 +16,6 @@
     "dist"
   ],
   "description": "Unofficial experimental PLEC integration for Lucide icons; not affiliated with or supported by Lucide.",
-  "license": "UNLICENSED",
   "keywords": [
     "plec",
     "lucide",

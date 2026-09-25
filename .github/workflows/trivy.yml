@@ -1,0 +1,57 @@
+name: Trivy
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    name: Security scan
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: 1
+          skip-files: '**/node_modules/**'
+          skip-dirs: '**/node_modules/**'
+      - name: Trivy license checks
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: license
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-license-results.sarif
+          exit-code: 1
+          skip-files: '**/node_modules/**'
+          skip-dirs: '**/node_modules/**'
+
+      - name: Upload results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-results.sarif
+      - name: Upload license results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-license-results.sarif

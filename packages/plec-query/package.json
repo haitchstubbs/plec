@@ -59,10 +59,10 @@
     "@plec/eslint-config": "*",
     "@types/node": "^24.4.0",
     "drizzle-orm": "^0.45.2",
-    "eslint": "^9.39.4",
+    "eslint": "^10",
     "kysely": "^0.29.2",
     "typescript": "^7.0.2",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.11"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.3",
