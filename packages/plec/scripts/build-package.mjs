@@ -43,7 +43,7 @@ export async function buildWorkspaceSurface() {
   ensureBuilt(
     '@plec/node-runtime',
     'packages/plec-node-runtime/dist/runtime.mjs',
-    'plec-node-runtime',
+    '@plec/node-runtime',
     'build',
   );
 
