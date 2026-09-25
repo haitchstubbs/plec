@@ -1,4 +1,4 @@
-import { createRoute } from 'plec';
+import { createRoute } from '@plec/core';
 import { Route as rootRoute } from './index';
 
 type Notes = { headline: string; detail: string };

@@ -1,5 +1,5 @@
 {
-  "name": "plec-e2e",
+  "name": "@plec/e2e",
   "packageManager": "yarn@4.17.1",
   "private": true,
   "type": "module",

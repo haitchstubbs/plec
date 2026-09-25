@@ -1,4 +1,4 @@
-import { cn } from 'plec-ui/lib/utils';
+import { cn } from '@plec/ui/lib/utils';
 
 function Skeleton({
   className,

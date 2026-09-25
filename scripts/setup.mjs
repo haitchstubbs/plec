@@ -319,7 +319,7 @@ function ensureChromiumInstalled() {
     command,
     [
       'workspace',
-      'plec-e2e',
+      '@plec/e2e',
       'exec',
       'playwright',
       'install',

@@ -1,4 +1,4 @@
-import { createRoute, useMutation, useState } from 'plec';
+import { createRoute, useMutation, useState } from '@plec/core';
 import { PageFrame, PageKicker } from '../components/page-primitives';
 import { Route as rootRoute } from './index';
 

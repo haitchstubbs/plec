@@ -1,1 +1,1 @@
-export * from 'plec-browser';
+export * from '@plec/browser';

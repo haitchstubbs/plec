@@ -13,7 +13,7 @@
     "seq": 1,
     "stage": "component-registered",
     "symbol": "Fragment",
-    "file": "plec/client/jsx.tsx",
+    "file": "@plec/core/client/jsx.tsx",
     "output": {
       "registeredAs": "component"
     }
@@ -22,7 +22,7 @@
     "seq": 2,
     "stage": "component-registered",
     "symbol": "RouteView",
-    "file": "plec/routes/render-outlet.tsx",
+    "file": "@plec/core/routes/render-outlet.tsx",
     "output": {
       "registeredAs": "component"
     }
@@ -31,7 +31,7 @@
     "seq": 3,
     "stage": "component-registered",
     "symbol": "DefaultError",
-    "file": "plec/routes/render-outlet.tsx",
+    "file": "@plec/core/routes/render-outlet.tsx",
     "output": {
       "registeredAs": "component"
     }
@@ -40,7 +40,7 @@
     "seq": 4,
     "stage": "component-registered",
     "symbol": "RouterProvider",
-    "file": "plec/routes/router.tsx",
+    "file": "@plec/core/routes/router.tsx",
     "output": {
       "registeredAs": "component"
     }
@@ -49,7 +49,7 @@
     "seq": 5,
     "stage": "component-registered",
     "symbol": "Outlet",
-    "file": "plec/routes/router.tsx",
+    "file": "@plec/core/routes/router.tsx",
     "output": {
       "registeredAs": "component"
     }
@@ -58,7 +58,7 @@
     "seq": 6,
     "stage": "component-registered",
     "symbol": "Link",
-    "file": "plec/routes/router.tsx",
+    "file": "@plec/core/routes/router.tsx",
     "output": {
       "registeredAs": "component"
     }
@@ -86,7 +86,7 @@
     "seq": 9,
     "stage": "component-factory-init",
     "symbol": "CircleHelp",
-    "file": "plec-lucide/icons/circle-help",
+    "file": "@plec/lucide/icons/circle-help",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -96,7 +96,7 @@
     "seq": 10,
     "stage": "component-factory-init",
     "symbol": "House",
-    "file": "plec-lucide/icons/house",
+    "file": "@plec/lucide/icons/house",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -106,7 +106,7 @@
     "seq": 11,
     "stage": "component-factory-init",
     "symbol": "ListChecks",
-    "file": "plec-lucide/icons/list-checks",
+    "file": "@plec/lucide/icons/list-checks",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -116,7 +116,7 @@
     "seq": 12,
     "stage": "component-factory-init",
     "symbol": "Workflow",
-    "file": "plec-lucide/icons/workflow",
+    "file": "@plec/lucide/icons/workflow",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -126,7 +126,7 @@
     "seq": 13,
     "stage": "component-factory-init",
     "symbol": "ChevronRight",
-    "file": "plec-lucide/icons/chevron-right",
+    "file": "@plec/lucide/icons/chevron-right",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -136,7 +136,7 @@
     "seq": 14,
     "stage": "component-factory-init",
     "symbol": "PanelLeft",
-    "file": "plec-lucide/icons/panel-left",
+    "file": "@plec/lucide/icons/panel-left",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -268,7 +268,7 @@
     "seq": 28,
     "stage": "component-registered",
     "symbol": "Fragment",
-    "file": "plec/client/jsx.tsx",
+    "file": "@plec/core/client/jsx.tsx",
     "output": {
       "registeredAs": "component"
     }
@@ -277,7 +277,7 @@
     "seq": 29,
     "stage": "component-registered",
     "symbol": "RouteView",
-    "file": "plec/routes/render-outlet.tsx",
+    "file": "@plec/core/routes/render-outlet.tsx",
     "output": {
       "registeredAs": "component"
     }
@@ -286,7 +286,7 @@
     "seq": 30,
     "stage": "component-registered",
     "symbol": "DefaultError",
-    "file": "plec/routes/render-outlet.tsx",
+    "file": "@plec/core/routes/render-outlet.tsx",
     "output": {
       "registeredAs": "component"
     }
@@ -295,7 +295,7 @@
     "seq": 31,
     "stage": "component-registered",
     "symbol": "RouterProvider",
-    "file": "plec/routes/router.tsx",
+    "file": "@plec/core/routes/router.tsx",
     "output": {
       "registeredAs": "component"
     }
@@ -304,7 +304,7 @@
     "seq": 32,
     "stage": "component-registered",
     "symbol": "Outlet",
-    "file": "plec/routes/router.tsx",
+    "file": "@plec/core/routes/router.tsx",
     "output": {
       "registeredAs": "component"
     }
@@ -313,7 +313,7 @@
     "seq": 33,
     "stage": "component-registered",
     "symbol": "Link",
-    "file": "plec/routes/router.tsx",
+    "file": "@plec/core/routes/router.tsx",
     "output": {
       "registeredAs": "component"
     }
@@ -341,7 +341,7 @@
     "seq": 36,
     "stage": "component-factory-init",
     "symbol": "CircleHelp",
-    "file": "plec-lucide/icons/circle-help",
+    "file": "@plec/lucide/icons/circle-help",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -351,7 +351,7 @@
     "seq": 37,
     "stage": "component-factory-init",
     "symbol": "House",
-    "file": "plec-lucide/icons/house",
+    "file": "@plec/lucide/icons/house",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -361,7 +361,7 @@
     "seq": 38,
     "stage": "component-factory-init",
     "symbol": "ListChecks",
-    "file": "plec-lucide/icons/list-checks",
+    "file": "@plec/lucide/icons/list-checks",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -371,7 +371,7 @@
     "seq": 39,
     "stage": "component-factory-init",
     "symbol": "Workflow",
-    "file": "plec-lucide/icons/workflow",
+    "file": "@plec/lucide/icons/workflow",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -381,7 +381,7 @@
     "seq": 40,
     "stage": "component-factory-init",
     "symbol": "ChevronRight",
-    "file": "plec-lucide/icons/chevron-right",
+    "file": "@plec/lucide/icons/chevron-right",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false
@@ -391,7 +391,7 @@
     "seq": 41,
     "stage": "component-factory-init",
     "symbol": "PanelLeft",
-    "file": "plec-lucide/icons/panel-left",
+    "file": "@plec/lucide/icons/panel-left",
     "output": {
       "callee": "createIcon",
       "hasImplementation": false

@@ -1,4 +1,4 @@
-# `plec-ui`
+# `@plec/ui`
 
 React/shadcn-based UI kit: Tailwind v4 styles, atoms (components), hooks,
 and lib utilities. This is the React side of the workspace — ordinary React
@@ -9,10 +9,10 @@ components, not compiled by Plec — used by tooling and design work.
 Import via subpath exports or the `#` imports configured in
 `package.json`:
 
-- `plec-ui/globals.css`
-- `plec-ui/atoms/*` (or `#atoms/*`)
-- `plec-ui/hooks/*` (or `#hooks/*`)
-- `plec-ui/lib/*` (or `#lib/*`)
+- `@plec/ui/globals.css`
+- `@plec/ui/atoms/*` (or `#atoms/*`)
+- `@plec/ui/hooks/*` (or `#hooks/*`)
+- `@plec/ui/lib/*` (or `#lib/*`)
 
 Peer dependencies: `react`, `react-dom`.
 

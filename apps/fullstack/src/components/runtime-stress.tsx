@@ -1,4 +1,4 @@
-import { useState } from 'plec';
+import { useState } from '@plec/core';
 import type { Instrument, StressEvent, Summary } from '../stress-feed';
 
 /** Recognized by Plec's route compiler as a host-owned keyed collection.

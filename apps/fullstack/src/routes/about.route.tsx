@@ -1,4 +1,4 @@
-import { createRoute } from 'plec';
+import { createRoute } from '@plec/core';
 import { AboutPage } from '../components/about';
 import { Route as rootRoute } from './index';
 

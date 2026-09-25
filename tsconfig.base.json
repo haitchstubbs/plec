@@ -13,14 +13,14 @@
     "noUncheckedIndexedAccess": true,
     "types": ["node"],
     "paths": {
-      "plec-browser": ["./packages/plec-browser/src/index.ts"],
-      "plec-browser/compiled-subtree": [
+      "@plec/browser": ["./packages/plec-browser/src/index.ts"],
+      "@plec/browser/compiled-subtree": [
         "./packages/plec-browser/src/compiled-subtree-entry.ts"
       ],
-      "plec-lucide": ["./packages/lucide-plec/src/index.ts"],
-      "plec-lucide/icons/*": ["./packages/lucide-plec/src/icons/*"],
-      "plec": ["./packages/plec/src/index.ts"],
-      "plec/client/effects/development-memory-hud": [
+      "@plec/lucide": ["./packages/lucide-plec/src/index.ts"],
+      "@plec/lucide/icons/*": ["./packages/lucide-plec/src/icons/*"],
+      "@plec/core": ["./packages/plec/src/index.ts"],
+      "@plec/core/client/effects/development-memory-hud": [
         "./packages/plec/src/client/effects/development-memory-hud.ts"
       ]
     }

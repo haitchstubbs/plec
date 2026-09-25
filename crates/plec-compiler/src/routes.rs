@@ -918,4 +918,46 @@ mod tests {
                 })
         }));
     }
+
+    #[test]
+    fn lowers_route_component_with_typed_mutation_form_handler() {
+        let modules = vec![
+            parse_module(
+                "routes.tsx",
+                r#"
+                import { useMutation } from "./hooks";
+
+                function TodosPage() {
+                    const createTodo = useMutation(async (_event: Event) => {
+                        return "created";
+                    });
+                    const updateTodo = useMutation(async (id: string) => {
+                        return id;
+                    });
+                    return <form onSubmit={createTodo}><button type="submit">Add</button></form>;
+                }
+
+                export const Root = createRootRoute({ component: TodosPage });
+                export const router = createRouter({ routeTree: Root });
+            "#,
+            )
+            .unwrap(),
+            parse_module(
+                "hooks.ts",
+                r#"
+                export function useMutation(callback: unknown) { return callback; }
+            "#,
+            )
+            .unwrap(),
+        ];
+        let resolved_imports = HashMap::from([(
+            ("routes.tsx".to_string(), "./hooks".to_string()),
+            "hooks.ts".to_string(),
+        )]);
+        let graph = build_semantic_graph(&modules, &resolved_imports).unwrap();
+        let routes = lower_routes(&modules, &graph).unwrap();
+
+        lower_route_artifacts(&modules, &graph, &routes)
+            .expect("typed mutation form handlers should lower in route artifacts");
+    }
 }

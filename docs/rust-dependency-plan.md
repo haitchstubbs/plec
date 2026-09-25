@@ -551,7 +551,7 @@ However, account for direct package entrypoints.
 A developer can currently run things such as:
 
 ```bash
-yarn workspace plec build:runtime
+yarn workspace @plec/core build:runtime
 ```
 
 without going through root `yarn build`.

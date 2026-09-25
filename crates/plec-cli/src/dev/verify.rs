@@ -42,13 +42,13 @@ pub fn run(repo: &Repo) -> VerifyReport {
         repo,
         "browser unit",
         yarn_command(),
-        &["workspace", "plec-browser", "test"],
+        &["workspace", "@plec/browser", "test"],
     ));
     stages.push(run_command(
         repo,
         "typecheck",
         yarn_command(),
-        &["workspace", "plec-browser", "typecheck"],
+        &["workspace", "@plec/browser", "typecheck"],
     ));
     stages.push(run_command(
         repo,
@@ -56,7 +56,7 @@ pub fn run(repo: &Repo) -> VerifyReport {
         yarn_command(),
         &[
             "workspace",
-            "plec-e2e",
+            "@plec/e2e",
             "exec",
             "playwright",
             "test",

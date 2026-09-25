@@ -1,5 +1,5 @@
 {
-  "name": "plec-query",
+  "name": "@plec/query",
   "version": "0.0.0",
   "type": "module",
   "private": true,
@@ -56,11 +56,11 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.7.0",
+    "@plec/eslint-config": "*",
     "@types/node": "^24.4.0",
     "drizzle-orm": "^0.45.2",
     "eslint": "^9.39.4",
     "kysely": "^0.29.2",
-    "plec-eslint-config": "*",
     "typescript": "^7.0.2",
     "vitest": "^3.2.4"
   },

@@ -7,7 +7,7 @@ import {
   Outlet,
   Link,
   cookie,
-} from 'plec';
+} from '@plec/core';
 
 export function FullstackLayout() {
   const [collapsed, setCollapsed] = useState(

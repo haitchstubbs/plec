@@ -1,4 +1,4 @@
-import { Outlet, useLocation } from 'plec';
+import { Outlet, useLocation } from '@plec/core';
 import { Badge } from './badge';
 
 export function Layout() {

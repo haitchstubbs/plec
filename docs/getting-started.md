@@ -40,7 +40,7 @@ available to the fullstack build. The fullstack scripts in
 ```sh
 yarn install --immutable
 yarn install:build-tools
-yarn workspace plec build:runtime   # cargo check + wasm-pack into packages/plec/dist/runtime
+yarn workspace @plec/core build:runtime   # cargo check + wasm-pack into packages/plec/dist/runtime
 yarn build
 ```
 
@@ -67,7 +67,7 @@ script does that before restarting the server.
 After changing the runtime crate (`crates/plec-runtime`):
 
 ```sh
-yarn workspace plec build:wasm   # wasm-pack -> packages/plec/dist/runtime
+yarn workspace @plec/core build:wasm   # wasm-pack -> packages/plec/dist/runtime
 yarn workspace fullstack build   # regenerates the application artifact and staged assets
 ```
 
@@ -83,7 +83,7 @@ client sends `accept-encoding: br`. If you hand-copy fresh `runtime.js` /
 regenerating the `.br` files, the browser silently runs the old code. Delete
 the `.br` files or re-run the fullstack build instead of hand-copying.
 
-For continuous rebuilds: `yarn workspace plec dev:wasm`.
+For continuous rebuilds: `yarn workspace @plec/core dev:wasm`.
 
 **Silent failures:** some browser-side wasm failure paths early-return
 without logging (for example generation mismatches in typed fetch). When a

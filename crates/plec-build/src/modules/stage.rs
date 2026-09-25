@@ -1,7 +1,7 @@
 //! Stage the prebuilt Plec runtime assets into the application output.
 //!
-//! Runtime assets resolve from the installed `plec` package
-//! (`<nearest node_modules>/plec/dist/runtime`) by walking up from the
+//! Runtime assets resolve from the installed `@plec/core` package
+//! (`<nearest node_modules>/@plec/core/dist/runtime`) by walking up from the
 //! application directory.
 //!
 //! The selected directory's runtime asset tree is a supply-chain boundary:
@@ -40,8 +40,8 @@ pub fn stage(
     } else {
         return Err(format!(
             "Plec runtime artifact not found — looked in:\n  \
-             node_modules/plec/dist/runtime in or above {} (installed plec package)\n\
-             Build the release artifact with `yarn workspace plec build` before building.",
+             node_modules/@plec/core/dist/runtime in or above {} (installed @plec/core package)\n\
+             Build the release artifact with `yarn workspace @plec/core build` before building.",
             app_dir.display(),
         )
         .into());
@@ -115,7 +115,7 @@ fn has_runtime_binaries(dir: &Path) -> bool {
     RUNTIME_BINARIES.iter().all(|file| dir.join(file).is_file())
 }
 
-/// Walks up from the application directory to the nearest installed `plec`
+/// Walks up from the application directory to the nearest installed `@plec/core`
 /// package that carries staged runtime assets.
 fn packaged_runtime_dir(app_dir: &Path) -> Option<PathBuf> {
     app_dir
@@ -123,7 +123,8 @@ fn packaged_runtime_dir(app_dir: &Path) -> Option<PathBuf> {
         .map(|ancestor| {
             ancestor
                 .join("node_modules")
-                .join("plec")
+                .join("@plec")
+                .join("core")
                 .join("dist")
                 .join("runtime")
         })
@@ -162,7 +163,7 @@ fn verify_provenance(
     let raw = contained_bytes(&provenance_path, boundary, "provenance.json").map_err(|_| {
         format!(
             "runtime provenance record not found at {} — rebuild the runtime with \
-              `plec workspace compile` (dev frontend) or `yarn workspace plec build:wasm`",
+              `plec workspace compile` (dev frontend) or `yarn workspace @plec/core build:wasm`",
             provenance_path.display()
         )
     })?;
@@ -213,7 +214,8 @@ mod tests {
     fn write_runtime_source(app: &Path, js: &str, wasm: &[u8]) {
         let runtime = app
             .join("node_modules")
-            .join("plec")
+            .join("@plec")
+            .join("core")
             .join("dist")
             .join("runtime");
         fs::create_dir_all(&runtime).expect("runtime dir");
@@ -242,7 +244,7 @@ mod tests {
         .expect("compress");
         fs::write(
             app.path()
-                .join("node_modules/plec/dist/runtime/runtime.js.br"),
+                .join("node_modules/@plec/core/dist/runtime/runtime.js.br"),
             compressed,
         )
         .expect("sidecar");
@@ -307,7 +309,7 @@ mod tests {
         // directory.
         fs::remove_file(
             app.path()
-                .join("node_modules/plec/dist/runtime/runtime_bg.wasm"),
+                .join("node_modules/@plec/core/dist/runtime/runtime_bg.wasm"),
         )
         .expect("remove real binary");
 
@@ -316,7 +318,7 @@ mod tests {
             std::os::unix::fs::symlink(
                 outside.path().join("escape.wasm"),
                 app.path()
-                    .join("node_modules/plec/dist/runtime/runtime_bg.wasm"),
+                    .join("node_modules/@plec/core/dist/runtime/runtime_bg.wasm"),
             )
             .expect("symlink");
         }
@@ -342,7 +344,8 @@ mod tests {
         let runtime = app
             .path()
             .join("node_modules")
-            .join("plec")
+            .join("@plec")
+            .join("core")
             .join("dist")
             .join("runtime");
         fs::create_dir_all(&runtime).expect("runtime dir");
@@ -370,7 +373,7 @@ mod tests {
         // Tamper with a verified binary after writing provenance.
         fs::write(
             app.path()
-                .join("node_modules/plec/dist/runtime/runtime_bg.wasm"),
+                .join("node_modules/@plec/core/dist/runtime/runtime_bg.wasm"),
             b"\0asm\x01\x00\x00\x00tampered",
         )
         .expect("tampered wasm");
@@ -401,7 +404,7 @@ mod tests {
         .expect("compress");
         fs::write(
             app.path()
-                .join("node_modules/plec/dist/runtime/runtime.js.br"),
+                .join("node_modules/@plec/core/dist/runtime/runtime.js.br"),
             compressed,
         )
         .expect("sidecar");

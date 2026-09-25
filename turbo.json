@@ -9,8 +9,8 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**", "build/**"]
     },
-    "plec#build": {
-      "dependsOn": ["plec-browser#build"],
+    "@plec/core#build": {
+      "dependsOn": ["@plec/browser#build"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "../../Cargo.lock",
@@ -21,7 +21,7 @@
     },
     "fullstack#build": {
       "cache": false,
-      "dependsOn": ["plec#build"],
+      "dependsOn": ["@plec/core#build"],
       "env": ["PLEC_BIN"],
       "outputs": ["dist/**"]
     },
@@ -59,8 +59,8 @@
       "dependsOn": ["^typecheck"],
       "outputs": []
     },
-    "plec#typecheck": {
-      "dependsOn": ["^typecheck", "plec-browser#build"],
+    "@plec/core#typecheck": {
+      "dependsOn": ["^typecheck", "@plec/browser#build"],
       "outputs": []
     },
     "clean": {

@@ -57,7 +57,7 @@ async function buildWasm() {
   const buildScript = path.resolve(
     repoRoot,
     'packages',
-    'plec',
+    '@plec/core',
     'scripts',
     'build-runtime.mjs',
   );

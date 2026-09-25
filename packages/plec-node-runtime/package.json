@@ -1,5 +1,5 @@
 {
-  "name": "plec-node-runtime",
+  "name": "@plec/node-runtime",
   "version": "0.0.0",
   "private": true,
   "type": "module",

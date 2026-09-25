@@ -5,7 +5,7 @@
     "rootDir": "src",
     "declaration": true,
     "jsx": "react-jsx",
-    "jsxImportSource": "plec",
+    "jsxImportSource": "@plec/core",
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]

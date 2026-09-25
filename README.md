@@ -43,7 +43,7 @@ Plec does not use a virtual DOM or re-render component subtrees as its normal up
 Plec applications are authored with typed TS/TSX components and familiar reactive primitives.
 
 ```tsx
-import { createRoute, useMutation, useState } from 'plec';
+import { createRoute, useMutation, useState } from '@plec/core';
 
 export const Route = createRoute({
   path: 'todos',
@@ -251,7 +251,7 @@ For example:
 
 ```toml
 [compiler.host-imports]
-lucide = { provider = "lucide", adapter = "plec-lucide", ssr = true }
+lucide = { provider = "lucide", adapter = "@plec/lucide", ssr = true }
 ```
 
 The compiler records the semantic dependency while the browser and server hosts provide the actual implementation.
@@ -263,14 +263,14 @@ apps/
   fullstack/              Full-stack Plec demo application
 
 packages/
-  plec/                   Authoring APIs, JS package and CLI shim
-  plec-browser/           Browser transport, bootstrap and host integration
-  plec-node-runtime/      Node application-runtime sidecar
-  plec-query/             Query authoring APIs and adapters
-  plec-e2e/               Canonical Playwright E2E runner
-  plec-eslint-config/     Shared ESLint configuration
-  lucide-plec/            Generated Plec icon components
-  ui/                     Shared React/shadcn tooling and styles
+  plec/                   @plec/core: authoring APIs, JS package and CLI shim
+  plec-browser/           @plec/browser: browser transport and host integration
+  plec-node-runtime/      @plec/node-runtime: Node application-runtime sidecar
+  plec-query/             @plec/query: query authoring APIs and adapters
+  plec-e2e/               @plec/e2e: canonical Playwright E2E runner
+  plec-eslint-config/     @plec/eslint-config: shared ESLint configuration
+  lucide-plec/            @plec/lucide: generated Plec icon components
+  ui/                     @plec/ui: shared React/shadcn tooling and styles
 
 crates/
   plec-parser/            TS/TSX parser
@@ -311,7 +311,7 @@ Additional WASM and browser tooling is pinned by the repository and installed th
 yarn install --immutable
 yarn install:build-tools
 
-yarn workspace plec build:runtime
+yarn workspace @plec/core build:runtime
 yarn build
 
 yarn workspace fullstack dev
