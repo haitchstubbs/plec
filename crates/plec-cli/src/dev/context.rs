@@ -342,7 +342,7 @@ const ARTIFACT_WORKFLOWS: &[&str] = &[
     "plec workspace artifact provenance runtime",
     "plec workspace artifact stale",
     "plec workspace doctor adoption",
-    "yarn workspace plec build:wasm",
+    "yarn workspace @plec/core build:wasm",
 ];
 const ARTIFACT_TESTS: &[&str] = &[
     "cargo test -p plec-build",

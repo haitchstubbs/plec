@@ -24,7 +24,7 @@ fn output_dir(tag: &str) -> PathBuf {
 }
 
 /// Copy an app into a disposable project rooted under Cargo's test output.
-/// Its nearest `node_modules/plec` is synthesized by the test, while other
+/// Its nearest `node_modules/@plec/core` is synthesized by the test, while other
 /// build dependencies continue to resolve from the workspace ancestor.
 fn fixture_project(tag: &str, name: &str) -> PathBuf {
     let project = output_dir(&format!("source-{tag}"));
@@ -217,7 +217,7 @@ fn forbidden_browser_dependency_fails_the_build() {
 
 // ---------------------------------------------------------------------------
 // Out-of-repo builds: the `plec` package arrives as an installed dependency
-// and the runtime assets stage from `node_modules/plec/dist/runtime`.
+// and the runtime assets stage from `node_modules/@plec/core/dist/runtime`.
 // ---------------------------------------------------------------------------
 
 /// The workspace root, for reaching the real node_modules install.
@@ -286,11 +286,11 @@ fn install_plec_package(project: &Path, runtime_marker: &str) {
             .collect::<String>()
     };
 
-    let plec = project.join("node_modules/plec");
+    let plec = project.join("node_modules/@plec/core");
     fs::create_dir_all(plec.join("dist/runtime")).expect("plec package dirs should be creatable");
     fs::write(
         plec.join("package.json"),
-        r#"{"name":"plec","type":"module","exports":{".":"./dist/browser.js"}}"#,
+        r#"{"name":"@plec/core","type":"module","exports":{".":"./dist/browser.js"}}"#,
     )
     .expect("plec package.json should be writable");
     fs::write(
@@ -331,7 +331,7 @@ fn builds_out_of_repo_app_from_installed_plec_package() {
     let staged = read(out_dir.join("public/runtime/runtime.js"));
     assert_eq!(
         staged, "installed-package-runtime",
-        "runtime assets must stage from node_modules/plec/dist/runtime"
+        "runtime assets must stage from node_modules/@plec/core/dist/runtime"
     );
 
     // Same minimum artifact structure as the in-workspace build.
@@ -359,7 +359,7 @@ fn staging_failure_names_installed_package_resolution_path() {
     let project = out_of_repo_project("missing-runtime");
     let app = project.join("mini-app");
     copy_dir_all(&fixture_app("mini-app"), &app);
-    // No node_modules/plec installed: runtime staging has nowhere to resolve.
+    // No node_modules/@plec/core installed: runtime staging has nowhere to resolve.
 
     // Runtime staging runs before any bundling, so esbuild is not needed.
     let out_dir = project.join("dist");
@@ -372,7 +372,7 @@ fn staging_failure_names_installed_package_resolution_path() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("node_modules/plec/dist/runtime"),
+        stderr.contains("node_modules/@plec/core/dist/runtime"),
         "failure must name the installed-package runtime path: {stderr}"
     );
 }

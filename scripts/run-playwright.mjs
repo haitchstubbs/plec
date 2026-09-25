@@ -17,7 +17,7 @@ const result = spawnSync(
   yarn,
   [
     'workspace',
-    'plec-e2e',
+    '@plec/e2e',
     'exec',
     'playwright',
     'test',

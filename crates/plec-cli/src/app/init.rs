@@ -37,7 +37,7 @@ styles = "/assets/styles.css"
     ),
     (
         "src/router.tsx",
-        r#"import { createRouter } from 'plec';
+        r#"import { createRouter } from '@plec/core';
 import { Route as rootRoute } from './routes/index';
 
 export const router = createRouter({
@@ -49,7 +49,7 @@ export default router;
     ),
     (
         "src/routes/index.tsx",
-        r#"import { createRootRoute } from 'plec';
+        r#"import { createRootRoute } from '@plec/core';
 import { Home } from './home';
 
 export const Route = createRootRoute({
@@ -66,7 +66,7 @@ export const Route = createRootRoute({
     ),
     (
         "src/client.tsx",
-        r#"import { startPlecRouter } from 'plec/browser';
+        r#"import { startPlecRouter } from '@plec/core/browser';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('The Plec application root is missing.');
@@ -81,7 +81,7 @@ await startPlecRouter({
     ),
     (
         "src/server.ts",
-        r#"import type { AppRequestHandler } from 'plec/server';
+        r#"import type { AppRequestHandler } from '@plec/core/server';
 
 export const handleRequest: AppRequestHandler = async (request) => {
   const url = new URL(request.url);

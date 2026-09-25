@@ -458,13 +458,13 @@ pub fn emit_node_runtime(
     if !source.exists() {
         let packaged = app_dir
             .ancestors()
-            .map(|ancestor| ancestor.join("node_modules/plec/dist/node-runtime.mjs"))
+            .map(|ancestor| ancestor.join("node_modules/@plec/core/dist/node-runtime.mjs"))
             .find(|candidate| candidate.is_file())
             .or_else(|| {
                 app_dir
                     .ancestors()
                     .map(|ancestor| {
-                        ancestor.join("node_modules/plec-node-runtime/dist/runtime.mjs")
+                        ancestor.join("node_modules/@plec/node-runtime/dist/runtime.mjs")
                     })
                     .find(|candidate| candidate.is_file())
             });
@@ -623,7 +623,7 @@ preloads = ["/a.woff2", "/b.woff2"]
     fn copies_packaged_node_runtime_for_out_of_repo_apps() {
         let root = tempfile::tempdir().expect("root");
         let app = root.path().join("app");
-        let package = app.join("node_modules/plec/dist");
+        let package = app.join("node_modules/@plec/core/dist");
         let out = root.path().join("dist");
         std::fs::create_dir_all(&package).expect("package dir");
         std::fs::write(
