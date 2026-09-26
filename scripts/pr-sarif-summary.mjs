@@ -327,7 +327,7 @@ async function githubRequest(url, token, options = {}) {
   return response.status === 204 ? undefined : response.json();
 }
 
-async function publishComment(body, marker) {
+export async function publishComment(body, marker) {
   const token = process.env.GITHUB_TOKEN;
   const repository = process.env.GITHUB_REPOSITORY;
   const pullNumber = process.env.PR_NUMBER;
@@ -335,7 +335,7 @@ async function publishComment(body, marker) {
     console.warn(
       'PR summary not published: GitHub PR context or token is unavailable.',
     );
-    return;
+    return { action: 'skipped' };
   }
 
   try {
@@ -370,20 +370,39 @@ async function publishComment(body, marker) {
         comment.body?.includes(marker),
     );
     if (existing) {
-      await githubRequest(`${api}/${existing.id}`, token, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body }),
-      });
+      const updated = await githubRequest(
+        `${process.env.GITHUB_API_URL ?? 'https://api.github.com'}/repos/${repository}/issues/comments/${existing.id}`,
+        token,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ body }),
+        },
+      );
+      if (updated?.id !== existing.id || updated?.body !== body) {
+        throw new Error(
+          `GitHub did not confirm update of PR comment ${existing.id}.`,
+        );
+      }
+      console.log(`Updated PR summary comment ${existing.id}.`);
+      return { action: 'updated', commentId: existing.id };
     } else {
-      await githubRequest(api, token, {
+      const created = await githubRequest(api, token, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ body }),
       });
+      if (!created?.id || created.body !== body) {
+        throw new Error(
+          'GitHub did not confirm creation of the PR summary comment.',
+        );
+      }
+      console.log(`Created PR summary comment ${created.id}.`);
+      return { action: 'created', commentId: created.id };
     }
   } catch (error) {
     console.warn(`PR summary could not be published: ${error.message}`);
+    return { action: 'failed' };
   }
 }
 

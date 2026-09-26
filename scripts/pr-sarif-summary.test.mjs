@@ -1,0 +1,98 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { publishComment } from './pr-sarif-summary.mjs';
+
+const marker = '<!-- plec-security-comment:trivy -->';
+
+test('updates the marker-owned bot comment through the issue-comments endpoint', async (context) => {
+  const env = {
+    GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+    GITHUB_REPOSITORY: process.env.GITHUB_REPOSITORY,
+    GITHUB_API_URL: process.env.GITHUB_API_URL,
+    PR_NUMBER: process.env.PR_NUMBER,
+  };
+  Object.assign(process.env, {
+    GITHUB_TOKEN: 'test-token',
+    GITHUB_REPOSITORY: 'owner/repo',
+    GITHUB_API_URL: 'https://api.github.com',
+    PR_NUMBER: '55',
+  });
+  context.after(() => {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const botComment = {
+    id: 42,
+    user: { login: 'github-actions[bot]' },
+    body: `${marker}\nold body`,
+  };
+  const otherScannerComment = {
+    id: 41,
+    user: { login: 'github-actions[bot]' },
+    body: '<!-- plec-security-comment:opengrep -->\nOpenGrep body',
+  };
+  let comments = [otherScannerComment, botComment];
+  const requests = [];
+  context.mock.method(
+    globalThis,
+    'fetch',
+    async (input, options = {}) => {
+      const url = String(input);
+      const method = options.method ?? 'GET';
+      requests.push({ url, method });
+
+      if (method === 'GET') {
+        return Response.json(comments);
+      }
+      if (method === 'PATCH') {
+        assert.equal(
+          url,
+          'https://api.github.com/repos/owner/repo/issues/comments/42',
+        );
+        botComment.body = JSON.parse(options.body).body;
+        return Response.json(botComment);
+      }
+      if (method === 'POST') {
+        const created = {
+          id: 43,
+          user: { login: 'github-actions[bot]' },
+          body: JSON.parse(options.body).body,
+        };
+        comments.push(created);
+        return Response.json(created, { status: 201 });
+      }
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    },
+  );
+  context.mock.method(console, 'log', () => {});
+
+  const first = `${marker}\nsummary for run 1`;
+  const second = `${marker}\nsummary for run 2`;
+  assert.deepEqual(await publishComment(first, marker), {
+    action: 'updated',
+    commentId: 42,
+  });
+  assert.deepEqual(await publishComment(second, marker), {
+    action: 'updated',
+    commentId: 42,
+  });
+
+  assert.equal(comments.length, 2);
+  assert.equal(botComment.body, second);
+  assert.deepEqual(
+    requests.filter(({ method }) => method !== 'GET'),
+    [
+      {
+        url: 'https://api.github.com/repos/owner/repo/issues/comments/42',
+        method: 'PATCH',
+      },
+      {
+        url: 'https://api.github.com/repos/owner/repo/issues/comments/42',
+        method: 'PATCH',
+      },
+    ],
+  );
+});
