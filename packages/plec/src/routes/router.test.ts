@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, expectTypeOf, it } from 'vitest';
 import {
   createRootRoute,
   createRoute,
@@ -18,14 +18,15 @@ afterEach(() => {
 });
 
 function setLocation(pathname: string) {
+  const url = new URL(pathname, 'http://localhost');
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
     value: {
       location: {
-        pathname,
-        search: '',
-        hash: '',
-        href: `http://localhost${pathname}`,
+        pathname: url.pathname,
+        search: url.search,
+        hash: url.hash,
+        href: url.href,
         origin: 'http://localhost',
       },
       history: { pushState() {}, replaceState() {} },
@@ -34,6 +35,19 @@ function setLocation(pathname: string) {
 }
 
 describe('code-first routes', () => {
+  it('infers parameter names from literal route paths', () => {
+    const root = createRootRoute({ component: View });
+    const route = createRoute({
+      getParentRoute: () => root,
+      path: 'projects/$projectId/tasks/$taskId',
+      component: View,
+    });
+    expectTypeOf<ReturnType<typeof route.useParams>>().toEqualTypeOf<{
+      projectId: string;
+      taskId: string;
+    }>();
+  });
+
   it('matches nested, parameter, index, and fallback routes', () => {
     const root = createRootRoute({ component: View });
     const index = createRoute({
@@ -136,6 +150,38 @@ describe('code-first routes', () => {
     });
   });
 
+  it('parses search values with ordered repeated keys and strict decoding', async () => {
+    const { parseSearch } = await import('./router');
+    expect(parseSearch('?tag=one&tag=two+words&empty')).toEqual({
+      tag: ['one', 'two words'],
+      empty: '',
+    });
+    expect(() => parseSearch('?bad=%')).toThrow(URIError);
+  });
+
+  it('exposes search only from the matching route', () => {
+    const root = createRootRoute({ component: View });
+    const route = createRoute({
+      getParentRoute: () => root,
+      path: '$projectId',
+      component: View,
+    });
+    root.addChildren([route]);
+    const state = {
+      activeRouteMatch: {
+        route,
+        params: { projectId: '42' },
+        search: { tag: ['one', 'two'] },
+      },
+    } as unknown as Parameters<typeof withRendering>[0];
+    expect(withRendering(state, () => route.useSearch())).toEqual({
+      tag: ['one', 'two'],
+    });
+    expect(() => withRendering(state, () => root.useSearch())).toThrow(
+      'Route.useSearch() can only run while rendering its matching route.',
+    );
+  });
+
   it('exposes accumulated nested params and rejects non-matching access', () => {
     const root = createRootRoute({ component: View });
     const organization = createRoute({
@@ -169,7 +215,7 @@ describe('code-first routes', () => {
   });
 
   it('updates params after client navigation', async () => {
-    setLocation('/projects/old');
+    setLocation('/projects/old?tag=old');
     const root = createRootRoute({ component: View });
     const projects = createRoute({
       getParentRoute: () => root,
@@ -187,10 +233,12 @@ describe('code-first routes', () => {
     router.start();
     await Promise.resolve();
     expect(router.matches.at(-1)?.params).toEqual({ projectId: 'old' });
+    expect(router.matches.at(-1)?.search).toEqual({ tag: 'old' });
 
-    setLocation('/projects/new');
+    setLocation('/projects/new?tag=first&tag=second');
     await router.reload();
     expect(router.matches.at(-1)?.params).toEqual({ projectId: 'new' });
+    expect(router.matches.at(-1)?.search).toEqual({ tag: ['first', 'second'] });
   });
 
   it('reloads only the selected route and rejects stale results', async () => {
@@ -318,9 +366,9 @@ describe('code-first routes', () => {
     root.addChildren([todos, other]);
     const router = createRouter({ routeTree: root });
     router.matches = [
-      { route: root, params: {}, status: 'ready' },
-      { route: todos, params: {}, status: 'ready', data: 'initial' },
-      { route: other, params: {}, status: 'ready', data: 'initial' },
+      { route: root, params: {}, search: {}, status: 'ready' },
+      { route: todos, params: {}, search: {}, status: 'ready', data: 'initial' },
+      { route: other, params: {}, search: {}, status: 'ready', data: 'initial' },
     ];
     setLocation('/todos');
     const first = router.reloadRoute(todos);
