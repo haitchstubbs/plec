@@ -31,9 +31,11 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           exit-code: 1
+          limit-severities-for-sarif: true
           skip-files: '**/node_modules/**'
           skip-dirs: '**/node_modules/**'
-      - name: Trivy license checks
+
+      - name: Trivy license gate
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
@@ -41,10 +43,22 @@ jobs:
           scanners: license
           version: v0.74.0
           severity: HIGH,CRITICAL
-          ignore-unfixed: true
+          format: table
+          exit-code: 1
+          skip-files: '**/node_modules/**'
+          skip-dirs: '**/node_modules/**'
+
+      - name: Trivy license report
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: license
+          version: v0.74.0
           format: sarif
           output: trivy-license-results.sarif
-          exit-code: 1
+          exit-code: 0
           skip-files: '**/node_modules/**'
           skip-dirs: '**/node_modules/**'
 
