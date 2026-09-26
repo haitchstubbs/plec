@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   security-events: write
+  pull-requests: write
 
 jobs:
   scan:
@@ -74,3 +75,10 @@ jobs:
         with:
           sarif_file: trivy-license-results.sarif
           category: trivy-license
+
+      - name: Publish PR summary
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/pr-sarif-summary.mjs trivy
