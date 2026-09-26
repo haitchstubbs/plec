@@ -914,6 +914,37 @@ mod tests {
     }
 
     #[test]
+    fn lowers_route_search_access_in_a_route_component() {
+        let modules = vec![parse_module(
+            "routes.tsx",
+            r#"
+                function Page() {
+                    const search = Route.useSearch();
+                    return <p>{search.tab}</p>;
+                }
+                export const Root = createRootRoute({ component: Page });
+                export const Home = createRoute({
+                    getParentRoute: () => Root,
+                    path: 'home',
+                    component: Page,
+                });
+                export const router = createRouter({ routeTree: Root.addChildren([Home]) });
+            "#,
+        )
+        .unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let routes = lower_routes(&modules, &graph).unwrap();
+        let artifacts = lower_route_artifacts(&modules, &graph, &routes).unwrap();
+        assert!(artifacts.graphs.iter().any(|graph| {
+            graph
+                .graph
+                .components
+                .iter()
+                .any(|component| component.host_slots.iter().any(|slot| slot.kind == "routeSearch"))
+        }));
+    }
+
+    #[test]
     fn emits_independent_component_graphs_for_each_route_phase() {
         let modules = vec![parse_module("routes.tsx", r#"
             export function Layout() { return <main />; }

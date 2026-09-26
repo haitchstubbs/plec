@@ -2910,6 +2910,92 @@ async fn client_navigation_seeds_loader_host_state_into_mounted_graph() {
     );
 }
 
+#[wasm_bindgen_test]
+fn route_search_updates_existing_route_graph_on_query_navigation() {
+    let _location = reset_browser_location();
+    let runtime = PlecRuntime::new();
+    let root = mount_root();
+    runtime
+        .register_graph(
+            "root".into(),
+            serde_wasm_bindgen::to_value(&loader_host_state_layout_artifact()).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register_graph(
+            "page".into(),
+            serde_wasm_bindgen::to_value(&route_search_page_artifact()).unwrap(),
+        )
+        .unwrap();
+    let manifest = js_sys::JSON::parse(
+        &serde_json::json!({
+            "version": 3,
+            "rootGraphId": "root",
+            "routes": [
+                {"id": "notes", "path": "notes", "graphId": "page", "outletId": "main"}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    runtime.start(root.clone(), manifest).unwrap();
+    runtime.navigate("/notes?tag=first".into(), false).unwrap();
+    let before = root.query_selector("main div p").unwrap().unwrap();
+    assert_eq!(before.text_content().as_deref(), Some("first"));
+
+    runtime.navigate("/notes?tag=second".into(), false).unwrap();
+    let after = root.query_selector("main div p").unwrap().unwrap();
+    assert_eq!(after.text_content().as_deref(), Some("second"));
+    assert!(before.is_same_node(Some(&after)));
+
+    runtime
+        .navigate("/notes?tag=second&tag=third".into(), false)
+        .unwrap();
+    assert_eq!(
+        root.query_selector("main div p")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .as_deref(),
+        Some("[\"second\",\"third\"]")
+    );
+    assert!(runtime.navigate("/notes?tag=%".into(), false).is_err());
+}
+
+fn route_search_page_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "route-search.tsx#Page",
+            "rootNode": 0,
+            "strings": ["p", "tag"],
+            "constants": [],
+            "nodes": [
+                {"op": "element", "tag": 0, "parent": null, "children": [1]},
+                {"op": "text", "text": 0, "parent": 0}
+            ],
+            "texts": [{"binding": 0}],
+            "bindings": [{"target": 1, "sink": "text", "expression": 0}],
+            "propPrograms": [],
+            "events": [],
+            "inputs": [],
+            "hostSlots": [{"kind": "routeSearch"}],
+            "stateSlots": [],
+            "parameters": [],
+            "expressions": [{"instructions": [
+                {"op": "loadHost", "host": 0},
+                {"op": "field", "field": 1},
+                {"op": "return"}
+            ]}],
+            "actions": [],
+            "loops": [],
+            "dependencyEdges": [],
+            "routeOutlets": []
+        }]
+    })
+}
+
 /// Fresh client navigation mounts the route graph by clearing the outlet
 /// element (`TypedRuntime::mount`), so the layout's outlet must be a
 /// dedicated empty element rather than the element holding layout content.

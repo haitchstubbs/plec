@@ -52,6 +52,8 @@ export type {
   RouteMetadata,
   RouteOptions,
   RouteDefinition,
+  RouteParams,
+  RouteSearch,
 } from './routes/router';
 export {
   PlecNotFoundOutcome,

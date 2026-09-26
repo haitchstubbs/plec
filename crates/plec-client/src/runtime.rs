@@ -848,9 +848,11 @@ impl RuntimeState {
                     .get(&parent_id)
                     .and_then(|instance| instance.route_state.as_ref())
                     .map(|state| state.params.clone());
-                runtime.set_host_inputs(
-                    self.typed_host_inputs_for_route(loader_data.as_ref(), route_params.as_ref()),
-                )?;
+                runtime.set_host_inputs(self.typed_host_inputs_for_location(
+                    loader_data.as_ref(),
+                    route_params.as_ref(),
+                    None,
+                )?)?;
                 runtime.graph_generation = self.next_typed_generation();
                 if let Some(adoption) = request.adoption.as_ref() {
                     runtime.adopt(
@@ -1061,6 +1063,12 @@ impl RuntimeState {
 }
 
 impl TypedRuntime {
+    pub fn set_host_input(&mut self, name: &str, value: RuntimeValue) -> Result<(), JsValue> {
+        self.host_inputs.insert(name.to_owned(), value.clone());
+        self.app.host_inputs.insert(name.to_owned(), value);
+        Ok(())
+    }
+
     pub fn set_route_error(&mut self, error: RuntimeValue) -> Result<(), JsValue> {
         // Error components may render a fixed fallback and not consume the
         // route error value. In that case there is no state slot to populate.

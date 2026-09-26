@@ -15,6 +15,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
         .clone()
         .ok_or_else(|| JsValue::from_str("missing:ssr-manifest"))?;
     let location = typed_location(href);
+    state.set_typed_route_search(&location.search)?;
     // The boundary owner is derived up front so the root graph selection can
     // honor a root not-found boundary before any instance is claimed.
     let agreement = match state.typed_ssr_route_chain.borrow().as_ref() {
@@ -398,6 +399,7 @@ pub fn navigate_typed_route(
         .clone()
         .ok_or_else(|| JsValue::from_str("typed router manifest missing"))?;
     let location = typed_location(href);
+    state.set_typed_route_search(&location.search)?;
     if write_history {
         if replace {
             window()?
@@ -483,6 +485,15 @@ pub fn navigate_typed_route(
                 .then(|| (id.clone(), entry.route_id.clone(), entry.match_key.clone()))
         });
         let created = !matches!(&current, Some((_, route_id, key)) if route_id.as_deref() == Some(route.id.as_str()) && key.as_deref() == Some(match_key.as_str()));
+        let search_changed = !created
+            && current.as_ref().is_some_and(|(id, _, _)| {
+                state
+                    .typed
+                    .borrow()
+                    .get(id)
+                    .and_then(|instance| instance.route_state.as_ref())
+                    .is_some_and(|route| route.location.1 != location.search)
+            });
         let id = match current {
             Some((id, route_id, key))
                 if route_id.as_deref() == Some(route.id.as_str())
@@ -510,7 +521,10 @@ pub fn navigate_typed_route(
                 &location,
             )?,
         };
-        if created {
+        if !created {
+            state.update_typed_route_search(&id, &location.search)?;
+        }
+        if created || search_changed {
             if let Some(action) = route.loader_action {
                 state.run_typed_loader(&id, action, matched.params, &location)?;
             }
@@ -729,7 +743,7 @@ fn mount_typed_graph(
     runtime.set_component_definitions(graph.components);
     runtime.host_registry = state.host_registry.clone();
     runtime.host_dispatch = Some(state.clone());
-    runtime.set_host_inputs(state.typed_host_inputs_for_route(None, route_params))?;
+    runtime.set_host_inputs(state.typed_host_inputs_for_location(None, route_params, None)?)?;
     runtime.graph_generation = state.next_typed_generation();
     // Fresh client mounts use the exact structural address the server
     // renderer would have given this route position, so CSR-created DOM
@@ -804,7 +818,7 @@ fn adopt_typed_graph(
     let host_inputs = if parent_id.is_none() {
         state.typed_host_inputs.borrow().clone()
     } else {
-        state.typed_host_inputs_for_route(loader_data, route_params)
+        state.typed_host_inputs_for_location(loader_data, route_params, None)?
     };
     runtime.set_host_inputs(host_inputs)?;
     runtime.graph_generation = state.next_typed_generation();
@@ -866,10 +880,8 @@ fn typed_match_key(
     let mut params = params.iter().collect::<Vec<_>>();
     params.sort_by(|left, right| left.0.cmp(right.0));
     format!(
-        "{route_id}\n{}\n{}\n{}\n{}",
+        "{route_id}\n{}\n{}",
         location.pathname,
-        location.search,
-        location.hash,
         params
             .into_iter()
             .map(|(key, value)| format!("{key}={value}"))

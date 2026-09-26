@@ -317,6 +317,16 @@ impl RuntimeState {
         loader_data: Option<&RuntimeValue>,
         route_params: Option<&HashMap<String, String>>,
     ) -> HashMap<String, RuntimeValue> {
+        self.typed_host_inputs_for_location(loader_data, route_params, None)
+            .expect("missing search input has no decoding failure")
+    }
+
+    pub fn typed_host_inputs_for_location(
+        &self,
+        loader_data: Option<&RuntimeValue>,
+        route_params: Option<&HashMap<String, String>>,
+        route_search: Option<&str>,
+    ) -> Result<HashMap<String, RuntimeValue>, JsValue> {
         let mut inputs = self.typed_host_inputs.borrow().clone();
         if let Some(value) = loader_data {
             inputs.insert("loaderData".into(), value.clone());
@@ -333,7 +343,22 @@ impl RuntimeState {
                     .collect(),
             ),
         );
-        inputs
+        if let Some(search) = route_search {
+            inputs.insert(
+                "routeSearch".into(),
+                parse_route_search(search)?,
+            );
+        } else if !inputs.contains_key("routeSearch") {
+            inputs.insert("routeSearch".into(), RuntimeValue::Record(HashMap::new()));
+        }
+        Ok(inputs)
+    }
+
+    pub fn set_typed_route_search(&self, search: &str) -> Result<(), JsValue> {
+        self.typed_host_inputs
+            .borrow_mut()
+            .insert("routeSearch".into(), parse_route_search(search)?);
+        Ok(())
     }
 
     /// Installs the runtime-local host provider registry. `null` removes
@@ -360,6 +385,35 @@ impl RuntimeState {
         *self.host_registry.borrow_mut() = Some(registry);
         Ok(())
     }
+}
+
+pub(crate) fn parse_route_search(search: &str) -> Result<RuntimeValue, JsValue> {
+    let mut values: HashMap<String, Vec<String>> = HashMap::new();
+    let search = search.strip_prefix('?').unwrap_or(search);
+    for pair in search.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let decode = |value: &str| {
+            let value = value.replace('+', " ");
+            js_sys::decode_uri_component(&value)
+                .map(|decoded| decoded.as_string().unwrap_or_default())
+        };
+        values.entry(decode(key)?).or_default().push(decode(value)?);
+    }
+    let value = RuntimeValue::Record(
+        values
+            .into_iter()
+            .map(|(key, values)| {
+                let value = if values.len() == 1 {
+                    RuntimeValue::String(values.into_iter().next().unwrap_or_default())
+                } else {
+                    RuntimeValue::Array(values.into_iter().map(RuntimeValue::String).collect())
+                };
+                (key, value)
+            })
+            .collect(),
+    );
+    value.check_limits().map_err(JsValue::from_str)?;
+    Ok(value)
 }
 
 impl RuntimeState {

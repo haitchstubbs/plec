@@ -262,6 +262,7 @@ fn typed_eval_bounded(
                         )),
                         "loaderData" => app.host_inputs.get("loaderData").cloned(),
                         "routeParams" => app.host_inputs.get("routeParams").cloned(),
+                        "routeSearch" => app.host_inputs.get("routeSearch").cloned(),
                         _ => None,
                     })
                     .unwrap_or(RuntimeValue::Null);

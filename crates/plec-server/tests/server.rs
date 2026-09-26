@@ -167,6 +167,50 @@ async fn renders_a_route_artifact_with_document_metadata_and_public_request_loca
 }
 
 #[tokio::test]
+async fn renders_route_search_host_input_from_parsed_query_values() {
+    let dir = fixture_dir();
+    let route_graph = json!({
+        "rootComponent": 0,
+        "components": [{
+            "rootNode": 0,
+            "strings": ["p", "tab"],
+            "constants": [],
+            "nodes": [
+                {"op": "element", "tag": 0, "children": [1]},
+                {"op": "text", "text": 0}
+            ],
+            "texts": [{"binding": 0}],
+            "bindings": [{"target": 0, "sink": "text", "expression": 0}],
+            "propPrograms": [],
+            "hostSlots": [{"kind": "routeSearch"}],
+            "stateSlots": [],
+            "parameters": [],
+            "loops": [],
+            "routeOutlets": [],
+            "expressions": [{"instructions": [
+                {"op": "loadHost", "host": 0},
+                {"op": "field", "field": 1},
+                {"op": "return"}
+            ]}]
+        }]
+    });
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": [{"id": "home", "path": "", "graphId": "home", "outletId": "main"}]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "", true)},
+            {"graphId": "home", "graph": route_graph}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+    let html = get_html(&options(dir.path()), "/?tab=recent&tab=featured").await;
+    assert!(html.contains(">[\"recent\",\"featured\"]</p>"), "{html}");
+}
+
+#[tokio::test]
 async fn serializes_an_empty_text_value_as_the_empty_comment_sentinel() {
     let dir = fixture_dir();
     let home = json!({

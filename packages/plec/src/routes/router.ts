@@ -33,7 +33,7 @@ export type RouteParams<TPath extends string> = string extends TPath
   ? Record<string, string>
   : { [Name in ParamNames<TPath>]: string };
 
-export type RouteSearch = Record<string, string | string[]>;
+export type RouteSearch = Record<string, string | string[] | undefined>;
 
 export type RouteOptions<
   TData = unknown,

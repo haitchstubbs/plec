@@ -156,6 +156,18 @@ mod tests {
 
         assert_eq!(context.url, "https://app.example.test:8443/before?tab=old");
     }
+
+    #[test]
+    fn query_parser_keeps_repeated_values_ordered_and_form_decodes() {
+        let query = parse_query("tag=one&tag=two+words&empty").unwrap();
+        assert!(matches!(
+            query.get("tag"),
+            Some(QueryValue::Many(values)) if values == &["one", "two words"]
+        ));
+        assert!(matches!(query.get("empty"), Some(QueryValue::One(value)) if value.is_empty()));
+        assert!(parse_query("bad=%").is_err());
+        assert!(parse_query("bad=%FF").is_err());
+    }
 }
 
 /// Strict `decodeURIComponent`: `%` escapes must be complete hex pairs and

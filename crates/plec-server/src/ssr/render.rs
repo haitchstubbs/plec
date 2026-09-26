@@ -1003,6 +1003,32 @@ fn evaluate_bounded(
                             return Value::Null;
                         }
                     }
+                    Some("routeSearch") => {
+                        let search = scope
+                            .request
+                            .query
+                            .iter()
+                            .map(|(name, value)| {
+                                let value = match value {
+                                    crate::request::QueryValue::One(value) => {
+                                        Value::String(value.clone())
+                                    }
+                                    crate::request::QueryValue::Many(values) => Value::Array(
+                                        values.iter().cloned().map(Value::String).collect(),
+                                    ),
+                                };
+                                (name.clone(), value)
+                            })
+                            .collect();
+                        if !evaluate_stack_push(
+                            &mut stack,
+                            &mut stack_sizes,
+                            &mut stack_bytes,
+                            Value::Object(search),
+                        ) {
+                            return Value::Null;
+                        }
+                    }
                     Some("location") => {
                         let mut location = serde_json::Map::new();
                         location.insert(
