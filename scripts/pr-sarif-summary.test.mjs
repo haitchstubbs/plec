@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { publishComment } from './pr-sarif-summary.mjs';
+import {
+  fullstackRuntimePackages,
+  publishComment,
+  renderTrivySummary,
+} from './pr-sarif-summary.mjs';
 
 const marker = '<!-- plec-security-comment:trivy -->';
 
@@ -95,4 +99,68 @@ test('updates the marker-owned bot comment through the issue-comments endpoint',
       },
     ],
   );
+});
+
+test('separates fullstack production licenses from other workspace records', async () => {
+  const runtimeScope = await fullstackRuntimePackages();
+  assert.ok(runtimeScope.direct.has('lucide'));
+  assert.ok(runtimeScope.packages.has('@fontsource-variable/outfit'));
+  assert.ok(runtimeScope.packages.has('@fontsource-variable/raleway'));
+  assert.ok(!runtimeScope.packages.has('lightningcss'));
+
+  const security = { available: true, results: [] };
+  const licenses = {
+    available: true,
+    results: [
+      {
+        level: 'note',
+        license: {
+          packageName: '@fontsource-variable/outfit',
+          license: 'OFL-1.1',
+          classification: 'unknown',
+          path: 'yarn.lock',
+        },
+      },
+      {
+        level: 'note',
+        license: {
+          packageName: 'lucide',
+          license: 'ISC',
+          classification: 'notice',
+          path: 'yarn.lock',
+        },
+      },
+      {
+        level: 'warning',
+        license: {
+          packageName: 'lightningcss',
+          license: 'MPL-2.0',
+          classification: 'reciprocal',
+          path: 'yarn.lock',
+        },
+      },
+    ],
+  };
+  const body = renderTrivySummary(security, licenses, {
+    securityOutcome: 'success',
+    licenseGateOutcome: 'success',
+    runtimeScope,
+  });
+
+  assert.match(
+    body,
+    /Fullstack production dependencies \| ⚠️ Review \| 2/,
+  );
+  assert.match(
+    body,
+    /Other workspace records \(outside fullstack runtime; includes tooling\) \| ⚠️ Review \| 1/,
+  );
+  assert.match(body, /“Unknown” is Trivy’s classification/);
+  assert.ok(
+    body.indexOf('@fontsource-variable/outfit') <
+      body.indexOf('lightningcss'),
+  );
+  assert.ok(body.indexOf('lucide') < body.indexOf('lightningcss'));
+  assert.match(body, /fullstack direct/);
+  assert.match(body, /outside fullstack runtime/);
 });

@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,6 +8,10 @@ const markers = {
 };
 const maxDetails = 20;
 const maxTextLength = 240;
+const repoRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+);
 
 function plainText(value, limit = maxTextLength) {
   return String(value ?? '')
@@ -125,6 +129,75 @@ async function readSarif(file) {
   }
 }
 
+function validPackageName(name) {
+  return /^(?:@[a-z0-9._~-]+\/)?[a-z0-9._~-]+$/i.test(name);
+}
+
+async function resolvePackageManifest(name, fromDirectory) {
+  if (!validPackageName(name)) return undefined;
+  const segments = name.split('/');
+  let directory = fromDirectory;
+  while (
+    directory === repoRoot ||
+    directory.startsWith(`${repoRoot}${path.sep}`)
+  ) {
+    const candidate = path.join(
+      directory,
+      'node_modules',
+      ...segments,
+      'package.json',
+    );
+    try {
+      return await realpath(candidate);
+    } catch {
+      directory = path.dirname(directory);
+    }
+  }
+  return undefined;
+}
+
+export async function fullstackRuntimePackages() {
+  const appManifestPath = path.join(
+    repoRoot,
+    'apps/fullstack/package.json',
+  );
+  const app = JSON.parse(await readFile(appManifestPath, 'utf8'));
+  const direct = new Set([
+    ...Object.keys(app.dependencies ?? {}),
+    ...Object.keys(app.optionalDependencies ?? {}),
+  ]);
+  const packages = new Set(direct);
+  const queue = [];
+  for (const name of direct) {
+    const manifest = await resolvePackageManifest(
+      name,
+      path.dirname(appManifestPath),
+    );
+    if (manifest) queue.push(manifest);
+  }
+
+  const visited = new Set();
+  while (queue.length) {
+    const manifestPath = queue.pop();
+    if (visited.has(manifestPath)) continue;
+    visited.add(manifestPath);
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    const dependencies = {
+      ...manifest.dependencies,
+      ...manifest.optionalDependencies,
+    };
+    for (const name of Object.keys(dependencies)) {
+      packages.add(name);
+      const resolved = await resolvePackageManifest(
+        name,
+        path.dirname(manifestPath),
+      );
+      if (resolved && !visited.has(resolved)) queue.push(resolved);
+    }
+  }
+  return { direct, packages };
+}
+
 function detailsList(results, title) {
   if (!results.length) return '';
   const shown = results.slice(0, maxDetails);
@@ -178,6 +251,7 @@ export function renderTrivySummary(
   {
     securityOutcome = process.env.SECURITY_SCAN_OUTCOME,
     licenseGateOutcome = process.env.LICENSE_GATE_OUTCOME,
+    runtimeScope,
   } = {},
 ) {
   const marker = markers.trivy;
@@ -186,27 +260,35 @@ export function renderTrivySummary(
     ['high', 'critical'].includes(level),
   );
   const licenseCount = licenses.results.length;
-  const classifications = new Map();
-  for (const result of licenses.results) {
-    const classification = result.license.classification;
-    classifications.set(
-      classification,
-      (classifications.get(classification) ?? 0) + 1,
-    );
-  }
-  const reviewCount =
-    (classifications.get('unknown') ?? 0) +
-    (classifications.get('reciprocal') ?? 0) +
-    (classifications.get('unclassified') ?? 0);
-  const licenseStatus = !licenses.available
-    ? '⚠️ Unavailable'
+  const runtimeLicenses = runtimeScope
+    ? licenses.results.filter((result) =>
+        runtimeScope.packages.has(result.license.packageName),
+      )
+    : [];
+  const otherLicenses = runtimeScope
+    ? licenses.results.filter(
+        (result) =>
+          !runtimeScope.packages.has(result.license.packageName),
+      )
+    : licenses.results;
+  const runtimeClassifications = classificationCounts(runtimeLicenses);
+  const otherClassifications = classificationCounts(otherLicenses);
+  const runtimeReviewCount = reviewCount(runtimeClassifications);
+  const otherReviewCount = reviewCount(otherClassifications);
+  const runtimeStatus =
+    !licenses.available || !runtimeScope
+      ? '⚠️ Unavailable'
+      : runtimeReviewCount
+        ? '⚠️ Review'
+        : '✅';
+  const otherStatus = otherReviewCount ? '⚠️ Review' : 'ℹ️ Inventory';
+  const licenseGateStatus = !licenses.available
+    ? '⚠️'
     : licenseGateOutcome === 'skipped'
-      ? '⏭️ Not run'
+      ? '⏭️'
       : licenseGateOutcome === 'failure' || highLicense.length
-        ? '❌ Gate failed'
-        : reviewCount
-          ? '⚠️ Review'
-          : '✅';
+        ? '❌'
+        : '✅';
   const securityStatus = !security.available
     ? '⚠️'
     : securityOutcome === 'failure' || securityCount
@@ -214,17 +296,11 @@ export function renderTrivySummary(
       : securityOutcome === 'skipped'
         ? '⏭️'
         : '✅';
-  const licenseGateCount = !licenses.available
-    ? 'Unavailable'
-    : licenseGateOutcome === 'failure' && !highLicense.length
-      ? 'Gate failed'
-      : licenseGateOutcome === 'skipped'
-        ? 'Not run'
-        : highLicense.length;
   let body = `${marker}\n## 🛡️ Trivy\n\n| Scan | Result | Findings |\n| --- | --- | ---: |`;
   body += `\n| Vulnerabilities / secrets / misconfigurations | ${securityStatus} | ${security.available ? (securityOutcome === 'failure' && !securityCount ? 'Scan failed' : securityCount) : 'Unavailable'} |`;
-  body += `\n| License gate (HIGH/CRITICAL) | ${!licenses.available ? '⚠️' : licenseGateOutcome === 'skipped' ? '⏭️' : licenseGateOutcome === 'failure' || highLicense.length ? '❌' : '✅'} | ${licenseGateCount} |`;
-  body += `\n| License inventory | ${licenseStatus} | ${licenses.available ? licenseCount : 'Unavailable'} |`;
+  body += `\n| License gate (HIGH/CRITICAL, repository-wide) | ${licenseGateStatus} | ${!licenses.available ? 'Unavailable' : licenseGateOutcome === 'skipped' ? 'Not run' : licenseGateOutcome === 'failure' && !highLicense.length ? 'Gate failed' : highLicense.length} |`;
+  body += `\n| Fullstack production dependencies | ${runtimeStatus} | ${licenses.available && runtimeScope ? runtimeLicenses.length : 'Unavailable'} |`;
+  body += `\n| Other workspace records (outside fullstack runtime; includes tooling) | ${otherStatus} | ${licenses.available ? otherLicenses.length : 'Unavailable'} |`;
   if (!security.available) {
     body += '\n\n⚠️ Security SARIF report unavailable.';
   } else if (!securityCount) {
@@ -241,14 +317,16 @@ export function renderTrivySummary(
   } else if (!licenseCount) {
     body += '\n\nNo license records.';
   } else {
-    body += '\n\nLicense records by classification: ';
-    body += [...classifications]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(
-        ([classification, count]) =>
-          `**${plainText(classification)}** ${count}`,
-      )
-      .join(', ');
+    if (runtimeScope) {
+      body += `\n\nFullstack production dependency classifications: ${formatClassifications(runtimeClassifications)}.`;
+      body += `\nOther workspace classifications: ${formatClassifications(otherClassifications)}.`;
+      body +=
+        '\n“Unknown” is Trivy’s classification; it does not mean the license identifier is missing.';
+    } else {
+      body += '\n\nRepository-wide license classifications: ';
+      body += `${formatClassifications(otherClassifications)}.`;
+      body += '\n⚠️ Fullstack runtime scope could not be determined.';
+    }
     if (licenseGateOutcome === 'failure' && !highLicense.length) {
       body +=
         '\n\n❌ License gate failed; SARIF did not expose a severity count.';
@@ -259,25 +337,14 @@ export function renderTrivySummary(
     } else {
       body += '\n\nNo HIGH/CRITICAL license gate findings.';
     }
-    if (reviewCount) {
-      body += `\n\n${reviewCount} reciprocal, unknown, or unclassified license record${reviewCount === 1 ? '' : 's'} may need review. Notice classifications are attribution notices, not gate failures.`;
+    if (runtimeReviewCount) {
+      body += `\n\n${runtimeReviewCount} fullstack runtime record${runtimeReviewCount === 1 ? '' : 's'} has a reciprocal, unknown, or unclassified Trivy classification. Notice records are attribution obligations, not gate failures.`;
     }
-    const classificationRank = {
-      reciprocal: 0,
-      unknown: 1,
-      unclassified: 2,
-      notice: 3,
-      unencumbered: 4,
-    };
-    const orderedLicenses = [...licenses.results].sort((a, b) => {
-      const rankA = classificationRank[a.license.classification] ?? 5;
-      const rankB = classificationRank[b.license.classification] ?? 5;
-      return (
-        rankA - rankB ||
-        a.license.packageName.localeCompare(b.license.packageName)
-      );
-    });
-    body += licenseDetailsList(orderedLicenses);
+    const orderedLicenses = prioritizeLicenseRecords(
+      licenses.results,
+      runtimeScope,
+    );
+    body += licenseDetailsList(orderedLicenses, runtimeScope);
   }
   body += `\n\n[View workflow run](${runUrl()})`;
   return body;
@@ -287,20 +354,88 @@ export async function buildTrivySummary(
   securityFile = 'trivy-results.sarif',
   licenseFile = 'trivy-license-results.sarif',
 ) {
+  let runtimeScope;
+  try {
+    runtimeScope = await fullstackRuntimePackages();
+  } catch (error) {
+    console.warn(
+      `Fullstack runtime dependency scope unavailable: ${error.message}`,
+    );
+  }
   return renderTrivySummary(
     await readSarif(securityFile),
     await readSarif(licenseFile),
+    { runtimeScope },
   );
 }
 
-function licenseDetailsList(results) {
+function classificationCounts(results) {
+  const counts = new Map();
+  for (const result of results) {
+    const classification = result.license.classification;
+    counts.set(classification, (counts.get(classification) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function reviewCount(classifications) {
+  return (
+    (classifications.get('unknown') ?? 0) +
+    (classifications.get('reciprocal') ?? 0) +
+    (classifications.get('unclassified') ?? 0)
+  );
+}
+
+function formatClassifications(classifications) {
+  if (!classifications.size) return 'none';
+  return [...classifications]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(
+      ([classification, count]) =>
+        `${plainText(classification)} ${count}`,
+    )
+    .join(', ');
+}
+
+function prioritizeLicenseRecords(results, runtimeScope) {
+  const rank = (result) => {
+    if (!runtimeScope) return 0;
+    const name = result.license.packageName;
+    const classification = result.license.classification;
+    const direct = runtimeScope.direct.has(name);
+    const runtime = runtimeScope.packages.has(name);
+    const review = ['reciprocal', 'unknown', 'unclassified'].includes(
+      classification,
+    );
+    if (direct) return 0;
+    if (runtime && review) return 1;
+    if (!runtime && review) return 2;
+    if (runtime) return 3;
+    return 4;
+  };
+  return [...results].sort(
+    (a, b) =>
+      rank(a) - rank(b) ||
+      a.license.packageName.localeCompare(b.license.packageName) ||
+      a.license.license.localeCompare(b.license.license),
+  );
+}
+
+function licenseDetailsList(results, runtimeScope) {
   if (!results.length) return '';
   const shown = results.slice(0, maxDetails);
   const lines = shown.map(({ license, level }) => {
     const location =
       license.path ?? license.artifact ?? 'unknown source';
     const suffix = level === 'error' ? ' — SARIF error' : '';
-    return `- **${inlineCode(license.packageName)}** — ${inlineCode(license.license)} (${plainText(license.classification)}) — ${inlineCode(location)}${suffix}`;
+    const scope = runtimeScope
+      ? runtimeScope.direct.has(license.packageName)
+        ? 'fullstack direct'
+        : runtimeScope.packages.has(license.packageName)
+          ? 'fullstack runtime'
+          : 'outside fullstack runtime'
+      : 'scope unavailable';
+    return `- **${inlineCode(license.packageName)}** — ${inlineCode(license.license)} (Trivy: ${plainText(license.classification)}; ${scope}) — ${inlineCode(location)}${suffix}`;
   });
   const omitted = results.length - shown.length;
   if (omitted > 0)
