@@ -238,7 +238,9 @@ describe('code-first routes', () => {
     setLocation('/projects/new?tag=first&tag=second');
     await router.reload();
     expect(router.matches.at(-1)?.params).toEqual({ projectId: 'new' });
-    expect(router.matches.at(-1)?.search).toEqual({ tag: ['first', 'second'] });
+    expect(router.matches.at(-1)?.search).toEqual({
+      tag: ['first', 'second'],
+    });
   });
 
   it('reloads only the selected route and rejects stale results', async () => {
@@ -367,8 +369,20 @@ describe('code-first routes', () => {
     const router = createRouter({ routeTree: root });
     router.matches = [
       { route: root, params: {}, search: {}, status: 'ready' },
-      { route: todos, params: {}, search: {}, status: 'ready', data: 'initial' },
-      { route: other, params: {}, search: {}, status: 'ready', data: 'initial' },
+      {
+        route: todos,
+        params: {},
+        search: {},
+        status: 'ready',
+        data: 'initial',
+      },
+      {
+        route: other,
+        params: {},
+        search: {},
+        status: 'ready',
+        data: 'initial',
+      },
     ];
     setLocation('/todos');
     const first = router.reloadRoute(todos);

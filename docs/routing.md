@@ -3,7 +3,10 @@
 `Route.useParams()` returns decoded path parameters owned by the matching route. Literal path definitions infer parameter names:
 
 ```ts
-const Route = createRoute({ path: 'projects/$projectId', component: Project });
+const Route = createRoute({
+  path: 'projects/$projectId',
+  component: Project,
+});
 const { projectId } = Route.useParams();
 ```
 

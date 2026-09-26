@@ -20,13 +20,14 @@ export type RouteMetadata = {
   description?: string;
 };
 
-type ParamNames<TPath extends string> = TPath extends `${string}$${infer Tail}`
-  ? Tail extends `${infer Name}/${infer Rest}`
-    ? Name | ParamNames<Rest>
-    : Tail extends ''
-      ? never
-      : Tail
-  : never;
+type ParamNames<TPath extends string> =
+  TPath extends `${string}$${infer Tail}`
+    ? Tail extends `${infer Name}/${infer Rest}`
+      ? Name | ParamNames<Rest>
+      : Tail extends ''
+        ? never
+        : Tail
+    : never;
 
 export type RouteParams<TPath extends string> = string extends TPath
   ? Record<string, string>
@@ -34,7 +35,10 @@ export type RouteParams<TPath extends string> = string extends TPath
 
 export type RouteSearch = Record<string, string | string[]>;
 
-export type RouteOptions<TData = unknown, TPath extends string = string> = {
+export type RouteOptions<
+  TData = unknown,
+  TPath extends string = string,
+> = {
   path?: TPath;
   /** Child graphs mount here in the matching parent graph. */
   outletId?: string;
@@ -53,16 +57,18 @@ export type RouteOptions<TData = unknown, TPath extends string = string> = {
   meta?: RouteMetadata;
 };
 
-export type RouteDefinition<TData = unknown, TPath extends string = string> =
-  RouteOptions<TData, TPath> & {
-    children: RouteDefinition[];
-    parent?: RouteDefinition;
-    addChildren(children: RouteDefinition[]): RouteDefinition<TData>;
-    useLoaderData(): TData;
-    useParams(): RouteParams<TPath>;
-    useSearch(): RouteSearch;
-    useReload(): () => Promise<void>;
-  };
+export type RouteDefinition<
+  TData = unknown,
+  TPath extends string = string,
+> = RouteOptions<TData, TPath> & {
+  children: RouteDefinition[];
+  parent?: RouteDefinition;
+  addChildren(children: RouteDefinition[]): RouteDefinition<TData>;
+  useLoaderData(): TData;
+  useParams(): RouteParams<TPath>;
+  useSearch(): RouteSearch;
+  useReload(): () => Promise<void>;
+};
 
 export type RedirectOptions = {
   /** Replace the current history entry. Defaults to `true`. */
@@ -120,7 +126,10 @@ export function createRootRoute<TData = unknown>(
   return makeRoute(options);
 }
 
-export function createRoute<TData = unknown, TPath extends string = string>(
+export function createRoute<
+  TData = unknown,
+  TPath extends string = string,
+>(
   options: RouteOptions<TData, TPath> & {
     getParentRoute: () => RouteDefinition;
   },
