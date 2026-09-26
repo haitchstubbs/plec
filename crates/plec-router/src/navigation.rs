@@ -1141,7 +1141,9 @@ mod tests {
             },
         );
         assert_ne!(first, second);
-        assert_ne!(first, search);
+        // Query-only navigation preserves the route instance; the search
+        // input updates independently of route match identity.
+        assert_eq!(first, search);
     }
 
     fn instance(route_id: &str, params: &[(&str, &str)]) -> plec_ir::SsrRouteInstance {
