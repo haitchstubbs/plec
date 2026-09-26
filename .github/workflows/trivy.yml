@@ -20,7 +20,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependency metadata without running package scripts
+        run: yarn install --immutable
+        env:
+          YARN_ENABLE_SCRIPTS: 'false'
+
       - name: Trivy scan
+        id: trivy-security-scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
@@ -37,6 +51,7 @@ jobs:
           skip-dirs: '**/node_modules/**'
 
       - name: Trivy license gate
+        id: trivy-license-gate
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
@@ -46,8 +61,6 @@ jobs:
           severity: HIGH,CRITICAL
           format: table
           exit-code: 1
-          skip-files: '**/node_modules/**'
-          skip-dirs: '**/node_modules/**'
 
       - name: Trivy license report
         if: always()
@@ -60,8 +73,6 @@ jobs:
           format: sarif
           output: trivy-license-results.sarif
           exit-code: 0
-          skip-files: '**/node_modules/**'
-          skip-dirs: '**/node_modules/**'
 
       - name: Upload results
         if: always()
@@ -81,4 +92,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          SECURITY_SCAN_OUTCOME: ${{ steps.trivy-security-scan.outcome }}
+          LICENSE_GATE_OUTCOME: ${{ steps.trivy-license-gate.outcome }}
         run: node scripts/pr-sarif-summary.mjs trivy

@@ -4,6 +4,8 @@
 
 This workspace generates PLEC-compatible icon components from the installed Lucide package. It keeps Lucide-specific knowledge out of PLEC and application code.
 
+The adapter's own code is MIT-licensed. Lucide icon definitions retain Lucide's ISC license and its separate MIT notice for Feather-derived icons. Applications that distribute Lucide-derived output must include Lucide's license notice; the fullstack app copies it to `dist/public/licenses/Lucide-LICENSE.txt` during build.
+
 It is intentionally private and experimental. Do not depend on it for production use, and do not treat it as an official Lucide package or support channel.
 
 The generated components return ordinary SVG graph nodes. A future compiler component-manifest integration can consume the same generated catalog without making PLEC aware of Lucide icons.

@@ -72,6 +72,27 @@ function severityFor(result, rule) {
   return 'unknown';
 }
 
+function licenseDetails(message, ruleId) {
+  const field = (name) =>
+    new RegExp(`(?:^|\\n)\\s*${name}:?\\s*([^\\n]+)`, 'i')
+      .exec(message)?.[1]
+      ?.trim();
+  const license = /(?:^|\n)\s*License\s+([^\s]+)/i.exec(message)?.[1];
+  const packageName = field('PkgName');
+  const classification = field('Classification')?.toLowerCase();
+  return {
+    packageName:
+      packageName ?? ruleId?.split(':')[0] ?? 'unknown package',
+    license:
+      license ??
+      ruleId?.split(':').slice(1).join(':') ??
+      'unknown license',
+    classification: classification ?? 'unclassified',
+    artifact: field('Artifact'),
+    path: field('Path'),
+  };
+}
+
 async function readSarif(file) {
   try {
     const sarif = JSON.parse(await readFile(file, 'utf8'));
@@ -84,17 +105,17 @@ async function readSarif(file) {
           rules.find(({ id }) => id === result.ruleId);
         const location = result.locations?.[0]?.physicalLocation;
         const uri = location?.artifactLocation?.uri;
+        const message =
+          result.message?.text ?? result.message?.markdown ?? 'Finding';
         results.push({
           ruleId: result.ruleId ?? rule?.id ?? 'unknown-rule',
-          message:
-            result.message?.text ??
-            result.message?.markdown ??
-            'Finding',
+          message,
           level: severityFor(result, rule),
           path: uri
             ? decodeURIComponent(uri).replace(/^file:\/\//, '')
             : 'unknown path',
           line: location?.region?.startLine,
+          license: licenseDetails(message, result.ruleId ?? rule?.id),
         });
       }
     }
@@ -151,62 +172,140 @@ export async function buildOpenGrepSummary(
   return body;
 }
 
-export async function buildTrivySummary(
-  securityFile = 'trivy-results.sarif',
-  licenseFile = 'trivy-license-results.sarif',
+export function renderTrivySummary(
+  security,
+  licenses,
+  {
+    securityOutcome = process.env.SECURITY_SCAN_OUTCOME,
+    licenseGateOutcome = process.env.LICENSE_GATE_OUTCOME,
+  } = {},
 ) {
   const marker = markers.trivy;
-  const security = await readSarif(securityFile);
-  const licenses = await readSarif(licenseFile);
   const securityCount = security.results.length;
   const highLicense = licenses.results.filter(({ level }) =>
-    ['high', 'critical', 'error'].includes(level),
+    ['high', 'critical'].includes(level),
   );
   const licenseCount = licenses.results.length;
+  const classifications = new Map();
+  for (const result of licenses.results) {
+    const classification = result.license.classification;
+    classifications.set(
+      classification,
+      (classifications.get(classification) ?? 0) + 1,
+    );
+  }
+  const reviewCount =
+    (classifications.get('unknown') ?? 0) +
+    (classifications.get('reciprocal') ?? 0) +
+    (classifications.get('unclassified') ?? 0);
   const licenseStatus = !licenses.available
+    ? '⚠️ Unavailable'
+    : licenseGateOutcome === 'skipped'
+      ? '⏭️ Not run'
+      : licenseGateOutcome === 'failure' || highLicense.length
+        ? '❌ Gate failed'
+        : reviewCount
+          ? '⚠️ Review'
+          : '✅';
+  const securityStatus = !security.available
     ? '⚠️'
-    : highLicense.length
+    : securityOutcome === 'failure' || securityCount
       ? '❌'
-      : licenseCount
-        ? '⚠️'
+      : securityOutcome === 'skipped'
+        ? '⏭️'
         : '✅';
+  const licenseGateCount = !licenses.available
+    ? 'Unavailable'
+    : licenseGateOutcome === 'failure' && !highLicense.length
+      ? 'Gate failed'
+      : licenseGateOutcome === 'skipped'
+        ? 'Not run'
+        : highLicense.length;
   let body = `${marker}\n## 🛡️ Trivy\n\n| Scan | Result | Findings |\n| --- | --- | ---: |`;
-  body += `\n| Vulnerabilities / secrets / misconfigurations | ${security.available ? (securityCount ? '❌' : '✅') : '⚠️'} | ${security.available ? securityCount : 'Unavailable'} |`;
-  body += `\n| Licenses | ${licenseStatus} | ${licenses.available ? licenseCount : 'Unavailable'} |`;
+  body += `\n| Vulnerabilities / secrets / misconfigurations | ${securityStatus} | ${security.available ? (securityOutcome === 'failure' && !securityCount ? 'Scan failed' : securityCount) : 'Unavailable'} |`;
+  body += `\n| License gate (HIGH/CRITICAL) | ${!licenses.available ? '⚠️' : licenseGateOutcome === 'skipped' ? '⏭️' : licenseGateOutcome === 'failure' || highLicense.length ? '❌' : '✅'} | ${licenseGateCount} |`;
+  body += `\n| License inventory | ${licenseStatus} | ${licenses.available ? licenseCount : 'Unavailable'} |`;
   if (!security.available) {
     body += '\n\n⚠️ Security SARIF report unavailable.';
   } else if (!securityCount) {
-    body += '\n\nNo HIGH/CRITICAL security findings.';
+    body +=
+      securityOutcome === 'failure'
+        ? '\n\n⚠️ Security scan failed without SARIF findings; inspect the workflow run.'
+        : '\n\nNo HIGH/CRITICAL security findings.';
   } else {
     body += `\n\n❌ ${securityCount} HIGH/CRITICAL security finding${securityCount === 1 ? '' : 's'}.`;
     body += detailsList(security.results, 'Security findings');
   }
   if (!licenses.available) {
     body += '\n\n⚠️ License SARIF report unavailable.';
-  } else if (licenseCount) {
-    const counts = new Map();
-    for (const result of licenses.results) {
-      const severity =
-        result.level === 'error'
-          ? 'high/critical (SARIF error)'
-          : result.level;
-      counts.set(severity, (counts.get(severity) ?? 0) + 1);
-    }
-    body += '\n\nLicense findings by severity: ';
-    body += [...counts]
+  } else if (!licenseCount) {
+    body += '\n\nNo license records.';
+  } else {
+    body += '\n\nLicense records by classification: ';
+    body += [...classifications]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([severity, count]) => `${plainText(severity)} ${count}`)
+      .map(
+        ([classification, count]) =>
+          `**${plainText(classification)}** ${count}`,
+      )
       .join(', ');
-    if (highLicense.length) {
-      body += `\n\n❌ ${highLicense.length} HIGH/CRITICAL license finding${highLicense.length === 1 ? '' : 's'}; the license gate should fail.`;
-    } else {
+    if (licenseGateOutcome === 'failure' && !highLicense.length) {
       body +=
-        '\n\nLicense findings are informational and do not fail the HIGH/CRITICAL gate.';
+        '\n\n❌ License gate failed; SARIF did not expose a severity count.';
+    } else if (highLicense.length) {
+      body += `\n\n❌ ${highLicense.length} HIGH/CRITICAL license finding${highLicense.length === 1 ? '' : 's'}.`;
+    } else if (licenseGateOutcome === 'skipped') {
+      body += '\n\n⚠️ The license gate did not run.';
+    } else {
+      body += '\n\nNo HIGH/CRITICAL license gate findings.';
     }
-    body += detailsList(licenses.results, 'License findings');
+    if (reviewCount) {
+      body += `\n\n${reviewCount} reciprocal, unknown, or unclassified license record${reviewCount === 1 ? '' : 's'} may need review. Notice classifications are attribution notices, not gate failures.`;
+    }
+    const classificationRank = {
+      reciprocal: 0,
+      unknown: 1,
+      unclassified: 2,
+      notice: 3,
+      unencumbered: 4,
+    };
+    const orderedLicenses = [...licenses.results].sort((a, b) => {
+      const rankA = classificationRank[a.license.classification] ?? 5;
+      const rankB = classificationRank[b.license.classification] ?? 5;
+      return (
+        rankA - rankB ||
+        a.license.packageName.localeCompare(b.license.packageName)
+      );
+    });
+    body += licenseDetailsList(orderedLicenses);
   }
   body += `\n\n[View workflow run](${runUrl()})`;
   return body;
+}
+
+export async function buildTrivySummary(
+  securityFile = 'trivy-results.sarif',
+  licenseFile = 'trivy-license-results.sarif',
+) {
+  return renderTrivySummary(
+    await readSarif(securityFile),
+    await readSarif(licenseFile),
+  );
+}
+
+function licenseDetailsList(results) {
+  if (!results.length) return '';
+  const shown = results.slice(0, maxDetails);
+  const lines = shown.map(({ license, level }) => {
+    const location =
+      license.path ?? license.artifact ?? 'unknown source';
+    const suffix = level === 'error' ? ' — SARIF error' : '';
+    return `- **${inlineCode(license.packageName)}** — ${inlineCode(license.license)} (${plainText(license.classification)}) — ${inlineCode(location)}${suffix}`;
+  });
+  const omitted = results.length - shown.length;
+  if (omitted > 0)
+    lines.push(`- ${omitted} additional records omitted.`);
+  return `\n<details>\n<summary>License records (${results.length})</summary>\n\n${lines.join('\n')}\n\n</details>`;
 }
 
 async function githubRequest(url, token, options = {}) {
