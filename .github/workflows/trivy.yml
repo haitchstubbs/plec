@@ -25,6 +25,7 @@ jobs:
           scan-type: fs
           scan-ref: .
           scanners: vuln,secret,misconfig
+          version: v0.74.0
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           format: sarif
@@ -38,6 +39,7 @@ jobs:
           scan-type: fs
           scan-ref: .
           scanners: license
+          version: v0.74.0
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           format: sarif
