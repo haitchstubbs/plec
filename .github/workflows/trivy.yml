@@ -35,8 +35,9 @@ jobs:
       - name: Trivy license checks
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          scan-type: license
+          scan-type: fs
           scan-ref: .
+          scanners: license
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           format: sarif
