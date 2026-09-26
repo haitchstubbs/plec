@@ -2,7 +2,8 @@
   "build-tools": {
     "wasm-pack": "0.13.1",
     "wasm-tools": "1.258.0",
-    "wasm-bindgen-cli": "0.2.128"
+    "wasm-bindgen-cli": "0.2.128",
+    "opengrep": "1.30.0"
   },
   "prebuilt-build-tools": {
     "linux-x64": {
@@ -17,6 +18,12 @@
       "wasm-bindgen-cli": {
         "target": "x86_64-unknown-linux-musl",
         "sha256": "b51f0208fdff83515a787bd8ab9ac5865ed84dabb66d0c709957bb59793c645f"
+      },
+      "opengrep": {
+        "target": "v1.30.0",
+        "commit": "acf67b45c97c4b63626536605c77064ef536806d",
+        "asset": "opengrep_manylinux_x86",
+        "sha256": "35779bdd72e92129c8df2a77f0c55e8c08356801ea92591ef32108d6b28d564c"
       }
     }
   },

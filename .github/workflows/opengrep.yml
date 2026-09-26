@@ -1,0 +1,47 @@
+name: OpenGrep
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    name: Static security scan
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pinned OpenGrep
+        run: >-
+          curl --fail --location --silent --show-error
+          https://raw.githubusercontent.com/opengrep/opengrep/acf67b45c97c4b63626536605c77064ef536806d/install.sh
+          | bash -s -- -v v1.30.0
+
+      - name: Scan Rust, TypeScript, JavaScript, and CSS
+        run: >-
+          "$HOME/.opengrep/cli/latest/opengrep" scan
+          --config p/security-audit
+          --sarif
+          --sarif-output opengrep-results.sarif
+          --error
+          --include '*.rs'
+          --include '*.ts'
+          --include '*.tsx'
+          --include '*.js'
+          --include '*.jsx'
+          --include '*.css'
+          .
+
+      - name: Upload results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: opengrep-results.sarif

@@ -12,6 +12,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import cliToolsConfig from '../cli-tools.json' with { type: 'json' };
+import { ensureOpengrep } from './install-opengrep.mjs';
 import {
   chromeDriverPath,
   chromeDriverTarget,
@@ -477,6 +478,20 @@ function ensureChromeDriver() {
 for (const [name, version] of Object.entries(buildTools)) {
   if (name === 'wasm-bindgen-cli') {
     ensureWasmBindgenCli();
+  } else if (name === 'opengrep') {
+    if (
+      cliToolsConfig['prebuilt-build-tools']?.[
+        `${process.platform}-${process.arch}`
+      ]?.opengrep
+    ) {
+      ensureOpengrep();
+    } else if (process.env.CI) {
+      ensureOpengrep();
+    } else {
+      console.log(
+        `Skipping pinned OpenGrep install: no prebuilt is configured for ${process.platform}/${process.arch}.`,
+      );
+    }
   } else {
     ensureTool({ name, version });
   }

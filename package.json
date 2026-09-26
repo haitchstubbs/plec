@@ -29,6 +29,7 @@
     "lint": "yarn format:check",
     "format": "prettier --write . && cargo fmt --manifest-path crates/plec-runtime/Cargo.toml",
     "format:check": "node scripts/check-json-duplicates.mjs turbo.json && prettier --check . && cargo fmt --manifest-path crates/plec-runtime/Cargo.toml --check",
+    "check:sast": ".tools/opengrep-1.30.0/opengrep scan --config p/security-audit --sarif --sarif-output opengrep-results.sarif --error --include '*.rs' --include '*.ts' --include '*.tsx' --include '*.js' --include '*.jsx' --include '*.css' .",
     "typecheck": "turbo run typecheck",
     "inspect:fixture": "node scripts/inspect-fixture.mjs",
     "measure:runtime-baseline": "node benchmarks/measure-runtime-baseline.mjs",
