@@ -653,6 +653,14 @@ impl RuntimeState {
         graph_generation: u64,
         outcome: ActionOutcome,
     ) -> Result<(), JsValue> {
+        // Terminal navigation outcomes never commit the loader value or the
+        // route: the router resolves them before anything paints as final.
+        match &outcome {
+            ActionOutcome::Redirect { .. } | ActionOutcome::NotFound => {
+                return self.defer_terminal_loader_outcome(instance_id, graph_generation, outcome);
+            }
+            ActionOutcome::Success(_) | ActionOutcome::Failure(_) => {}
+        }
         let ActionOutcome::Success(value) = outcome else {
             let ActionOutcome::Failure(error) = outcome else {
                 unreachable!();
@@ -712,6 +720,76 @@ impl RuntimeState {
         self.flush_component_work()?;
         self.install_typed_event_listeners()?;
         Ok(())
+    }
+
+    /// A redirect or not-found outcome terminates the loader without
+    /// committing the route. The origin instance returns to its previous
+    /// committed state when one exists; fresh (uncommitted) instances stay
+    /// untouched for the router to resolve, and the terminal outcome is
+    /// handed to the router through a DOM event (the same pattern as
+    /// `plec:graph-needed`) because navigation authority lives above the
+    /// client crate boundary.
+    fn defer_terminal_loader_outcome(
+        &self,
+        instance_id: &str,
+        graph_generation: u64,
+        outcome: ActionOutcome,
+    ) -> Result<(), JsValue> {
+        // A reloaded existing instance returns to its committed normal graph
+        // (previous loader data, nothing from the aborted run). A fresh
+        // instance from this navigation stays as-is; the router navigation
+        // disposes or replaces it, so no terminal outcome is ever painted.
+        let restore = {
+            let mut typed = self.typed.borrow_mut();
+            let Some(instance) = typed.get_mut(instance_id) else {
+                return Ok(());
+            };
+            if instance
+                .runtime_for_generation_mut(graph_generation)
+                .is_none()
+            {
+                // Stale completion for a replaced route: nothing to commit.
+                return Ok(());
+            }
+            let restore = instance.loader_runtime.is_some();
+            restore
+        };
+        if restore {
+            self.restore_typed_route_normal(instance_id)?;
+        }
+        self.flush_component_work()?;
+        let (event_type, href, replace) = match outcome {
+            ActionOutcome::Redirect { location, replace } => {
+                // The shared action machine validates the path shape, so the
+                // location is already an application path.
+                ("plec:loader-redirect", location, replace)
+            }
+            ActionOutcome::NotFound => ("plec:loader-not-found", String::new(), true),
+            ActionOutcome::Success(_) | ActionOutcome::Failure(_) => unreachable!(),
+        };
+        let init = web_sys::CustomEventInit::new();
+        let detail = js_sys::Object::new();
+        js_sys::Reflect::set(
+            &detail,
+            &JsValue::from_str("instanceId"),
+            &JsValue::from_str(instance_id),
+        )?;
+        js_sys::Reflect::set(
+            &detail,
+            &JsValue::from_str("href"),
+            &JsValue::from_str(&href),
+        )?;
+        js_sys::Reflect::set(
+            &detail,
+            &JsValue::from_str("replace"),
+            &JsValue::from_bool(replace),
+        )?;
+        init.set_detail(&detail);
+        let event = web_sys::CustomEvent::new_with_event_init_dict(&event_type, &init)?;
+        // The router listens on `document` (matching its click/popstate
+        // wiring), and a window-dispatched event never reaches it.
+        document()?.dispatch_event(&event)?;
+        self.install_typed_event_listeners()
     }
 }
 

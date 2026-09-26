@@ -2092,3 +2092,324 @@ async fn string_length_and_filter_pass_through_non_arrays() {
         "{html}"
     );
 }
+
+
+fn outcome_graph(graph_id: &str, tag: &str, text: &str, action: Value, constants: Value, expressions: Value) -> Value {
+    json!({
+        "rootComponent": 0,
+        "components": [{
+            "id": graph_id,
+            "rootNode": 0,
+            "strings": [tag, "location", "replace"],
+            "constants": constants,
+            "nodes": [
+                {"op": "element", "tag": 0, "children": [1]},
+                {"op": "text", "text": 0}
+            ],
+            "texts": [{"value": text}],
+            "bindings": [],
+            "propPrograms": [],
+            "stateSlots": [],
+            "parameters": [],
+            "loops": [],
+            "routeOutlets": [],
+            "expressions": expressions,
+            "actions": [action]
+        }]
+    })
+}
+
+fn redirect_loader_action(_location: &str) -> Value {
+    json!({
+        "routeLoader": true,
+        "frameSlots": 3,
+        "parameterSlots": [0, 1],
+        "instructions": [{"op": "return", "outcome": "redirect", "value": 0}]
+    })
+}
+
+fn redirect_loader_expressions() -> Value {
+    json!([{
+        "instructions": [
+            {"op": "constant", "constant": 0},
+            {"op": "constant", "constant": 1},
+            {"op": "makeRecord", "fields": [1, 2]},
+            {"op": "return"}
+        ]
+    }])
+}
+
+fn not_found_loader_action() -> Value {
+    json!({
+        "routeLoader": true,
+        "frameSlots": 3,
+        "parameterSlots": [0, 1],
+        "instructions": [{"op": "return", "outcome": "notFound"}]
+    })
+}
+
+#[tokio::test]
+async fn a_loader_redirect_answers_307_to_the_destination() {
+    let dir = fixture_dir();
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": [
+                {"id": "home", "path": "", "graphId": "home", "outletId": "main", "loaderAction": 0},
+                {"id": "notes", "path": "notes", "graphId": "notes", "outletId": "main"}
+            ]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "", true)},
+            {"graphId": "home", "graph": outcome_graph(
+                "home", "p", "Home",
+                redirect_loader_action("/notes"),
+                json!(["/notes", true]),
+                redirect_loader_expressions()
+            )},
+            {"graphId": "notes", "graph": simple_page("notes", "p", "Notes page")}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+    let options = options(dir.path());
+    let response = create_plec_server(options.clone())
+        .oneshot(get("/"))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("/notes")
+    );
+    // The destination itself renders normally.
+    let html = get_html(&options, "/notes").await;
+    assert!(html.contains("Notes page"), "{html}");
+}
+
+#[tokio::test]
+async fn a_loader_redirect_loop_fails_with_a_diagnostic() {
+    let dir = fixture_dir();
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": [
+                {"id": "home", "path": "", "graphId": "home", "outletId": "main", "loaderAction": 0},
+                {"id": "loop", "path": "loop", "graphId": "loop", "outletId": "main", "loaderAction": 0}
+            ]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "", true)},
+            {"graphId": "home", "graph": outcome_graph(
+                "home", "p", "Home",
+                redirect_loader_action("/loop"),
+                json!(["/loop", true]),
+                redirect_loader_expressions()
+            )},
+            {"graphId": "loop", "graph": outcome_graph(
+                "loop", "p", "Loop",
+                redirect_loader_action("/"),
+                json!(["/", true]),
+                redirect_loader_expressions()
+            )}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+    let response = create_plec_server(options(dir.path()))
+        .oneshot(get("/"))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = text_of(response).await;
+    assert!(
+        body.contains("redirect loop exceeded 5 hops"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_not_found_loader_outcome_renders_the_boundary_with_status_404() {
+    let dir = fixture_dir();
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": [{
+                "id": "home",
+                "path": "",
+                "graphId": "home",
+                "outletId": "main",
+                "notFoundGraphId": "home-404",
+                "loaderAction": 0
+            }]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "", true)},
+            {"graphId": "home", "graph": outcome_graph(
+                "home", "p", "Home",
+                not_found_loader_action(),
+                json!([]),
+                json!([])
+            )},
+            {"graphId": "home-404", "graph": simple_page("home-404", "p", "Boundary 404")}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+    let options = options(dir.path());
+    let response = create_plec_server(options.clone())
+        .oneshot(get("/"))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let html = text_of(response).await;
+    assert!(html.contains("Boundary 404"), "{html}");
+    assert!(html.contains("\"phase\":\"notFound\""), "{html}");
+    assert!(html.contains("\"state\":{\"kind\":\"notFound\"}"), "{html}");
+    assert_valid_bootstrap(&html, &artifact, &artifact["manifest"]);
+}
+
+#[tokio::test]
+async fn a_not_found_outcome_truncates_the_chain_at_the_boundary_owner() {
+    let dir = fixture_dir();
+    // The child loader raises not-found; the parent route owns the boundary.
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": [
+                {
+                    "id": "projects",
+                    "path": "projects",
+                    "graphId": "projects",
+                    "outletId": "main",
+                    "notFoundGraphId": "projects-404",
+                    "routeOutlets": [{"id": "main", "node": 0}]
+                },
+                {
+                    "id": "project",
+                    "parentId": "projects",
+                    "path": "$projectId",
+                    "graphId": "project",
+                    "outletId": "main",
+                    "loaderAction": 0
+                }
+            ]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "", true)},
+            {"graphId": "projects", "graph": page("projects", "section", "Projects", true)},
+            {"graphId": "project", "graph": outcome_graph(
+                "project", "p", "Project",
+                not_found_loader_action(),
+                json!([]),
+                json!([])
+            )},
+            {"graphId": "projects-404", "graph": simple_page("projects-404", "p", "Projects boundary")}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+    let options = options(dir.path());
+    let response = create_plec_server(options.clone())
+        .oneshot(get("/projects/9"))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let html = text_of(response).await;
+    // The parent boundary renders; the throwing child never commits.
+    assert!(html.contains("Projects boundary"), "{html}");
+    assert!(!html.contains(">Project<"), "{html}");
+    // The snapshot chain truncates at the owner with the NotFound phase.
+    let start = html
+        .find(BOOTSTRAP_OPEN)
+        .expect("bootstrap is present")
+        + BOOTSTRAP_OPEN.len();
+    let end = html[start..].find("</script>").expect("bootstrap close") + start;
+    let payload: Value = serde_json::from_str(&html[start..end]).expect("bootstrap json");
+    let routes = payload["snapshot"]["routes"].as_array().expect("routes");
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0]["routeId"], "projects");
+    assert_eq!(routes[0]["phase"], "notFound");
+    assert!(payload["snapshot"]["loaders"].as_array().unwrap().is_empty());
+    assert_valid_bootstrap(&html, &artifact, &artifact["manifest"]);
+}
+
+#[tokio::test]
+async fn a_not_found_outcome_without_any_boundary_uses_the_root_boundary() {
+    let dir = fixture_dir();
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "rootNotFoundGraphId": "root-404",
+            "routes": [{
+                "id": "home",
+                "path": "",
+                "graphId": "home",
+                "outletId": "main",
+                "loaderAction": 0
+            }]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "", true)},
+            {"graphId": "root-404", "graph": simple_page("root-404", "p", "Global 404")},
+            {"graphId": "home", "graph": outcome_graph(
+                "home", "p", "Home",
+                not_found_loader_action(),
+                json!([]),
+                json!([])
+            )}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+    let options = options(dir.path());
+    let response = create_plec_server(options.clone())
+        .oneshot(get("/"))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let html = text_of(response).await;
+    assert!(html.contains("Global 404"), "{html}");
+    assert_valid_bootstrap(&html, &artifact, &artifact["manifest"]);
+}
+
+#[tokio::test]
+async fn a_malformed_redirect_target_fails_deterministically() {
+    let dir = fixture_dir();
+    let artifact = json!({
+        "manifest": {
+            "revision": "test-revision",
+            "rootGraphId": "root",
+            "routes": [{
+                "id": "home",
+                "path": "",
+                "graphId": "home",
+                "outletId": "main",
+                "loaderAction": 0
+            }]
+        },
+        "graphs": [
+            {"graphId": "root", "graph": page("root", "main", "", true)},
+            {"graphId": "home", "graph": outcome_graph(
+                "home", "p", "Home",
+                redirect_loader_action("https://evil.example/run"),
+                json!(["https://evil.example/run", true]),
+                redirect_loader_expressions()
+            )}
+        ]
+    });
+    write_artifact(dir.path(), &artifact);
+    let response = create_plec_server(options(dir.path()))
+        .oneshot(get("/"))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = text_of(response).await;
+    assert!(
+        body.contains("redirect location"),
+        "the shared action machine rejects non-path targets: {body}"
+    );
+}

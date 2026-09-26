@@ -140,8 +140,8 @@ pub struct RouterListener {
     pub callback: Closure<dyn FnMut(Event)>,
 }
 
-#[derive(Clone)]
 pub struct RuntimeState {
+    owns_router_listeners: bool,
     pub router_listeners: Rc<RefCell<Vec<RouterListener>>>,
     /// Typed graph state is instance-owned so a persistent layout never loses
     /// its DOM, state, listeners, or fetch ownership when a child route moves.
@@ -210,6 +210,41 @@ pub struct RuntimeState {
     /// lifetime so retained JS references reach their explicit stale guard
     /// instead of wasm-bindgen's generic "closure dropped" failure.
     pub retired_host_callbacks: Rc<RefCell<Vec<HostCallbackHandle>>>,
+    /// Redirect hops followed during the current navigation. Loader
+    /// redirects increment; user-initiated navigation resets. Shared with
+    /// the SSR host's `MAX_REDIRECT_HOPS` so loop behavior matches.
+    pub typed_redirect_depth: Rc<std::cell::Cell<usize>>,
+}
+
+impl Clone for RuntimeState {
+    fn clone(&self) -> Self {
+        Self {
+            owns_router_listeners: false,
+            router_listeners: self.router_listeners.clone(),
+            typed: self.typed.clone(),
+            region_tracker: self.region_tracker.clone(),
+            reconcile_budget: self.reconcile_budget.clone(),
+            typed_root: self.typed_root.clone(),
+            typed_generation: self.typed_generation.clone(),
+            typed_component_registry: self.typed_component_registry.clone(),
+            typed_manifest: self.typed_manifest.clone(),
+            typed_host_inputs: self.typed_host_inputs.clone(),
+            typed_ssr_host_inputs: self.typed_ssr_host_inputs.clone(),
+            typed_ssr_imported: self.typed_ssr_imported.clone(),
+            typed_ssr_route_chain: self.typed_ssr_route_chain.clone(),
+            typed_ssr_loaders: self.typed_ssr_loaders.clone(),
+            typed_ssr_branches: self.typed_ssr_branches.clone(),
+            typed_ssr_loops: self.typed_ssr_loops.clone(),
+            typed_ssr_nested: self.typed_ssr_nested.clone(),
+            typed_components: self.typed_components.clone(),
+            cookie_policy: self.cookie_policy.clone(),
+            fetch_policy: self.fetch_policy.clone(),
+            tag_policy: self.tag_policy.clone(),
+            host_registry: self.host_registry.clone(),
+            retired_host_callbacks: self.retired_host_callbacks.clone(),
+            typed_redirect_depth: self.typed_redirect_depth.clone(),
+        }
+    }
 }
 
 /// One host-owned fetch grant. Authority comes only from grants published
@@ -330,6 +365,7 @@ impl RuntimeState {
 impl RuntimeState {
     pub fn new() -> Self {
         Self {
+            owns_router_listeners: true,
             router_listeners: Rc::new(RefCell::new(Vec::new())),
             typed: Rc::new(RefCell::new(HashMap::new())),
             region_tracker: Rc::new(RegionTracker::new()),
@@ -352,6 +388,7 @@ impl RuntimeState {
             tag_policy: Rc::new(RefCell::new(None)),
             host_registry: Rc::new(RefCell::new(None)),
             retired_host_callbacks: Rc::new(RefCell::new(Vec::new())),
+            typed_redirect_depth: Rc::new(std::cell::Cell::new(0)),
         }
     }
 
@@ -383,6 +420,10 @@ impl RuntimeState {
 /// was released without a prior dispose.
 impl Drop for RuntimeState {
     fn drop(&mut self) {
+        // Clones dispatch shared runtime state but never own facade listeners.
+        if !self.owns_router_listeners {
+            return;
+        }
         for listener in self.router_listeners.borrow_mut().drain(..) {
             let _ = listener.target.remove_event_listener_with_callback(
                 &listener.event_type,

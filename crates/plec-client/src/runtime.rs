@@ -491,6 +491,7 @@ pub struct TypedRouteState {
     pub pending_graph_id: Option<String>,
     pub pending_mode: String,
     pub error_graph_id: Option<String>,
+    pub not_found_graph_id: Option<String>,
     pub loader_action: Option<usize>,
     pub params: HashMap<String, String>,
     pub location: (String, String, String),
@@ -502,6 +503,10 @@ pub enum TypedRoutePhase {
     Normal,
     Loading,
     Error,
+    /// The route instance rendered its not-found boundary after a loader
+    /// produced a not-found outcome. Semantically distinct from `Error`;
+    /// boundary graphs carry no retry action.
+    NotFound,
 }
 
 impl RuntimeState {

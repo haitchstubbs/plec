@@ -1236,6 +1236,7 @@ mod tests {
             pending_mode: "replace".into(),
             error_graph_id: None,
             loader_action: None,
+            not_found_graph_id: None,
             outlet_id: "main".into(),
             meta: None,
         }
@@ -1247,6 +1248,7 @@ mod tests {
             version: 3,
             revision: "test".into(),
             root_graph_id: "root".into(),
+                root_not_found_graph_id: None,
             routes: vec![
                 route_entry("home", None, "", "home-graph"),
                 route_entry("about", None, "about", "about-graph"),

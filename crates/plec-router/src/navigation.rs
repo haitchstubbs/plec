@@ -15,7 +15,25 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
         .clone()
         .ok_or_else(|| JsValue::from_str("missing:ssr-manifest"))?;
     let location = typed_location(href);
-    if !has_typed_graph(state, &manifest.root_graph_id) {
+    // The boundary owner is derived up front so the root graph selection can
+    // honor a root not-found boundary before any instance is claimed.
+    let agreement = match state.typed_ssr_route_chain.borrow().as_ref() {
+        Some(imported) => {
+            let loaders = state.typed_ssr_loaders.borrow();
+            ssr_chain_agreement(imported, &typed_route_chain(&manifest, &location.pathname), &loaders, &manifest)
+        }
+        None => SsrChainAgreement::Exact,
+    };
+    let root_boundary = matches!(agreement, SsrChainAgreement::RootNotFoundBoundary);
+    let adopted_root_graph = if root_boundary {
+        manifest
+            .root_not_found_graph_id
+            .clone()
+            .ok_or_else(|| JsValue::from_str("missing:ssr-root-not-found-graph"))?
+    } else {
+        manifest.root_graph_id.clone()
+    };
+    if !has_typed_graph(state, &adopted_root_graph) {
         return Err(JsValue::from_str("missing:ssr-root-graph"));
     }
     let root_id = graph_instance_id(None, "main", None);
@@ -25,7 +43,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
         root_id.clone(),
         None,
         "main".into(),
-        manifest.root_graph_id.clone(),
+        adopted_root_graph,
         None,
         None,
         root,
@@ -39,17 +57,95 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
     // The transferred snapshot chain is the route execution cause. The
     // runtime re-derives the chain from the URL with the same matcher used
     // for fresh navigation; agreement lets the imported identity proceed,
-    // disagreement is a contract failure, never a silent remount.
-    if let Some(imported) = state.typed_ssr_route_chain.borrow().as_ref() {
-        let loaders = state.typed_ssr_loaders.borrow();
-        if let Some(detail) = ssr_route_chain_mismatch(imported, &derived_chain, &loaders) {
+    // disagreement is a contract failure, never a silent remount. A
+    // not-found boundary truncates the derived chain to the boundary owner.
+    let mut owner_position: Option<usize> = None;
+    match agreement {
+        SsrChainAgreement::Exact => {}
+        SsrChainAgreement::NotFoundBoundary(depth) => {
+            owner_position = Some(depth - 1);
+        }
+        SsrChainAgreement::RootNotFoundBoundary => {
+            owner_position = Some(usize::MAX);
+        }
+        SsrChainAgreement::Mismatch(detail) => {
             return Err(JsValue::from_str(&format!(
                 "mismatch:ssr-route-chain:{detail}"
             )));
         }
     }
-    for matched in derived_chain.into_iter() {
+    let derived_chain = match owner_position {
+        Some(usize::MAX) => Vec::new(),
+        Some(depth) => derived_chain[..=depth].to_vec(),
+        None => derived_chain,
+    };
+    for (index, matched) in derived_chain.into_iter().enumerate() {
         let route = matched.route;
+        if Some(index) == owner_position.filter(|depth| *depth != usize::MAX) {
+            // The boundary owner: the server rendered its not-found graph.
+            let Some(boundary_graph_id) = route.not_found_graph_id.clone() else {
+                return Err(JsValue::from_str("mismatch:ssr-not-found-graph"));
+            };
+            if !has_typed_graph(state, &boundary_graph_id) {
+                return Err(JsValue::from_str("missing:ssr-route-not-found-graph"));
+            }
+            let loader = route
+                .loader_action
+                .map(|action| {
+                    let reference = plec_ir::loader_ref(&route.graph_id, action);
+                    let outcome = state
+                        .typed_ssr_loaders
+                        .borrow()
+                        .get(&reference)
+                        .cloned()
+                        .ok_or_else(|| {
+                            JsValue::from_str(&format!("mismatch:ssr-loader:{reference}"))
+                        })?;
+                    Ok::<_, JsValue>(Some((action, outcome)))
+                })
+                .transpose()?
+                .flatten();
+            let match_key = typed_match_key(&route.id, &matched.params, &location);
+            let id = graph_instance_id(Some(&parent_id), &route.outlet_id, None);
+            let outlet = state.typed_outlet_element(&parent_id, &route.outlet_id)?;
+            let child_path = format!("{path}/outlet:{}", route.outlet_id);
+            adopt_typed_graph(
+                state,
+                id.clone(),
+                Some(parent_id.clone()),
+                route.outlet_id.clone(),
+                boundary_graph_id,
+                Some(route.id),
+                Some(match_key),
+                outlet,
+                child_path.clone(),
+                None,
+                Some(&matched.params),
+            )?;
+            state
+                .typed
+                .borrow_mut()
+                .get_mut(&id)
+                .expect("adopted route exists")
+                .route_state = Some(TypedRouteState {
+                normal_graph_id: route.graph_id,
+                pending_graph_id: route.pending_graph_id,
+                pending_mode: route.pending_mode,
+                error_graph_id: route.error_graph_id,
+                not_found_graph_id: route.not_found_graph_id,
+                loader_action: loader.map(|(action, _)| action),
+                params: matched.params,
+                location: (
+                    location.pathname.clone(),
+                    location.search.clone(),
+                    location.hash.clone(),
+                ),
+                phase: TypedRoutePhase::NotFound,
+            });
+            parent_id = id;
+            path = child_path;
+            continue;
+        }
         if !has_typed_graph(state, &route.graph_id) {
             return Err(JsValue::from_str("missing:ssr-route-graph"));
         }
@@ -108,6 +204,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                 pending_graph_id: route.pending_graph_id,
                 pending_mode: route.pending_mode,
                 error_graph_id: route.error_graph_id,
+                not_found_graph_id: route.not_found_graph_id,
                 loader_action: Some(action),
                 params: matched.params,
                 location: (
@@ -161,6 +258,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                 pending_graph_id: route.pending_graph_id,
                 pending_mode: route.pending_mode,
                 error_graph_id: route.error_graph_id,
+                not_found_graph_id: route.not_found_graph_id,
                 loader_action: loader.map(|(action, _)| action),
                 params: matched.params,
                 location: (
@@ -330,10 +428,28 @@ pub fn navigate_typed_route(
             true,
             None,
         )?;
+    } else {
+        // A root not-found boundary from a previous navigation restores the
+        // persistent root graph before the new chain mounts into it.
+        if let Some(boundary) = &manifest.root_not_found_graph_id {
+            let showing_boundary = state
+                .typed
+                .borrow()
+                .get(&root_id)
+                .map(|instance| &instance.graph_id == boundary)
+                .unwrap_or(false);
+            if showing_boundary {
+                state.show_typed_route_graph(&root_id, &manifest.root_graph_id, false, None)?;
+            }
+        }
     }
     let mut parent_id = root_id;
+    let mut nearest_not_found_graph = None;
     for matched in typed_route_chain(&manifest, &location.pathname) {
         let route = matched.route;
+        if route.not_found_graph_id.is_some() {
+            nearest_not_found_graph = route.not_found_graph_id.clone();
+        }
         if !has_typed_graph(state, &route.graph_id) {
             request_typed_graph(state, &route.graph_id)?;
             return Ok(());
@@ -345,6 +461,11 @@ pub fn navigate_typed_route(
             for graph_id in [
                 route.pending_graph_id.as_deref(),
                 route.error_graph_id.as_deref(),
+                route
+                    .not_found_graph_id
+                    .as_deref()
+                    .or(nearest_not_found_graph.as_deref())
+                    .or(manifest.root_not_found_graph_id.as_deref()),
             ]
             .into_iter()
             .flatten()
@@ -398,6 +519,95 @@ pub fn navigate_typed_route(
     }
     state.dispose_typed_children(&parent_id)?;
     refresh_navigation_state(state, &location.pathname)
+}
+
+/// Resolves a terminal loader redirect outcome: navigate to the target with
+/// explicit history semantics. Loop protection shares `MAX_REDIRECT_HOPS`
+/// with the SSR host; a loop aborts the navigation with a diagnostic instead
+/// of committing any route.
+pub fn handle_loader_redirect(
+    state: &RuntimeState,
+    href: &str,
+    replace: bool,
+) -> Result<(), JsValue> {
+    let depth = next_redirect_depth(state.typed_redirect_depth.get(), href)
+        .map_err(|error| JsValue::from_str(&error))?;
+    state.typed_redirect_depth.set(depth);
+    let root = state
+        .typed_root
+        .borrow()
+        .clone()
+        .ok_or_else(|| JsValue::from_str("typed router root is missing"))?;
+    // Navigation may pause for lazy graph delivery or a loader fetch. Keep
+    // this hop charged until a fresh user navigation resets the budget; a
+    // synchronous decrement here would let asynchronous redirect loops run
+    // forever.
+    navigate_typed_route(state, href, root, replace, true)
+}
+
+fn next_redirect_depth(current: usize, href: &str) -> Result<usize, String> {
+    let depth = current.saturating_add(1);
+    if depth > plec_ir::limits::MAX_REDIRECT_HOPS {
+        return Err(format!(
+            "redirect loop exceeded {} hops at {href}",
+            plec_ir::limits::MAX_REDIRECT_HOPS
+        ));
+    }
+    Ok(depth)
+}
+
+/// Resolves a terminal loader not-found outcome. The boundary owner is the
+/// deepest instance from the origin (inclusive) declaring
+/// `notFoundComponent`; its descendants are discarded and the owner
+/// transitions to the `NotFound` phase. Without any route boundary, the
+/// root boundary applies.
+pub fn handle_loader_not_found(state: &RuntimeState, origin_id: &str) -> Result<(), JsValue> {
+    let manifest = state
+        .typed_manifest
+        .borrow()
+        .clone()
+        .ok_or_else(|| JsValue::from_str("typed router manifest missing"))?;
+    let owner = {
+        let typed = state.typed.borrow();
+        let mut cursor = Some(origin_id.to_owned());
+        loop {
+            match cursor {
+                Some(id) => {
+                    let Some(instance) = typed.get(&id) else {
+                        break None;
+                    };
+                    if instance
+                        .route_state
+                        .as_ref()
+                        .and_then(|route| route.not_found_graph_id.as_ref())
+                        .is_some()
+                    {
+                        break Some(id);
+                    }
+                    cursor = instance.parent_id.clone();
+                }
+                None => break None,
+            }
+        }
+    };
+    if let Some(owner_id) = owner {
+        state.dispose_typed_children(&owner_id)?;
+        state.show_typed_route_not_found(&owner_id)?;
+        state.flush_component_work()?;
+        return state.install_typed_event_listeners();
+    }
+    match &manifest.root_not_found_graph_id {
+        Some(boundary_graph_id) => {
+            let root_id = graph_instance_id(None, "main", None);
+            state.dispose_typed_children(&root_id)?;
+            state.show_typed_route_graph(&root_id, boundary_graph_id, false, None)?;
+            state.flush_component_work()?;
+            state.install_typed_event_listeners()
+        }
+        // Compiled applications cannot reach this: the compiler rejects
+        // `notFound()` without any boundary in the chain. Defensive only.
+        None => Ok(()),
+    }
 }
 
 fn has_typed_graph(state: &RuntimeState, graph_id: &str) -> bool {
@@ -469,6 +679,7 @@ fn mount_typed_child(
         pending_graph_id: route.pending_graph_id.clone(),
         pending_mode: route.pending_mode.clone(),
         error_graph_id: route.error_graph_id.clone(),
+        not_found_graph_id: route.not_found_graph_id.clone(),
         loader_action: route.loader_action,
         params: params.clone(),
         location: (
@@ -668,18 +879,81 @@ fn typed_match_key(
 }
 
 /// Compares the server-published snapshot chain with the chain re-derived
-/// from the current URL. Returns the detail for a
-/// `mismatch:ssr-route-chain:{detail}` failure code, or `None` on agreement.
-/// The chain comparison reuses `typed_route_chain` output; it never invents a
-/// third matcher. Loader outcomes must pair with the phase that rendered
-/// them: `active` requires a resolved outcome, `error` a rejected one.
-fn ssr_route_chain_mismatch(
+/// from the current URL. Loader outcomes must pair with the phase that
+/// rendered them: `active` requires a resolved outcome, `error` a rejected
+/// one, `notFound` a not-found outcome or the owner's own resolved one.
+enum SsrChainAgreement {
+    /// The snapshot chain equals the URL-derived chain.
+    Exact,
+    /// The snapshot truncates at a not-found boundary owner (`depth` entries).
+    /// The truncated suffix never commits; the owner adopts its boundary.
+    NotFoundBoundary(usize),
+    /// The snapshot renders only the root not-found boundary.
+    RootNotFoundBoundary,
+    /// A contract failure (`mismatch:ssr-route-chain:{detail}`).
+    Mismatch(String),
+}
+
+fn ssr_chain_agreement(
     imported: &[plec_ir::SsrRouteInstance],
     derived: &[TypedRouteMatch],
     loaders: &HashMap<String, plec_ir::SsrLoaderState>,
-) -> Option<String> {
-    if imported.len() != derived.len() {
-        return Some(format!("length:{}:{}", imported.len(), derived.len()));
+    manifest: &RouteManifest,
+) -> SsrChainAgreement {
+    if imported.is_empty()
+        && derived.is_empty()
+        && manifest.root_not_found_graph_id.is_some()
+    {
+        return SsrChainAgreement::RootNotFoundBoundary;
+    }
+    if imported.len() > derived.len() {
+        return SsrChainAgreement::Mismatch(format!(
+            "length:{}:{}",
+            imported.len(),
+            derived.len()
+        ));
+    }
+    if imported.len() < derived.len() {
+        // Truncation is only legitimate as a not-found boundary: the last
+        // imported entry must be the derived route at the same position,
+        // must own a not-found boundary, and must carry the NotFound phase.
+        // An empty chain is only legitimate as the root boundary.
+        if imported.is_empty() {
+            return if manifest.root_not_found_graph_id.is_some() {
+                SsrChainAgreement::RootNotFoundBoundary
+            } else {
+                SsrChainAgreement::Mismatch("root-boundary".into())
+            };
+        }
+        let last = &imported[imported.len() - 1];
+        let owner = &derived[imported.len() - 1];
+        let owns_boundary = last.phase == plec_ir::SsrRoutePhase::NotFound
+            && last.route_id == owner.route.id
+            && owner.route.not_found_graph_id.is_some();
+        return if owns_boundary {
+            SsrChainAgreement::NotFoundBoundary(imported.len())
+        } else {
+            SsrChainAgreement::Mismatch(format!(
+                "length:{}:{}",
+                imported.len(),
+                derived.len()
+            ))
+        };
+    }
+    if let Some(last) = imported.last() {
+        if last.phase == plec_ir::SsrRoutePhase::NotFound {
+            let owner = &derived[imported.len() - 1];
+            return if last.route_id == owner.route.id
+                && owner.route.not_found_graph_id.is_some()
+            {
+                SsrChainAgreement::NotFoundBoundary(imported.len())
+            } else {
+                SsrChainAgreement::Mismatch(format!(
+                    "not-found-owner:{}",
+                    last.route_id
+                ))
+            };
+        }
     }
     for (index, (instance, matched)) in imported.iter().zip(derived).enumerate() {
         let outcome = matched
@@ -702,23 +976,36 @@ fn ssr_route_chain_mismatch(
             ) => None,
             // Error phases resume only from a matching rejected outcome.
             (plec_ir::SsrRoutePhase::Error, _) => Some("error"),
+            // A not-found phase pairs with its not-found outcome (the owner
+            // raised the outcome itself) or with the owner's own resolved
+            // outcome (a deeper route raised it). No outcome is valid for a
+            // boundary owner without a loader.
+            (
+                plec_ir::SsrRoutePhase::NotFound,
+                Some(Some(
+                    plec_ir::SsrLoaderState::NotFound
+                    | plec_ir::SsrLoaderState::Resolved { .. },
+                )),
+            )
+            | (plec_ir::SsrRoutePhase::NotFound, None) => None,
+            (plec_ir::SsrRoutePhase::NotFound, _) => Some("not-found"),
         };
         if let Some(phase) = phase {
-            return Some(format!("phase:{index}:{phase}"));
+            return SsrChainAgreement::Mismatch(format!("phase:{index}:{phase}"));
         }
         if instance.route_id != matched.route.id {
-            return Some(format!("route:{index}:{}", instance.route_id));
+            return SsrChainAgreement::Mismatch(format!("route:{index}:{}", instance.route_id));
         }
         for (key, value) in &instance.params {
             if matched.params.get(key).map(String::as_str) != Some(value.as_str()) {
-                return Some(format!("params:{index}:{key}"));
+                return SsrChainAgreement::Mismatch(format!("params:{index}:{key}"));
             }
         }
         if matched.params.len() != instance.params.len() {
-            return Some(format!("params:{index}:count"));
+            return SsrChainAgreement::Mismatch(format!("params:{index}:count"));
         }
     }
-    None
+    SsrChainAgreement::Exact
 }
 
 /// The error record a rejected imported outcome restores. The snapshot
@@ -738,6 +1025,21 @@ fn typed_route_chain(manifest: &RouteManifest, pathname: &str) -> Vec<TypedRoute
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redirect_hop_budget_accumulates_across_deferred_hops() {
+        // Each call represents a redirect outcome after an asynchronous
+        // loader/graph wait; the chain must retain its accumulated count.
+        let mut depth = 0;
+        for _ in 0..plec_ir::limits::MAX_REDIRECT_HOPS {
+            depth = next_redirect_depth(depth, "/next").unwrap();
+        }
+        assert_eq!(depth, plec_ir::limits::MAX_REDIRECT_HOPS);
+        assert!(next_redirect_depth(depth, "/loop")
+            .unwrap_err()
+            .contains("redirect loop exceeded"));
+    }
+
     fn route(id: &str, parent: Option<&str>, path: &str) -> RouteManifestEntry {
         RouteManifestEntry {
             id: id.into(),
@@ -747,6 +1049,7 @@ mod tests {
             pending_graph_id: None,
             pending_mode: "replace".into(),
             error_graph_id: None,
+            not_found_graph_id: None,
             outlet_id: "main".into(),
             loader_action: None,
         }
@@ -756,6 +1059,7 @@ mod tests {
         let manifest = RouteManifest {
             version: Some(3),
             root_graph_id: "root".into(),
+            root_not_found_graph_id: None,
             routes: vec![
                 route("projects", None, "projects"),
                 route("new", Some("projects"), "new"),
@@ -786,6 +1090,7 @@ mod tests {
         let manifest = RouteManifest {
             version: Some(3),
             root_graph_id: "root".into(),
+            root_not_found_graph_id: None,
             routes: vec![route("layout", None, ""), route("home", Some("layout"), "")],
         };
         let matched = typed_route_chain(&manifest, "/");
@@ -838,6 +1143,14 @@ mod tests {
         }
     }
 
+    fn agreement(
+        imported: &[plec_ir::SsrRouteInstance],
+        derived: &[TypedRouteMatch],
+        manifest: &RouteManifest,
+    ) -> SsrChainAgreement {
+        ssr_chain_agreement(imported, derived, &HashMap::new(), manifest)
+    }
+
     #[test]
     fn snapshot_chain_agrees_for_flat_param_catch_all_and_nested_chains() {
         // Flat multi-segment $param route: the server matcher and
@@ -845,6 +1158,7 @@ mod tests {
         let manifest = RouteManifest {
             version: Some(3),
             root_graph_id: "root".into(),
+            root_not_found_graph_id: None,
             routes: vec![
                 route("home", None, ""),
                 route("project", None, "projects/$projectId"),
@@ -852,28 +1166,29 @@ mod tests {
             ],
         };
         let derived = typed_route_chain(&manifest, "/projects/a%20b");
-        assert_eq!(
-            ssr_route_chain_mismatch(
+        assert!(matches!(
+            agreement(
                 &[instance("project", &[("projectId", "a b")])],
                 &derived,
-                &HashMap::new()
+                &manifest
             ),
-            None
-        );
+            SsrChainAgreement::Exact
+        ));
 
         // Catch-all agreement: an unmatched path resolves to the same
         // fallback route on both sides.
         let derived = typed_route_chain(&manifest, "/nowhere");
-        assert_eq!(
-            ssr_route_chain_mismatch(&[instance("missing", &[])], &derived, &HashMap::new()),
-            None
-        );
+        assert!(matches!(
+            agreement(&[instance("missing", &[])], &derived, &manifest),
+            SsrChainAgreement::Exact
+        ));
 
         // Nested pathless-index chain agreement when the snapshot carries the
         // full descent.
         let nested = RouteManifest {
             version: Some(3),
             root_graph_id: "root".into(),
+            root_not_found_graph_id: None,
             routes: vec![route("layout", None, ""), route("home", Some("layout"), "")],
         };
         let derived = typed_route_chain(&nested, "/");
@@ -884,14 +1199,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["layout", "home"]
         );
-        assert_eq!(
-            ssr_route_chain_mismatch(
+        assert!(matches!(
+            agreement(
                 &[instance("layout", &[]), instance("home", &[])],
                 &derived,
-                &HashMap::new()
+                &nested
             ),
-            None
-        );
+            SsrChainAgreement::Exact
+        ));
     }
 
     #[test]
@@ -899,46 +1214,110 @@ mod tests {
         let nested = RouteManifest {
             version: Some(3),
             root_graph_id: "root".into(),
+            root_not_found_graph_id: None,
             routes: vec![route("layout", None, ""), route("home", Some("layout"), "")],
         };
         // A truncated transferred chain is malformed and must be detectable,
-        // never silently adopted.
+        // never silently adopted: the truncated route owns no boundary.
         let derived = typed_route_chain(&nested, "/");
-        assert_eq!(
-            ssr_route_chain_mismatch(&[instance("layout", &[])], &derived, &HashMap::new()),
-            Some("length:1:2".into())
-        );
+        assert!(matches!(
+            agreement(&[instance("layout", &[])], &derived, &nested),
+            SsrChainAgreement::Mismatch(_)
+        ));
         // Param value disagreement (server rendered one id, URL holds another).
         let manifest = RouteManifest {
             version: Some(3),
             root_graph_id: "root".into(),
+            root_not_found_graph_id: None,
             routes: vec![route("project", None, "projects/$projectId")],
         };
         let derived = typed_route_chain(&manifest, "/projects/a");
-        assert_eq!(
-            ssr_route_chain_mismatch(
+        assert!(matches!(
+            agreement(
                 &[instance("project", &[("projectId", "b")])],
                 &derived,
-                &HashMap::new()
+                &manifest
             ),
-            Some("params:0:projectId".into())
-        );
+            SsrChainAgreement::Mismatch(_)
+        ));
         // Extra derived params (snapshot claims none for a $param route).
-        assert_eq!(
-            ssr_route_chain_mismatch(&[instance("project", &[])], &derived, &HashMap::new()),
-            Some("params:0:count".into())
-        );
+        assert!(matches!(
+            agreement(&[instance("project", &[])], &derived, &manifest),
+            SsrChainAgreement::Mismatch(_)
+        ));
         // Route id disagreement at the same position.
-        assert_eq!(
-            ssr_route_chain_mismatch(&[instance("home", &[])], &derived, &HashMap::new()),
-            Some("route:0:home".into())
-        );
+        assert!(matches!(
+            agreement(&[instance("home", &[])], &derived, &manifest),
+            SsrChainAgreement::Mismatch(_)
+        ));
         // Reserved phases cannot adopt as active.
         let mut reserved = instance("project", &[("projectId", "a")]);
         reserved.phase = plec_ir::SsrRoutePhase::Error;
-        assert_eq!(
-            ssr_route_chain_mismatch(&[reserved], &derived, &HashMap::new()),
-            Some("phase:0:error".into())
-        );
+        assert!(matches!(
+            agreement(&[reserved], &derived, &manifest),
+            SsrChainAgreement::Mismatch(_)
+        ));
+    }
+
+    #[test]
+    fn truncated_chain_is_only_legitimate_as_a_not_found_boundary() {
+        // A boundary-owning route may truncate the chain behind it.
+        let mut projects = route("projects", None, "projects");
+        projects.not_found_graph_id = Some("projects-404".into());
+        let manifest = RouteManifest {
+            version: Some(3),
+            root_graph_id: "root".into(),
+            root_not_found_graph_id: None,
+            routes: vec![projects, route("settings", Some("projects"), "settings")],
+        };
+        let derived = typed_route_chain(&manifest, "/projects/settings");
+        let mut owner_instance = instance("projects", &[]);
+        owner_instance.phase = plec_ir::SsrRoutePhase::NotFound;
+        assert!(matches!(
+            agreement(&[owner_instance], &derived, &manifest),
+            SsrChainAgreement::NotFoundBoundary(1)
+        ));
+        let mut self_owner_instance = instance("projects", &[]);
+        self_owner_instance.phase = plec_ir::SsrRoutePhase::NotFound;
+        assert!(matches!(
+            agreement(
+                &[self_owner_instance],
+                &typed_route_chain(&manifest, "/projects"),
+                &manifest
+            ),
+            SsrChainAgreement::NotFoundBoundary(1)
+        ));
+
+        // The truncation must end at a route the snapshot names with the
+        // NotFound phase; an Active truncation is a contract failure.
+        assert!(matches!(
+            agreement(&[instance("home", &[])], &derived, &manifest),
+            SsrChainAgreement::Mismatch(_)
+        ));
+
+        // An empty chain is only legitimate as the root boundary.
+        let mut root_boundary = manifest.clone();
+        root_boundary.root_not_found_graph_id = Some("root-404".into());
+        assert!(matches!(
+            agreement(&[], &derived, &root_boundary),
+            SsrChainAgreement::RootNotFoundBoundary
+        ));
+        assert!(matches!(
+            agreement(
+                &[],
+                &[],
+                &RouteManifest {
+                    version: Some(3),
+                    root_graph_id: "root".into(),
+                    root_not_found_graph_id: Some("root-404".into()),
+                    routes: Vec::new(),
+                }
+            ),
+            SsrChainAgreement::RootNotFoundBoundary
+        ));
+        assert!(matches!(
+            agreement(&[], &derived, &manifest),
+            SsrChainAgreement::Mismatch(_)
+        ));
     }
 }

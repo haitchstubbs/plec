@@ -6604,3 +6604,128 @@ fn rust_keyed_callback_component_fixture_swaps_child_conditional_from_parent_sta
         "the editing prop must flip the child conditional without remounting"
     );
 }
+
+fn loader_boundary_artifact() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.10",
+        "rootComponent": 0,
+        "components": [{
+            "id": "loader-transfer.tsx#Missing",
+            "rootNode": 0,
+            "strings": ["p"],
+            "constants": [],
+            "nodes": [
+                {"op": "element", "tag": 0, "parent": null, "children": [1]},
+                {"op": "text", "text": 0, "parent": 0}
+            ],
+            "texts": [{"value": "boundary-404"}],
+            "bindings": [],
+            "propPrograms": [],
+            "events": [],
+            "inputs": [],
+            "hostSlots": [],
+            "stateSlots": [],
+            "parameters": [],
+            "expressions": [],
+            "actions": [],
+            "loops": [],
+            "dependencyEdges": [],
+            "routeOutlets": []
+        }]
+    })
+}
+
+fn register_not_found_graphs(runtime: &PlecRuntime) {
+    register_loader_graphs(runtime);
+    runtime
+        .register_graph(
+            "loader-transfer.tsx#Missing".into(),
+            serde_wasm_bindgen::to_value(&loader_boundary_artifact()).unwrap(),
+        )
+        .unwrap();
+}
+
+fn not_found_manifest() -> JsValue {
+    serde_wasm_bindgen::to_value(&serde_json::json!({
+        "version": 3,
+        "revision": "rev-1",
+        "rootGraphId": "loader-transfer.tsx#Root",
+        "routes": [{
+            "id": "page",
+            "path": "todos",
+            "graphId": "loader-transfer.tsx#Page",
+            "outletId": "main",
+            "notFoundGraphId": "loader-transfer.tsx#Missing",
+            "loaderAction": 0
+        }]
+    }))
+    .unwrap()
+}
+
+fn start_not_found_transfer(runtime: &PlecRuntime, root: &Element) -> Result<(), JsValue> {
+    let _location = reset_browser_location_to("/todos");
+    let html = format!(
+        "<main data-plec-node=\"root/node:0\"><p data-plec-node=\"root/node:1\">\
+         <!--plec:text:root:2-->layout</p>\
+         <p data-plec-node=\"root/outlet:main/node:0\">\
+         <!--plec:text:root/outlet:main:1-->boundary-404</p></main>"
+    );
+    root.set_inner_html(&html);
+    register_not_found_graphs(runtime);
+    let snapshot = serde_wasm_bindgen::to_value(&serde_json::json!({
+        "version": 2,
+        "revision": "rev-1",
+        "routes": [{"routeId": "page", "params": {}, "phase": "notFound"}],
+        "public": {"location": "/todos", "exports": {}},
+        "loaders": [{
+            "graphId": "loader-transfer.tsx#Page",
+            "action": 0,
+            "state": {"kind": "notFound"}
+        }],
+        "structure": {"graphs": {"root/outlet:main": {"graphId": "loader-transfer.tsx#Missing"}}}
+    }))
+    .unwrap();
+    runtime.start_adopt_snapshot(root.clone(), not_found_manifest(), snapshot)
+}
+
+#[wasm_bindgen_test]
+fn not_found_snapshot_adopts_the_boundary_graph_in_the_not_found_phase() {
+    // An empty fetch queue makes any client refetch fail loudly: adoption
+    // must resume from the transferred outcome only.
+    let _fetch = install_plec_fetch_queue(r#"[]"#);
+    let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
+    let root = mount_root();
+    start_not_found_transfer(&runtime, &root).unwrap();
+    let text = root.text_content().unwrap_or_default();
+    assert!(text.contains("boundary-404"), "{text}");
+    assert!(text.contains("layout"), "{text}");
+    assert_eq!(runtime.ssr_text_divergences(), 0);
+}
+
+#[wasm_bindgen_test]
+fn a_redirect_loader_outcome_in_a_snapshot_fails_closed() {
+    let _location = reset_browser_location_to("/todos");
+    let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
+    let root = mount_root();
+    root.set_inner_html(&loader_route_html("x"));
+    register_loader_graphs(&runtime);
+    let snapshot = serde_wasm_bindgen::to_value(&serde_json::json!({
+        "version": 2,
+        "revision": "rev-1",
+        "routes": [{"routeId": "page", "params": {}, "phase": "active"}],
+        "public": {"location": "/todos", "exports": {}},
+        "loaders": [{
+            "graphId": "loader-transfer.tsx#Page",
+            "action": 0,
+            "state": {"kind": "redirect", "location": "/next", "replace": true}
+        }],
+        "structure": {"graphs": {"root/outlet:main": {"graphId": "loader-transfer.tsx#Root"}}}
+    }))
+    .unwrap();
+    // Redirects never serialize: the server resolves them before rendering.
+    assert!(runtime
+        .start_adopt_snapshot(root.clone(), loader_manifest(false).into(), snapshot)
+        .is_err());
+}

@@ -29,6 +29,12 @@ export type RouteOptions<TData = unknown> = {
   pendingComponent?: PlecComponent;
   pendingMode?: PendingMode;
   errorComponent?: PlecComponent;
+  /**
+   * Renders when a loader in this route's subtree resolves as not found.
+   * The deepest matched route owning a not-found boundary wins; without any
+   * route boundary the root boundary applies. SSR answers 404.
+   */
+  notFoundComponent?: PlecComponent;
   /** Static document metadata rendered by the Plec server. */
   meta?: RouteMetadata;
 };
@@ -41,6 +47,41 @@ export type RouteDefinition<TData = unknown> = RouteOptions<TData> & {
   useParams(): Record<string, string>;
   useReload(): () => Promise<void>;
 };
+
+export type RedirectOptions = {
+  /** Replace the current history entry. Defaults to `true`. */
+  replace?: boolean;
+};
+
+/** Terminal loader outcome: navigate to an application path. */
+export function redirect(
+  to: string,
+  options: RedirectOptions = {},
+): never {
+  throw new PlecRedirectOutcome(to, options.replace ?? true);
+}
+
+/** Terminal loader outcome: the matched route resolves as not found. */
+export function notFound(): never {
+  throw new PlecNotFoundOutcome();
+}
+
+export class PlecRedirectOutcome extends Error {
+  constructor(
+    readonly location: string,
+    readonly replace: boolean,
+  ) {
+    super(`redirect to ${location}`);
+    this.name = 'PlecRedirectOutcome';
+  }
+}
+
+export class PlecNotFoundOutcome extends Error {
+  constructor() {
+    super('not found');
+    this.name = 'PlecNotFoundOutcome';
+  }
+}
 
 export type RouteMatch = {
   route: RouteDefinition;
@@ -301,6 +342,15 @@ export class PlecRouter {
             this.requestVersion !== version)
       )
         return;
+      // Terminal loader outcomes: a redirect navigates immediately without
+      // committing the interrupted route; not-found falls through as an
+      // error status carrying the outcome.
+      if (error instanceof PlecRedirectOutcome) {
+        if (!reloadRoute) {
+          this.navigate(error.location, { replace: error.replace });
+        }
+        return;
+      }
       match.status = 'error';
       match.error = error;
       this.emit();

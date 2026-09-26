@@ -125,7 +125,10 @@ describe('code-first routes', () => {
     const router = createRouter({ routeTree: root });
     const state = {
       router,
-      activeRouteMatch: { route: project, params: { projectId: 'a b' } },
+      activeRouteMatch: {
+        route: project,
+        params: { projectId: 'a b' },
+      },
     } as unknown as Parameters<typeof withRendering>[0];
 
     expect(withRendering(state, () => project.useParams())).toEqual({
@@ -158,7 +161,9 @@ describe('code-first routes', () => {
       organizationId: 'acme',
       projectId: '42',
     });
-    expect(() => withRendering(state, () => organization.useParams())).toThrow(
+    expect(() =>
+      withRendering(state, () => organization.useParams()),
+    ).toThrow(
       'Route.useParams() can only run while rendering its matching route.',
     );
   });

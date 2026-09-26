@@ -447,6 +447,33 @@ impl RuntimeState {
         }
         Ok(())
     }
+
+    /// Transitions one route instance to its not-found boundary graph. The
+    /// phase is `NotFound`, semantically distinct from an error; boundary
+    /// graphs carry no retry action and the loader value is not committed.
+    pub fn show_typed_route_not_found(&self, id: &str) -> Result<(), JsValue> {
+        let graph_id = {
+            let mut typed = self.typed.borrow_mut();
+            let instance = typed
+                .get_mut(id)
+                .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
+            if let Some(mut loader) = instance.loader_runtime.take() {
+                loader.invalidate_fetches();
+                loader.clear_listeners();
+                loader.dispose_host_components();
+            }
+            let state = instance
+                .route_state
+                .as_mut()
+                .ok_or_else(|| JsValue::from_str("typed route not-found state missing"))?;
+            state.phase = TypedRoutePhase::NotFound;
+            state.not_found_graph_id.clone()
+        };
+        if let Some(graph_id) = graph_id {
+            self.show_typed_route_graph(id, &graph_id, false, None)?;
+        }
+        Ok(())
+    }
 }
 
 pub fn normalize_route_error(error: RuntimeValue) -> RuntimeValue {

@@ -37,14 +37,20 @@ impl RequestContext {
             .get(header::HOST)
             .and_then(|value| value.to_str().ok())
             .unwrap_or("localhost");
-        // The TS host resolved request URLs against `http://{host}`; the
-        // native host terminates TLS at a proxy in the same deployments, so
-        // the scheme stays an explicit host detail.
+        // The native host commonly terminates TLS at a proxy. Honor its
+        // forwarded scheme when present, while keeping HTTP as the default.
+        let scheme = headers
+            .get("x-forwarded-proto")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(',').next())
+            .map(str::trim)
+            .filter(|scheme| matches!(*scheme, "http" | "https"))
+            .unwrap_or("http");
         let path_and_query = uri
             .path_and_query()
             .map(|value| value.as_str().to_owned())
             .unwrap_or_else(|| "/".to_owned());
-        let url = format!("http://{host}{path_and_query}");
+        let url = format!("{scheme}://{host}{path_and_query}");
         let cookies = parse_cookies(
             headers
                 .get(header::COOKIE)
@@ -99,7 +105,9 @@ fn parse_cookies(header: &str) -> Result<HashMap<String, String>, ServerError> {
     Ok(cookies)
 }
 
-fn parse_query(query: &str) -> Result<HashMap<String, QueryValue>, ServerError> {
+pub(crate) fn parse_query(
+    query: &str,
+) -> Result<HashMap<String, QueryValue>, ServerError> {
     let mut values: Vec<(String, Vec<String>)> = Vec::new();
     for pair in query.split('&') {
         if pair.is_empty() {
@@ -128,6 +136,26 @@ fn parse_query(query: &str) -> Result<HashMap<String, QueryValue>, ServerError> 
             (name, value)
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_url_uses_forwarded_https_and_host_port() {
+        let uri: Uri = "/before?tab=old".parse().unwrap();
+        let headers = HeaderMap::from_iter([
+            (header::HOST, "app.example.test:8443".parse().unwrap()),
+            (
+                "x-forwarded-proto".parse().unwrap(),
+                "https".parse().unwrap(),
+            ),
+        ]);
+        let context = RequestContext::from_parts(Method::GET, &uri, &headers).unwrap();
+
+        assert_eq!(context.url, "https://app.example.test:8443/before?tab=old");
+    }
 }
 
 /// Strict `decodeURIComponent`: `%` escapes must be complete hex pairs and

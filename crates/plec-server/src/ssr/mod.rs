@@ -172,11 +172,23 @@ pub(crate) fn render_application(
     request: &RequestContext,
     tag_policy: &plec_ir::sink::TagPolicy,
     development: bool,
+    root_not_found: bool,
 ) -> Result<RenderedApplication, RenderError> {
+    // The root instance renders the root not-found boundary when a not-found
+    // outcome fell through to the root boundary owner.
+    let root_graph_id = if root_not_found {
+        bundle
+            .manifest
+            .root_not_found_graph_id
+            .as_deref()
+            .unwrap_or(&bundle.manifest.root_graph_id)
+    } else {
+        &bundle.manifest.root_graph_id
+    };
     let root = bundle
         .graphs
         .iter()
-        .find(|entry| entry.graph_id == bundle.manifest.root_graph_id)
+        .find(|entry| entry.graph_id == root_graph_id)
         .map(|entry| &entry.graph)
         .ok_or(RenderError::RootGraphMissing)?;
     let route_tree = build_route_tree(bundle, routes, 0, ROOT_GRAPH_INSTANCE_ID)?;
@@ -243,11 +255,15 @@ fn build_route_tree<'a>(
         return Ok(None);
     };
     let route = execution.route_match.route;
-    let graph_id = match execution.loader.as_ref().map(|loader| &loader.state) {
-        Some(plec_ir::SsrLoaderState::Rejected { .. }) => {
-            route.error_graph_id.as_deref().unwrap_or(&route.graph_id)
+    let graph_id = if execution.not_found {
+        route.not_found_graph_id.as_deref().unwrap_or(&route.graph_id)
+    } else {
+        match execution.loader.as_ref().map(|loader| &loader.state) {
+            Some(plec_ir::SsrLoaderState::Rejected { .. }) => {
+                route.error_graph_id.as_deref().unwrap_or(&route.graph_id)
+            }
+            _ => &route.graph_id,
         }
-        _ => &route.graph_id,
     };
     let graph = bundle
         .graphs

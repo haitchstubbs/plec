@@ -36,18 +36,24 @@ pub(crate) fn bootstrap_payload(
     routes: &[RouteExecution<'_>],
     context: &RequestContext,
     rendered: &RenderedApplication,
+    root_not_found: bool,
 ) -> Option<BootstrapPayload> {
-    if routes.is_empty() {
+    if routes.is_empty() && !root_not_found {
         return None;
     }
+    let root_graph_id = if root_not_found {
+        bundle
+            .manifest
+            .root_not_found_graph_id
+            .clone()
+            .unwrap_or_else(|| bundle.manifest.root_graph_id.clone())
+    } else {
+        bundle.manifest.root_graph_id.clone()
+    };
     let mut graphs = BTreeMap::new();
     graphs.insert(
         ROOT_GRAPH_INSTANCE_ID.to_owned(),
-        graph_structure(
-            ROOT_GRAPH_INSTANCE_ID,
-            &bundle.manifest.root_graph_id,
-            rendered,
-        ),
+        graph_structure(ROOT_GRAPH_INSTANCE_ID, &root_graph_id, rendered),
     );
     for child in &rendered.child_graphs {
         graphs.insert(
@@ -95,7 +101,9 @@ pub(crate) fn bootstrap_payload(
                         .iter()
                         .map(|(name, value)| (name.clone(), value.clone()))
                         .collect(),
-                    phase: if matches!(
+                    phase: if execution.not_found {
+                        SsrRoutePhase::NotFound
+                    } else if matches!(
                         execution.loader.as_ref().map(|loader| &loader.state),
                         Some(SsrLoaderState::Rejected { .. })
                     ) {

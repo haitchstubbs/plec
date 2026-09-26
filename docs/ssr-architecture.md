@@ -59,6 +59,16 @@ Key property: **server renderer, browser glue, and WASM runtime all walk the exa
 - `ssr::snapshot` constructs the typed bootstrap directly from `plec-ir` snapshot types, so the producer and WASM consumer share one schema authority.
 - Any document render failure serves the static SPA shell; development responses expose the fallback diagnostic.
 
+### Route loader outcomes
+
+Route loaders compile from a restricted static TypeScript grammar, not arbitrary JavaScript. Supported forms include destructured `{ params }`, awaited `fetch` with literal or parameter-interpolated template URLs, an optional `{ signal }` init, conditional branches, early returns, comparisons, logical operators, unary `!`/`-`, templates, and member access. The only supported fetch init property is `signal`; cancellation remains host-owned. Unsupported forms fail compilation with a route diagnostic.
+
+An awaited loader `fetch` yields decoded JSON response body. Non-success HTTP status and transport/decode failures reject before loader body logic continues. The host's legacy response-envelope unwrapping applies only to loader actions without the compiled `loader_decode_body` marker.
+
+Throwing `redirect(path, { replace? })` is terminal. SSR follows redirects internally only to detect loops, then sends one `307` with final `Location`; client navigation handles the same path without committing the origin route. `replace` defaults to `true`. Both hosts enforce `MAX_REDIRECT_HOPS` (5); SSR returns a diagnostic response and client navigation aborts when exceeded. Redirect outcomes never enter the SSR snapshot.
+
+Throwing `notFound()` is also terminal, but uses a distinct not-found phase rather than the error phase. The deepest matched route from origin upward with `notFoundComponent` owns the boundary; descendants below it are discarded. Without a route boundary, the root `notFoundComponent` applies, followed by the built-in minimal 404 response. SSR returns status `404` and snapshots the owner as `phase: "notFound"` with the truncated route chain. CSR preloads the selected boundary graph before running a loader, then transitions that owner in place. Not-found never falls through to a wildcard route.
+
 ### `packages/plec-browser` — the adoption gatekeeper
 
 - `startPlecRouter` (`packages/plec-browser/src/index.ts:499`): reads `#plec-bootstrap`, fetches manifest + graphs, registers them, then decides adopt-vs-fallback (diagram below).
