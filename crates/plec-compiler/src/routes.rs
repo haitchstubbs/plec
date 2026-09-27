@@ -700,6 +700,65 @@ mod tests {
     }
 
     #[test]
+    fn compiles_terminal_only_loader_outcomes_without_fetch() {
+        for outcome in ["throw redirect('/login');", "throw notFound();"] {
+            let source = format!(
+                r#"
+                function Layout() {{ return <main />; }}
+                function Missing() {{ return <p />; }}
+                function Page() {{ return <p />; }}
+                export const Root = createRootRoute({{ component: Layout, notFoundComponent: Missing }});
+                export const UserRoute = createRoute({{
+                    getParentRoute: () => Root,
+                    path: 'users/$id',
+                    component: Page,
+                    notFoundComponent: Missing,
+                    loader: async () => {{ {outcome} }},
+                }});
+                export const router = createRouter({{ routeTree: Root.addChildren([UserRoute]) }});
+            "#
+            );
+
+            let (action, _) = compile_loader_program(&source).unwrap();
+            assert!(action.instructions.iter().any(|instruction| matches!(
+                instruction,
+                plec_ir::ActionInstruction::Return {
+                    outcome: plec_ir::ReturnOutcome::Redirect | plec_ir::ReturnOutcome::NotFound,
+                    ..
+                }
+            )));
+        }
+    }
+
+    #[test]
+    fn rejects_loader_without_fetch_or_terminal_outcome() {
+        let modules = vec![parse_module(
+            "routes.tsx",
+            r#"
+            function Layout() { return <main />; }
+            function Page() { return <p />; }
+            export const Root = createRootRoute({ component: Layout });
+            export const UserRoute = createRoute({
+                getParentRoute: () => Root,
+                path: 'users/$id',
+                component: Page,
+                loader: async () => {},
+            });
+            export const router = createRouter({ routeTree: Root.addChildren([UserRoute]) });
+        "#,
+        )
+        .unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let routes = lower_routes(&modules, &graph).unwrap();
+        let error = lower_route_artifacts(&modules, &graph, &routes)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(
+            "must await fetch(url) or produce a redirect/not-found outcome"
+        ));
+    }
+
+    #[test]
     fn rejects_not_found_without_a_declared_boundary() {
         let modules = vec![parse_module(
             "routes.tsx",

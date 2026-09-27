@@ -195,7 +195,7 @@ async fn render_document_inner(
         match outcome {
             LoaderDocumentOutcome::Render => {
                 if hops > 0 {
-                    return Ok(redirect_response(&destination));
+                    return redirect_response(&destination);
                 }
                 return render_executions(state, context, &bundle, executions, false).await;
             }
@@ -207,13 +207,13 @@ async fn render_document_inner(
                         plec_ir::limits::MAX_REDIRECT_HOPS
                     )));
                 }
-                destination = apply_redirect_location(context, &location);
+                destination = apply_redirect_location(context, &location)?;
             }
             LoaderDocumentOutcome::NotFound => {
                 if hops > 0 {
                     // The redirect target resolves as not found; answer the
                     // redirect so the destination URL owns the 404 response.
-                    return Ok(redirect_response(&destination));
+                    return redirect_response(&destination);
                 }
                 return render_not_found_document(state, context, &bundle, executions).await;
             }
@@ -223,18 +223,19 @@ async fn render_document_inner(
 
 /// One 307 hop to a loader redirect destination. Documents are GET requests,
 /// so 307 preserves semantics while keeping the browser URL authoritative.
-fn redirect_response(location: &str) -> Response<Body> {
+fn redirect_response(location: &str) -> Result<Response<Body>, ServerError> {
     let mut response = Response::new(Body::empty());
     *response.status_mut() = StatusCode::TEMPORARY_REDIRECT;
     let headers = response.headers_mut();
-    if let Ok(value) = axum::http::HeaderValue::from_str(location) {
-        headers.insert(axum::http::header::LOCATION, value);
-    }
+    let value = axum::http::HeaderValue::from_str(location).map_err(|_| {
+        ServerError::message("route loader redirect target is not a valid header value")
+    })?;
+    headers.insert(axum::http::header::LOCATION, value);
     headers.insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),
     );
-    response
+    Ok(response)
 }
 
 enum LoaderDocumentOutcome {
@@ -246,13 +247,27 @@ enum LoaderDocumentOutcome {
 /// Applies a validated redirect target to the request context so the next hop
 /// matches, seeds loaders, and snapshots against the destination URL. Returns
 /// the canonical destination path (the 307 `Location` value).
-fn apply_redirect_location(context: &mut RequestContext, location: &str) -> String {
-    let (path, query) = match location.split_once('?') {
-        Some((path, query)) => (path, Some(query)),
-        None => (location, None),
-    };
+fn apply_redirect_location(
+    context: &mut RequestContext,
+    location: &str,
+) -> Result<String, ServerError> {
+    let uri = location
+        .parse::<axum::http::Uri>()
+        .map_err(|_| ServerError::message("route loader redirect target is malformed"))?;
+    if uri.scheme().is_some() || uri.authority().is_some() || location.contains(['#', '\\']) {
+        return Err(ServerError::message(
+            "route loader redirects must use an absolute application path without a fragment",
+        ));
+    }
+    let path = uri.path();
+    if !path.starts_with('/') || path.starts_with("//") {
+        return Err(ServerError::message(
+            "route loader redirects must use an absolute application path",
+        ));
+    }
+    let query = uri.query();
+    context.query = crate::request::parse_query(query.unwrap_or_default())?;
     context.pathname = path.to_owned();
-    context.query = crate::request::parse_query(query.unwrap_or_default()).unwrap_or_default();
     // Rebuild the absolute URL against the original host.
     let (scheme, host) = context
         .url
@@ -263,10 +278,10 @@ fn apply_redirect_location(context: &mut RequestContext, location: &str) -> Stri
         Some(query) => format!("{scheme}://{host}{path}?{query}"),
         None => format!("{scheme}://{host}{path}"),
     };
-    match query {
+    Ok(match query {
         Some(query) => format!("{path}?{query}"),
         None => path.to_owned(),
-    }
+    })
 }
 
 /// Selects the not-found boundary owner for a not-found outcome raised
@@ -544,10 +559,38 @@ mod tests {
             query: HashMap::from([("old".into(), QueryValue::One("1".into()))]),
         };
 
-        let location = apply_redirect_location(&mut context, "/after?tab=2");
+        let location = apply_redirect_location(&mut context, "/after?tab=2").unwrap();
 
         assert_eq!(location, "/after?tab=2");
         assert_eq!(context.url, "https://app.example.test:8443/after?tab=2");
         assert_eq!(context.pathname, "/after");
+    }
+
+    #[test]
+    fn rejects_malformed_or_non_local_redirect_targets() {
+        let context = || RequestContext {
+            url: "https://app.example.test/before".into(),
+            pathname: "/before".into(),
+            method: Method::GET,
+            headers: Default::default(),
+            cookies: HashMap::new(),
+            params: HashMap::new(),
+            query: HashMap::new(),
+        };
+
+        for target in [
+            "",
+            "relative/path",
+            "//outside.example/path",
+            "https://outside.example/path",
+            "/bad path",
+            "/ok?bad=%",
+            "/ok#fragment",
+        ] {
+            assert!(
+                apply_redirect_location(&mut context(), target).is_err(),
+                "accepted invalid redirect target {target:?}"
+            );
+        }
     }
 }

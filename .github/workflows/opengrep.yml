@@ -18,17 +18,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install pinned OpenGrep
-        run: >-
-          curl --fail --location --silent --show-error
-          https://raw.githubusercontent.com/opengrep/opengrep/acf67b45c97c4b63626536605c77064ef536806d/install.sh
-          | bash -s -- -v v1.30.0
+        run: node scripts/install-opengrep.mjs
 
       - name: Scan Rust, TypeScript, JavaScript, and CSS
         run: >-
-          "$HOME/.opengrep/cli/latest/opengrep" scan
+          ".tools/opengrep-1.30.0/opengrep" scan
           --config p/security-audit
           --sarif
           --sarif-output opengrep-results.sarif
@@ -43,7 +40,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
         with:
           sarif_file: opengrep-results.sarif
 

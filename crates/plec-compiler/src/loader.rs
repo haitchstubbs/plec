@@ -182,9 +182,18 @@ pub(crate) fn compile_loader(loader: &Expr, pools: LoaderPools<'_>) -> Result<Co
         .iter()
         .filter(|instruction| matches!(instruction, ActionInstruction::CapabilityRequest { .. }))
         .count();
-    if fetches == 0 {
+    let has_terminal_outcome = emitter.instructions.iter().any(|instruction| {
+        matches!(
+            instruction,
+            ActionInstruction::Return {
+                outcome: ReturnOutcome::Redirect | ReturnOutcome::NotFound,
+                ..
+            }
+        )
+    });
+    if fetches == 0 && !has_terminal_outcome {
         return Err(RouteError(
-            "route loader must contain at least one await fetch(url)".into(),
+            "route loader must await fetch(url) or produce a redirect/not-found outcome".into(),
         ));
     }
     let uses_not_found = emitter

@@ -544,6 +544,16 @@ pub fn handle_loader_redirect(
     href: &str,
     replace: bool,
 ) -> Result<(), JsValue> {
+    if !href.starts_with('/')
+        || href.starts_with("//")
+        || href.contains(['#', '\\'])
+        || href.chars().any(char::is_whitespace)
+        || href.chars().any(char::is_control)
+    {
+        return Err(JsValue::from_str(
+            "route loader redirects must use a valid absolute application path without a fragment",
+        ));
+    }
     let depth = next_redirect_depth(state.typed_redirect_depth.get(), href)
         .map_err(|error| JsValue::from_str(&error))?;
     state.typed_redirect_depth.set(depth);
