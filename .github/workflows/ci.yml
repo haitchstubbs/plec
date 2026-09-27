@@ -53,24 +53,24 @@ jobs:
         with:
           sarif_file: trivy-security-results.sarif
           category: trivy-source-security
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-trivy-security
+          path: trivy-security-results.sarif
+          if-no-files-found: ignore
+          retention-days: 1
       - if: always() && github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: node scripts/pr-sarif-summary.mjs opengrep
-      - if: always() && github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: node scripts/pr-sarif-summary.mjs trivy-source
-
   licenses:
     name: Licenses
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: ./.github/actions/setup-plec
@@ -107,13 +107,13 @@ jobs:
         with:
           sarif_file: trivy-license-results.sarif
           category: trivy-license
-      - if: always() && github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          SECURITY_SCAN_OUTCOME: skipped
-          LICENSE_GATE_OUTCOME: ${{ steps.trivy-license.outcome }}
-        run: node scripts/pr-sarif-summary.mjs trivy-license
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-trivy-license
+          path: trivy-license-results.sarif
+          if-no-files-found: ignore
+          retention-days: 1
 
   dependency-audit:
     name: Dependency Audit
@@ -121,7 +121,6 @@ jobs:
     permissions:
       contents: read
       security-events: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: ./.github/actions/setup-plec
@@ -158,11 +157,43 @@ jobs:
         with:
           sarif_file: trivy-vulnerability-results.sarif
           category: trivy-vulnerabilities
-      - if: always() && github.event_name == 'pull_request'
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-trivy-vulnerability
+          path: trivy-vulnerability-results.sarif
+          if-no-files-found: ignore
+          retention-days: 1
+
+  trivy-summary:
+    name: Trivy PR Summary
+    if: always()
+    needs: [security, licenses, dependency-audit]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - if: github.event_name == 'pull_request'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - if: github.event_name == 'pull_request'
+        uses: ./.github/actions/setup-plec
+      - if: github.event_name == 'pull_request'
+        run: yarn install --immutable
+      - if: github.event_name == 'pull_request'
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        continue-on-error: true
+        with:
+          pattern: ci-trivy-*
+          path: .
+          merge-multiple: true
+      - if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: node scripts/pr-sarif-summary.mjs trivy-vulnerability
+          SECURITY_SCAN_OUTCOME: ${{ (needs.security.result == 'success' && needs.dependency-audit.result == 'success') && 'success' || 'failure' }}
+          LICENSE_GATE_OUTCOME: ${{ needs.licenses.result == 'success' && 'success' || 'failure' }}
+        run: node scripts/pr-sarif-summary.mjs trivy
 
   crates:
     name: Crates
@@ -339,6 +370,7 @@ jobs:
         security,
         licenses,
         dependency-audit,
+        trivy-summary,
         crates,
         packages,
         fullstack-build,
