@@ -4,8 +4,11 @@ import {
   createRoute,
   createRouter,
   matchRoutes,
+  notFound,
 } from './router';
 import { withRendering } from '../client/root/render-context';
+import type { RootState } from '../client/root/root-state';
+import { DefaultNotFound, renderRouteView } from './render-outlet';
 
 const View = () => null;
 const originalWindow = globalThis.window;
@@ -126,6 +129,145 @@ describe('code-first routes', () => {
       status: 'error',
       error: expect.any(Error),
     });
+  });
+
+  it('commits a route-owned not-found boundary', async () => {
+    setLocation('/projects/42/tasks');
+    const root = createRootRoute({ component: View });
+    let childLoaderCalls = 0;
+    const projects = createRoute({
+      getParentRoute: () => root,
+      path: 'projects/$id',
+      component: View,
+      notFoundComponent: View,
+      loader: () => notFound(),
+    });
+    const tasks = createRoute({
+      getParentRoute: () => projects,
+      path: 'tasks',
+      component: View,
+      loader: () => {
+        childLoaderCalls += 1;
+        return [];
+      },
+    });
+    root.addChildren([projects]);
+    projects.addChildren([tasks]);
+
+    const router = createRouter({ routeTree: root });
+    router.start();
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+
+    expect(router.matches.map((match) => match.route)).toEqual([
+      root,
+      projects,
+    ]);
+    expect(router.matches.at(-1)?.status).toBe('notFound');
+    expect(childLoaderCalls).toBe(0);
+  });
+
+  it('uses the nearest ancestor not-found boundary and stops the chain', async () => {
+    setLocation('/projects/42/tasks');
+    const root = createRootRoute({ component: View });
+    const projects = createRoute({
+      getParentRoute: () => root,
+      path: 'projects/$id',
+      component: View,
+      notFoundComponent: View,
+    });
+    const tasks = createRoute({
+      getParentRoute: () => projects,
+      path: 'tasks',
+      component: View,
+      loader: () => notFound(),
+    });
+    root.addChildren([projects]);
+    projects.addChildren([tasks]);
+
+    const router = createRouter({ routeTree: root });
+    router.start();
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+
+    expect(router.matches.map((match) => match.route)).toEqual([
+      root,
+      projects,
+    ]);
+    expect(router.matches.at(-1)?.status).toBe('notFound');
+    expect(router.committedMatches.map((match) => match.route)).toEqual([
+      root,
+      projects,
+    ]);
+    expect(router.committedMatches.at(-1)?.status).toBe('notFound');
+  });
+
+  it('uses the root match for the built-in not-found fallback', async () => {
+    setLocation('/projects/42/tasks');
+    const root = createRootRoute({ component: View });
+    const project = createRoute({
+      getParentRoute: () => root,
+      path: 'projects/$id',
+      component: View,
+      loader: () => notFound(),
+    });
+    let childLoaderCalls = 0;
+    const tasks = createRoute({
+      getParentRoute: () => project,
+      path: 'tasks',
+      component: View,
+      loader: () => {
+        childLoaderCalls += 1;
+        return [];
+      },
+    });
+    root.addChildren([project]);
+    project.addChildren([tasks]);
+
+    const router = createRouter({ routeTree: root });
+    router.start();
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+
+    expect(router.matches).toHaveLength(1);
+    expect(router.matches[0]).toMatchObject({ route: root, status: 'notFound' });
+    expect(router.committedMatches).toHaveLength(1);
+    expect(router.committedMatches[0]?.status).toBe('notFound');
+    expect(childLoaderCalls).toBe(0);
+  });
+
+  it('renders the selected not-found boundary instead of the route component', () => {
+    let routeRenders = 0;
+    let boundaryRenders = 0;
+    const route = createRootRoute({
+      component: () => {
+        routeRenders += 1;
+        return null;
+      },
+      notFoundComponent: () => {
+        boundaryRenders += 1;
+        return null;
+      },
+    });
+    const match = {
+      route,
+      params: {},
+      search: {},
+      status: 'notFound' as const,
+    };
+
+    renderRouteView(match, {} as RootState, {} as Document);
+
+    expect(routeRenders).toBe(0);
+    expect(boundaryRenders).toBe(1);
+  });
+
+  it('provides a built-in non-retryable not-found view', () => {
+    const fallback = DefaultNotFound({});
+
+    expect(fallback).toMatchObject({
+      type: 'section',
+      props: { role: 'status' },
+    });
+    expect(JSON.stringify(fallback)).toContain('Not found');
+    expect(JSON.stringify(fallback)).not.toContain('retry');
   });
 
   it('exposes decoded params from matching route', () => {

@@ -110,7 +110,7 @@ export type RouteMatch = {
   params: Record<string, string>;
   search: RouteSearch;
   data?: unknown;
-  status: 'pending' | 'ready' | 'error';
+  status: 'pending' | 'ready' | 'error' | 'notFound';
   error?: unknown;
 };
 
@@ -297,6 +297,13 @@ export class PlecRouter {
         )
           return;
         if (match.status === 'error') return;
+        if (this.matches.some((candidate) => candidate.status === 'notFound')) {
+          this.committedMatches = this.matches.map((candidate) => ({
+            ...candidate,
+          }));
+          this.emit();
+          return;
+        }
       }
       if (
         this.controller === controller &&
@@ -380,18 +387,48 @@ export class PlecRouter {
             this.requestVersion !== version)
       )
         return;
-      // Terminal loader outcomes: a redirect navigates immediately without
-      // committing the interrupted route; not-found falls through as an
-      // error status carrying the outcome.
+      // Terminal loader outcomes do not commit the interrupted route.
       if (error instanceof PlecRedirectOutcome) {
         if (!reloadRoute) {
           this.navigate(error.location, { replace: error.replace });
         }
         return;
       }
+      if (error instanceof PlecNotFoundOutcome) {
+        this.resolveNotFound(match);
+        if (commit) {
+          this.committedMatches = this.matches.map((candidate) => ({
+            ...candidate,
+          }));
+        }
+        this.emit();
+        return;
+      }
       match.status = 'error';
       match.error = error;
       this.emit();
+    }
+  }
+
+  /**
+   * Truncate the active route chain at its nearest not-found boundary. If no
+   * route declares one, the root match owns the built-in not-found view.
+   */
+  private resolveNotFound(origin: RouteMatch) {
+    const originIndex = this.matches.indexOf(origin);
+    if (originIndex < 0) return;
+    let ownerIndex = 0;
+    for (let index = originIndex; index >= 0; index -= 1) {
+      if (this.matches[index]?.route.notFoundComponent) {
+        ownerIndex = index;
+        break;
+      }
+    }
+    this.matches.splice(ownerIndex + 1);
+    const owner = this.matches[ownerIndex];
+    if (owner) {
+      owner.status = 'notFound';
+      owner.error = undefined;
     }
   }
 

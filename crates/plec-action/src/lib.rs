@@ -42,7 +42,14 @@ fn redirect_location(value: &RuntimeValue) -> Result<String, ActionError> {
             _ => None,
         })
         .ok_or_else(|| ActionError("redirect outcome requires a string location".into()))?;
-    if location.is_empty() || !location.starts_with('/') || location.starts_with("//") {
+    if location.is_empty()
+        || !location.starts_with('/')
+        || location.starts_with("//")
+        // WHATWG URL parsing treats backslashes as path separators for
+        // special schemes, so `/\\evil.example` would otherwise become an
+        // off-origin navigation in browsers.
+        || location.contains('\\')
+    {
         return Err(ActionError(format!(
             "redirect location {location:?} is not an application path"
         )));
@@ -55,7 +62,10 @@ pub enum ActionOutcome {
     Success(RuntimeValue),
     Failure(RuntimeValue),
     /// Terminal loader redirect. `location` must be an absolute path.
-    Redirect { location: String, replace: bool },
+    Redirect {
+        location: String,
+        replace: bool,
+    },
     /// Terminal loader not-found outcome.
     NotFound,
 }
@@ -780,6 +790,25 @@ mod tests {
 
     fn actions(value: serde_json::Value) -> Vec<TypedAction> {
         serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn redirect_targets_must_be_application_paths() {
+        let location = |value: &str| {
+            redirect_location(&RuntimeValue::Record(std::collections::HashMap::from([
+                ("location".into(), RuntimeValue::String(value.into())),
+                ("replace".into(), RuntimeValue::Bool(true)),
+            ])))
+        };
+
+        assert_eq!(location("/notes").unwrap(), "/notes");
+        assert_eq!(
+            location("/projects/42?tab=details").unwrap(),
+            "/projects/42?tab=details"
+        );
+        assert!(location("//evil.example").is_err());
+        assert!(location("/\\evil.example").is_err());
+        assert!(location("/\\\\evil.example").is_err());
     }
 
     #[test]

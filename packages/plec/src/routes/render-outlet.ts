@@ -13,7 +13,11 @@ export function renderRouteView(
   const previous = state.activeRouteMatch;
   state.activeRouteMatch = match;
   try {
-    return renderValue(jsx(match.route.component, {}), state, document);
+    const Component =
+      match.status === 'notFound'
+        ? match.route.notFoundComponent ?? DefaultNotFound
+        : match.route.component;
+    return renderValue(jsx(Component, {}), state, document);
   } finally {
     state.activeRouteMatch = previous;
   }
@@ -85,3 +89,13 @@ export const DefaultError: PlecComponent = ({ retry }) => {
     ],
   });
 };
+
+/** Non-retryable fallback used when no route declares a not-found boundary. */
+export const DefaultNotFound: PlecComponent = () =>
+  jsx('section', {
+    role: 'status',
+    children: [
+      jsx('h1', { children: 'Not found' }),
+      jsx('p', { children: 'The requested page could not be found.' }),
+    ],
+  });
