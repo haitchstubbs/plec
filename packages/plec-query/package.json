@@ -35,9 +35,9 @@
   },
   "scripts": {
     "build": "tsc",
-    "compile": "yarn compile:native && yarn compile:wasm",
-    "compile:native": "napi build --platform --release --no-js --manifest-path ../../crates/plec-query-node/Cargo.toml --output-dir native",
-    "compile:wasm": "cargo build --manifest-path ../../crates/plec-query-core/Cargo.toml --target wasm32-unknown-unknown --release",
+    "compile": "yarn --cwd ../.. rust:deps:check && yarn compile:native && yarn compile:wasm",
+    "compile:native": "yarn --cwd ../.. rust:deps:check && cargo check --locked --manifest-path ../../crates/plec-query-node/Cargo.toml && napi build --platform --release --no-js --manifest-path ../../crates/plec-query-node/Cargo.toml --output-dir native",
+    "compile:wasm": "yarn --cwd ../.. rust:deps:check && cargo build --locked --manifest-path ../../crates/plec-query-core/Cargo.toml --target wasm32-unknown-unknown --release",
     "docs:generate-dialect-matrix": "node ./scripts/generate-dialect-matrix.mjs",
     "docs:check-dialect-matrix": "node ./scripts/generate-dialect-matrix.mjs --check",
     "bench:query-parity:baseline": "node ./scripts/run-query-parity-benchmark.mjs baseline",

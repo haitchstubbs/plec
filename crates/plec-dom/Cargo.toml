@@ -2,10 +2,11 @@
 name = "plec-dom"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 js-sys = { workspace = true }
-plec-schema = { path = "../plec-schema" }
+plec-schema = { path = "../plec-schema", version = "0.1.0" }
 serde = { workspace = true }
 wasm-bindgen = { workspace = true }
 web-sys = { workspace = true }

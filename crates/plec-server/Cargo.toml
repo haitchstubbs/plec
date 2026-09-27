@@ -2,6 +2,7 @@
 name = "plec-server"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 axum.workspace = true
@@ -19,9 +20,9 @@ hyper-util.workspace = true
 http-body-util.workspace = true
 getrandom.workspace = true
 
-plec-ir = { path = "../plec-ir" }
-plec-schema = { path = "../plec-schema" }
-plec-action = { path = "../plec-action" }
+plec-ir = { path = "../plec-ir", version = "0.1.0" }
+plec-schema = { path = "../plec-schema", version = "0.1.0" }
+plec-action = { path = "../plec-action", version = "0.1.0" }
 
 [dev-dependencies]
 tempfile.workspace = true

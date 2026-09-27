@@ -1,0 +1,49 @@
+[advisories]
+version = 2
+unmaintained = "workspace"
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Zlib",
+]
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[bans.build]
+executables = "deny"
+# Report detected shebang scripts without blocking on upstream test/release
+# helper scripts embedded in dependency source archives.
+interpreted = "warn"
+enable-builtin-globs = false
+include-dependencies = true
+include-archives = false
+
+# libloading ships DLL test fixtures; neither file is a build-time executable.
+[[bans.build.bypass]]
+crate = "libloading"
+allow = [
+  { path = "tests/nagisa32.dll" },
+  { path = "tests/nagisa64.dll" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

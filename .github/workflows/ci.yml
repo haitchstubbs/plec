@@ -90,6 +90,8 @@ jobs:
         run: yarn install --immutable
       - name: Install build tools
         run: yarn install:build-tools
+      - name: Check Rust dependency policy
+        run: yarn rust:deps:check
       - name: Verify browser toolchain
         run: yarn toolchain:verify:browser
       - name: Build development Plec CLI

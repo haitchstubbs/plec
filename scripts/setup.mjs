@@ -17,6 +17,8 @@ import {
   chromeDriverPath,
   chromeDriverTarget,
   chromiumExecutable,
+  cargoToolPath,
+  cargoToolRoot,
   expectedChromiumFromPlaywright,
   playwrightBrowsersPath,
   toolchain,
@@ -234,6 +236,53 @@ function ensureWasmBindgenCli() {
     process.exitCode = install.status ?? 1;
     return;
   }
+}
+
+function ensureSecurityTool(name, config) {
+  const binary = config.binary ?? name;
+  const executable = cargoToolPath(name, binary);
+  const root = cargoToolRoot(name);
+  if (
+    existsSync(executable) &&
+    versionOf(executable) === config.version
+  ) {
+    console.log(`${name} found: ${config.version}`);
+    return;
+  }
+
+  console.log(
+    `Installing pinned ${name} ${config.version} from source...`,
+  );
+  const args = [
+    'install',
+    '--git',
+    config.repository,
+    '--rev',
+    config.commit,
+    '--locked',
+    '--root',
+    root,
+    '--force',
+  ];
+  if (config.features?.length) {
+    args.push('--features', config.features.join(','));
+  }
+  args.push(config.package ?? name);
+  const install = run('cargo', args, { cwd: repoRoot });
+  if (install.error || install.status !== 0) {
+    console.error(`Failed to install pinned ${name}.`);
+    process.exitCode = install.status ?? 1;
+    return;
+  }
+  const actual = versionOf(executable);
+  if (actual !== config.version) {
+    throw new Error(
+      `Pinned ${name} version mismatch: expected ${config.version}, found ${actual ?? 'missing'}.`,
+    );
+  }
+  console.log(
+    `${name} ${config.version} installed from ${config.commit}.`,
+  );
 }
 
 function findFile(root, filename) {
@@ -498,6 +547,15 @@ for (const [name, version] of Object.entries(buildTools)) {
 
   if (process.exitCode) {
     break;
+  }
+}
+
+if (!process.exitCode) {
+  for (const [name, config] of Object.entries(
+    cliToolsConfig['security-tools'] ?? {},
+  )) {
+    ensureSecurityTool(name, config);
+    if (process.exitCode) break;
   }
 }
 

@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   chromeDriverPath,
   chromiumExecutable,
+  cargoToolPath,
   expectedChromiumFromPlaywright,
   repoRoot,
   toolchain,
@@ -111,6 +112,19 @@ expectVersion(
 );
 verifyCargoLock();
 verifyCargoResolution();
+
+for (const [name, config] of Object.entries(
+  toolchain['security-tools'] ?? {},
+)) {
+  const executable = cargoToolPath(name, config.binary ?? name);
+  if (!existsSync(executable)) {
+    failures.push(
+      `${name}: expected repo-local executable at ${executable}`,
+    );
+    continue;
+  }
+  expectVersion(name, commandVersion(executable), config.version);
+}
 
 if (browser) {
   const browserTools = toolchain['browser-tools'];

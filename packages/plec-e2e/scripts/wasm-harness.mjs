@@ -46,9 +46,9 @@ const result = spawnSync(
     '--chromedriver',
     chromeDriver,
     runtimeCrate,
-    ...(process.argv.length > 2
-      ? ['--', ...process.argv.slice(2)]
-      : []),
+    '--',
+    '--locked',
+    ...(process.argv.length > 2 ? process.argv.slice(2) : []),
   ],
   {
     cwd: repoRoot,

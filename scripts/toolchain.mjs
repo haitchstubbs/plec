@@ -39,6 +39,24 @@ export function wasmBindgenBinPath() {
   return path.dirname(wasmBindgenToolPath('wasm-bindgen'));
 }
 
+export function cargoToolRoot(name) {
+  const tool = toolchain['security-tools']?.[name];
+  if (!tool) throw new Error(`Unknown pinned Cargo tool: ${name}`);
+  return path.join(repoRoot, '.tools', 'cargo', name, tool.commit);
+}
+
+export function cargoToolPath(name, binary = name) {
+  return path.join(
+    cargoToolRoot(name),
+    'bin',
+    `${binary}${process.platform === 'win32' ? '.exe' : ''}`,
+  );
+}
+
+export function cargoToolBinPath(name) {
+  return path.dirname(cargoToolPath(name));
+}
+
 export function chromiumExecutable() {
   const { revision } = toolchain['browser-tools'].chromium;
   const root = path.join(

@@ -24,6 +24,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 # Keep the browser runtime small. This profile is used by wasm-pack's release
 # builds and also benefits any other workspace crate shipped as WASM.
@@ -42,7 +43,7 @@ tempfile = "3.3.0"
 async-graphql = "7"
 brotli = "8"
 clap = { version = "4.6.6", features = ["derive"] }
-plec-compiler = { path = "crates/plec-compiler" }
+plec-compiler = { path = "crates/plec-compiler", version = "0.1.0" }
 pollster = "0.4"
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
@@ -93,7 +94,7 @@ tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 # 0.6 is the first series against http 1.x, which axum 0.8 requires.
 tower-http = { version = "0.6", features = ["fs"] }
-reqwest = { version = "0.11", default-features = false }
+reqwest = { version = "0.12", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = [
   "std",
 ] }
@@ -115,7 +116,7 @@ rmp-serde = "1"
 once_cell = "1"
 blake3 = "1"
 dashmap = "6"
-lru = "0.16"
+lru = "0.18.2"
 parking_lot = "0.12"
 smallvec = "1"
 rstest = "0.25"

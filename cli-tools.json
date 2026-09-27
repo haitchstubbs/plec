@@ -5,6 +5,19 @@
     "wasm-bindgen-cli": "0.2.128",
     "opengrep": "1.30.0"
   },
+  "security-tools": {
+    "cargo-deny": {
+      "version": "0.19.0",
+      "repository": "https://github.com/EmbarkStudios/cargo-deny",
+      "commit": "09faadcea2d0d1742492e6872b743d1e4d151a27"
+    },
+    "cargo-audit": {
+      "version": "0.22.1",
+      "repository": "https://github.com/RustSec/rustsec",
+      "package": "cargo-audit",
+      "commit": "efcde93a237dc51f8c32d84d880bf97b442835c8"
+    }
+  },
   "prebuilt-build-tools": {
     "linux-x64": {
       "wasm-pack": {

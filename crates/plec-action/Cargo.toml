@@ -2,10 +2,11 @@
 name = "plec-action"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
-plec-ir = { path = "../plec-ir" }
-plec-schema = { path = "../plec-schema" }
+plec-ir = { path = "../plec-ir", version = "0.1.0" }
+plec-schema = { path = "../plec-schema", version = "0.1.0" }
 
 [dev-dependencies]
 serde_json.workspace = true

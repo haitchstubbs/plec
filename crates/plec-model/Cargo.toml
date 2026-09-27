@@ -2,9 +2,10 @@
 name = "plec-model"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
-plec-parser = { path = "../plec-parser" }
+plec-parser = { path = "../plec-parser", version = "0.1.0" }
 swc_common = { workspace = true }
 swc_ecma_ast = { workspace = true }
 

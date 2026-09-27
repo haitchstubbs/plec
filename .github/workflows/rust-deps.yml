@@ -1,0 +1,55 @@
+name: Rust dependency audit
+
+on:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - crates/**/Cargo.toml
+      - deny.toml
+      - cli-tools.json
+      - scripts/check-rust-deps.mjs
+      - scripts/setup.mjs
+      - scripts/toolchain.mjs
+      - scripts/verify-toolchain.mjs
+      - .github/workflows/rust-deps.yml
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - crates/**/Cargo.toml
+      - deny.toml
+      - cli-tools.json
+      - scripts/check-rust-deps.mjs
+      - scripts/setup.mjs
+      - scripts/toolchain.mjs
+      - scripts/verify-toolchain.mjs
+      - .github/workflows/rust-deps.yml
+  schedule:
+    - cron: '23 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Rust dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - name: Enable Corepack
+        run: corepack enable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+      - name: Install JavaScript dependencies
+        run: yarn install --immutable
+      - name: Install pinned tools
+        run: yarn install:build-tools
+      - name: Run full Rust dependency audit
+        run: yarn rust:deps:audit
