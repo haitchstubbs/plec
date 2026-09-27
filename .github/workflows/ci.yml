@@ -101,7 +101,10 @@ jobs:
           severity: HIGH,CRITICAL
           format: sarif
           output: trivy-license-results.sarif
-          exit-code: 1
+          # cargo-deny is the blocking license policy gate. Trivy's license
+          # classifier is retained for SARIF visibility without failing CI on
+          # classifications that are not violations of the repository policy.
+          exit-code: 0
       - if: always()
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
         with:
