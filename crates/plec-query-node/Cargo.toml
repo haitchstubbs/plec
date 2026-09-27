@@ -2,6 +2,7 @@
 name = "plec-query-node"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 build = "build.rs"
 
 [lib]
@@ -10,7 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 napi.workspace = true
 napi-derive.workspace = true
-query_core = { package = "plec-query", path = "../plec-query-core" }
+query_core = { package = "plec-query", path = "../plec-query-core", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 

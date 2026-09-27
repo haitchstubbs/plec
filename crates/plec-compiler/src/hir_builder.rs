@@ -170,6 +170,8 @@ struct HirLoweringCtx<'a> {
     component_aliases: std::collections::HashMap<String, ComponentId>,
     component_selectors: std::collections::HashMap<String, (ExprId, ComponentId, ComponentId)>,
     loader_data_binding: Option<BindingId>,
+    route_params_binding: Option<BindingId>,
+    route_search_binding: Option<BindingId>,
     scopes: Vec<std::collections::HashMap<String, BindingId>>,
     semantic_graph: &'a SemanticGraph,
     module_id: &'a str,
@@ -204,6 +206,8 @@ impl<'a> HirLoweringCtx<'a> {
             component_aliases: std::collections::HashMap::new(),
             component_selectors: std::collections::HashMap::new(),
             loader_data_binding: None,
+            route_params_binding: None,
+            route_search_binding: None,
             scopes: vec![std::collections::HashMap::new()],
             semantic_graph,
             module_id,
@@ -2947,6 +2951,60 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
             };
             HirExpr::Binding(binding)
         }
+        Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.obj.as_ref(), Expr::Ident(object) if object.sym == "Route") && matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref name) if name.sym == "useParams"))) =>
+        {
+            if !call.args.is_empty() {
+                return Err("Route.useParams() accepts no arguments".into());
+            }
+            let binding = if let Some(binding) = ctx.route_params_binding {
+                binding
+            } else {
+                let span = source_span_from_swc(call.span, ctx.module_id);
+                let binding = ctx.declare_binding(
+                    "__plec_route_params".into(),
+                    HirBindingKind::Input {
+                        kind: "routeParams".into(),
+                    },
+                    span.clone(),
+                )?;
+                ctx.inputs.push(HirInput {
+                    binding,
+                    name: "routeParams".into(),
+                    kind: "routeParams".into(),
+                    span,
+                });
+                ctx.route_params_binding = Some(binding);
+                binding
+            };
+            HirExpr::Binding(binding)
+        }
+        Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.obj.as_ref(), Expr::Ident(object) if object.sym == "Route") && matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref name) if name.sym == "useSearch"))) =>
+        {
+            if !call.args.is_empty() {
+                return Err("Route.useSearch() accepts no arguments".into());
+            }
+            let binding = if let Some(binding) = ctx.route_search_binding {
+                binding
+            } else {
+                let span = source_span_from_swc(call.span, ctx.module_id);
+                let binding = ctx.declare_binding(
+                    "__plec_route_search".into(),
+                    HirBindingKind::Input {
+                        kind: "routeSearch".into(),
+                    },
+                    span.clone(),
+                )?;
+                ctx.inputs.push(HirInput {
+                    binding,
+                    name: "routeSearch".into(),
+                    kind: "routeSearch".into(),
+                    span,
+                });
+                ctx.route_search_binding = Some(binding);
+                binding
+            };
+            HirExpr::Binding(binding)
+        }
         Expr::Call(call) if matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Member(member) if matches!(member.obj.as_ref(), Expr::Ident(object) if object.sym == "Route") && matches!(member.prop, swc_ecma_ast::MemberProp::Ident(ref name) if name.sym == "useReload"))) =>
         {
             if !call.args.is_empty() {
@@ -5007,6 +5065,51 @@ mod tests {
             "export function Page() { const todos = Route.useLoaderData(); return <p>{todos.length}</p>; }",
         ).unwrap();
         assert!(hir.inputs.iter().any(|input| input.kind == "loaderData"));
+    }
+
+    #[test]
+    fn lowers_route_params_as_a_typed_input() {
+        let hir = build_and_lower(
+            "export function Page() { const params = Route.useParams(); return <p>{params.id}</p>; }",
+        )
+        .unwrap();
+        assert!(hir.inputs.iter().any(|input| input.kind == "routeParams"));
+        let executable = crate::lower_component_to_executable(&hir).unwrap();
+        assert!(executable
+            .host_slots
+            .iter()
+            .any(|slot| slot.kind == "routeParams"));
+    }
+
+    #[test]
+    fn rejects_arguments_to_route_params() {
+        let error =
+            build_and_lower("export function Page() { return <p>{Route.useParams('id').id}</p>; }")
+                .unwrap_err();
+        assert!(error.contains("Route.useParams() accepts no arguments"));
+    }
+
+    #[test]
+    fn lowers_route_search_as_a_typed_input() {
+        let hir = build_and_lower(
+            "export function Page() { const search = Route.useSearch(); return <p>{search.tag}</p>; }",
+        )
+        .unwrap();
+        assert!(hir.inputs.iter().any(|input| input.kind == "routeSearch"));
+        let executable = crate::lower_component_to_executable(&hir).unwrap();
+        assert!(executable
+            .host_slots
+            .iter()
+            .any(|slot| slot.kind == "routeSearch"));
+    }
+
+    #[test]
+    fn rejects_arguments_to_route_search() {
+        let error = build_and_lower(
+            "export function Page() { return <p>{Route.useSearch('tag').tag}</p>; }",
+        )
+        .unwrap_err();
+        assert!(error.contains("Route.useSearch() accepts no arguments"));
     }
 
     #[test]

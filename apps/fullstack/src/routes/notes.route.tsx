@@ -3,14 +3,12 @@ import { Route as rootRoute } from './index';
 
 type Notes = { headline: string; detail: string };
 
-export const Route = createRoute({
+export const Route = createRoute<Notes>({
   getParentRoute: () => rootRoute,
   path: 'notes',
-  loader: async () => {
-    const response = await fetch('/api/notes');
-    if (!response.ok) throw new Error('Could not load notes');
-    return (await response.json()) as Notes;
-  },
+  // Loader-local fetch resolves to the decoded response body; a non-2xx
+  // transport result fails the loader before this value is ever produced.
+  loader: async () => await fetch('/api/notes'),
   errorComponent: NotesError,
   component: NotesPage,
   meta: {

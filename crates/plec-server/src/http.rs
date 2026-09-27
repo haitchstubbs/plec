@@ -23,6 +23,9 @@ pub(crate) struct RouteMatch<'a> {
 pub(crate) struct RouteExecution<'a> {
     pub route_match: RouteMatch<'a>,
     pub loader: Option<plec_ir::SsrLoaderOutcome>,
+    /// The instance rendered its not-found boundary (a loader in its subtree
+    /// produced a not-found outcome and this route owns the boundary).
+    pub not_found: bool,
 }
 
 pub(crate) async fn dispatch(
@@ -140,31 +143,210 @@ async fn render_document_inner(
     context: &mut RequestContext,
 ) -> Result<Response<Body>, ServerError> {
     let bundle = artifact::read_bounded(&state.options.artifact_path).await?;
-    let matched = match_route(&bundle.manifest, &context.pathname);
-    // SSR markup and app handlers must observe the same matched params the
-    // browser snapshot carries, so the request context stops dropping them.
-    let mut executions = Vec::new();
-    if let Some(matched) = matched {
-        for route_match in matched {
-            context.params = route_match.params.clone();
-            let loader =
-                loader::execute_route_loader(&bundle, route_match.route, context, &state.http)
-                    .await?;
-            executions.push(RouteExecution {
-                route_match,
-                loader,
-            });
+    // Loader redirects answer 307 so the browser URL, the re-requested
+    // document, and the snapshot location stay one consistent destination.
+    // The hops are followed internally only to bound the chain: loops fail
+    // with a diagnostic instead of bouncing the browser forever.
+    let mut hops = 0usize;
+    let mut destination = String::new();
+    loop {
+        let matched = match_route(&bundle.manifest, &context.pathname);
+        let mut executions = Vec::new();
+        let mut outcome = LoaderDocumentOutcome::Render;
+        if let Some(matched) = matched {
+            'chain: for route_match in matched {
+                let params: Vec<(String, String)> = route_match
+                    .params
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
+                context.params = route_match.params.clone();
+                let execution =
+                    loader::execute_route_loader(&bundle, route_match.route, context, &params, &state.http)
+                        .await?;
+                // A not-found origin must still join the execution list so
+                // boundary resolution can see it; redirects never commit.
+                let (loader, terminal) = match execution {
+                    loader::LoaderExecution::None => (None, None),
+                    loader::LoaderExecution::Snapshot(outcome) => (Some(outcome), None),
+                    loader::LoaderExecution::Redirect { location, .. } => {
+                        (None, Some(LoaderDocumentOutcome::Redirect(location)))
+                    }
+                    loader::LoaderExecution::NotFound => (
+                        Some(plec_ir::SsrLoaderOutcome {
+                            graph_id: route_match.route.graph_id.clone(),
+                            action: route_match.route.loader_action.unwrap_or_default(),
+                            state: plec_ir::SsrLoaderState::NotFound,
+                        }),
+                        Some(LoaderDocumentOutcome::NotFound),
+                    ),
+                };
+                executions.push(RouteExecution {
+                    route_match,
+                    loader,
+                    not_found: false,
+                });
+                if let Some(terminal) = terminal {
+                    outcome = terminal;
+                    break 'chain;
+                }
+            }
+        }
+        match outcome {
+            LoaderDocumentOutcome::Render => {
+                if hops > 0 {
+                    return redirect_response(&destination);
+                }
+                return render_executions(state, context, &bundle, executions, false).await;
+            }
+            LoaderDocumentOutcome::Redirect(location) => {
+                hops += 1;
+                if hops > plec_ir::limits::MAX_REDIRECT_HOPS {
+                    return Err(ServerError::message(format!(
+                        "route loader redirect loop exceeded {} hops at {location}",
+                        plec_ir::limits::MAX_REDIRECT_HOPS
+                    )));
+                }
+                destination = apply_redirect_location(context, &location)?;
+            }
+            LoaderDocumentOutcome::NotFound => {
+                if hops > 0 {
+                    // The redirect target resolves as not found; answer the
+                    // redirect so the destination URL owns the 404 response.
+                    return redirect_response(&destination);
+                }
+                return render_not_found_document(state, context, &bundle, executions).await;
+            }
         }
     }
+}
+
+/// One 307 hop to a loader redirect destination. Documents are GET requests,
+/// so 307 preserves semantics while keeping the browser URL authoritative.
+fn redirect_response(location: &str) -> Result<Response<Body>, ServerError> {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::TEMPORARY_REDIRECT;
+    let headers = response.headers_mut();
+    let value = axum::http::HeaderValue::from_str(location).map_err(|_| {
+        ServerError::message("route loader redirect target is not a valid header value")
+    })?;
+    headers.insert(axum::http::header::LOCATION, value);
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+enum LoaderDocumentOutcome {
+    Render,
+    Redirect(String),
+    NotFound,
+}
+
+/// Applies a validated redirect target to the request context so the next hop
+/// matches, seeds loaders, and snapshots against the destination URL. Returns
+/// the canonical destination path (the 307 `Location` value).
+fn apply_redirect_location(
+    context: &mut RequestContext,
+    location: &str,
+) -> Result<String, ServerError> {
+    let uri = location
+        .parse::<axum::http::Uri>()
+        .map_err(|_| ServerError::message("route loader redirect target is malformed"))?;
+    if uri.scheme().is_some() || uri.authority().is_some() || location.contains(['#', '\\']) {
+        return Err(ServerError::message(
+            "route loader redirects must use an absolute application path without a fragment",
+        ));
+    }
+    let path = uri.path();
+    if !path.starts_with('/') || path.starts_with("//") {
+        return Err(ServerError::message(
+            "route loader redirects must use an absolute application path",
+        ));
+    }
+    let query = uri.query();
+    context.query = crate::request::parse_query(query.unwrap_or_default())?;
+    context.pathname = path.to_owned();
+    // Rebuild the absolute URL against the original host.
+    let (scheme, host) = context
+        .url
+        .split_once("://")
+        .map(|(scheme, rest)| (scheme, rest.split('/').next().unwrap_or("localhost")))
+        .unwrap_or(("http", "localhost"));
+    context.url = match query {
+        Some(query) => format!("{scheme}://{host}{path}?{query}"),
+        None => format!("{scheme}://{host}{path}"),
+    };
+    Ok(match query {
+        Some(query) => format!("{path}?{query}"),
+        None => path.to_owned(),
+    })
+}
+
+/// Selects the not-found boundary owner for a not-found outcome raised
+/// somewhere in `executions` (the chain executed up to the origin). The owner
+/// is the deepest matched route declaring `notFoundComponent`, else the root
+/// boundary. The chain truncates at the owner: descendants never commit.
+fn resolve_not_found_boundary(
+    bundle: &artifact::Manifest,
+    executions: &mut Vec<RouteExecution<'_>>,
+) -> bool {
+    let owner = executions
+        .iter()
+        .rposition(|execution| execution.route_match.route.not_found_graph_id.is_some());
+    match owner {
+        Some(index) => {
+            executions.truncate(index + 1);
+            executions[index].not_found = true;
+            true
+        }
+        // Root boundary: the persistent root renders the boundary and no
+        // child route instance commits.
+        None => {
+            executions.clear();
+            bundle.root_not_found_graph_id.is_some()
+        }
+    }
+}
+
+async fn render_not_found_document(
+    state: &ServerState,
+    context: &mut RequestContext,
+    bundle: &artifact::ArtifactBundle,
+    mut executions: Vec<RouteExecution<'_>>,
+) -> Result<Response<Body>, ServerError> {
+    let root_not_found = resolve_not_found_boundary(&bundle.manifest, &mut executions);
+    if executions.is_empty() && !root_not_found {
+        // No notFoundComponent anywhere: the built-in minimal 404 body.
+        return Ok(json_response(
+            StatusCode::NOT_FOUND,
+            &json!({ "error": "not found" }),
+        ));
+    }
+    let response = render_executions(state, context, bundle, executions, root_not_found).await?;
+    let (mut parts, body) = response.into_parts();
+    parts.status = StatusCode::NOT_FOUND;
+    Ok(Response::from_parts(parts, body))
+}
+
+async fn render_executions(
+    state: &ServerState,
+    context: &mut RequestContext,
+    bundle: &artifact::ArtifactBundle,
+    executions: Vec<RouteExecution<'_>>,
+    root_not_found: bool,
+) -> Result<Response<Body>, ServerError> {
     let tag_policy = plec_ir::sink::TagPolicy {
         custom_elements: state.options.custom_elements.iter().cloned().collect(),
     };
     let rendered = ssr::render_application(
-        &bundle,
+        bundle,
         &executions,
         context,
         &tag_policy,
         state.options.development,
+        root_not_found,
     )?;
     let body = resolve_host_renders(
         &rendered.body,
@@ -172,7 +354,7 @@ async fn render_document_inner(
         state.options.application_runtime.as_deref(),
     )
     .await;
-    let payload = ssr::bootstrap_payload(&bundle, &executions, context, &rendered);
+    let payload = ssr::bootstrap_payload(bundle, &executions, context, &rendered, root_not_found);
     // No bootstrap means nothing to resume: the browser mounts fresh.
     let bootstrap = payload.map(|payload| {
         serde_json::to_string(&payload)
@@ -358,4 +540,57 @@ fn send_html(
         }
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::request::QueryValue;
+
+    #[test]
+    fn internal_redirect_preserves_https_and_non_default_port() {
+        let mut context = RequestContext {
+            url: "https://app.example.test:8443/before?old=1".into(),
+            pathname: "/before".into(),
+            method: Method::GET,
+            headers: Default::default(),
+            cookies: HashMap::new(),
+            params: HashMap::new(),
+            query: HashMap::from([("old".into(), QueryValue::One("1".into()))]),
+        };
+
+        let location = apply_redirect_location(&mut context, "/after?tab=2").unwrap();
+
+        assert_eq!(location, "/after?tab=2");
+        assert_eq!(context.url, "https://app.example.test:8443/after?tab=2");
+        assert_eq!(context.pathname, "/after");
+    }
+
+    #[test]
+    fn rejects_malformed_or_non_local_redirect_targets() {
+        let context = || RequestContext {
+            url: "https://app.example.test/before".into(),
+            pathname: "/before".into(),
+            method: Method::GET,
+            headers: Default::default(),
+            cookies: HashMap::new(),
+            params: HashMap::new(),
+            query: HashMap::new(),
+        };
+
+        for target in [
+            "",
+            "relative/path",
+            "//outside.example/path",
+            "https://outside.example/path",
+            "/bad path",
+            "/ok?bad=%",
+            "/ok#fragment",
+        ] {
+            assert!(
+                apply_redirect_location(&mut context(), target).is_err(),
+                "accepted invalid redirect target {target:?}"
+            );
+        }
+    }
 }

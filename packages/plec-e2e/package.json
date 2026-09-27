@@ -1,5 +1,6 @@
 {
   "name": "@plec/e2e",
+  "version": "0.1.0",
   "packageManager": "yarn@4.17.1",
   "private": true,
   "type": "module",
@@ -17,6 +18,6 @@
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.11"
   }
 }

@@ -20,8 +20,26 @@ export type RouteMetadata = {
   description?: string;
 };
 
-export type RouteOptions<TData = unknown> = {
-  path?: string;
+type ParamNames<TPath extends string> =
+  TPath extends `${string}$${infer Tail}`
+    ? Tail extends `${infer Name}/${infer Rest}`
+      ? Name | ParamNames<Rest>
+      : Tail extends ''
+        ? never
+        : Tail
+    : never;
+
+export type RouteParams<TPath extends string> = string extends TPath
+  ? Record<string, string>
+  : { [Name in ParamNames<TPath>]: string };
+
+export type RouteSearch = Record<string, string | string[] | undefined>;
+
+export type RouteOptions<
+  TData = unknown,
+  TPath extends string = string,
+> = {
+  path?: TPath;
   /** Child graphs mount here in the matching parent graph. */
   outletId?: string;
   component: PlecComponent;
@@ -29,23 +47,70 @@ export type RouteOptions<TData = unknown> = {
   pendingComponent?: PlecComponent;
   pendingMode?: PendingMode;
   errorComponent?: PlecComponent;
+  /**
+   * Renders when a loader in this route's subtree resolves as not found.
+   * The deepest matched route owning a not-found boundary wins; without any
+   * route boundary the root boundary applies. SSR answers 404.
+   */
+  notFoundComponent?: PlecComponent;
   /** Static document metadata rendered by the Plec server. */
   meta?: RouteMetadata;
 };
 
-export type RouteDefinition<TData = unknown> = RouteOptions<TData> & {
+export type RouteDefinition<
+  TData = unknown,
+  TPath extends string = string,
+> = RouteOptions<TData, TPath> & {
   children: RouteDefinition[];
   parent?: RouteDefinition;
   addChildren(children: RouteDefinition[]): RouteDefinition<TData>;
   useLoaderData(): TData;
+  useParams(): RouteParams<TPath>;
+  useSearch(): RouteSearch;
   useReload(): () => Promise<void>;
 };
+
+export type RedirectOptions = {
+  /** Replace the current history entry. Defaults to `true`. */
+  replace?: boolean;
+};
+
+/** Terminal loader outcome: navigate to an application path. */
+export function redirect(
+  to: string,
+  options: RedirectOptions = {},
+): never {
+  throw new PlecRedirectOutcome(to, options.replace ?? true);
+}
+
+/** Terminal loader outcome: the matched route resolves as not found. */
+export function notFound(): never {
+  throw new PlecNotFoundOutcome();
+}
+
+export class PlecRedirectOutcome extends Error {
+  constructor(
+    readonly location: string,
+    readonly replace: boolean,
+  ) {
+    super(`redirect to ${location}`);
+    this.name = 'PlecRedirectOutcome';
+  }
+}
+
+export class PlecNotFoundOutcome extends Error {
+  constructor() {
+    super('not found');
+    this.name = 'PlecNotFoundOutcome';
+  }
+}
 
 export type RouteMatch = {
   route: RouteDefinition;
   params: Record<string, string>;
+  search: RouteSearch;
   data?: unknown;
-  status: 'pending' | 'ready' | 'error';
+  status: 'pending' | 'ready' | 'error' | 'notFound';
   error?: unknown;
 };
 
@@ -61,20 +126,23 @@ export function createRootRoute<TData = unknown>(
   return makeRoute(options);
 }
 
-export function createRoute<TData = unknown>(
-  options: RouteOptions<TData> & {
+export function createRoute<
+  TData = unknown,
+  TPath extends string = string,
+>(
+  options: RouteOptions<TData, TPath> & {
     getParentRoute: () => RouteDefinition;
   },
-): RouteDefinition<TData> {
+): RouteDefinition<TData, TPath> {
   const route = makeRoute(options);
   route.parent = options.getParentRoute();
   return route;
 }
 
-function makeRoute<TData>(
-  options: RouteOptions<TData>,
-): RouteDefinition<TData> {
-  const route: RouteDefinition<TData> = {
+function makeRoute<TData, TPath extends string = string>(
+  options: RouteOptions<TData, TPath>,
+): RouteDefinition<TData, TPath> {
+  const route: RouteDefinition<TData, TPath> = {
     ...options,
     children: [],
     addChildren(children) {
@@ -90,6 +158,24 @@ function makeRoute<TData>(
           'Route.useLoaderData() can only run while rendering its matching route.',
         );
       return match.data as TData;
+    },
+    useParams() {
+      const state = currentRendering();
+      const match = state?.activeRouteMatch;
+      if (!state || !match || match.route !== route)
+        throw new Error(
+          'Route.useParams() can only run while rendering its matching route.',
+        );
+      return match.params as RouteParams<TPath>;
+    },
+    useSearch() {
+      const state = currentRendering();
+      const match = state?.activeRouteMatch;
+      if (!state || !match || match.route !== route)
+        throw new Error(
+          'Route.useSearch() can only run while rendering its matching route.',
+        );
+      return match.search;
     },
     useReload() {
       const state = currentRendering();
@@ -159,6 +245,7 @@ export class PlecRouter {
     );
     if (!match || !current || !route.loader) return Promise.resolve();
     match.params = current.params;
+    match.search = parseSearch(location.search);
     const previous = this.routeReloads.get(route);
     previous?.controller.abort();
     const request = {
@@ -184,8 +271,10 @@ export class PlecRouter {
     const matches = matchRoutes(this.routeTree, location.pathname) ?? [
       { route: this.routeTree, params: {}, status: 'ready' as const },
     ];
+    const search = parseSearch(location.search);
     this.matches = matches.map((match) => ({
       ...match,
+      search,
       status: match.route.loader ? 'pending' : 'ready',
     }));
     // A navigation is committed atomically after every active loader succeeds.
@@ -208,6 +297,17 @@ export class PlecRouter {
         )
           return;
         if (match.status === 'error') return;
+        if (
+          this.matches.some(
+            (candidate) => candidate.status === 'notFound',
+          )
+        ) {
+          this.committedMatches = this.matches.map((candidate) => ({
+            ...candidate,
+          }));
+          this.emit();
+          return;
+        }
       }
       if (
         this.controller === controller &&
@@ -291,9 +391,48 @@ export class PlecRouter {
             this.requestVersion !== version)
       )
         return;
+      // Terminal loader outcomes do not commit the interrupted route.
+      if (error instanceof PlecRedirectOutcome) {
+        if (!reloadRoute) {
+          this.navigate(error.location, { replace: error.replace });
+        }
+        return;
+      }
+      if (error instanceof PlecNotFoundOutcome) {
+        this.resolveNotFound(match);
+        if (commit) {
+          this.committedMatches = this.matches.map((candidate) => ({
+            ...candidate,
+          }));
+        }
+        this.emit();
+        return;
+      }
       match.status = 'error';
       match.error = error;
       this.emit();
+    }
+  }
+
+  /**
+   * Truncate the active route chain at its nearest not-found boundary. If no
+   * route declares one, the root match owns the built-in not-found view.
+   */
+  private resolveNotFound(origin: RouteMatch) {
+    const originIndex = this.matches.indexOf(origin);
+    if (originIndex < 0) return;
+    let ownerIndex = 0;
+    for (let index = originIndex; index >= 0; index -= 1) {
+      if (this.matches[index]?.route.notFoundComponent) {
+        ownerIndex = index;
+        break;
+      }
+    }
+    this.matches.splice(ownerIndex + 1);
+    const owner = this.matches[ownerIndex];
+    if (owner) {
+      owner.status = 'notFound';
+      owner.error = undefined;
     }
   }
 
@@ -383,4 +522,29 @@ export function matchRoutes(
     return undefined;
   };
   return walk(root, 0, {});
+}
+
+/** Parse URL form query values; repeated keys retain order, malformed escapes throw. */
+export function parseSearch(search: string): RouteSearch {
+  const result: RouteSearch = {};
+  const query = search.startsWith('?') ? search.slice(1) : search;
+  for (const pair of query.split('&')) {
+    if (!pair) continue;
+    const separator = pair.indexOf('=');
+    const rawKey = separator < 0 ? pair : pair.slice(0, separator);
+    const rawValue = separator < 0 ? '' : pair.slice(separator + 1);
+    const key = decodeURIComponent(rawKey.replace(/\+/g, ' '));
+    const value = decodeURIComponent(rawValue.replace(/\+/g, ' '));
+    const previous = result[key];
+    if (!Object.prototype.hasOwnProperty.call(result, key)) {
+      Object.defineProperty(result, key, {
+        value,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    } else if (Array.isArray(previous)) previous.push(value);
+    else result[key] = [previous as string, value];
+  }
+  return result;
 }

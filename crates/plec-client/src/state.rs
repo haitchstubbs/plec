@@ -140,8 +140,8 @@ pub struct RouterListener {
     pub callback: Closure<dyn FnMut(Event)>,
 }
 
-#[derive(Clone)]
 pub struct RuntimeState {
+    owns_router_listeners: bool,
     pub router_listeners: Rc<RefCell<Vec<RouterListener>>>,
     /// Typed graph state is instance-owned so a persistent layout never loses
     /// its DOM, state, listeners, or fetch ownership when a child route moves.
@@ -210,6 +210,41 @@ pub struct RuntimeState {
     /// lifetime so retained JS references reach their explicit stale guard
     /// instead of wasm-bindgen's generic "closure dropped" failure.
     pub retired_host_callbacks: Rc<RefCell<Vec<HostCallbackHandle>>>,
+    /// Redirect hops followed during the current navigation. Loader
+    /// redirects increment; user-initiated navigation resets. Shared with
+    /// the SSR host's `MAX_REDIRECT_HOPS` so loop behavior matches.
+    pub typed_redirect_depth: Rc<std::cell::Cell<usize>>,
+}
+
+impl Clone for RuntimeState {
+    fn clone(&self) -> Self {
+        Self {
+            owns_router_listeners: false,
+            router_listeners: self.router_listeners.clone(),
+            typed: self.typed.clone(),
+            region_tracker: self.region_tracker.clone(),
+            reconcile_budget: self.reconcile_budget.clone(),
+            typed_root: self.typed_root.clone(),
+            typed_generation: self.typed_generation.clone(),
+            typed_component_registry: self.typed_component_registry.clone(),
+            typed_manifest: self.typed_manifest.clone(),
+            typed_host_inputs: self.typed_host_inputs.clone(),
+            typed_ssr_host_inputs: self.typed_ssr_host_inputs.clone(),
+            typed_ssr_imported: self.typed_ssr_imported.clone(),
+            typed_ssr_route_chain: self.typed_ssr_route_chain.clone(),
+            typed_ssr_loaders: self.typed_ssr_loaders.clone(),
+            typed_ssr_branches: self.typed_ssr_branches.clone(),
+            typed_ssr_loops: self.typed_ssr_loops.clone(),
+            typed_ssr_nested: self.typed_ssr_nested.clone(),
+            typed_components: self.typed_components.clone(),
+            cookie_policy: self.cookie_policy.clone(),
+            fetch_policy: self.fetch_policy.clone(),
+            tag_policy: self.tag_policy.clone(),
+            host_registry: self.host_registry.clone(),
+            retired_host_callbacks: self.retired_host_callbacks.clone(),
+            typed_redirect_depth: self.typed_redirect_depth.clone(),
+        }
+    }
 }
 
 /// One host-owned fetch grant. Authority comes only from grants published
@@ -274,13 +309,56 @@ impl RuntimeState {
         &self,
         loader_data: Option<&RuntimeValue>,
     ) -> HashMap<String, RuntimeValue> {
+        self.typed_host_inputs_for_route(loader_data, None)
+    }
+
+    pub fn typed_host_inputs_for_route(
+        &self,
+        loader_data: Option<&RuntimeValue>,
+        route_params: Option<&HashMap<String, String>>,
+    ) -> HashMap<String, RuntimeValue> {
+        self.typed_host_inputs_for_location(loader_data, route_params, None)
+            .expect("missing search input has no decoding failure")
+    }
+
+    pub fn typed_host_inputs_for_location(
+        &self,
+        loader_data: Option<&RuntimeValue>,
+        route_params: Option<&HashMap<String, String>>,
+        route_search: Option<&str>,
+    ) -> Result<HashMap<String, RuntimeValue>, JsValue> {
         let mut inputs = self.typed_host_inputs.borrow().clone();
         if let Some(value) = loader_data {
             inputs.insert("loaderData".into(), value.clone());
         } else {
             inputs.remove("loaderData");
         }
-        inputs
+        inputs.insert(
+            "routeParams".into(),
+            RuntimeValue::Record(
+                route_params
+                    .into_iter()
+                    .flat_map(|params| params.iter())
+                    .map(|(key, value)| (key.clone(), RuntimeValue::String(value.clone())))
+                    .collect(),
+            ),
+        );
+        if let Some(search) = route_search {
+            inputs.insert(
+                "routeSearch".into(),
+                parse_route_search(search)?,
+            );
+        } else if !inputs.contains_key("routeSearch") {
+            inputs.insert("routeSearch".into(), RuntimeValue::Record(HashMap::new()));
+        }
+        Ok(inputs)
+    }
+
+    pub fn set_typed_route_search(&self, search: &str) -> Result<(), JsValue> {
+        self.typed_host_inputs
+            .borrow_mut()
+            .insert("routeSearch".into(), parse_route_search(search)?);
+        Ok(())
     }
 
     /// Installs the runtime-local host provider registry. `null` removes
@@ -309,9 +387,39 @@ impl RuntimeState {
     }
 }
 
+pub(crate) fn parse_route_search(search: &str) -> Result<RuntimeValue, JsValue> {
+    let mut values: HashMap<String, Vec<String>> = HashMap::new();
+    let search = search.strip_prefix('?').unwrap_or(search);
+    for pair in search.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let decode = |value: &str| {
+            let value = value.replace('+', " ");
+            js_sys::decode_uri_component(&value)
+                .map(|decoded| decoded.as_string().unwrap_or_default())
+        };
+        values.entry(decode(key)?).or_default().push(decode(value)?);
+    }
+    let value = RuntimeValue::Record(
+        values
+            .into_iter()
+            .map(|(key, values)| {
+                let value = if values.len() == 1 {
+                    RuntimeValue::String(values.into_iter().next().unwrap_or_default())
+                } else {
+                    RuntimeValue::Array(values.into_iter().map(RuntimeValue::String).collect())
+                };
+                (key, value)
+            })
+            .collect(),
+    );
+    value.check_limits().map_err(JsValue::from_str)?;
+    Ok(value)
+}
+
 impl RuntimeState {
     pub fn new() -> Self {
         Self {
+            owns_router_listeners: true,
             router_listeners: Rc::new(RefCell::new(Vec::new())),
             typed: Rc::new(RefCell::new(HashMap::new())),
             region_tracker: Rc::new(RegionTracker::new()),
@@ -334,6 +442,7 @@ impl RuntimeState {
             tag_policy: Rc::new(RefCell::new(None)),
             host_registry: Rc::new(RefCell::new(None)),
             retired_host_callbacks: Rc::new(RefCell::new(Vec::new())),
+            typed_redirect_depth: Rc::new(std::cell::Cell::new(0)),
         }
     }
 
@@ -365,6 +474,10 @@ impl RuntimeState {
 /// was released without a prior dispose.
 impl Drop for RuntimeState {
     fn drop(&mut self) {
+        // Clones dispatch shared runtime state but never own facade listeners.
+        if !self.owns_router_listeners {
+            return;
+        }
         for listener in self.router_listeners.borrow_mut().drain(..) {
             let _ = listener.target.remove_event_listener_with_callback(
                 &listener.event_type,

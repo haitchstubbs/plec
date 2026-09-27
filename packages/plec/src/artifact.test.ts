@@ -12,12 +12,16 @@ import { describe, expect, it } from 'vitest';
  */
 const packageDir = path.resolve(import.meta.dirname, '..');
 const distDir = path.join(packageDir, 'dist');
-const built = existsSync(path.join(distDir, 'index.js'));
+const isWindows = process.platform === 'win32';
+const binaryName = isWindows ? 'plec.exe' : 'plec';
+// Only scripts/build-artifact.mjs assembles dist/bin/<binaryName>; the plain
+// workspace build also produces dist/index.js, so gate on the artifact-only
+// output to skip until the release artifact was built (mirrors shim.test.ts).
+const built =
+  existsSync(path.join(distDir, 'index.js')) &&
+  existsSync(path.join(distDir, 'bin', binaryName));
 
 describe.skipIf(!built)('plec release artifact', () => {
-  const isWindows = process.platform === 'win32';
-  const binaryName = isWindows ? 'plec.exe' : 'plec';
-
   it('stages the WASM runtime assets with brotli sidecars', () => {
     expect(
       existsSync(path.join(distDir, 'runtime/runtime_bg.wasm')),
@@ -31,12 +35,6 @@ describe.skipIf(!built)('plec release artifact', () => {
     expect(
       existsSync(path.join(distDir, 'runtime/runtime.js.br')),
     ).toBe(true);
-  });
-
-  it('carries the release CLI binary the bin shim needs', () => {
-    expect(existsSync(path.join(distDir, 'bin', binaryName))).toBe(
-      true,
-    );
   });
 
   it('ships a CLI binary whose version matches the package version', () => {

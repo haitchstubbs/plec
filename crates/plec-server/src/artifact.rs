@@ -37,6 +37,8 @@ pub struct Manifest {
     #[serde(default)]
     pub root_graph_id: String,
     #[serde(default)]
+    pub root_not_found_graph_id: Option<String>,
+    #[serde(default)]
     pub routes: Vec<Route>,
 }
 
@@ -58,6 +60,8 @@ pub struct Route {
     #[serde(default)]
     pub error_graph_id: Option<String>,
     #[serde(default)]
+    pub not_found_graph_id: Option<String>,
+    #[serde(default)]
     pub loader_action: Option<usize>,
     #[serde(default = "default_pending_mode")]
     pub pending_mode: String,
@@ -74,6 +78,7 @@ impl Manifest {
         plec_schema::routing::RouteManifest {
             version: None,
             root_graph_id: self.root_graph_id.clone(),
+            root_not_found_graph_id: self.root_not_found_graph_id.clone(),
             routes: self
                 .routes
                 .iter()
@@ -84,6 +89,7 @@ impl Manifest {
                     graph_id: route.graph_id.clone(),
                     pending_graph_id: route.pending_graph_id.clone(),
                     error_graph_id: route.error_graph_id.clone(),
+                    not_found_graph_id: route.not_found_graph_id.clone(),
                     outlet_id: route.outlet_id.clone(),
                     loader_action: route.loader_action,
                     pending_mode: route.pending_mode.clone(),

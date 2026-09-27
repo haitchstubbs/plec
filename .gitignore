@@ -47,6 +47,7 @@ playwright-report/
 
 # Temporary files
 .tmp
+opengrep-results.sarif
 
 # Local tooling (provisioned by scripts/setup.mjs) and build caches
 .tools/

@@ -6,14 +6,12 @@ type Todo = { id: string; title: string; completed: boolean };
 type TodoPatch = Pick<Todo, 'completed'> | Pick<Todo, 'title'>;
 type TodoMutationInput = { id: string; body: string };
 
-export const Route = createRoute({
+export const Route = createRoute<Todo[]>({
   getParentRoute: () => rootRoute,
   path: 'todos',
-  loader: async ({ signal }) => {
-    const response = await fetch('/api/todos', { signal });
-    if (!response.ok) throw new Error('Could not load todos');
-    return (await response.json()) as Todo[];
-  },
+  // Loader-local fetch resolves to the decoded body; transport failures
+  // (non-2xx) become loader errors before any body logic runs.
+  loader: async ({ signal }) => await fetch('/api/todos', { signal }),
   pendingComponent: TodosPending,
   errorComponent: TodosError,
   component: TodosPage,
