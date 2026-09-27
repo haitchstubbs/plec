@@ -49,7 +49,7 @@ jobs:
           toolchain: 1.98.0
       - name: Install JavaScript dependencies
         run: yarn install --immutable
-      - name: Install pinned tools
-        run: yarn install:build-tools
+      - name: Install pinned Rust security tools
+        run: yarn install:rust-security-tools
       - name: Run full Rust dependency audit
         run: yarn rust:deps:audit

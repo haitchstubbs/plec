@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "install:build-tools": "node scripts/setup.mjs",
+    "install:rust-security-tools": "node scripts/setup.mjs --security-only",
     "install:plec-cli": "yarn rust:deps:check && cargo install --locked --path crates/plec-cli",
     "install:plec-cli:dev": "yarn rust:deps:check && PLEC_CLI_VERSION=dev cargo install --locked --path crates/plec-cli --force",
     "setup": "yarn install --immutable && yarn install:build-tools && yarn build --force",

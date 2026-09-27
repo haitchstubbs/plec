@@ -28,6 +28,7 @@ import {
 } from './toolchain.mjs';
 
 const { 'build-tools': buildTools } = cliToolsConfig;
+const securityOnly = process.argv.includes('--security-only');
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptsDir, '..');
@@ -524,29 +525,31 @@ function ensureChromeDriver() {
 
 // Ensure required Rust build tools are installed
 
-for (const [name, version] of Object.entries(buildTools)) {
-  if (name === 'wasm-bindgen-cli') {
-    ensureWasmBindgenCli();
-  } else if (name === 'opengrep') {
-    if (
-      cliToolsConfig['prebuilt-build-tools']?.[
-        `${process.platform}-${process.arch}`
-      ]?.opengrep
-    ) {
-      ensureOpengrep();
-    } else if (process.env.CI) {
-      ensureOpengrep();
+if (!securityOnly) {
+  for (const [name, version] of Object.entries(buildTools)) {
+    if (name === 'wasm-bindgen-cli') {
+      ensureWasmBindgenCli();
+    } else if (name === 'opengrep') {
+      if (
+        cliToolsConfig['prebuilt-build-tools']?.[
+          `${process.platform}-${process.arch}`
+        ]?.opengrep
+      ) {
+        ensureOpengrep();
+      } else if (process.env.CI) {
+        ensureOpengrep();
+      } else {
+        console.log(
+          `Skipping pinned OpenGrep install: no prebuilt is configured for ${process.platform}/${process.arch}.`,
+        );
+      }
     } else {
-      console.log(
-        `Skipping pinned OpenGrep install: no prebuilt is configured for ${process.platform}/${process.arch}.`,
-      );
+      ensureTool({ name, version });
     }
-  } else {
-    ensureTool({ name, version });
-  }
 
-  if (process.exitCode) {
-    break;
+    if (process.exitCode) {
+      break;
+    }
   }
 }
 
@@ -559,7 +562,7 @@ if (!process.exitCode) {
   }
 }
 
-if (!process.exitCode) {
+if (!process.exitCode && !securityOnly) {
   console.log('Ensuring wasm32-unknown-unknown target is installed...');
 
   const target = run('rustup', [
@@ -577,11 +580,11 @@ if (!process.exitCode) {
   }
 }
 
-if (!process.exitCode) {
+if (!process.exitCode && !securityOnly) {
   ensureChromeDriver();
 }
 
-if (!process.exitCode) {
+if (!process.exitCode && !securityOnly) {
   const verify = run(
     process.execPath,
     ['scripts/verify-toolchain.mjs', '--browser'],
@@ -595,5 +598,9 @@ if (!process.exitCode) {
 }
 
 if (!process.exitCode) {
-  console.log('WASM/browser toolchain ready.');
+  console.log(
+    securityOnly
+      ? 'Pinned Rust dependency security tools ready.'
+      : 'WASM/browser toolchain ready.',
+  );
 }
