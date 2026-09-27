@@ -106,6 +106,9 @@ test('separates fullstack production licenses from other workspace records', asy
   assert.ok(runtimeScope.direct.has('lucide'));
   assert.ok(runtimeScope.packages.has('@fontsource-variable/outfit'));
   assert.ok(runtimeScope.packages.has('@fontsource-variable/raleway'));
+  assert.ok(!runtimeScope.direct.has('@plec/ui'));
+  assert.ok(!runtimeScope.packages.has('shadcn'));
+  assert.ok(!runtimeScope.packages.has('@babel/core'));
   assert.ok(!runtimeScope.packages.has('lightningcss'));
 
   const security = { available: true, results: [] };
@@ -147,13 +150,10 @@ test('separates fullstack production licenses from other workspace records', asy
     runtimeScope,
   });
 
+  assert.match(body, /Fullstack production dependencies \| ✅ \| 2/);
   assert.match(
     body,
-    /Fullstack production dependencies \| ⚠️ Review \| 2/,
-  );
-  assert.match(
-    body,
-    /Other workspace records \(outside fullstack runtime; includes tooling\) \| ⚠️ Review \| 1/,
+    /Other workspace records \(outside fullstack runtime; includes tooling\) \| ℹ️ Inventory \| 1/,
   );
   assert.match(body, /“Unknown” is Trivy’s classification/);
   assert.ok(

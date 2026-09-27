@@ -9,7 +9,7 @@
     "copy:fonts:outfit": "yarn prep:assetdir && cp ../../node_modules/@fontsource-variable/outfit/files/*.woff2 dist/public/assets/files/",
     "copy:fonts:raleway": "yarn prep:assetdir && cp ../../node_modules/@fontsource-variable/raleway/files/*.woff2 dist/public/assets/files/",
     "copy:fonts": "yarn copy:fonts:outfit && yarn copy:fonts:raleway",
-    "copy:licenses": "mkdir -p dist/public/licenses && cp ../../node_modules/lucide/LICENSE dist/public/licenses/Lucide-LICENSE.txt",
+    "copy:licenses": "mkdir -p dist/public/licenses && cp ../../node_modules/lucide/LICENSE dist/public/licenses/Lucide-LICENSE.txt && cp ../../node_modules/@fontsource-variable/outfit/LICENSE dist/public/licenses/Outfit-OFL-1.1.txt && cp ../../node_modules/@fontsource-variable/raleway/LICENSE dist/public/licenses/Raleway-OFL-1.1.txt",
     "build:plec": "plec build src/app.tsx --out-dir dist",
     "build:css": "tailwindcss -i src/styles.css -o dist/public/assets/styles.css",
     "dev:rebuild": "yarn check:no-react && yarn --cwd ../.. exec turbo run build --filter=fullstack && yarn start",
@@ -26,7 +26,6 @@
     "@plec/browser": "workspace:*",
     "@plec/core": "workspace:*",
     "@plec/lucide": "workspace:*",
-    "@plec/ui": "workspace:*",
     "lucide": "^1.31.0"
   },
   "devDependencies": {

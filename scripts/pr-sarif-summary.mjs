@@ -274,14 +274,13 @@ export function renderTrivySummary(
   const runtimeClassifications = classificationCounts(runtimeLicenses);
   const otherClassifications = classificationCounts(otherLicenses);
   const runtimeReviewCount = reviewCount(runtimeClassifications);
-  const otherReviewCount = reviewCount(otherClassifications);
   const runtimeStatus =
     !licenses.available || !runtimeScope
       ? '⚠️ Unavailable'
       : runtimeReviewCount
         ? '⚠️ Review'
         : '✅';
-  const otherStatus = otherReviewCount ? '⚠️ Review' : 'ℹ️ Inventory';
+  const otherStatus = 'ℹ️ Inventory';
   const licenseGateStatus = !licenses.available
     ? '⚠️'
     : licenseGateOutcome === 'skipped'
@@ -338,7 +337,7 @@ export function renderTrivySummary(
       body += '\n\nNo HIGH/CRITICAL license gate findings.';
     }
     if (runtimeReviewCount) {
-      body += `\n\n${runtimeReviewCount} fullstack runtime record${runtimeReviewCount === 1 ? '' : 's'} has a reciprocal, unknown, or unclassified Trivy classification. Notice records are attribution obligations, not gate failures.`;
+      body += `\n\n${runtimeReviewCount} fullstack runtime record${runtimeReviewCount === 1 ? '' : 's'} has a reciprocal or unclassified Trivy classification. Notice records are attribution obligations, not gate failures.`;
     }
     const orderedLicenses = prioritizeLicenseRecords(
       licenses.results,
@@ -380,7 +379,6 @@ function classificationCounts(results) {
 
 function reviewCount(classifications) {
   return (
-    (classifications.get('unknown') ?? 0) +
     (classifications.get('reciprocal') ?? 0) +
     (classifications.get('unclassified') ?? 0)
   );
