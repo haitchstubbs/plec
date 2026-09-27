@@ -5,6 +5,7 @@ import {
   createRouter,
   matchRoutes,
   notFound,
+  redirect,
 } from './router';
 import { withRendering } from '../client/root/render-context';
 import type { RootState } from '../client/root/root-state';
@@ -434,6 +435,139 @@ describe('code-first routes', () => {
     });
     expect(router.matches[0]?.status).toBe('ready');
     expect(router.matches[0]?.data).toBeUndefined();
+  });
+
+  it.each([
+    'https://example.com/path',
+    '//example.com/path',
+    'login',
+    '/login#section',
+  ])('rejects invalid loader redirect target %s', async (target) => {
+    setLocation('/source');
+    const root = createRootRoute({ component: View });
+    const source = createRoute({
+      getParentRoute: () => root,
+      path: 'source',
+      component: View,
+      loader: () => redirect(target),
+    });
+    root.addChildren([source]);
+    const router = createRouter({ routeTree: root });
+    router.start();
+    for (let index = 0; index < 8; index++) await Promise.resolve();
+    expect(router.matches.at(-1)).toMatchObject({ status: 'error' });
+    expect(router.matches.at(-1)?.error).toBeInstanceOf(Error);
+  });
+
+  it('bounds asynchronous loader redirect chains', async () => {
+    setLocation('/a');
+    const fakeWindow = globalThis.window as unknown as {
+      history: { replaceState: (...args: unknown[]) => void };
+      location: {
+        pathname: string;
+        search: string;
+        hash: string;
+        href: string;
+      };
+    };
+    fakeWindow.history.replaceState = (_state, _title, path) => {
+      const url = new URL(String(path), 'http://localhost');
+      Object.assign(fakeWindow.location, {
+        pathname: url.pathname,
+        search: url.search,
+        hash: url.hash,
+        href: url.href,
+      });
+    };
+    const root = createRootRoute({ component: View });
+    const a = createRoute({
+      getParentRoute: () => root,
+      path: 'a',
+      component: View,
+      loader: async () => {
+        await Promise.resolve();
+        redirect('/b');
+      },
+    });
+    const b = createRoute({
+      getParentRoute: () => root,
+      path: 'b',
+      component: View,
+      loader: async () => {
+        await Promise.resolve();
+        redirect('/a');
+      },
+    });
+    root.addChildren([a, b]);
+    const router = createRouter({ routeTree: root });
+    let loads = 0;
+    router.subscribe(() => {
+      if (router.matches.some((match) => match.status === 'pending'))
+        loads += 1;
+    });
+    router.start();
+    for (let index = 0; index < 100; index++) await Promise.resolve();
+    expect(loads).toBeLessThan(20);
+    expect(router.matches.at(-1)?.status).toBe('error');
+    expect(String(router.matches.at(-1)?.error)).toContain(
+      'redirect loop exceeded 5 hops',
+    );
+  });
+
+  it('follows redirects returned by route reload and replaces history', async () => {
+    setLocation('/source');
+    let calls = 0;
+    const historyCalls: string[] = [];
+    const root = createRootRoute({ component: View });
+    const source = createRoute({
+      getParentRoute: () => root,
+      path: 'source',
+      component: View,
+      loader: () =>
+        ++calls === 1 ? 'loaded' : redirect('/destination'),
+    });
+    const destination = createRoute({
+      getParentRoute: () => root,
+      path: 'destination',
+      component: View,
+      loader: async () => 'destination',
+    });
+    root.addChildren([source, destination]);
+    const fakeWindow = globalThis.window as unknown as {
+      history: Record<string, (...args: unknown[]) => void>;
+      location: {
+        pathname: string;
+        search: string;
+        hash: string;
+        href: string;
+        origin: string;
+      };
+    };
+    fakeWindow.history.replaceState = (_state, _title, path) => {
+      historyCalls.push(`replace:${String(path)}`);
+      const url = new URL(String(path), 'http://localhost');
+      Object.assign(fakeWindow.location, {
+        pathname: url.pathname,
+        search: url.search,
+        hash: url.hash,
+        href: url.href,
+      });
+    };
+    fakeWindow.history.pushState = (_state, _title, path) =>
+      historyCalls.push(`push:${String(path)}`);
+    const router = createRouter({ routeTree: root });
+    router.start();
+    for (let index = 0; index < 8; index++) await Promise.resolve();
+    await router.reloadRoute(source);
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+    expect(historyCalls).toContain('replace:/destination');
+    expect(router.matches.at(-1)?.route).toBe(destination);
+    expect(
+      router.matches.some(
+        (match) => match.route === source && match.status === 'pending',
+      ),
+    ).toBe(false);
+    expect(router.committedMatches.at(-1)?.route).toBe(destination);
   });
 
   it('commits a navigation only after the complete route chain resolves', async () => {
