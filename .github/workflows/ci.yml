@@ -1,5 +1,4 @@
 # yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
-
 name: CI
 
 on:
@@ -11,146 +10,344 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  quality:
-    name: Code Quality
-    runs-on: ubuntu-latest
+  security:
+    name: Security
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: ./.github/actions/setup-plec
+      - run: yarn install --immutable
+        env:
+          YARN_ENABLE_SCRIPTS: 'false'
+      - run: yarn install:security-tools
+      - run: yarn check:sast
+      - name: Trivy source security scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          node-version-file: .node-version
-      - name: Enable Corepack
-        run: corepack enable
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+          scan-type: fs
+          scan-ref: .
+          scanners: secret,misconfig
+          version: v0.74.0
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-security-results.sarif
+          exit-code: 1
+          limit-severities-for-sarif: true
+          skip-files: '**/node_modules/**'
+          skip-dirs: '**/node_modules/**'
+      - if: always()
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
         with:
-          node-version-file: .node-version
-          cache: yarn
-          cache-dependency-path: yarn.lock
+          sarif_file: opengrep-results.sarif
+          category: opengrep
+      - if: always()
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+        with:
+          sarif_file: trivy-security-results.sarif
+          category: trivy-source-security
+      - if: always() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/pr-sarif-summary.mjs opengrep
+      - if: always() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/pr-sarif-summary.mjs trivy-source
+
+  licenses:
+    name: Licenses
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-plec
+      - run: yarn install --immutable
+        env:
+          YARN_ENABLE_SCRIPTS: 'false'
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: 1.98.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          shared-key: ci-v2-${{ runner.os }}-${{ runner.arch }}
-          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**/*.toml', 'crates/**/*.rs', 'cli-tools.json') }}
-          cache-bin: true
-          cache-workspace-crates: true
-          save-if: false
-      - name: Install dependencies
-        run: yarn install --immutable
-      - name: Restore pinned Rust security tools
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+          shared-key: rust-security-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ hashFiles('Cargo.lock', 'deny.toml', 'cli-tools.json') }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .tools/cargo
           key: rust-security-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cli-tools.json') }}
-      - name: Install pinned Rust security tools
-        run: yarn install:rust-security-tools
-      - name: Check formatting
-        run: yarn format:check
-      - name: Typecheck
-        run: yarn typecheck
+      - run: yarn install:cargo-deny
+      - run: yarn check:licenses
+      - name: Trivy license gate and SARIF
+        id: trivy-license
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: license
+          version: v0.74.0
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-license-results.sarif
+          exit-code: 1
+      - if: always()
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+        with:
+          sarif_file: trivy-license-results.sarif
+          category: trivy-license
+      - if: always() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SECURITY_SCAN_OUTCOME: skipped
+          LICENSE_GATE_OUTCOME: ${{ steps.trivy-license.outcome }}
+        run: node scripts/pr-sarif-summary.mjs trivy-license
 
-  required:
-    name: Tests
-    needs: quality
-    runs-on: ubuntu-latest
+  dependency-audit:
+    name: Dependency Audit
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version-file: .node-version
-      - name: Enable Corepack
-        run: corepack enable
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version-file: .node-version
-          cache: yarn
-          cache-dependency-path: yarn.lock
+      - uses: ./.github/actions/setup-plec
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: 1.98.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          shared-key: ci-v2-${{ runner.os }}-${{ runner.arch }}
-          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**/*.toml', 'crates/**/*.rs', 'cli-tools.json') }}
+          shared-key: rust-security-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ hashFiles('Cargo.lock', 'deny.toml', 'cli-tools.json') }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .tools/cargo
+          key: rust-security-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cli-tools.json') }}
+      - run: yarn install:rust-security-tools
+      - run: yarn rust:deps:check
+      - name: Trivy dependency vulnerability scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          version: v0.74.0
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-vulnerability-results.sarif
+          exit-code: 1
+          limit-severities-for-sarif: true
+          skip-files: '**/node_modules/**'
+          skip-dirs: '**/node_modules/**'
+      - if: always()
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+        with:
+          sarif_file: trivy-vulnerability-results.sarif
+          category: trivy-vulnerabilities
+      - if: always() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/pr-sarif-summary.mjs trivy-vulnerability
+
+  crates:
+    name: Crates
+    needs: [security, licenses, dependency-audit]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: crates-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**/*.toml', 'crates/**/*.rs') }}
           cache-bin: true
           cache-workspace-crates: true
-      - name: Restore pinned tools and browser assets
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - run: cargo check --workspace --all-targets --locked
+      - run: cargo test --workspace --all-targets --locked --no-run
+      - run: cargo test --workspace --all-targets --locked
+      - run: cargo build --locked -p plec-cli
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          path: |
-            .tools
-            .cache/ms-playwright
-          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cli-tools.json') }}
-      - name: Restore Turbo cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+          name: crates-output
+          path: target/debug/plec
+          retention-days: 1
+
+  packages:
+    name: Packages
+    needs: crates
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-plec
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: 1.98.0
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: crates-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**/*.toml', 'crates/**/*.rs') }}
+          cache-bin: true
+          cache-workspace-crates: true
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .turbo
-          key: turbo-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            turbo-${{ runner.os }}-
-      - name: Install dependencies
-        run: yarn install --immutable
-      - name: Install build tools
-        run: yarn install:build-tools
-      - name: Check Rust dependency policy
-        run: yarn rust:deps:check
-      - name: Verify browser toolchain
-        run: yarn toolchain:verify:browser
-      - name: Build development Plec CLI
-        run: cargo build --locked -p plec-cli
-      - name: Test
-        run: yarn test
-      - name: Test WASM
+          key: turbo-${{ runner.os }}-${{ hashFiles('yarn.lock', 'turbo.json', 'packages/**/package.json', 'packages/**/*.{ts,tsx,js,jsx,json}') }}
+          restore-keys: turbo-${{ runner.os }}-
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .tools
+            .cache/ms-playwright
+          key: browser-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cli-tools.json', 'yarn.lock') }}
+          restore-keys: browser-tools-${{ runner.os }}-${{ runner.arch }}-
+      - run: yarn install --immutable
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: crates-output
+          path: target/debug
+      - run: chmod +x target/debug/plec
+      - run: yarn install:build-tools
+      - run: yarn install:browser-tools
+      - run: yarn format:check
+      - run: yarn turbo run build typecheck --filter='./packages/*'
+      - run: yarn turbo run test --filter='./packages/*' --filter='!@plec/core'
+      - run: yarn turbo run test:package --filter=@plec/core
+      - run: yarn test:wasm
         env:
           PLEC_BIN: ${{ github.workspace }}/target/debug/plec
-        run: yarn test:wasm
-      - name: Build and test E2E
-        env:
-          PLEC_BIN: ${{ github.workspace }}/target/debug/plec
-        run: yarn turbo run build test:e2e
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: packages-output
+          path: |
+            packages/*/dist/
+            target/debug/plec
+          if-no-files-found: warn
+          retention-days: 1
 
-  artifact:
-    name: Build Artifact
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: required
-    runs-on: ubuntu-latest
+  fullstack-build:
+    name: Fullstack Build
+    needs: packages
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version-file: .node-version
-      - name: Enable Corepack
-        run: corepack enable
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version-file: .node-version
-          cache: yarn
-          cache-dependency-path: yarn.lock
+      - uses: ./.github/actions/setup-plec
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: 1.98.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          shared-key: ci-v2-${{ runner.os }}-${{ runner.arch }}
-          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**/*.toml', 'crates/**/*.rs', 'cli-tools.json') }}
+          shared-key: crates-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**/*.toml', 'crates/**/*.rs') }}
           cache-bin: true
           cache-workspace-crates: true
-          save-if: false
-      - name: Restore pinned tools and browser assets
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ hashFiles('yarn.lock', 'turbo.json', 'packages/**/package.json', 'apps/fullstack/**') }}
+          restore-keys: turbo-${{ runner.os }}-
+      - run: yarn install --immutable
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: packages-output
+          path: .
+      - run: chmod +x target/debug/plec
+      - run: yarn workspace fullstack build
+        env:
+          PLEC_BIN: ${{ github.workspace }}/target/debug/plec
+      - run: yarn workspace fullstack typecheck:ci
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fullstack-dist
+          path: |
+            apps/fullstack/dist/
+            target/debug/plec
+          retention-days: 1
+
+  acceptance:
+    name: Acceptance
+    needs: fullstack-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-plec
+      - run: yarn install --immutable
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             .tools
             .cache/ms-playwright
-          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cli-tools.json') }}
-      - name: Install dependencies
-        run: yarn install --immutable
-      - name: Install build tools
-        run: yarn install:build-tools
-      - name: Build release artifact
-        run: yarn workspace @plec/core build:artifact
+          key: browser-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cli-tools.json', 'yarn.lock') }}
+          restore-keys: browser-tools-${{ runner.os }}-${{ runner.arch }}-
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: fullstack-dist
+          path: .
+      - run: chmod +x target/debug/plec
+      - run: yarn install:browser-tools
+      - run: yarn workspace @plec/e2e test:acceptance
+        env:
+          PLEC_BIN: ${{ github.workspace }}/target/debug/plec
+
+  e2e:
+    name: E2E
+    needs: fullstack-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-plec
+      - run: yarn install --immutable
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .tools
+            .cache/ms-playwright
+          key: browser-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cli-tools.json', 'yarn.lock') }}
+          restore-keys: browser-tools-${{ runner.os }}-${{ runner.arch }}-
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: fullstack-dist
+          path: .
+      - run: chmod +x target/debug/plec
+      - run: yarn install:browser-tools
+      - run: yarn workspace @plec/e2e test:e2e
+        env:
+          PLEC_BIN: ${{ github.workspace }}/target/debug/plec
+
+  ci-gate:
+    name: CI Gate
+    if: always()
+    needs:
+      [
+        security,
+        licenses,
+        dependency-audit,
+        crates,
+        packages,
+        fullstack-build,
+        acceptance,
+        e2e,
+      ]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every stage to succeed
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: node -e "const r=JSON.parse(process.env.RESULTS); if(r.some(x=>x!=='success')) { console.error(r); process.exit(1) }"

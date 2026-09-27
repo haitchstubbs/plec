@@ -1,0 +1,13 @@
+name: Setup Plec Node environment
+description: Provision the pinned Node/Yarn runtime and restore the Yarn cache.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version-file: .node-version
+        cache: yarn
+        cache-dependency-path: yarn.lock
+    - name: Enable Corepack
+      shell: bash
+      run: corepack enable

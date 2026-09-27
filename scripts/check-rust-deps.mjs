@@ -3,12 +3,15 @@ import { spawnSync } from 'node:child_process';
 import { cargoToolPath, repoRoot } from './toolchain.mjs';
 
 const full = process.argv.includes('--full');
+const licenses = process.argv.includes('--licenses');
 const unknownArgs = process.argv
   .slice(2)
-  .filter((arg) => arg !== '--full');
+  .filter((arg) => arg !== '--full' && arg !== '--licenses');
 if (unknownArgs.length) {
   console.error(`Unknown argument(s): ${unknownArgs.join(' ')}`);
-  console.error('Usage: node scripts/check-rust-deps.mjs [--full]');
+  console.error(
+    'Usage: node scripts/check-rust-deps.mjs [--licenses] [--full]',
+  );
   process.exit(2);
 }
 
@@ -36,14 +39,18 @@ run(
 
 const deny = cargoToolPath('cargo-deny');
 const audit = cargoToolPath('cargo-audit');
-run('Check Cargo dependency policy', deny, [
-  'check',
-  '--disable-fetch',
-  '--hide-inclusion-graph',
-  'licenses',
-  'bans',
-  'sources',
-]);
+run(
+  licenses
+    ? 'Check Cargo license policy'
+    : 'Check Cargo dependency policy',
+  deny,
+  [
+    'check',
+    '--disable-fetch',
+    '--hide-inclusion-graph',
+    ...(licenses ? ['licenses'] : ['bans', 'sources']),
+  ],
+);
 
 if (full) {
   run('Check RustSec advisories with cargo-deny', deny, [

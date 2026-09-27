@@ -28,7 +28,35 @@ import {
 } from './toolchain.mjs';
 
 const { 'build-tools': buildTools } = cliToolsConfig;
-const securityOnly = process.argv.includes('--security-only');
+const profileArg = process.argv
+  .find((arg) => arg.startsWith('--profile='))
+  ?.slice(10);
+const profileIndex = process.argv.indexOf('--profile');
+const profile =
+  profileArg ??
+  (profileIndex >= 0 ? process.argv[profileIndex + 1] : undefined);
+const profiles = new Set(
+  (profile ?? 'build,browser,rust-security,runtime')
+    .split(',')
+    .filter(Boolean),
+);
+const knownProfiles = new Set([
+  'build',
+  'browser',
+  'rust-security',
+  'cargo-deny',
+  'security',
+  'runtime',
+]);
+for (const value of profiles) {
+  if (!knownProfiles.has(value))
+    throw new Error(`Unknown setup profile: ${value}`);
+}
+const setupBuild = profiles.has('build');
+const setupBrowser = profiles.has('browser');
+const setupRustSecurity = profiles.has('rust-security');
+const setupCargoDeny = profiles.has('cargo-deny');
+const setupSecurity = profiles.has('security');
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptsDir, '..');
@@ -525,8 +553,9 @@ function ensureChromeDriver() {
 
 // Ensure required Rust build tools are installed
 
-if (!securityOnly) {
+if (setupBuild) {
   for (const [name, version] of Object.entries(buildTools)) {
+    if (name === 'opengrep') continue;
     if (name === 'wasm-bindgen-cli') {
       ensureWasmBindgenCli();
     } else if (name === 'opengrep') {
@@ -553,16 +582,23 @@ if (!securityOnly) {
   }
 }
 
-if (!process.exitCode) {
+if (!process.exitCode && (setupRustSecurity || setupCargoDeny)) {
   for (const [name, config] of Object.entries(
     cliToolsConfig['security-tools'] ?? {},
   )) {
+    if (setupCargoDeny && !setupRustSecurity && name !== 'cargo-deny') {
+      continue;
+    }
     ensureSecurityTool(name, config);
     if (process.exitCode) break;
   }
 }
 
-if (!process.exitCode && !securityOnly) {
+if (!process.exitCode && setupSecurity) {
+  ensureOpengrep();
+}
+
+if (!process.exitCode && setupBuild) {
   console.log('Ensuring wasm32-unknown-unknown target is installed...');
 
   const target = run('rustup', [
@@ -580,14 +616,25 @@ if (!process.exitCode && !securityOnly) {
   }
 }
 
-if (!process.exitCode && !securityOnly) {
+if (!process.exitCode && setupBrowser) {
   ensureChromeDriver();
 }
 
-if (!process.exitCode && !securityOnly) {
+if (
+  !process.exitCode &&
+  (setupBuild ||
+    setupBrowser ||
+    setupRustSecurity ||
+    setupCargoDeny ||
+    profiles.has('runtime'))
+) {
   const verify = run(
     process.execPath,
-    ['scripts/verify-toolchain.mjs', '--browser'],
+    [
+      'scripts/verify-toolchain.mjs',
+      '--profile',
+      [...profiles].filter((value) => value !== 'security').join(','),
+    ],
     {
       cwd: repoRoot,
     },
@@ -598,9 +645,5 @@ if (!process.exitCode && !securityOnly) {
 }
 
 if (!process.exitCode) {
-  console.log(
-    securityOnly
-      ? 'Pinned Rust dependency security tools ready.'
-      : 'WASM/browser toolchain ready.',
-  );
+  console.log(`Tool profiles ready: ${[...profiles].join(', ')}.`);
 }

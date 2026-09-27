@@ -5,6 +5,10 @@ import { fileURLToPath } from 'node:url';
 const markers = {
   opengrep: '<!-- plec-security-comment:opengrep -->',
   trivy: '<!-- plec-security-comment:trivy -->',
+  trivyLicense: '<!-- plec-security-comment:trivy-license -->',
+  trivySource: '<!-- plec-security-comment:trivy-source -->',
+  trivyVulnerability:
+    '<!-- plec-security-comment:trivy-vulnerability -->',
 };
 const maxDetails = 20;
 const maxTextLength = 240;
@@ -368,6 +372,44 @@ export async function buildTrivySummary(
   );
 }
 
+export async function buildTrivyLicenseSummary() {
+  let runtimeScope;
+  try {
+    runtimeScope = await fullstackRuntimePackages();
+  } catch (error) {
+    console.warn(
+      `Fullstack runtime dependency scope unavailable: ${error.message}`,
+    );
+  }
+  return renderTrivySummary(
+    { available: false, results: [] },
+    await readSarif('trivy-license-results.sarif'),
+    { securityOutcome: 'skipped', runtimeScope },
+  );
+}
+
+export async function buildTrivyVulnerabilitySummary() {
+  return buildTrivySecuritySummary(
+    'trivy-vulnerability-results.sarif',
+    markers.trivyVulnerability,
+  );
+}
+
+export async function buildTrivySourceSummary() {
+  return buildTrivySecuritySummary(
+    'trivy-security-results.sarif',
+    markers.trivySource,
+  );
+}
+
+async function buildTrivySecuritySummary(file, marker) {
+  return renderTrivySummary(
+    await readSarif(file),
+    { available: false, results: [] },
+    { licenseGateOutcome: 'skipped' },
+  ).replace(markers.trivy, marker);
+}
+
 function classificationCounts(results) {
   const counts = new Map();
   for (const result of results) {
@@ -551,9 +593,24 @@ if (
     );
   } else if (kind === 'trivy') {
     await publishComment(await buildTrivySummary(), markers.trivy);
+  } else if (kind === 'trivy-license') {
+    await publishComment(
+      await buildTrivyLicenseSummary(),
+      markers.trivyLicense,
+    );
+  } else if (kind === 'trivy-vulnerability') {
+    await publishComment(
+      await buildTrivyVulnerabilitySummary(),
+      markers.trivyVulnerability,
+    );
+  } else if (kind === 'trivy-source') {
+    await publishComment(
+      await buildTrivySourceSummary(),
+      markers.trivySource,
+    );
   } else {
     console.error(
-      'Usage: node scripts/pr-sarif-summary.mjs <opengrep|trivy>',
+      'Usage: node scripts/pr-sarif-summary.mjs <opengrep|trivy|trivy-license|trivy-source|trivy-vulnerability>',
     );
     process.exitCode = 2;
   }

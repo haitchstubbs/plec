@@ -12,7 +12,18 @@ import {
   wasmBindgenToolPath,
 } from './toolchain.mjs';
 
-const browser = process.argv.includes('--browser');
+const profileIndex = process.argv.indexOf('--profile');
+const requestedProfile = process.argv
+  .find((arg) => arg.startsWith('--profile='))
+  ?.slice(10);
+const profiles = new Set(
+  (
+    requestedProfile ??
+    (profileIndex >= 0 ? process.argv[profileIndex + 1] : undefined)
+  )?.split(',') ?? ['runtime', 'build', 'rust-security'],
+);
+if (process.argv.includes('--browser')) profiles.add('browser');
+const browser = profiles.has('browser');
 const failures = [];
 
 function commandVersion(command, args = ['--version']) {
@@ -87,34 +98,55 @@ function packageVersion(packagePath) {
   return JSON.parse(readFileSync(packagePath, 'utf8')).version;
 }
 
-expectVersion('Node', process.versions.node, toolchain.runtime.node);
-expectVersion('Yarn', commandVersion('yarn'), toolchain.runtime.yarn);
-expectVersion('Rust', commandVersion('rustc'), toolchain.runtime.rust);
-expectVersion(
-  'wasm-pack',
-  commandVersion('wasm-pack'),
-  toolchain['build-tools']['wasm-pack'],
-);
-expectVersion(
-  'wasm-tools',
-  commandVersion('wasm-tools'),
-  toolchain['build-tools']['wasm-tools'],
-);
-expectVersion(
-  'wasm-bindgen-cli',
-  commandVersion(wasmBindgenToolPath('wasm-bindgen')),
-  toolchain['build-tools']['wasm-bindgen-cli'],
-);
-expectVersion(
-  'wasm-bindgen-test-runner',
-  commandVersion(wasmBindgenToolPath('wasm-bindgen-test-runner')),
-  toolchain['build-tools']['wasm-bindgen-cli'],
-);
-verifyCargoLock();
-verifyCargoResolution();
+if (profiles.has('runtime') || browser) {
+  expectVersion('Node', process.versions.node, toolchain.runtime.node);
+  expectVersion('Yarn', commandVersion('yarn'), toolchain.runtime.yarn);
+}
+if (profiles.has('runtime')) {
+  expectVersion(
+    'Rust',
+    commandVersion('rustc'),
+    toolchain.runtime.rust,
+  );
+}
+if (profiles.has('build')) {
+  expectVersion(
+    'wasm-pack',
+    commandVersion('wasm-pack'),
+    toolchain['build-tools']['wasm-pack'],
+  );
+  expectVersion(
+    'wasm-tools',
+    commandVersion('wasm-tools'),
+    toolchain['build-tools']['wasm-tools'],
+  );
+  expectVersion(
+    'wasm-bindgen-cli',
+    commandVersion(wasmBindgenToolPath('wasm-bindgen')),
+    toolchain['build-tools']['wasm-bindgen-cli'],
+  );
+  expectVersion(
+    'wasm-bindgen-test-runner',
+    commandVersion(wasmBindgenToolPath('wasm-bindgen-test-runner')),
+    toolchain['build-tools']['wasm-bindgen-cli'],
+  );
+}
+if (
+  profiles.has('runtime') ||
+  profiles.has('build') ||
+  profiles.has('rust-security') ||
+  profiles.has('cargo-deny')
+) {
+  verifyCargoLock();
+  verifyCargoResolution();
+}
 
 for (const [name, config] of Object.entries(
   toolchain['security-tools'] ?? {},
+).filter(
+  ([name]) =>
+    profiles.has('rust-security') ||
+    (profiles.has('cargo-deny') && name === 'cargo-deny'),
 )) {
   const executable = cargoToolPath(name, config.binary ?? name);
   if (!existsSync(executable)) {
@@ -205,6 +237,6 @@ if (failures.length) {
   process.exitCode = 1;
 } else {
   console.log(
-    `Pinned toolchain verified${browser ? ' (including browser)' : ''}.`,
+    `Pinned toolchain verified (${[...profiles].join(', ')}).`,
   );
 }
