@@ -1,10 +1,8 @@
 //! Product SemVer management for the Plec workspace.
 //!
 //! One canonical release version lives in the Cargo workspace
-//! (`[workspace.package] version` in the root `Cargo.toml`) and is mirrored
-//! by `packages/plec/package.json`, the release artifact's public metadata.
-//! This command keeps the two in lockstep; the CLI reports the same value
-//! through `plec --version` because plec-cli inherits the workspace version.
+//! (`[workspace.package] version` in the root `Cargo.toml`), is inherited by
+//! Rust crates, and is mirrored by every JavaScript workspace package.
 //!
 //! The product version is deliberately blind to every protocol/schema
 //! version (IR/component 0.10, route manifest, SSR snapshot, sidecar
@@ -15,20 +13,25 @@
 use super::repo::Repo;
 use semver::Version;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-/// The two authoritative product-version declarations.
+/// Authoritative Cargo and JavaScript product-version declarations.
 pub struct VersionFiles {
     pub cargo_toml: PathBuf,
-    pub package_json: PathBuf,
+    pub package_jsons: Vec<PathBuf>,
 }
 
 impl VersionFiles {
-    pub fn in_repo(repo: &Repo) -> VersionFiles {
-        VersionFiles {
-            cargo_toml: repo.root.join("Cargo.toml"),
-            package_json: repo.root.join("packages/plec/package.json"),
+    pub fn in_repo(repo: &Repo) -> Result<VersionFiles, String> {
+        let mut package_jsons = vec![repo.root.join("package.json")];
+        for directory in ["apps", "packages", "scripts"] {
+            collect_package_jsons(&repo.root.join(directory), &mut package_jsons)?;
         }
+        package_jsons.sort();
+        Ok(VersionFiles {
+            cargo_toml: repo.root.join("Cargo.toml"),
+            package_jsons,
+        })
     }
 }
 
@@ -37,7 +40,7 @@ pub fn run(repo: &Repo, set: Option<String>, check: bool) -> Result<(), String> 
         return Err("--check and --set cannot be used together".into());
     }
 
-    let files = VersionFiles::in_repo(repo);
+    let files = VersionFiles::in_repo(repo)?;
 
     if let Some(requested) = set {
         let version = Version::parse(&requested)
@@ -45,23 +48,34 @@ pub fn run(repo: &Repo, set: Option<String>, check: bool) -> Result<(), String> 
         set_version(&files, &version)?;
         println!("Plec product version set to {version}");
         println!("  updated {}", files.cargo_toml.display());
-        println!("  updated {}", files.package_json.display());
+        for path in &files.package_jsons {
+            println!("  updated {}", path.display());
+        }
         println!("  Cargo.lock refreshes on the next cargo build");
         return Ok(());
     }
 
     let cargo = workspace_version(&read_source(&files.cargo_toml)?)?;
-    let package = package_version(&read_source(&files.package_json)?)?;
-
     println!("Plec product version");
     println!("  Cargo workspace [workspace.package]  {cargo}");
-    println!("  packages/plec package.json           {package}");
-
-    if cargo != package {
+    let mut mismatches = Vec::new();
+    for path in &files.package_jsons {
+        let package = package_version(&read_source(path)?)?;
+        println!(
+            "  {}  {package}",
+            path.strip_prefix(&repo.root).unwrap_or(path).display()
+        );
+        if package != cargo {
+            mismatches.push(format!(
+                "{} declares {package}",
+                path.strip_prefix(&repo.root).unwrap_or(path).display()
+            ));
+        }
+    }
+    if !mismatches.is_empty() {
         return Err(format!(
-            "product version mismatch: Cargo workspace declares {cargo}, \
-             packages/plec declares {package} — realign with \
-             `plec workspace version --set <version>`"
+            "product version mismatch: Cargo workspace declares {cargo}; {} — realign with `plec workspace version --set <version>`",
+            mismatches.join(", ")
         ));
     }
 
@@ -69,18 +83,26 @@ pub fn run(repo: &Repo, set: Option<String>, check: bool) -> Result<(), String> 
 }
 
 fn set_version(files: &VersionFiles, version: &Version) -> Result<(), String> {
-    // Validate and stage both replacements before writing anything.
+    // Validate and stage every replacement before writing anything.
     let cargo_source = read_source(&files.cargo_toml)?;
-    let package_source = read_source(&files.package_json)?;
     let cargo_updated = replace_workspace_version(&cargo_source, version)?;
-    let package_updated = replace_package_version(&package_source, version)?;
+    let mut replacements = vec![(files.cargo_toml.clone(), cargo_source, cargo_updated)];
+    for path in &files.package_jsons {
+        let source = read_source(path)?;
+        let updated = replace_package_version(&source, version)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        replacements.push((path.clone(), source, updated));
+    }
 
-    write_source(&files.cargo_toml, &cargo_updated)?;
-    if let Err(error) = write_source(&files.package_json, &package_updated) {
-        // Roll the first file back so a failed update cannot leave the
-        // authoritative declarations split across two versions.
-        let _ = fs::write(&files.cargo_toml, &cargo_source);
-        return Err(error);
+    let mut written = Vec::new();
+    for (path, original, updated) in &replacements {
+        if let Err(error) = write_source(path, updated) {
+            for (written_path, written_original) in written.into_iter().rev() {
+                let _ = fs::write(written_path, written_original);
+            }
+            return Err(error);
+        }
+        written.push((path, original));
     }
 
     Ok(())
@@ -92,6 +114,33 @@ fn read_source(path: &PathBuf) -> Result<String, String> {
 
 fn write_source(path: &PathBuf, contents: &str) -> Result<(), String> {
     fs::write(path, contents).map_err(|error| format!("cannot write {}: {error}", path.display()))
+}
+
+fn collect_package_jsons(directory: &Path, output: &mut Vec<PathBuf>) -> Result<(), String> {
+    if !directory.exists() {
+        return Ok(());
+    }
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("cannot read {}: {error}", directory.display()))?;
+    for entry in entries {
+        let path = entry
+            .map_err(|error| format!("cannot read directory entry: {error}"))?
+            .path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|name| {
+                matches!(
+                    name.to_str(),
+                    Some("node_modules" | "dist" | ".git" | "target")
+                )
+            }) {
+                continue;
+            }
+            collect_package_jsons(&path, output)?;
+        } else if path.file_name().is_some_and(|name| name == "package.json") {
+            output.push(path);
+        }
+    }
+    Ok(())
 }
 
 /// The `version` value inside `[workspace.package]`.
@@ -132,37 +181,39 @@ fn find_workspace_version_line(source: &str) -> Result<(&str, usize), String> {
     Err("cannot find a version declaration in [workspace.package]".into())
 }
 
-/// The top-level `version` field of the release package manifest.
+/// The top-level `version` field of a workspace package manifest.
 fn package_version(source: &str) -> Result<String, String> {
-    let value: serde_json::Value = serde_json::from_str(source)
-        .map_err(|error| format!("invalid packages/plec/package.json: {error}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(source).map_err(|error| format!("invalid package.json: {error}"))?;
     value
         .get("version")
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| "packages/plec/package.json has no top-level version".into())
+        .ok_or_else(|| "package.json has no top-level version".into())
 }
 
-/// Returns the source with the top-level package `version` replaced.
-///
-/// The manifest is small and prettier-formatted, so the replacement edits the
-/// single top-level `version` line in place; the result is then re-parsed to
-/// prove the edit landed on the top-level field.
+/// Returns the source with a top-level package `version` set or added.
 fn replace_package_version(source: &str, version: &Version) -> Result<String, String> {
     let mut updated_lines: Vec<String> = Vec::new();
     let mut replaced = false;
     for line in source.lines() {
         if !replaced {
-            if let Some((start, end)) = quoted_value_range(line, "\"version\"") {
-                updated_lines.push(format!("{}{}{}", &line[..start], version, &line[end..]));
-                replaced = true;
-                continue;
+            if line.starts_with("  ") && !line.starts_with("   ") {
+                if let Some((start, end)) = quoted_value_range(line, "\"version\"") {
+                    updated_lines.push(format!("{}{}{}", &line[..start], version, &line[end..]));
+                    replaced = true;
+                    continue;
+                }
             }
         }
         updated_lines.push(line.to_owned());
     }
     if !replaced {
-        return Err("cannot find a version declaration in packages/plec/package.json".into());
+        let name_index = updated_lines.iter().position(|line| {
+            line.starts_with("  \"name\"") && quoted_value_range(line, "\"name\"").is_some()
+        });
+        let insertion = name_index.map_or(1, |index| index + 1);
+        updated_lines.insert(insertion, format!("  \"version\": \"{version}\","));
     }
 
     let updated = join_lines(source, updated_lines)?;
@@ -219,6 +270,11 @@ mod tests {
                 ),
             )
             .expect("write Cargo.toml");
+            fs::write(
+                dir.path().join("package.json"),
+                format!("{{\n  \"name\": \"workspace\",\n  \"version\": \"{package_version}\",\n  \"private\": true\n}}\n"),
+            )
+            .expect("write root package.json");
             fs::create_dir_all(dir.path().join("packages/plec")).expect("mkdir packages/plec");
             fs::write(
                 dir.path().join("packages/plec/package.json"),
@@ -239,20 +295,40 @@ mod tests {
     }
 
     fn cargo_version(repo: &Repo) -> String {
-        workspace_version(&read_source(&VersionFiles::in_repo(repo).cargo_toml).unwrap()).unwrap()
+        workspace_version(&read_source(&VersionFiles::in_repo(repo).unwrap().cargo_toml).unwrap())
+            .unwrap()
     }
 
     fn package_version_of(repo: &Repo) -> String {
-        package_version(&read_source(&VersionFiles::in_repo(repo).package_json).unwrap()).unwrap()
+        package_version(&read_source(&repo.root.join("packages/plec/package.json")).unwrap())
+            .unwrap()
     }
 
     #[test]
-    fn set_updates_both_authoritative_declarations() {
+    fn set_updates_workspace_and_all_package_declarations() {
         let fixture = Fixture::new("0.1.0", "0.0.0");
         let repo = fixture.repo();
+        fs::create_dir_all(repo.root.join("apps/example")).unwrap();
+        fs::write(
+            repo.root.join("apps/example/package.json"),
+            "{\n  \"name\": \"example\",\n  \"private\": true\n}\n",
+        )
+        .unwrap();
         run(&repo, Some("1.2.3-rc.1+001".into()), false).expect("set should succeed");
         assert_eq!(cargo_version(&repo), "1.2.3-rc.1+001");
         assert_eq!(package_version_of(&repo), "1.2.3-rc.1+001");
+        assert_eq!(
+            package_version(&read_source(&repo.root.join("package.json")).unwrap()).unwrap(),
+            "1.2.3-rc.1+001"
+        );
+        let package = read_source(&repo.root.join("packages/plec/package.json")).unwrap();
+        assert!(
+            package.contains("\"private\": true"),
+            "visibility must remain unchanged"
+        );
+        let new_package = read_source(&repo.root.join("apps/example/package.json")).unwrap();
+        assert_eq!(package_version(&new_package).unwrap(), "1.2.3-rc.1+001");
+        assert!(new_package.contains("\"private\": true"));
     }
 
     #[test]
@@ -270,7 +346,7 @@ mod tests {
 
         run(&repo, Some("0.2.0".into()), false).expect("set should succeed");
 
-        let cargo_source = read_source(&VersionFiles::in_repo(&repo).cargo_toml).unwrap();
+        let cargo_source = read_source(&VersionFiles::in_repo(&repo).unwrap().cargo_toml).unwrap();
         assert!(
             cargo_source.contains("toml = \"0.8\""),
             "dependency pin must not move"
