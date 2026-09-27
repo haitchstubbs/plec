@@ -35,7 +35,7 @@ jobs:
 
       - name: Trivy scan
         id: trivy-security-scan
-        uses: aquasecurity/trivy-action@7999b86c43a865dc79d8923397f35af22de63401 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -52,7 +52,7 @@ jobs:
 
       - name: Trivy license gate
         id: trivy-license-gate
-        uses: aquasecurity/trivy-action@7999b86c43a865dc79d8923397f35af22de63401 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -64,7 +64,7 @@ jobs:
 
       - name: Trivy license report
         if: always()
-        uses: aquasecurity/trivy-action@7999b86c43a865dc79d8923397f35af22de63401 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
