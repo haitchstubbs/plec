@@ -365,7 +365,6 @@ mod tests {
                 version: 3,
                 revision: String::new(),
                 root_graph_id: "page".into(),
-                root_not_found_graph_id: None,
                 routes: vec![],
             },
             registry: BTreeMap::from([(

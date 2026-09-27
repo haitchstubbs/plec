@@ -2,7 +2,6 @@
 name = "plec-client"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 
 [features]
 default = []
@@ -25,12 +24,12 @@ fetch = [
 ]
 
 [dependencies]
-plec-action = { path = "../plec-action", version = "0.1.0" }
+plec-action = { path = "../plec-action" }
 js-sys = { workspace = true }
-plec-dom = { path = "../plec-dom", version = "0.1.0" }
-plec-eval = { path = "../plec-eval", version = "0.1.0" }
-plec-ir = { path = "../plec-ir", version = "0.1.0" }
-plec-schema = { path = "../plec-schema", version = "0.1.0" }
+plec-dom = { path = "../plec-dom" }
+plec-eval = { path = "../plec-eval" }
+plec-ir = { path = "../plec-ir" }
+plec-schema = { path = "../plec-schema" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde-wasm-bindgen = { workspace = true }

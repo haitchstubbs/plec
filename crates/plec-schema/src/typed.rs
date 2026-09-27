@@ -559,11 +559,6 @@ pub struct TypedAction {
     pub route_loader: bool,
     #[serde(default)]
     pub route_retry: bool,
-    /// Loader fetches decode to the response body (not the transport
-    /// envelope). Hosts gate envelope unwrapping on this flag instead of
-    /// shape-sniffing the loader value.
-    #[serde(default)]
-    pub loader_decode_body: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -685,11 +680,6 @@ pub enum TypedActionInstruction {
 pub enum TypedReturnOutcome {
     Success,
     Failure,
-    /// Terminal loader redirect. The `Return` value evaluates to a
-    /// `{ location, replace }` record and unwinds the whole action run.
-    Redirect,
-    /// Terminal loader not-found outcome.
-    NotFound,
 }
 impl Default for TypedReturnOutcome {
     fn default() -> Self {
@@ -2062,7 +2052,6 @@ mod tests {
             loader_result_state: None,
             route_loader: false,
             route_retry: false,
-            loader_decode_body: false,
             instructions: vec![serde_json::from_value(serde_json::json!({"op":"return"})).unwrap()],
         });
 

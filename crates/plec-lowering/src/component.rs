@@ -105,10 +105,6 @@ pub fn lower_route_loader_to_executable(
                 *value = match outcome {
                     plec_ir::ReturnOutcome::Success => result_expression,
                     plec_ir::ReturnOutcome::Failure => error_expression,
-                    // Terminal loader outcomes carry their own semantics; a
-                    // bare `throw redirect()`/`throw notFound()` lowers with
-                    // no value reference here.
-                    plec_ir::ReturnOutcome::Redirect | plec_ir::ReturnOutcome::NotFound => None,
                 };
             }
         }
@@ -156,14 +152,6 @@ pub(crate) fn lower_component(
             }
             "loaderData" => {
                 let host = ctx.host("loaderData", None)?;
-                ctx.hosts.insert(input.binding, host);
-            }
-            "routeParams" => {
-                let host = ctx.host("routeParams", None)?;
-                ctx.hosts.insert(input.binding, host);
-            }
-            "routeSearch" => {
-                let host = ctx.host("routeSearch", None)?;
                 ctx.hosts.insert(input.binding, host);
             }
             _ => return Err(Ctx::new(component, targets).err("input kind is not executable")),
@@ -222,7 +210,6 @@ pub(crate) fn lower_component(
             parameter_slots: vec![],
             loader_result_state: None,
             route_loader: false,
-            loader_decode_body: false,
             instructions: vec![],
         });
         ctx.callables.insert(callable.binding, action);
@@ -235,7 +222,6 @@ pub(crate) fn lower_component(
                 parameter_slots: vec![],
                 loader_result_state: None,
                 route_loader: false,
-                loader_decode_body: false,
                 instructions: vec![
                     ActionInstruction::RouteReload,
                     ActionInstruction::Return {
@@ -315,7 +301,6 @@ pub(crate) fn lower_component(
             parameter_slots: vec![0],
             loader_result_state: None,
             route_loader: false,
-            loader_decode_body: false,
             instructions: vec![
                 ActionInstruction::MutationStart {
                     generation,

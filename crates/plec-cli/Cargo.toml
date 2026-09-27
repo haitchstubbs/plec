@@ -2,16 +2,15 @@
 name = "plec-cli"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 
 [dependencies]
-plec-inspect = { path = "../plec-inspect", version = "0.1.0" }
-plec-ir = { path = "../plec-ir", version = "0.1.0" }
-plec-parser = { path = "../plec-parser", version = "0.1.0" }
-plec-model = { path = "../plec-model", version = "0.1.0" }
-plec-compiler = { path = "../plec-compiler", version = "0.1.0" }
-plec-build = { path = "../plec-build", version = "0.1.0" }
-plec-server = { path = "../plec-server", version = "0.1.0" }
+plec-inspect = { path = "../plec-inspect" }
+plec-ir = { path = "../plec-ir" }
+plec-parser = { path = "../plec-parser" }
+plec-model = { path = "../plec-model" }
+plec-compiler = { path = "../plec-compiler" }
+plec-build = { path = "../plec-build" }
+plec-server = { path = "../plec-server" }
 axum = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }

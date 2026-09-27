@@ -12,13 +12,10 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import cliToolsConfig from '../cli-tools.json' with { type: 'json' };
-import { ensureOpengrep } from './install-opengrep.mjs';
 import {
   chromeDriverPath,
   chromeDriverTarget,
   chromiumExecutable,
-  cargoToolPath,
-  cargoToolRoot,
   expectedChromiumFromPlaywright,
   playwrightBrowsersPath,
   toolchain,
@@ -28,35 +25,6 @@ import {
 } from './toolchain.mjs';
 
 const { 'build-tools': buildTools } = cliToolsConfig;
-const profileArg = process.argv
-  .find((arg) => arg.startsWith('--profile='))
-  ?.slice(10);
-const profileIndex = process.argv.indexOf('--profile');
-const profile =
-  profileArg ??
-  (profileIndex >= 0 ? process.argv[profileIndex + 1] : undefined);
-const profiles = new Set(
-  (profile ?? 'build,browser,rust-security,runtime')
-    .split(',')
-    .filter(Boolean),
-);
-const knownProfiles = new Set([
-  'build',
-  'browser',
-  'rust-security',
-  'cargo-deny',
-  'security',
-  'runtime',
-]);
-for (const value of profiles) {
-  if (!knownProfiles.has(value))
-    throw new Error(`Unknown setup profile: ${value}`);
-}
-const setupBuild = profiles.has('build');
-const setupBrowser = profiles.has('browser');
-const setupRustSecurity = profiles.has('rust-security');
-const setupCargoDeny = profiles.has('cargo-deny');
-const setupSecurity = profiles.has('security');
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptsDir, '..');
@@ -265,53 +233,6 @@ function ensureWasmBindgenCli() {
     process.exitCode = install.status ?? 1;
     return;
   }
-}
-
-function ensureSecurityTool(name, config) {
-  const binary = config.binary ?? name;
-  const executable = cargoToolPath(name, binary);
-  const root = cargoToolRoot(name);
-  if (
-    existsSync(executable) &&
-    versionOf(executable) === config.version
-  ) {
-    console.log(`${name} found: ${config.version}`);
-    return;
-  }
-
-  console.log(
-    `Installing pinned ${name} ${config.version} from source...`,
-  );
-  const args = [
-    'install',
-    '--git',
-    config.repository,
-    '--rev',
-    config.commit,
-    '--locked',
-    '--root',
-    root,
-    '--force',
-  ];
-  if (config.features?.length) {
-    args.push('--features', config.features.join(','));
-  }
-  args.push(config.package ?? name);
-  const install = run('cargo', args, { cwd: repoRoot });
-  if (install.error || install.status !== 0) {
-    console.error(`Failed to install pinned ${name}.`);
-    process.exitCode = install.status ?? 1;
-    return;
-  }
-  const actual = versionOf(executable);
-  if (actual !== config.version) {
-    throw new Error(
-      `Pinned ${name} version mismatch: expected ${config.version}, found ${actual ?? 'missing'}.`,
-    );
-  }
-  console.log(
-    `${name} ${config.version} installed from ${config.commit}.`,
-  );
 }
 
 function findFile(root, filename) {
@@ -553,52 +474,19 @@ function ensureChromeDriver() {
 
 // Ensure required Rust build tools are installed
 
-if (setupBuild) {
-  for (const [name, version] of Object.entries(buildTools)) {
-    if (name === 'opengrep') continue;
-    if (name === 'wasm-bindgen-cli') {
-      ensureWasmBindgenCli();
-    } else if (name === 'opengrep') {
-      if (
-        cliToolsConfig['prebuilt-build-tools']?.[
-          `${process.platform}-${process.arch}`
-        ]?.opengrep
-      ) {
-        ensureOpengrep();
-      } else if (process.env.CI) {
-        ensureOpengrep();
-      } else {
-        console.log(
-          `Skipping pinned OpenGrep install: no prebuilt is configured for ${process.platform}/${process.arch}.`,
-        );
-      }
-    } else {
-      ensureTool({ name, version });
-    }
+for (const [name, version] of Object.entries(buildTools)) {
+  if (name === 'wasm-bindgen-cli') {
+    ensureWasmBindgenCli();
+  } else {
+    ensureTool({ name, version });
+  }
 
-    if (process.exitCode) {
-      break;
-    }
+  if (process.exitCode) {
+    break;
   }
 }
 
-if (!process.exitCode && (setupRustSecurity || setupCargoDeny)) {
-  for (const [name, config] of Object.entries(
-    cliToolsConfig['security-tools'] ?? {},
-  )) {
-    if (setupCargoDeny && !setupRustSecurity && name !== 'cargo-deny') {
-      continue;
-    }
-    ensureSecurityTool(name, config);
-    if (process.exitCode) break;
-  }
-}
-
-if (!process.exitCode && setupSecurity) {
-  ensureOpengrep();
-}
-
-if (!process.exitCode && setupBuild) {
+if (!process.exitCode) {
   console.log('Ensuring wasm32-unknown-unknown target is installed...');
 
   const target = run('rustup', [
@@ -616,25 +504,14 @@ if (!process.exitCode && setupBuild) {
   }
 }
 
-if (!process.exitCode && setupBrowser) {
+if (!process.exitCode) {
   ensureChromeDriver();
 }
 
-if (
-  !process.exitCode &&
-  (setupBuild ||
-    setupBrowser ||
-    setupRustSecurity ||
-    setupCargoDeny ||
-    profiles.has('runtime'))
-) {
+if (!process.exitCode) {
   const verify = run(
     process.execPath,
-    [
-      'scripts/verify-toolchain.mjs',
-      '--profile',
-      [...profiles].filter((value) => value !== 'security').join(','),
-    ],
+    ['scripts/verify-toolchain.mjs', '--browser'],
     {
       cwd: repoRoot,
     },
@@ -645,5 +522,5 @@ if (
 }
 
 if (!process.exitCode) {
-  console.log(`Tool profiles ready: ${[...profiles].join(', ')}.`);
+  console.log('WASM/browser toolchain ready.');
 }

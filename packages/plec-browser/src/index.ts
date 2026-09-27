@@ -615,7 +615,6 @@ export async function startPlecRouter(
     const chainDetail = validateSsrRouteChain(
       (manifest as any).routes ?? [],
       chain,
-      (manifest as any).rootNotFoundGraphId,
     );
     if (expectedRevision !== bootstrap.revision) {
       emitAdoptionDiagnostic(options, {
@@ -637,9 +636,8 @@ export async function startPlecRouter(
       try {
         // Every chain graph must be registered before WASM claims DOM; graphs
         // outside the initial chain stay lazy. A server-rendered error phase
-        // claims DOM built from the route's error graph, and a not-found
-        // phase claims the route's boundary graph, so those graphs must be
-        // registered too before the snapshot import validates structure.
+        // claims DOM built from the route's error graph, so that graph must
+        // be registered too before the snapshot import validates structure.
         if (!compiled) {
           for (const entry of chain as Array<{
             routeId: string;
@@ -651,14 +649,6 @@ export async function startPlecRouter(
             if (route?.graphId) await loadGraph(route.graphId);
             if (entry.phase === 'error' && route?.errorGraphId)
               await loadGraph(route.errorGraphId);
-            if (entry.phase === 'notFound' && route?.notFoundGraphId)
-              await loadGraph(route.notFoundGraphId);
-          }
-          if (
-            (chain as unknown[]).length === 0 &&
-            (manifest as any).rootNotFoundGraphId
-          ) {
-            await loadGraph((manifest as any).rootNotFoundGraphId);
           }
         }
         const snapshotImported = true;
@@ -821,15 +811,12 @@ function adoptionMismatchCode(error: unknown): string {
 /** Structural validation of the server-published route chain. Returns a
  * mismatch detail string, or null when the chain is well-formed and every
  * entry references a manifest route. This is deliberately weaker than the
- * WASM cross-validation: the gate never re-matches routes against the URL.
- * An empty chain is only legitimate as the root not-found boundary. */
+ * WASM cross-validation: the gate never re-matches routes against the URL. */
 export function validateSsrRouteChain(
   routes: unknown,
   chain: unknown,
-  rootNotFoundGraphId?: string,
 ): string | null {
-  if (!Array.isArray(chain)) return 'empty';
-  if (chain.length === 0) return rootNotFoundGraphId ? null : 'empty';
+  if (!Array.isArray(chain) || chain.length === 0) return 'empty';
   const known = Array.isArray(routes)
     ? new Set(
         routes
@@ -856,7 +843,7 @@ export function validateSsrRouteChain(
     const phase = (entry as any)?.phase;
     if (
       phase !== undefined &&
-      !['active', 'pending', 'error', 'notFound'].includes(phase)
+      !['active', 'pending', 'error'].includes(phase)
     )
       return `phase:${index}`;
   }

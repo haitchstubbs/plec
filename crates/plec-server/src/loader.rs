@@ -128,22 +128,14 @@ impl ActionHost for LoaderHost<'_> {
 
 /// One executed route loader. The snapshot sees only its terminal action
 /// outcome: `responseJson` remains an internal capability envelope.
-pub(crate) enum LoaderExecution {
-    None,
-    Snapshot(SsrLoaderOutcome),
-    Redirect { location: String, replace: bool },
-    NotFound,
-}
-
 pub(crate) async fn execute_route_loader(
     bundle: &ArtifactBundle,
     route: &Route,
     context: &RequestContext,
-    params: &[(String, String)],
     client: &reqwest::Client,
-) -> Result<LoaderExecution, ServerError> {
+) -> Result<Option<SsrLoaderOutcome>, ServerError> {
     let Some(action) = route.loader_action else {
-        return Ok(LoaderExecution::None);
+        return Ok(None);
     };
     let graph = bundle
         .graphs
@@ -174,43 +166,16 @@ pub(crate) async fn execute_route_loader(
         )));
     }
     let mut host = LoaderHost::new(component, context);
-    let mut frame = vec![RuntimeValue::Null; program.frame_slots];
-    // Compiled loaders declare the shared parameter contract: slot 0 carries
-    // matched route params, slot 1 the request location (slot 1 stays null
-    // until loader grammar exposes it; the slot contract is fixed).
-    if !program.parameter_slots.is_empty() {
-        frame[PARAMS_SLOT] = RuntimeValue::Record(
-            params
-                .iter()
-                .map(|(key, value)| (key.clone(), RuntimeValue::String(value.clone())))
-                .collect(),
-        );
-        if let Some(location) = frame.get_mut(LOCATION_SLOT) {
-            *location = RuntimeValue::Record(std::collections::HashMap::from([
-                (
-                    "pathname".into(),
-                    RuntimeValue::String(context.pathname.clone()),
-                ),
-                (
-                    "search".into(),
-                    RuntimeValue::String(ssr::url_search(&context.url)),
-                ),
-                ("hash".into(), RuntimeValue::String(String::new())),
-            ]));
-        }
-    }
     let mut run = start(
         &component.actions,
         action,
-        frame,
+        vec![RuntimeValue::Null; program.frame_slots],
         &mut host,
     )
     .map_err(loader_program_error)?;
     loop {
         match run {
-            Run::Complete(outcome) => {
-                return Ok(loader_execution(route, action, program, outcome))
-            }
+            Run::Complete(outcome) => return Ok(Some(loader_outcome(route, action, outcome))),
             Run::Suspended(mut suspension) => {
                 let result = execute_fetch(&suspension.request, context, client).await;
                 if let Ok((value, _)) = &result {
@@ -242,47 +207,23 @@ pub(crate) async fn execute_route_loader(
     }
 }
 
-const PARAMS_SLOT: usize = 0;
-const LOCATION_SLOT: usize = 1;
-
 fn loader_program_error(error: ActionError) -> ServerError {
     ServerError::message(format!("route loader action is invalid: {error}"))
 }
 
-fn loader_execution(
-    route: &Route,
-    action: usize,
-    program: &plec_schema::typed::TypedAction,
-    outcome: ActionOutcome,
-) -> LoaderExecution {
-    match outcome {
-        ActionOutcome::Success(value) => {
-            // Body-decoding loaders export the body directly; legacy loaders
-            // export the transport envelope and unwrap at this boundary.
-            let value = if program.loader_decode_body {
-                value
-            } else {
-                unwrap_response_body(value)
-            };
-            LoaderExecution::Snapshot(SsrLoaderOutcome {
-                graph_id: route.graph_id.clone(),
-                action,
-                state: SsrLoaderState::Resolved {
-                    value: value.into_ssr_snapshot(),
-                },
-            })
-        }
-        ActionOutcome::Failure(error) => LoaderExecution::Snapshot(SsrLoaderOutcome {
-            graph_id: route.graph_id.clone(),
-            action,
-            state: SsrLoaderState::Rejected {
-                message: failure_message(&error),
-            },
-        }),
-        ActionOutcome::Redirect { location, replace } => {
-            LoaderExecution::Redirect { location, replace }
-        }
-        ActionOutcome::NotFound => LoaderExecution::NotFound,
+fn loader_outcome(route: &Route, action: usize, outcome: ActionOutcome) -> SsrLoaderOutcome {
+    let state = match outcome {
+        ActionOutcome::Success(value) => SsrLoaderState::Resolved {
+            value: unwrap_response_body(value).into_ssr_snapshot(),
+        },
+        ActionOutcome::Failure(error) => SsrLoaderState::Rejected {
+            message: failure_message(&error),
+        },
+    };
+    SsrLoaderOutcome {
+        graph_id: route.graph_id.clone(),
+        action,
+        state,
     }
 }
 

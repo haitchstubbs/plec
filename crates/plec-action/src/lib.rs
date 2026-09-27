@@ -28,46 +28,10 @@ impl std::fmt::Display for ActionError {
 
 impl std::error::Error for ActionError {}
 
-/// Validates the terminal redirect payload. Both hosts (SSR loader execution
-/// and the browser runtime) share this machine, so target validation is
-/// centralized: redirects may only target application paths.
-fn redirect_location(value: &RuntimeValue) -> Result<String, ActionError> {
-    let record = value.record().ok_or_else(|| {
-        ActionError("redirect outcome requires a { location, replace } record".into())
-    })?;
-    let location = record
-        .get("location")
-        .and_then(|value| match value {
-            RuntimeValue::String(location) => Some(location.clone()),
-            _ => None,
-        })
-        .ok_or_else(|| ActionError("redirect outcome requires a string location".into()))?;
-    if location.is_empty()
-        || !location.starts_with('/')
-        || location.starts_with("//")
-        // WHATWG URL parsing treats backslashes as path separators for
-        // special schemes, so `/\\evil.example` would otherwise become an
-        // off-origin navigation in browsers.
-        || location.contains('\\')
-    {
-        return Err(ActionError(format!(
-            "redirect location {location:?} is not an application path"
-        )));
-    }
-    Ok(location)
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum ActionOutcome {
     Success(RuntimeValue),
     Failure(RuntimeValue),
-    /// Terminal loader redirect. `location` must be an absolute path.
-    Redirect {
-        location: String,
-        replace: bool,
-    },
-    /// Terminal loader not-found outcome.
-    NotFound,
 }
 
 #[derive(Clone, Debug)]
@@ -479,24 +443,6 @@ fn drive<H: ActionHost>(
                         .map(|expression| host.evaluate(expression, &continuation.current.frame))
                         .transpose()?
                         .unwrap_or(RuntimeValue::Null);
-                    // Redirect and not-found are terminal loader outcomes:
-                    // they unwind caller continuations instead of resuming
-                    // one, and hosts resolve them before any route commit.
-                    let terminal = match outcome {
-                        TypedReturnOutcome::Redirect => Some(ActionOutcome::Redirect {
-                            location: redirect_location(&value)?,
-                            replace: value
-                                .record()
-                                .and_then(|record| record.get("replace"))
-                                .map(|value| value.truthy())
-                                .unwrap_or(true),
-                        }),
-                        TypedReturnOutcome::NotFound => Some(ActionOutcome::NotFound),
-                        TypedReturnOutcome::Success | TypedReturnOutcome::Failure => None,
-                    };
-                    if let Some(outcome) = terminal {
-                        return run_finalizers(actions, continuation, outcome, host, finalizers);
-                    }
                     if let Some(caller) = continuation.callers.pop() {
                         let mut caller_frame = caller.frame;
                         let (slot, other, next_pc) = match outcome {
@@ -505,9 +451,6 @@ fn drive<H: ActionHost>(
                             }
                             TypedReturnOutcome::Failure => {
                                 (caller.error_slot, caller.result_slot, caller.failure_pc)
-                            }
-                            TypedReturnOutcome::Redirect | TypedReturnOutcome::NotFound => {
-                                unreachable!("terminal outcomes returned above")
                             }
                         };
                         if slot != TAIL_CALL_NO_SLOT {
@@ -527,9 +470,6 @@ fn drive<H: ActionHost>(
                     let outcome = match outcome {
                         TypedReturnOutcome::Success => ActionOutcome::Success(value),
                         TypedReturnOutcome::Failure => ActionOutcome::Failure(value),
-                        TypedReturnOutcome::Redirect | TypedReturnOutcome::NotFound => {
-                            unreachable!("terminal outcomes returned above")
-                        }
                     };
                     return run_finalizers(actions, continuation, outcome, host, finalizers);
                 }
@@ -790,25 +730,6 @@ mod tests {
 
     fn actions(value: serde_json::Value) -> Vec<TypedAction> {
         serde_json::from_value(value).unwrap()
-    }
-
-    #[test]
-    fn redirect_targets_must_be_application_paths() {
-        let location = |value: &str| {
-            redirect_location(&RuntimeValue::Record(std::collections::HashMap::from([
-                ("location".into(), RuntimeValue::String(value.into())),
-                ("replace".into(), RuntimeValue::Bool(true)),
-            ])))
-        };
-
-        assert_eq!(location("/notes").unwrap(), "/notes");
-        assert_eq!(
-            location("/projects/42?tab=details").unwrap(),
-            "/projects/42?tab=details"
-        );
-        assert!(location("//evil.example").is_err());
-        assert!(location("/\\evil.example").is_err());
-        assert!(location("/\\\\evil.example").is_err());
     }
 
     #[test]

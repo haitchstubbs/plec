@@ -63,10 +63,7 @@ export async function waitForMount(page: Page): Promise<void> {
 
 // Collects page errors, failed same-origin requests, and fetched graph
 // artifacts. The returned assertion must be awaited before the test ends.
-export function watch(
-  page: Page,
-  { requireGraph = true }: { requireGraph?: boolean } = {},
-): () => Promise<void> {
+export function watch(page: Page): () => Promise<void> {
   const errors: string[] = [];
   const graphs = new Set<string>();
   page.on('pageerror', (error) => errors.push(error.message));
@@ -81,12 +78,10 @@ export function watch(
     if (graphKey) graphs.add(graphKey);
   });
   return async () => {
-    if (requireGraph) {
-      expect(
-        graphs.size,
-        'the browser did not fetch graph artifacts',
-      ).toBeGreaterThan(0);
-    }
+    expect(
+      graphs.size,
+      'the browser did not fetch graph artifacts',
+    ).toBeGreaterThan(0);
     expect(errors, errors.join('\n')).toEqual([]);
   };
 }

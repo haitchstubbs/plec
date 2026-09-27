@@ -1,6 +1,6 @@
 {
   "name": "@plec/query",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "type": "module",
   "private": true,
   "main": "./dist/index.js",
@@ -35,9 +35,9 @@
   },
   "scripts": {
     "build": "tsc",
-    "compile": "yarn --cwd ../.. rust:deps:check && yarn compile:native && yarn compile:wasm",
-    "compile:native": "yarn --cwd ../.. rust:deps:check && cargo check --locked --manifest-path ../../crates/plec-query-node/Cargo.toml && napi build --platform --release --no-js --manifest-path ../../crates/plec-query-node/Cargo.toml --output-dir native",
-    "compile:wasm": "yarn --cwd ../.. rust:deps:check && cargo build --locked --manifest-path ../../crates/plec-query-core/Cargo.toml --target wasm32-unknown-unknown --release",
+    "compile": "yarn compile:native && yarn compile:wasm",
+    "compile:native": "napi build --platform --release --no-js --manifest-path ../../crates/plec-query-node/Cargo.toml --output-dir native",
+    "compile:wasm": "cargo build --manifest-path ../../crates/plec-query-core/Cargo.toml --target wasm32-unknown-unknown --release",
     "docs:generate-dialect-matrix": "node ./scripts/generate-dialect-matrix.mjs",
     "docs:check-dialect-matrix": "node ./scripts/generate-dialect-matrix.mjs --check",
     "bench:query-parity:baseline": "node ./scripts/run-query-parity-benchmark.mjs baseline",
@@ -59,10 +59,10 @@
     "@plec/eslint-config": "*",
     "@types/node": "^24.4.0",
     "drizzle-orm": "^0.45.2",
-    "eslint": "^10",
+    "eslint": "^9.39.4",
     "kysely": "^0.29.2",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^3.2.4"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.3",

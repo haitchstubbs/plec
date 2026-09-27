@@ -2,14 +2,13 @@
 name = "plec-router"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 
 [dependencies]
 js-sys = { workspace = true }
-plec-client = { path = "../plec-client", version = "0.1.0" }
-plec-dom = { path = "../plec-dom", version = "0.1.0" }
-plec-ir = { path = "../plec-ir", version = "0.1.0" }
-plec-schema = { path = "../plec-schema", version = "0.1.0" }
+plec-client = { path = "../plec-client" }
+plec-dom = { path = "../plec-dom" }
+plec-ir = { path = "../plec-ir" }
+plec-schema = { path = "../plec-schema" }
 serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }
 web-sys = { workspace = true }

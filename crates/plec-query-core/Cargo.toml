@@ -2,7 +2,6 @@
 name = "plec-query"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 
 [dependencies]
 serde.workspace = true

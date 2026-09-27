@@ -46,20 +46,10 @@ const previousDir = path.join(
 );
 
 try {
-  if (process.env.CI !== 'true') {
-    execFileSync(process.execPath, ['scripts/check-rust-deps.mjs'], {
-      cwd: repoRoot,
-      stdio: 'inherit',
-    });
-  }
-  execFileSync(
-    process.execPath,
-    ['scripts/verify-toolchain.mjs', '--profile', 'build,runtime'],
-    {
-      cwd: repoRoot,
-      stdio: 'inherit',
-    },
-  );
+  execFileSync(process.execPath, ['scripts/verify-toolchain.mjs'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+  });
   execFileSync(
     process.execPath,
     [

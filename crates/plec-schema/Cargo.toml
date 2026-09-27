@@ -2,7 +2,6 @@
 name = "plec-schema"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 
 [features]
 # Mirrors the runtime `fetch` feature: when disabled, application validation
@@ -13,4 +12,4 @@ fetch = []
 serde = { workspace = true }
 serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }
-plec-ir = { path = "../plec-ir", version = "0.1.0" }
+plec-ir = { path = "../plec-ir" }

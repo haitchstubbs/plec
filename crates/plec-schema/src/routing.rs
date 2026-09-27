@@ -8,8 +8,6 @@ pub struct RouteManifest {
     #[serde(default)]
     pub version: Option<u32>,
     pub root_graph_id: String,
-    #[serde(default)]
-    pub root_not_found_graph_id: Option<String>,
     pub routes: Vec<RouteManifestEntry>,
 }
 
@@ -23,8 +21,6 @@ pub struct RouteManifestEntry {
     pub graph_id: String,
     pub pending_graph_id: Option<String>,
     pub error_graph_id: Option<String>,
-    #[serde(default)]
-    pub not_found_graph_id: Option<String>,
     pub outlet_id: String,
     pub loader_action: Option<usize>,
     #[serde(default = "default_pending_mode")]
@@ -190,7 +186,6 @@ mod tests {
             graph_id: id.into(),
             pending_graph_id: None,
             error_graph_id: None,
-            not_found_graph_id: None,
             outlet_id: "main".into(),
             loader_action: None,
             pending_mode: "replace".into(),
@@ -202,7 +197,6 @@ mod tests {
         let manifest = RouteManifest {
             version: Some(3),
             root_graph_id: "root".into(),
-            root_not_found_graph_id: None,
             routes: vec![
                 route("projects", None, "projects"),
                 route("project", Some("projects"), "$projectId"),
@@ -236,7 +230,6 @@ mod tests {
         let manifest = RouteManifest {
             version: Some(3),
             root_graph_id: "root".into(),
-            root_not_found_graph_id: None,
             routes: vec![
                 route("layout", None, ""),
                 route("home", Some("layout"), ""),

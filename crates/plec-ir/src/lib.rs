@@ -60,11 +60,6 @@ pub struct RouteManifest {
     #[serde(default)]
     pub revision: String,
     pub root_graph_id: String,
-    /// Not-found boundary graph for the root route
-    /// (`createRootRoute({ notFoundComponent })`). The root route is
-    /// deliberately outside `routes`, so its boundary needs a separate slot.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root_not_found_graph_id: Option<String>,
     pub routes: Vec<RouteManifestEntry>,
 }
 
@@ -85,8 +80,6 @@ pub struct RouteManifestEntry {
     pub pending_mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_graph_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub not_found_graph_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub loader_action: Option<usize>,
     pub outlet_id: String,
@@ -111,11 +104,6 @@ impl RouteManifest {
         }
         if self.root_graph_id.is_empty() {
             return Err("route manifest root graph id is required".into());
-        }
-        if let Some(graph_id) = &self.root_not_found_graph_id {
-            if graph_id.is_empty() {
-                return Err("route manifest root not-found graph id is required".into());
-            }
         }
         if self.routes.len() > MAX_MANIFEST_ROUTES {
             return Err("route manifest exceeds the route count limit".into());
@@ -266,11 +254,6 @@ pub enum SsrRoutePhase {
     Active,
     Pending,
     Error,
-    /// The route instance rendered its not-found boundary after a loader
-    /// produced a not-found outcome. Semantically distinct from `Error`:
-    /// adoption must preserve the distinction, not funnel it through the
-    /// error machinery.
-    NotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -322,17 +305,13 @@ pub struct SsrLoaderOutcome {
     pub state: SsrLoaderState,
 }
 
-/// Loader outcomes are total: a loader either resolved a value, was rejected
-/// with a message, or produced a not-found outcome. Redirects never reach a
-/// snapshot (the server resolves them before rendering); a `Redirect` outcome
-/// arriving at any snapshot consumer must fail closed. There is no
-/// "unresolved" state to represent.
+/// Loader outcomes are total: a loader either resolved a value or was
+/// rejected with a message. There is no "unresolved" state to represent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SsrLoaderState {
     Resolved { value: SsrSnapshotValue },
     Rejected { message: String },
-    NotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -461,12 +440,7 @@ impl PlecSsrSnapshot {
     }
 
     fn validate_route_chain(&self, manifest: &RouteManifest) -> Result<(), String> {
-        // A root not-found boundary renders without any child route instance,
-        // so an empty chain is only legitimate when the manifest declares one.
         if self.routes.is_empty() {
-            if manifest.root_not_found_graph_id.is_some() {
-                return Ok(());
-            }
             return Err("ssr snapshot route chain is required".into());
         }
         let mut declared_params = std::collections::BTreeSet::new();
@@ -562,7 +536,6 @@ impl PlecSsrSnapshot {
                         return Err(format!("loader {reference} rejection requires a message"));
                     }
                 }
-                SsrLoaderState::NotFound => {}
             }
         }
         Ok(())
@@ -1237,11 +1210,6 @@ pub struct ActionProgram {
     pub loader_result_state: Option<usize>,
     #[serde(skip_serializing_if = "is_false", default)]
     pub route_loader: bool,
-    /// Loader fetches decode to the response body (not the transport
-    /// envelope). Hosts gate envelope unwrapping on this flag instead of
-    /// shape-sniffing the loader value.
-    #[serde(skip_serializing_if = "is_false", default)]
-    pub loader_decode_body: bool,
     pub instructions: Vec<ActionInstruction>,
 }
 
@@ -1376,12 +1344,6 @@ pub enum ReturnOutcome {
     #[default]
     Success,
     Failure,
-    /// Terminal loader redirect. The `Return` value expression evaluates to a
-    /// `{ location: string, replace: bool }` record. Redirects unwind the
-    /// whole action run; hosts resolve them before any route commit.
-    Redirect,
-    /// Terminal loader not-found outcome. The value is ignored.
-    NotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1478,8 +1440,7 @@ mod tests {
             version: 3,
             revision: "test".into(),
             root_graph_id: "root".into(),
-            root_not_found_graph_id: None,
-            routes:             vec![RouteManifestEntry {
+            routes: vec![RouteManifestEntry {
                 id: "todos".into(),
                 parent_id: None,
                 path: "/todos".into(),
@@ -1488,7 +1449,6 @@ mod tests {
                 pending_mode: "replace".into(),
                 error_graph_id: None,
                 loader_action: None,
-                not_found_graph_id: None,
                 outlet_id: "main".into(),
                 meta: None,
             }],
@@ -1534,7 +1494,6 @@ mod tests {
             version: 3,
             revision: "rev-1".into(),
             root_graph_id: "app#Index".into(),
-            root_not_found_graph_id: None,
             routes: vec![
                 RouteManifestEntry {
                     id: "app#Index".into(),
@@ -1545,7 +1504,6 @@ mod tests {
                     pending_mode: "replace".into(),
                     error_graph_id: None,
                     loader_action: None,
-                    not_found_graph_id: None,
                     outlet_id: "main".into(),
                     meta: None,
                 },
@@ -1558,7 +1516,6 @@ mod tests {
                     pending_mode: "replace".into(),
                     error_graph_id: None,
                     loader_action: Some(0),
-                    not_found_graph_id: None,
                     outlet_id: "main".into(),
                     meta: None,
                 },
@@ -1845,7 +1802,6 @@ mod tests {
                 pending_mode: "replace".into(),
                 error_graph_id: None,
                 loader_action: None,
-                not_found_graph_id: None,
                 outlet_id: "main".into(),
                 meta: None,
             })

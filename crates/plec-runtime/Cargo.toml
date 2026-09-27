@@ -2,7 +2,6 @@
 name = "plec-runtime"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -13,12 +12,12 @@ router = []
 fetch = ["plec-client/fetch"]
 
 [dependencies]
-plec-client = { path = "../plec-client", version = "0.1.0" }
-plec-dom = { path = "../plec-dom", version = "0.1.0" }
-plec-eval = { path = "../plec-eval", version = "0.1.0" }
-plec-ir = { path = "../plec-ir", version = "0.1.0" }
-plec-router = { path = "../plec-router", version = "0.1.0" }
-plec-schema = { path = "../plec-schema", version = "0.1.0" }
+plec-client = { path = "../plec-client" }
+plec-dom = { path = "../plec-dom" }
+plec-eval = { path = "../plec-eval" }
+plec-ir = { path = "../plec-ir" }
+plec-router = { path = "../plec-router" }
+plec-schema = { path = "../plec-schema" }
 js-sys = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -18,7 +18,6 @@ impl Ctx<'_> {
                         parameter_slots: vec![],
                         loader_result_state: None,
                         route_loader: false,
-                        loader_decode_body: false,
                         instructions: vec![
                             ActionInstruction::CallProp {
                                 prop,
@@ -103,7 +102,6 @@ impl Ctx<'_> {
                     parameter_slots: vec![],
                     loader_result_state: None,
                     route_loader: false,
-                    loader_decode_body: false,
                     instructions: code,
                 });
                 Ok(action)
@@ -257,7 +255,6 @@ impl Ctx<'_> {
             parameter_slots: (0..parameters.len()).collect(),
             loader_result_state: None,
             route_loader: false,
-            loader_decode_body: false,
             instructions: code,
         });
         Ok(index)

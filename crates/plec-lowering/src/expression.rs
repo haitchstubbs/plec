@@ -158,20 +158,6 @@ impl Ctx<'_> {
                         .ok_or_else(|| self.err("loader data used before lowering"))?;
                     code.push(ExpressionInstruction::LoadHost { host });
                 }
-                Some(HirBindingKind::Input { kind }) if kind == "routeParams" => {
-                    let host = *self
-                        .hosts
-                        .get(&binding)
-                        .ok_or_else(|| self.err("route params used before lowering"))?;
-                    code.push(ExpressionInstruction::LoadHost { host });
-                }
-                Some(HirBindingKind::Input { kind }) if kind == "routeSearch" => {
-                    let host = *self
-                        .hosts
-                        .get(&binding)
-                        .ok_or_else(|| self.err("route search used before lowering"))?;
-                    code.push(ExpressionInstruction::LoadHost { host });
-                }
                 Some(HirBindingKind::Parameter { callable: false })
                     if self.action_parameters.contains_key(&binding) =>
                 {

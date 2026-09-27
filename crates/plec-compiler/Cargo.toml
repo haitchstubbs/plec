@@ -2,14 +2,13 @@
 name = "plec-compiler"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 
 [dependencies]
-plec-parser = { path = "../plec-parser", version = "0.1.0" }
-plec-model = { path = "../plec-model", version = "0.1.0" }
-plec-hir = { path = "../plec-hir", version = "0.1.0" }
-plec-ir = { path = "../plec-ir", version = "0.1.0" }
-plec-lowering = { path = "../plec-lowering", version = "0.1.0" }
+plec-parser = { path = "../plec-parser" }
+plec-model = { path = "../plec-model" }
+plec-hir = { path = "../plec-hir" }
+plec-ir = { path = "../plec-ir" }
+plec-lowering = { path = "../plec-lowering" }
 swc_common.workspace = true
 swc_ecma_ast.workspace = true
 swc_ecma_visit.workspace = true
@@ -18,4 +17,4 @@ serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tempfile.workspace = true
-plec-schema = { path = "../plec-schema", version = "0.1.0" }
+plec-schema = { path = "../plec-schema" }

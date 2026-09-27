@@ -228,21 +228,19 @@ loudly (with a pointer here) when it is missing.
 
 Show, set, or verify the canonical Plec product SemVer. The product version
 is declared once in the Cargo workspace (`[workspace.package] version` in the
-root `Cargo.toml`), inherited by every Rust crate, and mirrored by the root
-manifest and every app/package manifest under `apps/`, `packages/`, and
-`scripts/`. This keeps the complete release bundle on one version.
+root `Cargo.toml`) and mirrored by `packages/plec/package.json`, the release
+artifact's public metadata; the CLI reports the same value through
+`plec --version` because plec-cli inherits the workspace version.
 
 ```bash
-plec workspace version                 # print all declarations
+plec workspace version                 # print both declarations
 plec workspace version --check         # verify consistency; exit non-zero on drift
 plec workspace version --set 0.2.0     # update every authoritative declaration
 ```
 
 `--set` validates SemVer (including prerelease/build metadata) before
-touching disk and updates the Cargo workspace declaration and all discovered
-JavaScript package manifests. It adds missing package `version` fields while
-preserving visibility such as `"private": true`. Dependency pins and
-code-owned protocol/schema versions remain untouched.
+touching disk and updates exactly the two authoritative files — dependency
+pins, protocol constants, and everything else stay byte-identical.
 
 ### Product version vs protocol versions
 

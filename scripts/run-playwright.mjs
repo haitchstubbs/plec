@@ -3,7 +3,7 @@ import { playwrightBrowsersPath, repoRoot } from './toolchain.mjs';
 
 const verify = spawnSync(
   process.execPath,
-  ['scripts/verify-toolchain.mjs', '--profile', 'browser'],
+  ['scripts/verify-toolchain.mjs', '--browser'],
   {
     cwd: repoRoot,
     stdio: 'inherit',

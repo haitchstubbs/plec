@@ -49,13 +49,13 @@ in `.env.plec` selects the variant).
 
 ## Version
 
-The package carries the canonical Plec product SemVer in its `version` field.
-`plec workspace version --set` / `--check` (dev CLI) keeps it aligned with the
-Cargo workspace declaration and every Rust crate and JS workspace package.
-The artifact build fails before assembling anything when the core package and
-Cargo declaration drift, and `plec --version` prints the same value from the
-compiled binary. Protocol versions (IR, route manifest, SSR snapshot, sidecar)
-are compatibility contracts and are deliberately not coupled to this SemVer.
+The package carries the canonical Plec product SemVer in its `version` field,
+kept identical to the Cargo workspace declaration (`[workspace.package]`
+version) by `plec workspace version --set` / `--check` (dev CLI). The
+artifact build fails before assembling anything when the two drift, and
+`plec --version` prints the same value from the compiled binary. Protocol
+versions (IR, route manifest, SSR snapshot, sidecar) are compatibility
+contracts and are deliberately not coupled to this SemVer.
 
 ## Commands
 

@@ -491,7 +491,6 @@ pub struct TypedRouteState {
     pub pending_graph_id: Option<String>,
     pub pending_mode: String,
     pub error_graph_id: Option<String>,
-    pub not_found_graph_id: Option<String>,
     pub loader_action: Option<usize>,
     pub params: HashMap<String, String>,
     pub location: (String, String, String),
@@ -503,10 +502,6 @@ pub enum TypedRoutePhase {
     Normal,
     Loading,
     Error,
-    /// The route instance rendered its not-found boundary after a loader
-    /// produced a not-found outcome. Semantically distinct from `Error`;
-    /// boundary graphs carry no retry action.
-    NotFound,
 }
 
 impl RuntimeState {
@@ -842,17 +837,7 @@ impl RuntimeState {
                     .borrow()
                     .get(&parent_id)
                     .and_then(|instance| instance.loader_data.clone());
-                let route_params = self
-                    .typed
-                    .borrow()
-                    .get(&parent_id)
-                    .and_then(|instance| instance.route_state.as_ref())
-                    .map(|state| state.params.clone());
-                runtime.set_host_inputs(self.typed_host_inputs_for_location(
-                    loader_data.as_ref(),
-                    route_params.as_ref(),
-                    None,
-                )?)?;
+                runtime.set_host_inputs(self.typed_host_inputs_for(loader_data.as_ref()))?;
                 runtime.graph_generation = self.next_typed_generation();
                 if let Some(adoption) = request.adoption.as_ref() {
                     runtime.adopt(
@@ -1063,12 +1048,6 @@ impl RuntimeState {
 }
 
 impl TypedRuntime {
-    pub fn set_host_input(&mut self, name: &str, value: RuntimeValue) -> Result<(), JsValue> {
-        self.host_inputs.insert(name.to_owned(), value.clone());
-        self.app.host_inputs.insert(name.to_owned(), value);
-        Ok(())
-    }
-
     pub fn set_route_error(&mut self, error: RuntimeValue) -> Result<(), JsValue> {
         // Error components may render a fixed fallback and not consume the
         // route error value. In that case there is no state slot to populate.

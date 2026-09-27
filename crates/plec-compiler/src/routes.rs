@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 
 use plec_hir::{ComponentId, HirApplication, HirRoute, HirRouteApplication, HirRouteMetadata};
-use plec_ir::{ActionProgram, ComponentApplication, RouteManifest, RouteManifestEntry, RouteMetadata, RouteOutlet};
+use plec_ir::{
+    ActionInstruction, ActionProgram, CapabilityRequest, ComponentApplication,
+    ExpressionInstruction, ExpressionProgram, ReturnOutcome, RouteManifest, RouteManifestEntry,
+    RouteMetadata, RouteOutlet, StateSlot, Value,
+};
 use plec_model::{resolve_local_symbol, SemanticGraph};
 use plec_parser::ParsedModule;
 use serde::Serialize;
@@ -99,12 +103,6 @@ pub fn lower_routes(
                     module,
                     graph,
                 )?;
-                let not_found_component = optional_component_option(
-                    options.props.as_slice(),
-                    "notFoundComponent",
-                    module,
-                    graph,
-                )?;
                 let loader = optional_ident_option(options.props.as_slice(), "loader")?;
                 let outlet_id = string_option(options.props.as_slice(), "outletId")?
                     .unwrap_or_else(|| "main".into());
@@ -119,7 +117,6 @@ pub fn lower_routes(
                     pending_component,
                     pending_mode,
                     error_component,
-                    not_found_component,
                     loader,
                     outlet_id,
                     metadata,
@@ -153,7 +150,6 @@ pub fn lower_routes(
     }
     Ok(HirRouteApplication {
         root: root.component.clone(),
-        root_not_found_component: root.not_found_component.clone(),
         routes,
     })
 }
@@ -168,7 +164,6 @@ pub fn lower_route_manifest(routes: &HirRouteApplication) -> RouteManifest {
         version: 3,
         revision: "rust-route-v1".into(),
         root_graph_id: graph_id(&routes.root),
-        root_not_found_graph_id: routes.root_not_found_component.as_ref().map(graph_id),
         routes: routes
             .routes
             .iter()
@@ -186,7 +181,6 @@ pub fn lower_route_manifest(routes: &HirRouteApplication) -> RouteManifest {
                 pending_graph_id: route.pending_component.as_ref().map(graph_id),
                 pending_mode: route.pending_mode.clone(),
                 error_graph_id: route.error_component.as_ref().map(graph_id),
-                not_found_graph_id: route.not_found_component.as_ref().map(graph_id),
                 // Loader action zero is reserved by route-graph lowering; callers
                 // cannot supply this runtime handle.
                 loader_action: route.loader.as_ref().map(|_| 0),
@@ -222,14 +216,10 @@ pub fn lower_route_artifacts_with_options(
     custom_elements: &std::collections::BTreeSet<String>,
 ) -> Result<RouteArtifactBundle, RouteError> {
     let mut phases = vec![routes.root.clone()];
-    if let Some(not_found) = &routes.root_not_found_component {
-        phases.push(not_found.clone());
-    }
     for route in &routes.routes {
         phases.push(route.component.clone());
         phases.extend(route.pending_component.clone());
         phases.extend(route.error_component.clone());
-        phases.extend(route.not_found_component.clone());
     }
     phases.sort_by(|left, right| {
         left.module_id
@@ -290,18 +280,12 @@ pub fn lower_route_artifacts_with_options(
 
     let mut manifest = lower_route_manifest(routes);
     for route in routes.routes.iter().filter(|route| route.loader.is_some()) {
-        let loader = crate::loader::loader_declaration(modules, route)?;
+        let url = static_route_loader_url(modules, route)?;
         let artifact = artifacts
             .iter_mut()
             .find(|artifact| artifact.graph_id == graph_id(&route.component))
             .ok_or_else(|| RouteError("route loader graph is missing".into()))?;
-        let (action, uses_not_found) = attach_route_loader(&mut artifact.graph, loader)?;
-        if uses_not_found && !chain_declares_not_found_boundary(routes, route) {
-            return Err(RouteError(format!(
-                "route {} throws notFound() without a notFoundComponent on this route, an ancestor, or the root route",
-                route.id
-            )));
-        }
+        let action = attach_route_loader(&mut artifact.graph, url)?;
         manifest
             .routes
             .iter_mut()
@@ -318,37 +302,181 @@ pub fn lower_route_artifacts_with_options(
     })
 }
 
-/// Compiles the loader body into a terminal loader action on the route
-/// component graph. See `crate::loader` for the grammar contract.
-/// `uses_not_found` reports whether the loader can resolve as not found so
-/// the caller can require a declared boundary.
-fn attach_route_loader(
-    graph: &mut ComponentApplication,
-    loader: &Expr,
-) -> Result<(usize, bool), RouteError> {
-    let component = graph
-        .components
-        .get_mut(graph.root_component)
-        .ok_or_else(|| RouteError("route loader root component is missing".into()))?;
-    let compiled = crate::loader::compile_loader(
-        loader,
-        crate::loader::LoaderPools {
-            strings: &mut component.strings,
-            constants: &mut component.constants,
-            expressions: &mut component.expressions,
-            state_slots: &mut component.state_slots,
+/// Compile the deliberately narrow loader subset needed for the experiment:
+/// an inline or named route loader whose body contains a static `fetch(url)`.
+/// The runtime owns cancellation, status handling, JSON decoding, and route
+/// phase transitions, so author-provided `signal` plumbing is unnecessary in
+/// the action graph.
+fn static_route_loader_url(
+    modules: &[ParsedModule],
+    route: &HirRoute,
+) -> Result<String, RouteError> {
+    let (module_id, local) = route
+        .id
+        .rsplit_once('#')
+        .ok_or_else(|| RouteError("route loader id is invalid".into()))?;
+    let module = modules
+        .iter()
+        .find(|module| module.id == module_id)
+        .ok_or_else(|| RouteError("route loader module is missing".into()))?;
+    let loader = module
+        .ast
+        .body
+        .iter()
+        .filter_map(exported_var)
+        .flat_map(|declaration| declaration.decls.iter())
+        .find(|declaration| matches!(&declaration.name, Pat::Ident(name) if name.id.sym == *local))
+        .and_then(|declaration| declaration.init.as_deref())
+        .and_then(|expression| match expression {
+            Expr::Call(call) if callee_name(&call.callee) == Some("createRoute") => {
+                call.args.first()
+            }
+            _ => None,
+        })
+        .and_then(|argument| match argument.expr.as_ref() {
+            Expr::Object(options) => prop(&options.props, "loader"),
+            _ => None,
+        })
+        .ok_or_else(|| RouteError("route loader declaration is missing".into()))?;
+    fetch_url_from_loader(loader)
+        .ok_or_else(|| RouteError("route loader must contain a fetch() with a static URL".into()))
+}
+
+fn fetch_url_from_loader(loader: &Expr) -> Option<String> {
+    match loader {
+        Expr::Arrow(arrow) => match arrow.body.as_ref() {
+            ArrowFunctionBody::Expr(expression) => fetch_url_from_expression(expression),
+            ArrowFunctionBody::FunctionBody(body) => fetch_url_from_statements(&body.stmts),
         },
-    )?;
-    let action = component.actions.len();
-    component.actions.push(ActionProgram {
-        frame_slots: compiled.frame_slots,
-        parameter_slots: compiled.parameter_slots,
-        loader_result_state: compiled.loader_result_state,
-        route_loader: true,
-        loader_decode_body: compiled.loader_decode_body,
-        instructions: compiled.instructions,
+        Expr::Fn(function) => function
+            .function
+            .body
+            .as_ref()
+            .and_then(|body| fetch_url_from_statements(&body.stmts)),
+        Expr::Ident(_) => None,
+        _ => fetch_url_from_expression(loader),
+    }
+}
+
+fn fetch_url_from_statements(statements: &[Stmt]) -> Option<String> {
+    statements.iter().find_map(|statement| match statement {
+        Stmt::Decl(Decl::Var(declaration)) => declaration.decls.iter().find_map(|declaration| {
+            declaration
+                .init
+                .as_deref()
+                .and_then(fetch_url_from_expression)
+        }),
+        Stmt::Expr(expression) => fetch_url_from_expression(&expression.expr),
+        Stmt::Return(returned) => returned.arg.as_deref().and_then(fetch_url_from_expression),
+        Stmt::Block(block) => fetch_url_from_statements(&block.stmts),
+        _ => None,
+    })
+}
+
+fn fetch_url_from_expression(expression: &Expr) -> Option<String> {
+    match expression {
+        Expr::Await(awaited) => fetch_url_from_expression(&awaited.arg),
+        Expr::Call(call) if callee_name(&call.callee) == Some("fetch") => call
+            .args
+            .first()
+            .and_then(|argument| match argument.expr.as_ref() {
+                Expr::Lit(swc_ecma_ast::Lit::Str(url)) => {
+                    Some(url.value.to_string_lossy().into_owned())
+                }
+                _ => None,
+            }),
+        Expr::Paren(parenthesized) => fetch_url_from_expression(&parenthesized.expr),
+        Expr::TsAs(assertion) => fetch_url_from_expression(&assertion.expr),
+        Expr::TsTypeAssertion(assertion) => fetch_url_from_expression(&assertion.expr),
+        _ => None,
+    }
+}
+
+fn attach_route_loader(
+    application: &mut ComponentApplication,
+    url: String,
+) -> Result<usize, RouteError> {
+    let component = application
+        .components
+        .get_mut(application.root_component)
+        .ok_or_else(|| RouteError("route loader root component is missing".into()))?;
+    let url_constant = component.constants.len();
+    component.constants.push(Value::String(url));
+    let url_expression = component.expressions.len();
+    component.expressions.push(ExpressionProgram {
+        instructions: vec![
+            ExpressionInstruction::Constant {
+                constant: url_constant,
+            },
+            ExpressionInstruction::Return,
+        ],
     });
-    Ok((action, compiled.uses_not_found))
+    let error_expression = component.expressions.len();
+    component.expressions.push(ExpressionProgram {
+        instructions: vec![
+            ExpressionInstruction::LoadFrame { slot: 1 },
+            ExpressionInstruction::Return,
+        ],
+    });
+    let null_constant = component.constants.len();
+    component.constants.push(Value::Null);
+    let null_expression = component.expressions.len();
+    component.expressions.push(ExpressionProgram {
+        instructions: vec![
+            ExpressionInstruction::Constant {
+                constant: null_constant,
+            },
+            ExpressionInstruction::Return,
+        ],
+    });
+    let loader_state = component.state_slots.len();
+    component.state_slots.push(StateSlot {
+        initial_expression: null_expression,
+        frame_slot: loader_state,
+    });
+    // `responseJson` stays an action-local transport envelope. The shared
+    // client/server loader executor returns it, then each host exports `body`
+    // at its loader-data boundary.
+    let result_expression = component.expressions.len();
+    component.expressions.push(ExpressionProgram {
+        instructions: vec![
+            ExpressionInstruction::LoadFrame { slot: 0 },
+            ExpressionInstruction::Return,
+        ],
+    });
+    let loader_action = component.actions.len();
+    component.actions.push(ActionProgram {
+        frame_slots: 2,
+        parameter_slots: vec![],
+        loader_result_state: Some(loader_state),
+        route_loader: true,
+        instructions: vec![
+            ActionInstruction::CapabilityRequest {
+                request: CapabilityRequest::Fetch {
+                    url: url_expression,
+                    method: "GET",
+                    headers: vec![],
+                    body: None,
+                    decode: "responseJson",
+                    require_ok: true,
+                },
+                success_pc: 1,
+                failure_pc: 2,
+                finally_pc: None,
+                result_slot: 0,
+                error_slot: 1,
+            },
+            ActionInstruction::Return {
+                outcome: ReturnOutcome::Success,
+                value: Some(result_expression),
+            },
+            ActionInstruction::Return {
+                outcome: ReturnOutcome::Failure,
+                value: Some(error_expression),
+            },
+        ],
+    });
+    Ok(loader_action)
 }
 
 fn stable_revision(artifacts: &[RouteArtifact]) -> String {
@@ -378,14 +506,10 @@ pub fn lower_route_application_to_executable(
     routes: &HirRouteApplication,
 ) -> Result<ComponentApplication, RouteError> {
     let mut roots = vec![routes.root.clone()];
-    if let Some(not_found) = &routes.root_not_found_component {
-        roots.push(not_found.clone());
-    }
     for route in &routes.routes {
         roots.push(route.component.clone());
         roots.extend(route.pending_component.clone());
         roots.extend(route.error_component.clone());
-        roots.extend(route.not_found_component.clone());
     }
     let mut components = Vec::new();
     for id in roots {
@@ -432,23 +556,6 @@ pub fn lower_route_application_to_executable(
         }
     }
     Ok(executable)
-}
-
-/// A not-found outcome must resolve to a declared boundary: this route, any
-/// ancestor, or the root route's boundary. Checked at compile time so the
-/// runtime never has to guess where a not-found outcome renders.
-fn chain_declares_not_found_boundary(routes: &HirRouteApplication, route: &HirRoute) -> bool {
-    let mut current = Some(route);
-    while let Some(candidate) = current {
-        if candidate.not_found_component.is_some() {
-            return true;
-        }
-        current = candidate
-            .parent
-            .as_ref()
-            .and_then(|id| routes.routes.iter().find(|candidate| &candidate.id == id));
-    }
-    routes.root_not_found_component.is_some()
 }
 
 fn graph_id(component: &ComponentId) -> String {
@@ -612,277 +719,6 @@ mod tests {
     use plec_model::build_semantic_graph;
     use plec_parser::parse_module;
 
-    fn compile_loader_program(source: &str) -> Result<(plec_ir::ActionProgram, Vec<String>), String> {
-        let modules = vec![parse_module("routes.tsx", source).unwrap()];
-        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
-        let routes = lower_routes(&modules, &graph).unwrap();
-        let mut bundle = lower_route_artifacts(&modules, &graph, &routes).unwrap();
-        let route = routes
-            .routes
-            .iter()
-            .find(|route| route.loader.is_some())
-            .ok_or("route loader is missing".to_owned())?;
-        let graph_id = format!("routes.tsx#{}", route.component.local_name);
-        let artifact = bundle
-            .graphs
-            .iter_mut()
-            .find(|artifact| artifact.graph_id == graph_id)
-            .ok_or("loader graph is missing".to_owned())?;
-        let component = artifact
-            .graph
-            .components
-            .get(artifact.graph.root_component)
-            .ok_or("root component is missing".to_owned())?;
-        let action = component
-            .actions
-            .last()
-            .ok_or("loader action is missing".to_owned())?;
-        Ok((
-            action.clone(),
-            component.strings.clone(),
-        ))
-    }
-
-    #[test]
-    fn lowers_conditional_loader_bodies_to_terminal_outcomes() {
-        let (action, strings) = compile_loader_program(
-            r#"
-            function Layout() { return <main />; }
-            function Missing() { return <p />; }
-            function Page() { return <p />; }
-            export const Root = createRootRoute({ component: Layout });
-            export const UserRoute = createRoute({
-                getParentRoute: () => Root,
-                path: 'users/$id',
-                component: Page,
-                notFoundComponent: Missing,
-                loader: async ({ params }) => {
-                    const user = await fetch(`/api/users/${params.id}`);
-                    if (!user.canView) throw redirect('/login');
-                    if (user.missing) throw notFound();
-                    return user;
-                },
-            });
-            export const router = createRouter({ routeTree: Root.addChildren([UserRoute]) });
-        "#,
-        )
-        .unwrap();
-        // The shared parameter contract: params and location.
-        assert_eq!(action.parameter_slots, vec![0, 1]);
-        assert!(action.route_loader);
-        // Loader fetches decode to the response body.
-        assert!(action.loader_decode_body);
-        let outcomes: Vec<&plec_ir::ActionInstruction> = action
-            .instructions
-            .iter()
-            .filter(|instruction| matches!(instruction, plec_ir::ActionInstruction::Return { .. }))
-            .collect();
-        let mut success = 0;
-        let mut redirect = false;
-        let mut not_found = false;
-        for instruction in &outcomes {
-            if let plec_ir::ActionInstruction::Return { outcome, .. } = instruction {
-                match outcome {
-                    plec_ir::ReturnOutcome::Success => success += 1,
-                    plec_ir::ReturnOutcome::Redirect => redirect = true,
-                    plec_ir::ReturnOutcome::NotFound => not_found = true,
-                    plec_ir::ReturnOutcome::Failure => {}
-                }
-            }
-        }
-        assert_eq!(success, 1);
-        assert!(redirect);
-        assert!(not_found);
-        // The template URL reads the `id` param through a field access.
-        assert!(strings.iter().any(|value| value == "id"));
-        assert!(strings.iter().any(|value| value == "body"));
-        assert!(strings.iter().any(|value| value == "location"));
-    }
-
-    #[test]
-    fn compiles_terminal_only_loader_outcomes_without_fetch() {
-        for outcome in ["throw redirect('/login');", "throw notFound();"] {
-            let source = format!(
-                r#"
-                function Layout() {{ return <main />; }}
-                function Missing() {{ return <p />; }}
-                function Page() {{ return <p />; }}
-                export const Root = createRootRoute({{ component: Layout, notFoundComponent: Missing }});
-                export const UserRoute = createRoute({{
-                    getParentRoute: () => Root,
-                    path: 'users/$id',
-                    component: Page,
-                    notFoundComponent: Missing,
-                    loader: async () => {{ {outcome} }},
-                }});
-                export const router = createRouter({{ routeTree: Root.addChildren([UserRoute]) }});
-            "#
-            );
-
-            let (action, _) = compile_loader_program(&source).unwrap();
-            assert!(action.instructions.iter().any(|instruction| matches!(
-                instruction,
-                plec_ir::ActionInstruction::Return {
-                    outcome: plec_ir::ReturnOutcome::Redirect | plec_ir::ReturnOutcome::NotFound,
-                    ..
-                }
-            )));
-        }
-    }
-
-    #[test]
-    fn rejects_loader_without_fetch_or_terminal_outcome() {
-        let modules = vec![parse_module(
-            "routes.tsx",
-            r#"
-            function Layout() { return <main />; }
-            function Page() { return <p />; }
-            export const Root = createRootRoute({ component: Layout });
-            export const UserRoute = createRoute({
-                getParentRoute: () => Root,
-                path: 'users/$id',
-                component: Page,
-                loader: async () => {},
-            });
-            export const router = createRouter({ routeTree: Root.addChildren([UserRoute]) });
-        "#,
-        )
-        .unwrap()];
-        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
-        let routes = lower_routes(&modules, &graph).unwrap();
-        let error = lower_route_artifacts(&modules, &graph, &routes)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains(
-            "must await fetch(url) or produce a redirect/not-found outcome"
-        ));
-    }
-
-    #[test]
-    fn rejects_not_found_without_a_declared_boundary() {
-        let modules = vec![parse_module(
-            "routes.tsx",
-            r#"
-            function Layout() { return <main />; }
-            function Page() { return <p />; }
-            export const Root = createRootRoute({ component: Layout });
-            export const UserRoute = createRoute({
-                getParentRoute: () => Root,
-                path: 'users/$id',
-                component: Page,
-                loader: async () => {
-                    const user = await fetch('/api/users/1');
-                    if (user.missing) throw notFound();
-                    return user;
-                },
-            });
-            export const router = createRouter({ routeTree: Root.addChildren([UserRoute]) });
-        "#,
-        )
-        .unwrap()];
-        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
-        let routes = lower_routes(&modules, &graph).unwrap();
-        let error = lower_route_artifacts(&modules, &graph, &routes).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("notFoundComponent on this route, an ancestor, or the root route"));
-    }
-
-    #[test]
-    fn rejects_unsupported_loader_statements_and_expressions() {
-        let reject = |body: &str, expected: &str| {
-            let source = format!(
-                r#"
-                function Layout() {{ return <main />; }}
-                function Missing() {{ return <p />; }}
-                function Page() {{ return <p />; }}
-                export const Root = createRootRoute({{ component: Layout, notFoundComponent: Missing }});
-                export const UserRoute = createRoute({{
-                    getParentRoute: () => Root,
-                    path: 'users/$id',
-                    component: Page,
-                    loader: async ({{ params }}) => {{
-                        {body}
-                    }},
-                }});
-                export const router = createRouter({{ routeTree: Root.addChildren([UserRoute]) }});
-            "#
-            );
-            let modules = vec![parse_module("routes.tsx", &source).unwrap()];
-            let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
-            let routes = lower_routes(&modules, &graph).unwrap();
-            let error = lower_route_artifacts(&modules, &graph, &routes).unwrap_err();
-            assert!(
-                error.to_string().contains(expected),
-                "expected {expected:?} in {error}"
-            );
-        };
-        reject(
-            "const user = await fetch('/api/x'); while (false) {}",
-            "loop",
-        );
-        reject(
-            "const user = await fetch('/api/x'); try {} catch {}",
-            "try/catch",
-        );
-        reject(
-            "const user = await fetch('/api/x', { method: 'POST' });",
-            "supports only the { signal } init",
-        );
-        reject(
-            "const helper = () => 1;",
-            "route loaders can only await fetch(url)",
-        );
-        reject("return fetch('/api/x');", "function call");
-        reject(
-            "const user = await fetch('/api/x'); return user.map(one => one);",
-            "function call",
-        );
-    }
-
-    #[test]
-    fn manifest_carries_not_found_boundaries() {
-        let modules = vec![parse_module(
-            "routes.tsx",
-            r#"
-            function Layout() { return <main />; }
-            function RootMissing() { return <p />; }
-            function Missing() { return <p />; }
-            function Page() { return <p />; }
-            export const Root = createRootRoute({ component: Layout, notFoundComponent: RootMissing });
-            export const UserRoute = createRoute({
-                getParentRoute: () => Root,
-                path: 'users/$id',
-                component: Page,
-                notFoundComponent: Missing,
-            });
-            export const router = createRouter({ routeTree: Root.addChildren([UserRoute]) });
-        "#,
-        )
-        .unwrap()];
-        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
-        let routes = lower_routes(&modules, &graph).unwrap();
-        let manifest = lower_route_manifest(&routes);
-        assert_eq!(
-            manifest.root_not_found_graph_id.as_deref(),
-            Some("routes.tsx#RootMissing")
-        );
-        assert_eq!(
-            manifest.routes[0].not_found_graph_id.as_deref(),
-            Some("routes.tsx#Missing")
-        );
-        // The boundary graphs are emitted as independently mountable phases.
-        let bundle = lower_route_artifacts(&modules, &graph, &routes).unwrap();
-        assert!(bundle
-            .graphs
-            .iter()
-            .any(|artifact| artifact.graph_id == "routes.tsx#RootMissing"));
-        assert!(bundle
-            .graphs
-            .iter()
-            .any(|artifact| artifact.graph_id == "routes.tsx#Missing"));
-    }
-
     #[test]
     fn lowers_static_route_tree_to_a_deterministic_manifest() {
         let modules = vec![parse_module("routes.tsx", r#"
@@ -970,37 +806,6 @@ mod tests {
             .find(|component| component.id == "routes.tsx#Layout")
             .unwrap();
         assert_eq!(layout.route_outlets[0].id, "main");
-    }
-
-    #[test]
-    fn lowers_route_search_access_in_a_route_component() {
-        let modules = vec![parse_module(
-            "routes.tsx",
-            r#"
-                function Page() {
-                    const search = Route.useSearch();
-                    return <p>{search.tab}</p>;
-                }
-                export const Root = createRootRoute({ component: Page });
-                export const Home = createRoute({
-                    getParentRoute: () => Root,
-                    path: 'home',
-                    component: Page,
-                });
-                export const router = createRouter({ routeTree: Root.addChildren([Home]) });
-            "#,
-        )
-        .unwrap()];
-        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
-        let routes = lower_routes(&modules, &graph).unwrap();
-        let artifacts = lower_route_artifacts(&modules, &graph, &routes).unwrap();
-        assert!(artifacts.graphs.iter().any(|graph| {
-            graph
-                .graph
-                .components
-                .iter()
-                .any(|component| component.host_slots.iter().any(|slot| slot.kind == "routeSearch"))
-        }));
     }
 
     #[test]

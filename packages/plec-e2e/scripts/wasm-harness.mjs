@@ -12,11 +12,7 @@ import {
 
 const verify = spawnSync(
   process.execPath,
-  [
-    'scripts/verify-toolchain.mjs',
-    '--profile',
-    'build,browser,runtime',
-  ],
+  ['scripts/verify-toolchain.mjs', '--browser'],
   { cwd: repoRoot, stdio: 'inherit' },
 );
 
@@ -50,8 +46,9 @@ const result = spawnSync(
     '--chromedriver',
     chromeDriver,
     runtimeCrate,
-    '--locked',
-    ...(process.argv.length > 2 ? process.argv.slice(2) : []),
+    ...(process.argv.length > 2
+      ? ['--', ...process.argv.slice(2)]
+      : []),
   ],
   {
     cwd: repoRoot,

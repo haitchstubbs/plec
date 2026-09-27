@@ -1,6 +1,5 @@
 mod component_discovery;
 mod hir_builder;
-mod loader;
 mod lowering;
 mod read_source_graph;
 mod routes;

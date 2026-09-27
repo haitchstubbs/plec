@@ -54,10 +54,9 @@
     "build:wasm": "node scripts/build-runtime.mjs",
     "dev:wasm": "cd ../.. && node scripts/watch-wasm.mjs",
     "test": "yarn test:ts && yarn test:runtime",
-    "test:package": "yarn test:ts",
     "test:ts": "yarn --cwd ../.. exec vitest run packages/plec/src --passWithNoTests",
-    "test:runtime": "yarn --cwd ../.. rust:deps:check && node ../../scripts/verify-toolchain.mjs && cargo test --locked --manifest-path ../../crates/plec-runtime/Cargo.toml --lib",
-    "test:runtime:core": "yarn --cwd ../.. rust:deps:check && node ../../scripts/verify-toolchain.mjs && cargo test --locked --manifest-path ../../crates/plec-runtime/Cargo.toml --no-default-features",
+    "test:runtime": "node ../../scripts/verify-toolchain.mjs && cargo test --locked --manifest-path ../../crates/plec-runtime/Cargo.toml --lib",
+    "test:runtime:core": "node ../../scripts/verify-toolchain.mjs && cargo test --locked --manifest-path ../../crates/plec-runtime/Cargo.toml --no-default-features",
     "test:wasm": "node ../plec-e2e/scripts/wasm-harness.mjs",
     "clean:runtime": "cargo clean --manifest-path ../../crates/plec-runtime/Cargo.toml",
     "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec/tsconfig.json --noEmit"

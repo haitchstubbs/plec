@@ -1,11 +1,9 @@
 import {
   Beaker,
   CircleHelp,
-  FolderKanban,
   House,
   ListChecks,
   NotebookText,
-  Shield,
   Workflow,
 } from 'lucide';
 import {
@@ -140,27 +138,6 @@ export function AppSidebar({
             onCloseMobile={onCloseMobile}
           >
             Notes
-          </NavLink>
-          <NavLink
-            href="/admin"
-            Icon={Shield}
-            onCloseMobile={onCloseMobile}
-          >
-            Admin
-          </NavLink>
-          <NavLink
-            href="/projects/plec"
-            Icon={FolderKanban}
-            onCloseMobile={onCloseMobile}
-          >
-            Projects
-          </NavLink>
-          <NavLink
-            href="/projects/ghost"
-            Icon={FolderKanban}
-            onCloseMobile={onCloseMobile}
-          >
-            Missing project
           </NavLink>
           <NavLink
             href="/stress"

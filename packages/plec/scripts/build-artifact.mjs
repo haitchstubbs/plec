@@ -65,14 +65,12 @@ if (cargoVersion !== packageVersion) {
   process.exit(1);
 }
 
-run(process.execPath, ['scripts/check-rust-deps.mjs', '--full']);
-
 await buildWorkspaceSurface();
 
 console.log(
   'Building release CLI binary (PLEC_CLI_VERSION=release)...',
 );
-run('cargo', ['build', '--locked', '--release', '-p', 'plec-cli'], {
+run('cargo', ['build', '--release', '-p', 'plec-cli'], {
   env: { ...process.env, PLEC_CLI_VERSION: 'release' },
 });
 const binaryName = isWindows ? 'plec.exe' : 'plec';

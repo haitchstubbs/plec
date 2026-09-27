@@ -15,49 +15,6 @@ pub struct TypedLocation {
 }
 
 impl RuntimeState {
-    pub fn update_typed_route_search(&self, id: &str, search: &str) -> Result<(), JsValue> {
-        let value = crate::state::parse_route_search(search)?;
-        let mut typed = self.typed.borrow_mut();
-        if !typed.contains_key(id) {
-            return Err(JsValue::from_str("typed route instance missing"));
-        }
-        let mut pending = vec![id.to_owned()];
-        while let Some(parent) = pending.pop() {
-            let children = typed
-                .iter()
-                .filter_map(|(child_id, child)| {
-                    (child.parent_id.as_deref() == Some(parent.as_str())).then(|| child_id.clone())
-                })
-                .collect::<Vec<_>>();
-            pending.extend(children);
-            let instance = typed
-                .get_mut(&parent)
-                .expect("route subtree instance remains present");
-            instance
-                .runtime
-                .set_host_input("routeSearch", value.clone())?;
-            instance.runtime.apply_static_bindings()?;
-            let conditionals = instance
-                .runtime
-                .conditionals
-                .keys()
-                .copied()
-                .collect::<Vec<_>>();
-            for conditional in conditionals {
-                instance.runtime.reconcile_static_conditional(
-                    conditional,
-                    &mut UpdateMetrics::default(),
-                )?;
-            }
-            if parent == id {
-                if let Some(route) = instance.route_state.as_mut() {
-                    route.location.1 = search.to_owned();
-                }
-            }
-        }
-        Ok(())
-    }
-
     pub fn reload_typed_route(&self, id: &str) -> Result<(), JsValue> {
         let (action, params, location) = {
             let mut typed = self.typed.borrow_mut();
@@ -342,17 +299,7 @@ impl RuntimeState {
             .borrow()
             .get(id)
             .and_then(|instance| instance.loader_data.clone());
-        let route_params = self
-            .typed
-            .borrow()
-            .get(id)
-            .and_then(|instance| instance.route_state.as_ref())
-            .map(|state| state.params.clone());
-        next.set_host_inputs(self.typed_host_inputs_for_location(
-            loader_data.as_ref(),
-            route_params.as_ref(),
-            None,
-        )?)?;
+        next.set_host_inputs(self.typed_host_inputs_for(loader_data.as_ref()))?;
         next.graph_generation = self.next_typed_generation();
         if let Some(error) = error {
             next.set_route_error(error)?;
@@ -449,12 +396,7 @@ impl RuntimeState {
             // Loader data is a host input: state initializers such as
             // loadHost("loaderData") only re-evaluate when host inputs are
             // (re)applied, so seed the graph before its first paint.
-            let route_params = instance.route_state.as_ref().map(|state| &state.params);
-            loader.set_host_inputs(self.typed_host_inputs_for_location(
-                instance.loader_data.as_ref(),
-                route_params,
-                None,
-            )?)?;
+            loader.set_host_inputs(self.typed_host_inputs_for(instance.loader_data.as_ref()))?;
             loader.mount(root)?;
             let mut previous = std::mem::replace(&mut instance.runtime, loader);
             previous.invalidate_fetches();
@@ -491,33 +433,6 @@ impl RuntimeState {
         };
         if let Some(graph_id) = graph_id {
             self.show_typed_route_graph(id, &graph_id, false, Some(normalize_route_error(error)))?;
-        }
-        Ok(())
-    }
-
-    /// Transitions one route instance to its not-found boundary graph. The
-    /// phase is `NotFound`, semantically distinct from an error; boundary
-    /// graphs carry no retry action and the loader value is not committed.
-    pub fn show_typed_route_not_found(&self, id: &str) -> Result<(), JsValue> {
-        let graph_id = {
-            let mut typed = self.typed.borrow_mut();
-            let instance = typed
-                .get_mut(id)
-                .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
-            if let Some(mut loader) = instance.loader_runtime.take() {
-                loader.invalidate_fetches();
-                loader.clear_listeners();
-                loader.dispose_host_components();
-            }
-            let state = instance
-                .route_state
-                .as_mut()
-                .ok_or_else(|| JsValue::from_str("typed route not-found state missing"))?;
-            state.phase = TypedRoutePhase::NotFound;
-            state.not_found_graph_id.clone()
-        };
-        if let Some(graph_id) = graph_id {
-            self.show_typed_route_graph(id, &graph_id, false, None)?;
         }
         Ok(())
     }

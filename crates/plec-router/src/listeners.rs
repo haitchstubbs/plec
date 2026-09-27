@@ -7,14 +7,11 @@
 
 use std::rc::Weak;
 
-use js_sys::Object;
 use plec_client::prelude::*;
 use plec_client::state::RuntimeState;
 use plec_dom::platform::{document, window};
-use wasm_bindgen::{prelude::Closure, JsCast};
-use web_sys::{CustomEvent, Event, EventTarget, MouseEvent};
 
-use crate::navigation::{handle_loader_not_found, handle_loader_redirect, navigate_typed_route};
+use crate::navigation::navigate_typed_route;
 
 pub fn install_router_listeners(state: &Rc<RuntimeState>) -> Result<(), JsValue> {
     let document = document()?;
@@ -64,15 +61,13 @@ pub fn install_router_listeners(state: &Rc<RuntimeState>) -> Result<(), JsValue>
         event.prevent_default();
         if let Some(runtime) = runtime.upgrade() {
             if let Some(root) = runtime.typed_root.borrow().clone() {
-                // User-initiated navigation starts a fresh redirect budget.
-                runtime.typed_redirect_depth.set(0);
                 let _ = navigate_typed_route(&runtime, &href, root, false, true);
             }
         }
     }) as Box<dyn FnMut(Event)>);
     document_target.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
     state.router_listeners.borrow_mut().push(RouterListener {
-        target: document_target.clone(),
+        target: document_target,
         event_type: "click".into(),
         callback: click,
     });
@@ -90,7 +85,6 @@ pub fn install_router_listeners(state: &Rc<RuntimeState>) -> Result<(), JsValue>
                 ))
             }) {
                 if let Some(root) = runtime.typed_root.borrow().clone() {
-                    runtime.typed_redirect_depth.set(0);
                     let _ = navigate_typed_route(&runtime, &location, root, false, false);
                 }
             }
@@ -102,53 +96,6 @@ pub fn install_router_listeners(state: &Rc<RuntimeState>) -> Result<(), JsValue>
         target: window_target,
         event_type: "popstate".into(),
         callback: popstate,
-    });
-    install_loader_outcome_listener(state, &document_target, "plec:loader-redirect", |runtime, detail| {
-        let href = js_sys::Reflect::get(&detail, &JsValue::from_str("href"))?
-            .as_string()
-            .ok_or_else(|| JsValue::from_str("loader redirect outcome is missing href"))?;
-        let replace = js_sys::Reflect::get(&detail, &JsValue::from_str("replace"))?
-            .is_truthy();
-        handle_loader_redirect(runtime, &href, replace)
-    })?;
-    install_loader_outcome_listener(state, &document_target, "plec:loader-not-found", |runtime, detail| {
-        let instance_id = js_sys::Reflect::get(&detail, &JsValue::from_str("instanceId"))?
-            .as_string()
-            .ok_or_else(|| JsValue::from_str("loader not-found outcome is missing instanceId"))?;
-        handle_loader_not_found(runtime, &instance_id)
-    })?;
-    Ok(())
-}
-
-/// Wires one terminal loader-outcome event to its router-side resolution.
-fn install_loader_outcome_listener<F>(
-    state: &Rc<RuntimeState>,
-    target: &EventTarget,
-    event_type: &str,
-    resolve: F,
-) -> Result<(), JsValue>
-where
-    F: Fn(&Rc<RuntimeState>, &Object) -> Result<(), JsValue> + 'static,
-{
-    let runtime: Weak<RuntimeState> = Rc::downgrade(state);
-    let callback = Closure::wrap(Box::new(move |event: Event| {
-        let Some(custom) = event.clone().dyn_into::<CustomEvent>().ok() else {
-            return;
-        };
-        let Some(detail) = custom.detail().dyn_into::<Object>().ok() else {
-            return;
-        };
-        if let Some(runtime) = runtime.upgrade() {
-            if let Err(error) = resolve(&runtime, &detail) {
-                web_sys::console::error_1(&error);
-            }
-        }
-    }) as Box<dyn FnMut(Event)>);
-    target.add_event_listener_with_callback(event_type, callback.as_ref().unchecked_ref())?;
-    state.router_listeners.borrow_mut().push(RouterListener {
-        target: target.clone(),
-        event_type: event_type.into(),
-        callback,
     });
     Ok(())
 }

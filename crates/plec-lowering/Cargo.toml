@@ -2,8 +2,7 @@
 name = "plec-lowering"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 
 [dependencies]
-plec-hir = { path = "../plec-hir", version = "0.1.0" }
-plec-ir = { path = "../plec-ir", version = "0.1.0" }
+plec-hir = { path = "../plec-hir" }
+plec-ir = { path = "../plec-ir" }

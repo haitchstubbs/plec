@@ -107,11 +107,10 @@ lives in the cargo-installed binary, so run those as bare `plec …` on the
 shell `PATH`, or set `PLEC_BIN` to force a binary.
 
 Both variants report the same Plec product SemVer via `plec --version`. It
-is declared once in the Cargo workspace and mirrored into all JS workspace
-package manifests; update the complete release bundle with
-`plec workspace version --set` and verify with `--check`. Protocol/IR and
-schema versions remain separate compatibility contracts and are never bumped
-by it.
+is declared once in the Cargo workspace and mirrored into
+`packages/plec/package.json`; update it with `plec workspace version --set`
+and verify with `--check` (protocol/IR versions are separate compatibility
+contracts, never bumped by it).
 
 ## Tests
 

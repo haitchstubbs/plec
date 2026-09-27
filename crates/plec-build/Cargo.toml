@@ -2,13 +2,12 @@
 name = "plec-build"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 
 [dependencies]
 brotli = { workspace = true }
-plec-compiler = { path = "../plec-compiler", version = "0.1.0" }
-plec-ir = { path = "../plec-ir", version = "0.1.0" }
-plec-model = { path = "../plec-model", version = "0.1.0" }
+plec-compiler = { path = "../plec-compiler" }
+plec-ir = { path = "../plec-ir" }
+plec-model = { path = "../plec-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

@@ -487,7 +487,6 @@ impl PlecRuntime {
             .borrow()
             .clone()
             .ok_or_else(|| JsValue::from_str("typed router has not started"))?;
-        self.state.typed_redirect_depth.set(0);
         navigate_typed_route(&self.state, &href, root, replace, true)
     }
 }
@@ -499,7 +498,6 @@ pub(crate) fn typed_route_manifest(manifest: plec_ir::RouteManifest) -> RouteMan
     RouteManifest {
         version: Some(manifest.version),
         root_graph_id: manifest.root_graph_id,
-        root_not_found_graph_id: manifest.root_not_found_graph_id,
         routes: manifest
             .routes
             .into_iter()
@@ -511,7 +509,6 @@ pub(crate) fn typed_route_manifest(manifest: plec_ir::RouteManifest) -> RouteMan
                 pending_graph_id: route.pending_graph_id,
                 pending_mode: route.pending_mode,
                 error_graph_id: route.error_graph_id,
-                not_found_graph_id: route.not_found_graph_id,
                 outlet_id: route.outlet_id,
                 loader_action: route.loader_action,
             })

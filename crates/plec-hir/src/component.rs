@@ -262,9 +262,6 @@ pub struct HirApplication {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirRouteApplication {
     pub root: ComponentId,
-    /// Not-found boundary component declared on the root route. The root
-    /// route is outside `routes`, so this rides beside `root`.
-    pub root_not_found_component: Option<ComponentId>,
     pub routes: Vec<HirRoute>,
 }
 
@@ -277,7 +274,6 @@ pub struct HirRoute {
     pub pending_component: Option<ComponentId>,
     pub pending_mode: String,
     pub error_component: Option<ComponentId>,
-    pub not_found_component: Option<ComponentId>,
     pub loader: Option<String>,
     pub outlet_id: String,
     pub metadata: HirRouteMetadata,

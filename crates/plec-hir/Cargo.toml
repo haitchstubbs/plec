@@ -2,4 +2,3 @@
 name = "plec-hir"
 version.workspace = true
 edition.workspace = true
-license.workspace = true

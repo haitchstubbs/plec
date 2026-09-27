@@ -1,14 +1,11 @@
-import { afterEach, describe, expect, expectTypeOf, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   createRootRoute,
   createRoute,
   createRouter,
   matchRoutes,
-  notFound,
 } from './router';
 import { withRendering } from '../client/root/render-context';
-import type { RootState } from '../client/root/root-state';
-import { DefaultNotFound, renderRouteView } from './render-outlet';
 
 const View = () => null;
 const originalWindow = globalThis.window;
@@ -21,15 +18,14 @@ afterEach(() => {
 });
 
 function setLocation(pathname: string) {
-  const url = new URL(pathname, 'http://localhost');
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
     value: {
       location: {
-        pathname: url.pathname,
-        search: url.search,
-        hash: url.hash,
-        href: url.href,
+        pathname,
+        search: '',
+        hash: '',
+        href: `http://localhost${pathname}`,
         origin: 'http://localhost',
       },
       history: { pushState() {}, replaceState() {} },
@@ -38,19 +34,6 @@ function setLocation(pathname: string) {
 }
 
 describe('code-first routes', () => {
-  it('infers parameter names from literal route paths', () => {
-    const root = createRootRoute({ component: View });
-    const route = createRoute({
-      getParentRoute: () => root,
-      path: 'projects/$projectId/tasks/$taskId',
-      component: View,
-    });
-    expectTypeOf<ReturnType<typeof route.useParams>>().toEqualTypeOf<{
-      projectId: string;
-      taskId: string;
-    }>();
-  });
-
   it('matches nested, parameter, index, and fallback routes', () => {
     const root = createRootRoute({ component: View });
     const index = createRoute({
@@ -128,262 +111,6 @@ describe('code-first routes', () => {
     expect(router.matches[1]).toMatchObject({
       status: 'error',
       error: expect.any(Error),
-    });
-  });
-
-  it('commits a route-owned not-found boundary', async () => {
-    setLocation('/projects/42/tasks');
-    const root = createRootRoute({ component: View });
-    let childLoaderCalls = 0;
-    const projects = createRoute({
-      getParentRoute: () => root,
-      path: 'projects/$id',
-      component: View,
-      notFoundComponent: View,
-      loader: () => notFound(),
-    });
-    const tasks = createRoute({
-      getParentRoute: () => projects,
-      path: 'tasks',
-      component: View,
-      loader: () => {
-        childLoaderCalls += 1;
-        return [];
-      },
-    });
-    root.addChildren([projects]);
-    projects.addChildren([tasks]);
-
-    const router = createRouter({ routeTree: root });
-    router.start();
-    for (let index = 0; index < 8; index += 1) await Promise.resolve();
-
-    expect(router.matches.map((match) => match.route)).toEqual([
-      root,
-      projects,
-    ]);
-    expect(router.matches.at(-1)?.status).toBe('notFound');
-    expect(childLoaderCalls).toBe(0);
-  });
-
-  it('uses the nearest ancestor not-found boundary and stops the chain', async () => {
-    setLocation('/projects/42/tasks');
-    const root = createRootRoute({ component: View });
-    const projects = createRoute({
-      getParentRoute: () => root,
-      path: 'projects/$id',
-      component: View,
-      notFoundComponent: View,
-    });
-    const tasks = createRoute({
-      getParentRoute: () => projects,
-      path: 'tasks',
-      component: View,
-      loader: () => notFound(),
-    });
-    root.addChildren([projects]);
-    projects.addChildren([tasks]);
-
-    const router = createRouter({ routeTree: root });
-    router.start();
-    for (let index = 0; index < 8; index += 1) await Promise.resolve();
-
-    expect(router.matches.map((match) => match.route)).toEqual([
-      root,
-      projects,
-    ]);
-    expect(router.matches.at(-1)?.status).toBe('notFound');
-    expect(router.committedMatches.map((match) => match.route)).toEqual(
-      [root, projects],
-    );
-    expect(router.committedMatches.at(-1)?.status).toBe('notFound');
-  });
-
-  it('uses the root match for the built-in not-found fallback', async () => {
-    setLocation('/projects/42/tasks');
-    const root = createRootRoute({ component: View });
-    const project = createRoute({
-      getParentRoute: () => root,
-      path: 'projects/$id',
-      component: View,
-      loader: () => notFound(),
-    });
-    let childLoaderCalls = 0;
-    const tasks = createRoute({
-      getParentRoute: () => project,
-      path: 'tasks',
-      component: View,
-      loader: () => {
-        childLoaderCalls += 1;
-        return [];
-      },
-    });
-    root.addChildren([project]);
-    project.addChildren([tasks]);
-
-    const router = createRouter({ routeTree: root });
-    router.start();
-    for (let index = 0; index < 8; index += 1) await Promise.resolve();
-
-    expect(router.matches).toHaveLength(1);
-    expect(router.matches[0]).toMatchObject({
-      route: root,
-      status: 'notFound',
-    });
-    expect(router.committedMatches).toHaveLength(1);
-    expect(router.committedMatches[0]?.status).toBe('notFound');
-    expect(childLoaderCalls).toBe(0);
-  });
-
-  it('renders the selected not-found boundary instead of the route component', () => {
-    let routeRenders = 0;
-    let boundaryRenders = 0;
-    const route = createRootRoute({
-      component: () => {
-        routeRenders += 1;
-        return null;
-      },
-      notFoundComponent: () => {
-        boundaryRenders += 1;
-        return null;
-      },
-    });
-    const match = {
-      route,
-      params: {},
-      search: {},
-      status: 'notFound' as const,
-    };
-
-    renderRouteView(match, {} as RootState, {} as Document);
-
-    expect(routeRenders).toBe(0);
-    expect(boundaryRenders).toBe(1);
-  });
-
-  it('provides a built-in non-retryable not-found view', () => {
-    const fallback = DefaultNotFound({});
-
-    expect(fallback).toMatchObject({
-      type: 'section',
-      props: { role: 'status' },
-    });
-    expect(JSON.stringify(fallback)).toContain('Not found');
-    expect(JSON.stringify(fallback)).not.toContain('retry');
-  });
-
-  it('exposes decoded params from matching route', () => {
-    const root = createRootRoute({ component: View });
-    const project = createRoute({
-      getParentRoute: () => root,
-      path: '$projectId',
-      component: View,
-    });
-    root.addChildren([project]);
-    const router = createRouter({ routeTree: root });
-    const state = {
-      router,
-      activeRouteMatch: {
-        route: project,
-        params: { projectId: 'a b' },
-      },
-    } as unknown as Parameters<typeof withRendering>[0];
-
-    expect(withRendering(state, () => project.useParams())).toEqual({
-      projectId: 'a b',
-    });
-  });
-
-  it('parses search values with ordered repeated keys and strict decoding', async () => {
-    const { parseSearch } = await import('./router');
-    expect(parseSearch('?tag=one&tag=two+words&empty')).toEqual({
-      tag: ['one', 'two words'],
-      empty: '',
-    });
-    expect(() => parseSearch('?bad=%')).toThrow(URIError);
-  });
-
-  it('exposes search only from the matching route', () => {
-    const root = createRootRoute({ component: View });
-    const route = createRoute({
-      getParentRoute: () => root,
-      path: '$projectId',
-      component: View,
-    });
-    root.addChildren([route]);
-    const state = {
-      activeRouteMatch: {
-        route,
-        params: { projectId: '42' },
-        search: { tag: ['one', 'two'] },
-      },
-    } as unknown as Parameters<typeof withRendering>[0];
-    expect(withRendering(state, () => route.useSearch())).toEqual({
-      tag: ['one', 'two'],
-    });
-    expect(() => withRendering(state, () => root.useSearch())).toThrow(
-      'Route.useSearch() can only run while rendering its matching route.',
-    );
-  });
-
-  it('exposes accumulated nested params and rejects non-matching access', () => {
-    const root = createRootRoute({ component: View });
-    const organization = createRoute({
-      getParentRoute: () => root,
-      path: '$organizationId',
-      component: View,
-    });
-    const project = createRoute({
-      getParentRoute: () => organization,
-      path: '$projectId',
-      component: View,
-    });
-    root.addChildren([organization]);
-    organization.addChildren([project]);
-    const state = {
-      activeRouteMatch: {
-        route: project,
-        params: { organizationId: 'acme', projectId: '42' },
-      },
-    } as unknown as Parameters<typeof withRendering>[0];
-
-    expect(withRendering(state, () => project.useParams())).toEqual({
-      organizationId: 'acme',
-      projectId: '42',
-    });
-    expect(() =>
-      withRendering(state, () => organization.useParams()),
-    ).toThrow(
-      'Route.useParams() can only run while rendering its matching route.',
-    );
-  });
-
-  it('updates params after client navigation', async () => {
-    setLocation('/projects/old?tag=old');
-    const root = createRootRoute({ component: View });
-    const projects = createRoute({
-      getParentRoute: () => root,
-      path: 'projects',
-      component: View,
-    });
-    const project = createRoute({
-      getParentRoute: () => projects,
-      path: '$projectId',
-      component: View,
-    });
-    root.addChildren([projects]);
-    projects.addChildren([project]);
-    const router = createRouter({ routeTree: root });
-    router.start();
-    await Promise.resolve();
-    expect(router.matches.at(-1)?.params).toEqual({ projectId: 'old' });
-    expect(router.matches.at(-1)?.search).toEqual({ tag: 'old' });
-
-    setLocation('/projects/new?tag=first&tag=second');
-    await router.reload();
-    expect(router.matches.at(-1)?.params).toEqual({ projectId: 'new' });
-    expect(router.matches.at(-1)?.search).toEqual({
-      tag: ['first', 'second'],
     });
   });
 
@@ -512,21 +239,9 @@ describe('code-first routes', () => {
     root.addChildren([todos, other]);
     const router = createRouter({ routeTree: root });
     router.matches = [
-      { route: root, params: {}, search: {}, status: 'ready' },
-      {
-        route: todos,
-        params: {},
-        search: {},
-        status: 'ready',
-        data: 'initial',
-      },
-      {
-        route: other,
-        params: {},
-        search: {},
-        status: 'ready',
-        data: 'initial',
-      },
+      { route: root, params: {}, status: 'ready' },
+      { route: todos, params: {}, status: 'ready', data: 'initial' },
+      { route: other, params: {}, status: 'ready', data: 'initial' },
     ];
     setLocation('/todos');
     const first = router.reloadRoute(todos);

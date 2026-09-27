@@ -10,9 +10,7 @@ import {
   createRoute,
   createRouter,
   Link,
-  notFound,
   Outlet,
-  redirect,
   RouterProvider,
   useNavigate,
 } from './routes/router';
@@ -36,8 +34,6 @@ export {
   createRootRoute,
   createRoute,
   createRouter,
-  redirect,
-  notFound,
   RouterProvider,
   Link,
   Outlet,
@@ -45,20 +41,6 @@ export {
 export type { PlecChild, PlecComponent, PlecNode } from './client/jsx';
 export type { PlecMutation } from './client/state/use-mutation';
 export type { PlecController } from './client/root/root-state';
-export type {
-  RedirectOptions,
-  LoaderContext,
-  PendingMode,
-  RouteMetadata,
-  RouteOptions,
-  RouteDefinition,
-  RouteParams,
-  RouteSearch,
-} from './routes/router';
-export {
-  PlecNotFoundOutcome,
-  PlecRedirectOutcome,
-} from './routes/router';
 
 export const Plec = {
   createRoot,

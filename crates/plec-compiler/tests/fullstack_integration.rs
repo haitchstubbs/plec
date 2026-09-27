@@ -105,8 +105,7 @@ fn lowers_fullstack_route_tree_to_a_rust_manifest() {
             .expect("static fullstack route declarations should lower"),
     );
     assert_eq!(manifest.version, 3);
-    // home, about, projects/$id, todos, notes, admin, stress, catch-all.
-    assert_eq!(manifest.routes.len(), 8);
+    assert_eq!(manifest.routes.len(), 7);
     let route_ids = manifest
         .routes
         .iter()
@@ -126,7 +125,6 @@ fn lowers_fullstack_route_tree_to_a_rust_manifest() {
         .find(|route| route.path == "projects/$id")
         .unwrap();
     assert_eq!(project.outlet_id, "main");
-    assert!(project.not_found_graph_id.is_some());
     let todos = manifest
         .routes
         .iter()
@@ -135,12 +133,4 @@ fn lowers_fullstack_route_tree_to_a_rust_manifest() {
     assert_eq!(todos.loader_action, Some(0));
     assert!(todos.pending_graph_id.is_some());
     assert!(todos.error_graph_id.is_some());
-    // Loader redirect/not-found demo routes compile through the loader
-    // grammar with their boundary graphs attached.
-    let admin = manifest
-        .routes
-        .iter()
-        .find(|route| route.path == "admin")
-        .unwrap();
-    assert!(admin.loader_action.is_some());
 }

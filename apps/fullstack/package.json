@@ -1,23 +1,20 @@
 {
   "name": "fullstack",
-  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "yarn dev:rebuild",
-    "start": "yarn --cwd ../.. rust:deps:check && cargo run --locked --quiet -p plec-cli -- serve dist",
+    "start": "cargo run --quiet -p plec-cli -- serve dist",
     "prep:assetdir": "mkdir -p dist/public/assets/files",
     "copy:fonts:outfit": "yarn prep:assetdir && cp ../../node_modules/@fontsource-variable/outfit/files/*.woff2 dist/public/assets/files/",
     "copy:fonts:raleway": "yarn prep:assetdir && cp ../../node_modules/@fontsource-variable/raleway/files/*.woff2 dist/public/assets/files/",
     "copy:fonts": "yarn copy:fonts:outfit && yarn copy:fonts:raleway",
-    "copy:licenses": "mkdir -p dist/public/licenses && cp ../../node_modules/lucide/LICENSE dist/public/licenses/Lucide-LICENSE.txt && cp ../../node_modules/@fontsource-variable/outfit/LICENSE dist/public/licenses/Outfit-OFL-1.1.txt && cp ../../node_modules/@fontsource-variable/raleway/LICENSE dist/public/licenses/Raleway-OFL-1.1.txt",
     "build:plec": "plec build src/app.tsx --out-dir dist",
     "build:css": "tailwindcss -i src/styles.css -o dist/public/assets/styles.css",
     "dev:rebuild": "yarn check:no-react && yarn --cwd ../.. exec turbo run build --filter=fullstack && yarn start",
-    "build": "yarn check:no-react && yarn build:plec && yarn copy:fonts && yarn copy:licenses && yarn build:css",
+    "build": "yarn check:no-react && yarn build:plec && yarn copy:fonts && yarn build:css",
     "test": "yarn check:no-react && vitest run",
-    "typecheck": "yarn --cwd ../.. rust:deps:check && yarn typecheck:ci",
-    "typecheck:ci": "yarn check:no-react && cargo check --locked -p plec-compiler",
+    "typecheck": "yarn check:no-react && cargo check -p plec-compiler",
     "check:no-react": "node scripts/check-no-react.mjs",
     "clean": "rm -rf dist",
     "clean:windows": "powershell -NoProfile -Command \"if (Test-Path dist) { Remove-Item -Recurse -Force dist }\""
@@ -28,13 +25,14 @@
     "@plec/browser": "workspace:*",
     "@plec/core": "workspace:*",
     "@plec/lucide": "workspace:*",
+    "@plec/ui": "workspace:*",
     "lucide": "^1.31.0"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.3",
-    "esbuild": "^0.28.1",
+    "esbuild": "^0.27.4",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^3.2.4"
   }
 }

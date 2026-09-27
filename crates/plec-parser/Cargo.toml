@@ -2,7 +2,6 @@
 name = "plec-parser"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 
 [dependencies]
 swc_common.workspace = true

@@ -221,11 +221,6 @@ pub const MAX_SNAPSHOT_ENTRIES: usize = 2_048;
 /// Maximum number of loop keys recorded for one loop node in a snapshot.
 pub const MAX_SNAPSHOT_LOOP_KEYS: usize = 10_000;
 
-/// Maximum redirect hops one navigation may follow before failing. Shared by
-/// the SSR document host and the client router so loop behavior is identical
-/// in both execution contexts.
-pub const MAX_REDIRECT_HOPS: usize = 5;
-
 #[cfg(test)]
 mod tests {
     use super::*;
