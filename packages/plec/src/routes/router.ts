@@ -15,6 +15,9 @@ export type LoaderContext = {
 
 export type PendingMode = 'replace' | 'retain';
 
+// Keep aligned with crates/plec-ir/src/limits.rs::MAX_REDIRECT_HOPS.
+const MAX_REDIRECT_HOPS = 5;
+
 export type RouteMetadata = {
   title?: string;
   description?: string;
@@ -196,6 +199,7 @@ export class PlecRouter {
   private requestVersion = 0;
   private routeReloads = new Map<RouteDefinition, RouteReloadRequest>();
   private started = false;
+  private redirectHops = 0;
   matches: RouteMatch[] = [];
   committedMatches: RouteMatch[] = [];
 
@@ -204,6 +208,7 @@ export class PlecRouter {
   start() {
     if (this.started) return;
     this.started = true;
+    this.redirectHops = 0;
     void this.load(locationFromWindow());
   }
 
@@ -217,6 +222,7 @@ export class PlecRouter {
   }
 
   navigate(to: string, options: { replace?: boolean } = {}) {
+    this.redirectHops = 0;
     const target = new URL(to, window.location.href);
     if (target.origin !== window.location.origin) {
       window.location.assign(target.href);
@@ -231,10 +237,50 @@ export class PlecRouter {
   }
 
   reload() {
+    this.redirectHops = 0;
     return this.load(locationFromWindow());
   }
 
+  private followLoaderRedirect(location: string, replace: boolean) {
+    try {
+      if (
+        !location.startsWith('/') ||
+        location.startsWith('//') ||
+        /[\\#\s\u0000-\u001f\u007f]/.test(location)
+      ) {
+        throw new Error(
+          `Invalid loader redirect target: ${JSON.stringify(location)}`,
+        );
+      }
+      const target = new URL(location, window.location.origin);
+      if (target.origin !== window.location.origin)
+        throw new Error(
+          `Invalid loader redirect target: ${JSON.stringify(location)}`,
+        );
+      if (++this.redirectHops > MAX_REDIRECT_HOPS)
+        throw new Error(
+          `Loader redirect loop exceeded ${MAX_REDIRECT_HOPS} hops`,
+        );
+      window.history[replace ? 'replaceState' : 'pushState'](
+        {},
+        '',
+        `${target.pathname}${target.search}`,
+      );
+      void this.load(locationFromWindow());
+    } catch (error) {
+      const active = this.matches.find(
+        (match) => match.status === 'pending',
+      );
+      if (active) {
+        active.status = 'error';
+        active.error = error;
+      }
+      this.emit();
+    }
+  }
+
   reloadRoute(route: RouteDefinition) {
+    this.redirectHops = 0;
     const location = locationFromWindow();
     const current = matchRoutes(
       this.routeTree,
@@ -393,9 +439,7 @@ export class PlecRouter {
         return;
       // Terminal loader outcomes do not commit the interrupted route.
       if (error instanceof PlecRedirectOutcome) {
-        if (!reloadRoute) {
-          this.navigate(error.location, { replace: error.replace });
-        }
+        this.followLoaderRedirect(error.location, error.replace);
         return;
       }
       if (error instanceof PlecNotFoundOutcome) {
