@@ -15,7 +15,7 @@ export function renderRouteView(
   try {
     const Component =
       match.status === 'notFound'
-        ? match.route.notFoundComponent ?? DefaultNotFound
+        ? (match.route.notFoundComponent ?? DefaultNotFound)
         : match.route.component;
     return renderValue(jsx(Component, {}), state, document);
   } finally {

@@ -193,10 +193,9 @@ describe('code-first routes', () => {
       projects,
     ]);
     expect(router.matches.at(-1)?.status).toBe('notFound');
-    expect(router.committedMatches.map((match) => match.route)).toEqual([
-      root,
-      projects,
-    ]);
+    expect(router.committedMatches.map((match) => match.route)).toEqual(
+      [root, projects],
+    );
     expect(router.committedMatches.at(-1)?.status).toBe('notFound');
   });
 
@@ -227,7 +226,10 @@ describe('code-first routes', () => {
     for (let index = 0; index < 8; index += 1) await Promise.resolve();
 
     expect(router.matches).toHaveLength(1);
-    expect(router.matches[0]).toMatchObject({ route: root, status: 'notFound' });
+    expect(router.matches[0]).toMatchObject({
+      route: root,
+      status: 'notFound',
+    });
     expect(router.committedMatches).toHaveLength(1);
     expect(router.committedMatches[0]?.status).toBe('notFound');
     expect(childLoaderCalls).toBe(0);

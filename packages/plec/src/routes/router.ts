@@ -297,7 +297,11 @@ export class PlecRouter {
         )
           return;
         if (match.status === 'error') return;
-        if (this.matches.some((candidate) => candidate.status === 'notFound')) {
+        if (
+          this.matches.some(
+            (candidate) => candidate.status === 'notFound',
+          )
+        ) {
           this.committedMatches = this.matches.map((candidate) => ({
             ...candidate,
           }));
