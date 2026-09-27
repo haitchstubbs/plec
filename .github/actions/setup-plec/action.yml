@@ -10,4 +10,10 @@ runs:
         cache-dependency-path: yarn.lock
     - name: Enable Corepack
       shell: bash
-      run: corepack enable
+      run: |
+        mkdir -p "$RUNNER_TEMP/plec-corepack"
+        corepack enable --install-directory "$RUNNER_TEMP/plec-corepack"
+        corepack prepare "$(node -p "require('./package.json').packageManager")" --activate
+        echo "$RUNNER_TEMP/plec-corepack" >> "$GITHUB_PATH"
+        export PATH="$RUNNER_TEMP/plec-corepack:$PATH"
+        yarn --version
