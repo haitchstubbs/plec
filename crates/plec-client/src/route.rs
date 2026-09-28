@@ -44,10 +44,9 @@ impl RuntimeState {
                 .copied()
                 .collect::<Vec<_>>();
             for conditional in conditionals {
-                instance.runtime.reconcile_static_conditional(
-                    conditional,
-                    &mut UpdateMetrics::default(),
-                )?;
+                instance
+                    .runtime
+                    .reconcile_static_conditional(conditional, &mut UpdateMetrics::default())?;
             }
             if parent == id {
                 if let Some(route) = instance.route_state.as_mut() {
@@ -524,49 +523,8 @@ impl RuntimeState {
 }
 
 pub fn normalize_route_error(error: RuntimeValue) -> RuntimeValue {
-    let RuntimeValue::Record(record) = error else {
-        return RuntimeValue::Record(HashMap::from([
-            ("kind".into(), RuntimeValue::String("runtime".into())),
-            (
-                "message".into(),
-                RuntimeValue::String("route loader failed".into()),
-            ),
-        ]));
-    };
-    let Some(RuntimeValue::String(kind)) = record.get("kind") else {
-        return RuntimeValue::Record(HashMap::from([
-            ("kind".into(), RuntimeValue::String("runtime".into())),
-            (
-                "message".into(),
-                RuntimeValue::String("route loader failed".into()),
-            ),
-        ]));
-    };
-    if !["http", "network", "abort", "decode"].contains(&kind.as_str()) {
-        return RuntimeValue::Record(HashMap::from([
-            ("kind".into(), RuntimeValue::String("runtime".into())),
-            (
-                "message".into(),
-                RuntimeValue::String("route loader failed".into()),
-            ),
-        ]));
-    }
-    let mut normalized = HashMap::from([
-        ("kind".into(), RuntimeValue::String(kind.clone())),
-        (
-            "message".into(),
-            record
-                .get("message")
-                .cloned()
-                .unwrap_or_else(|| RuntimeValue::String("route loader failed".into())),
-        ),
-    ]);
-    for field in ["status", "statusText", "body", "url"] {
-        if let Some(value) = record.get(field) {
-            normalized.insert(field.into(), value.clone());
-        }
-    }
-    RuntimeValue::Record(normalized)
+    let failure = plec_schema::public_route_loader_failure(&error);
+    plec_schema::route_loader_failure_value(&failure)
 }
 
 pub fn typed_location(href: &str) -> TypedLocation {

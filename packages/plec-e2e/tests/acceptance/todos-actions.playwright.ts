@@ -95,6 +95,87 @@ test('todo create, complete, rename, and delete stay targeted', async ({
     ).toBe(false);
     await expect(title).toHaveValue('Rejected todo');
 
+    // A later current success clears the public mutation.error value. The
+    // `run()` caller is the submit action above: its handled rejection leaves
+    // the draft in place while mutation.error publishes the same message.
+    post = 'done';
+    await page.getByRole('button', { name: 'Add todo' }).click();
+    await expect(page.getByText('Rejected todo')).toBeVisible();
+    await expect(
+      page.getByText('The Todo API rejected this change.', {
+        exact: true,
+      }),
+    ).toHaveCount(0);
+
+    let releaseStaleFailure: (() => void) | undefined;
+    let markFirstStarted: (() => void) | undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    let posts = 0;
+    await page.route('**/api/todos', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await forwardTodoRequest(route);
+        return;
+      }
+      posts += 1;
+      if (posts === 1) {
+        markFirstStarted?.();
+        await new Promise<void>((resolve) => {
+          releaseStaleFailure = resolve;
+        });
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: '{"private":"stale"}',
+        });
+      } else {
+        await route.fulfill({
+          status: 201,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            id: 'current-winner',
+            title: 'Current winner',
+            completed: false,
+          }),
+        });
+      }
+    });
+    await title.fill('Stale failure');
+    // Dispatch the compiled form event directly to overlap invocations while
+    // pending disables the visual submit control.
+    await page
+      .locator('form')
+      .evaluate((form) =>
+        form.dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true }),
+        ),
+      );
+    await firstStarted;
+    await title.evaluate((input) => {
+      (input as HTMLInputElement).value = 'Current winner';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await page
+      .locator('form')
+      .evaluate((form) =>
+        form.dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true }),
+        ),
+      );
+    await expect(
+      page.getByText('Current winner', { exact: true }),
+    ).toBeVisible();
+    releaseStaleFailure?.();
+    await expect(
+      page.getByText('The Todo API rejected this change.', {
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole('button', { name: 'Adding…' }),
+    ).toHaveCount(0);
+
     const rowKey = await page
       .locator('li')
       .filter({ hasText: 'Acceptance todo' })

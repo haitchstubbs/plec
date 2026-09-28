@@ -21,7 +21,12 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
     let agreement = match state.typed_ssr_route_chain.borrow().as_ref() {
         Some(imported) => {
             let loaders = state.typed_ssr_loaders.borrow();
-            ssr_chain_agreement(imported, &typed_route_chain(&manifest, &location.pathname), &loaders, &manifest)
+            ssr_chain_agreement(
+                imported,
+                &typed_route_chain(&manifest, &location.pathname),
+                &loaders,
+                &manifest,
+            )
         }
         None => SsrChainAgreement::Exact,
     };
@@ -922,18 +927,11 @@ fn ssr_chain_agreement(
     loaders: &HashMap<String, plec_ir::SsrLoaderState>,
     manifest: &RouteManifest,
 ) -> SsrChainAgreement {
-    if imported.is_empty()
-        && derived.is_empty()
-        && manifest.root_not_found_graph_id.is_some()
-    {
+    if imported.is_empty() && derived.is_empty() && manifest.root_not_found_graph_id.is_some() {
         return SsrChainAgreement::RootNotFoundBoundary;
     }
     if imported.len() > derived.len() {
-        return SsrChainAgreement::Mismatch(format!(
-            "length:{}:{}",
-            imported.len(),
-            derived.len()
-        ));
+        return SsrChainAgreement::Mismatch(format!("length:{}:{}", imported.len(), derived.len()));
     }
     if imported.len() < derived.len() {
         // Truncation is only legitimate as a not-found boundary: the last
@@ -955,25 +953,16 @@ fn ssr_chain_agreement(
         return if owns_boundary {
             SsrChainAgreement::NotFoundBoundary(imported.len())
         } else {
-            SsrChainAgreement::Mismatch(format!(
-                "length:{}:{}",
-                imported.len(),
-                derived.len()
-            ))
+            SsrChainAgreement::Mismatch(format!("length:{}:{}", imported.len(), derived.len()))
         };
     }
     if let Some(last) = imported.last() {
         if last.phase == plec_ir::SsrRoutePhase::NotFound {
             let owner = &derived[imported.len() - 1];
-            return if last.route_id == owner.route.id
-                && owner.route.not_found_graph_id.is_some()
-            {
+            return if last.route_id == owner.route.id && owner.route.not_found_graph_id.is_some() {
                 SsrChainAgreement::NotFoundBoundary(imported.len())
             } else {
-                SsrChainAgreement::Mismatch(format!(
-                    "not-found-owner:{}",
-                    last.route_id
-                ))
+                SsrChainAgreement::Mismatch(format!("not-found-owner:{}", last.route_id))
             };
         }
     }
@@ -1005,8 +994,7 @@ fn ssr_chain_agreement(
             (
                 plec_ir::SsrRoutePhase::NotFound,
                 Some(Some(
-                    plec_ir::SsrLoaderState::NotFound
-                    | plec_ir::SsrLoaderState::Resolved { .. },
+                    plec_ir::SsrLoaderState::NotFound | plec_ir::SsrLoaderState::Resolved { .. },
                 )),
             )
             | (plec_ir::SsrRoutePhase::NotFound, None) => None,
@@ -1032,17 +1020,7 @@ fn ssr_chain_agreement(
 
 /// Reconstitute the public route-loader record from the shared snapshot schema.
 fn ssr_loader_error(failure: &plec_ir::PublicRouteLoaderFailure) -> RuntimeValue {
-    use plec_ir::PublicRouteLoaderFailureKind as Kind;
-    let kind = match failure.kind { Kind::Http => "http", Kind::Network => "network", Kind::Abort => "abort", Kind::Decode => "decode", Kind::Runtime => "runtime" };
-    let mut record = HashMap::from([
-        ("kind".into(), RuntimeValue::String(kind.into())),
-        ("message".into(), RuntimeValue::String(failure.message.clone())),
-    ]);
-    if let Some(status) = failure.status { record.insert("status".into(), RuntimeValue::Number(status as f64)); }
-    if let Some(text) = &failure.status_text { record.insert("statusText".into(), RuntimeValue::String(text.clone())); }
-    if let Some(body) = &failure.body { record.insert("body".into(), RuntimeValue::from_ssr_snapshot(body)); }
-    if let Some(url) = &failure.url { record.insert("url".into(), RuntimeValue::String(url.clone())); }
-    RuntimeValue::Record(record)
+    plec_schema::route_loader_failure_value(failure)
 }
 
 fn typed_route_chain(manifest: &RouteManifest, pathname: &str) -> Vec<TypedRouteMatch> {

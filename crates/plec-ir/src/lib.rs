@@ -330,9 +330,34 @@ pub struct SsrLoaderOutcome {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SsrLoaderState {
-    Resolved { value: SsrSnapshotValue },
-    Rejected { failure: PublicRouteLoaderFailure },
+    Resolved {
+        value: SsrSnapshotValue,
+    },
+    Rejected {
+        #[serde(
+            default = "PublicRouteLoaderFailure::generic",
+            deserialize_with = "deserialize_public_route_loader_failure"
+        )]
+        failure: PublicRouteLoaderFailure,
+    },
     NotFound,
+}
+
+/// Only the public failure record is lenient at the snapshot boundary. The
+/// enclosing loader outcome and every other snapshot field retain strict
+/// deserialization and validation.
+fn deserialize_public_route_loader_failure<'de, D>(
+    deserializer: D,
+) -> Result<PublicRouteLoaderFailure, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let parsed = serde_json::from_value::<PublicRouteLoaderFailure>(value);
+    Ok(match parsed {
+        Ok(failure) if failure.validate().is_ok() => failure,
+        _ => PublicRouteLoaderFailure::generic(),
+    })
 }
 
 /// The deliberately small application-visible route-loader failure contract.
@@ -368,6 +393,9 @@ impl PublicRouteLoaderFailure {
     pub const MAX_MESSAGE_BYTES: usize = 4096;
     pub const MAX_URL_BYTES: usize = 8192;
     pub const MAX_STATUS_TEXT_BYTES: usize = 1024;
+    /// Maximum serialized supplementary HTTP error body (well below the
+    /// complete SSR snapshot ceiling).
+    pub const MAX_BODY_BYTES: usize = 512 * 1024;
 
     /// Fail closed for untrusted serialized failure data. This is a public
     /// fallback; callers must not substitute internal diagnostics.
@@ -375,10 +403,21 @@ impl PublicRouteLoaderFailure {
         if self.message.is_empty() || self.message.len() > Self::MAX_MESSAGE_BYTES {
             return Err("invalid route loader failure message");
         }
-        if self.status_text.as_ref().is_some_and(|s| s.len() > Self::MAX_STATUS_TEXT_BYTES)
-            || self.url.as_ref().is_some_and(|s| s.len() > Self::MAX_URL_BYTES)
+        if self
+            .status_text
+            .as_ref()
+            .is_some_and(|s| s.len() > Self::MAX_STATUS_TEXT_BYTES)
+            || self
+                .url
+                .as_ref()
+                .is_some_and(|s| s.len() > Self::MAX_URL_BYTES)
         {
             return Err("route loader failure field exceeds limit");
+        }
+        if self.body.as_ref().is_some_and(|body| {
+            serde_json::to_vec(body).map_or(true, |encoded| encoded.len() > Self::MAX_BODY_BYTES)
+        }) {
+            return Err("route loader failure body exceeds limit");
         }
         if self.status.is_some() && self.kind != PublicRouteLoaderFailureKind::Http {
             return Err("status is only valid for http route loader failures");
@@ -387,7 +426,14 @@ impl PublicRouteLoaderFailure {
     }
 
     pub fn generic() -> Self {
-        Self { kind: PublicRouteLoaderFailureKind::Runtime, message: Self::GENERIC_MESSAGE.into(), status: None, status_text: None, body: None, url: None }
+        Self {
+            kind: PublicRouteLoaderFailureKind::Runtime,
+            message: Self::GENERIC_MESSAGE.into(),
+            status: None,
+            status_text: None,
+            body: None,
+            url: None,
+        }
     }
 }
 
@@ -614,10 +660,15 @@ impl PlecSsrSnapshot {
                     }
                 }
                 SsrLoaderState::Rejected { failure } => {
-                    failure.validate().map_err(|error| format!("loader {reference}: {error}"))?;
+                    failure
+                        .validate()
+                        .map_err(|error| format!("loader {reference}: {error}"))?;
                     if let Some(body) = &failure.body {
-                        ensure_value_is_finite(body).map_err(|_| format!("loader {reference} failure body is invalid"))?;
-                        ensure_value_is_bounded(body).map_err(|_| format!("loader {reference} failure body exceeds limit"))?;
+                        ensure_value_is_finite(body)
+                            .map_err(|_| format!("loader {reference} failure body is invalid"))?;
+                        ensure_value_is_bounded(body).map_err(|_| {
+                            format!("loader {reference} failure body exceeds limit")
+                        })?;
                     }
                 }
                 SsrLoaderState::NotFound => {}
@@ -738,13 +789,13 @@ fn validate_branch_selections(
                 return Err(format!(
                     "branch selection for {instance_id} names node {} which is not a conditional",
                     branch.node
-                ))
+                ));
             }
             None => {
                 return Err(format!(
                     "branch selection for {instance_id} references unknown node handle {}",
                     branch.node
-                ))
+                ));
             }
         };
         if branch.selected == SsrSelectedBranch::Alternate && !has_alternate {
@@ -776,13 +827,13 @@ fn validate_loop_rows(
                 return Err(format!(
                     "loop record for {instance_id} names node {} which is not a loop",
                     loop_rows.node
-                ))
+                ));
             }
             None => {
                 return Err(format!(
                     "loop record for {instance_id} references unknown node handle {}",
                     loop_rows.node
-                ))
+                ));
             }
         }
         let mut seen = std::collections::BTreeSet::new();
@@ -1537,7 +1588,7 @@ mod tests {
             revision: "test".into(),
             root_graph_id: "root".into(),
             root_not_found_graph_id: None,
-            routes:             vec![RouteManifestEntry {
+            routes: vec![RouteManifestEntry {
                 id: "todos".into(),
                 parent_id: None,
                 path: "/todos".into(),
@@ -2348,10 +2399,64 @@ mod tests {
     #[test]
     fn ssr_snapshot_rejects_loader_rejections_with_invalid_messages() {
         assert_eq!(
-            snapshot_error(|snapshot| snapshot.loaders[0].state =
-                SsrLoaderState::Rejected { failure: PublicRouteLoaderFailure { message: "".into(), ..PublicRouteLoaderFailure::generic() } }),
+            snapshot_error(
+                |snapshot| snapshot.loaders[0].state = SsrLoaderState::Rejected {
+                    failure: PublicRouteLoaderFailure {
+                        message: "".into(),
+                        ..PublicRouteLoaderFailure::generic()
+                    }
+                }
+            ),
             "loader app#Todo#action:0: invalid route loader failure message"
         );
+    }
+
+    #[test]
+    fn malformed_public_loader_failure_normalizes_without_rejecting_snapshot() {
+        for failure in [
+            serde_json::json!({"kind":"unknown", "message":"secret"}),
+            serde_json::json!({"kind":"http", "message":7, "status":503}),
+            serde_json::json!({"kind":"network", "message":"bad", "status":503}),
+            serde_json::json!({"kind":"http", "message":"bad", "extra":"field"}),
+            serde_json::json!({"kind":"http", "message":"bad", "body":"x".repeat(PublicRouteLoaderFailure::MAX_BODY_BYTES)}),
+        ] {
+            let mut json = serde_json::to_value(valid_snapshot()).unwrap();
+            json["loaders"][0]["state"] = serde_json::json!({"kind":"rejected", "failure":failure});
+            let snapshot: PlecSsrSnapshot = serde_json::from_value(json).unwrap();
+            let manifest = test_manifest();
+            let application = test_application(true);
+            snapshot
+                .validate(&SsrSnapshotReferences {
+                    manifest: &manifest,
+                    application: &application,
+                })
+                .unwrap();
+            assert_eq!(
+                snapshot.loaders[0].state,
+                SsrLoaderState::Rejected {
+                    failure: PublicRouteLoaderFailure::generic()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_unrelated_snapshot_structure_still_fails_closed() {
+        let mut json = serde_json::to_value(valid_snapshot()).unwrap();
+        json["routes"][0]["routeId"] = serde_json::json!(7);
+        assert!(serde_json::from_value::<PlecSsrSnapshot>(json).is_err());
+
+        let mut json = serde_json::to_value(valid_snapshot()).unwrap();
+        json["revision"] = serde_json::json!("other-revision");
+        let snapshot: PlecSsrSnapshot = serde_json::from_value(json).unwrap();
+        let manifest = test_manifest();
+        let application = test_application(true);
+        assert!(snapshot
+            .validate(&SsrSnapshotReferences {
+                manifest: &manifest,
+                application: &application,
+            })
+            .is_err());
     }
 
     #[test]
@@ -2361,10 +2466,16 @@ mod tests {
             status: Some(503),
             ..PublicRouteLoaderFailure::generic()
         };
-        assert_eq!(failure.validate(), Err("status is only valid for http route loader failures"));
+        assert_eq!(
+            failure.validate(),
+            Err("status is only valid for http route loader failures")
+        );
         failure.status = None;
         failure.message = "x".repeat(PublicRouteLoaderFailure::MAX_MESSAGE_BYTES + 1);
-        assert_eq!(failure.validate(), Err("invalid route loader failure message"));
+        assert_eq!(
+            failure.validate(),
+            Err("invalid route loader failure message")
+        );
     }
 
     #[test]
@@ -2397,7 +2508,13 @@ mod tests {
         // requires the explicit boundary.
         assert_eq!(
             snapshot_error(|snapshot| {
-                snapshot.public.exports.get_mut("todoCount").unwrap().declaration.explicitly_public = false;
+                snapshot
+                    .public
+                    .exports
+                    .get_mut("todoCount")
+                    .unwrap()
+                    .declaration
+                    .explicitly_public = false;
             }),
             "public export todoCount rejected: server value requires an explicit public export boundary"
         );

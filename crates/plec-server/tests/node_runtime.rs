@@ -181,6 +181,36 @@ async fn application_responses_pass_through_verbatim() {
 }
 
 #[tokio::test]
+async fn uncaught_api_handler_failure_is_redacted_http_500_and_runtime_survives() {
+    let (runtime, _dir) = spawn_runtime(
+        r#"
+        export async function handleRequest(request) {
+          if (new URL(request.url).pathname === '/api/fail') {
+            throw new Error('secret-token /srv/private/handler.ts');
+          }
+          return new Response('alive');
+        }
+      "#,
+    )
+    .await;
+
+    let (status, body) = dispatch(&runtime, "GET", "/api/fail", None)
+        .await
+        .expect("failed application response");
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body, r#"{"error":"Internal Server Error"}"#);
+    assert!(!body.contains("secret-token"));
+    assert!(!body.contains("/srv/private"));
+
+    let (status, body) = dispatch(&runtime, "GET", "/api/ok", None)
+        .await
+        .expect("sidecar remains available");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "alive");
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn undefined_handler_results_map_to_the_canonical_404() {
     let (runtime, _dir) = spawn_runtime("export async function handleRequest() {}").await;
     let router = create_plec_server(options(runtime.clone()));

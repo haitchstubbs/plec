@@ -6,16 +6,16 @@
 use std::{path::Path, sync::Arc};
 
 use axum::{
-    Router,
     body::Body,
     http::{Request, Response, StatusCode},
+    Router,
 };
 use plec_ir::PlecSsrSnapshot;
 use plec_server::{
-    DocumentMetadata, PlecServerOptions, artifact::ArtifactBundle, create_plec_server,
-    runtime::AppRequestHandler,
+    artifact::ArtifactBundle, create_plec_server, runtime::AppRequestHandler, DocumentMetadata,
+    PlecServerOptions,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const BOOTSTRAP_OPEN: &str = "<script id=\"plec-bootstrap\" type=\"application/json\">";
@@ -717,6 +717,29 @@ async fn spawn_chunked_stub(status: u16, chunks: Vec<Vec<u8>>) -> u16 {
     port
 }
 
+async fn spawn_error_stub(status: u16, content_type: &'static str, chunks: Vec<Vec<u8>>) -> u16 {
+    let app = Router::new().route(
+        "/api/data",
+        axum::routing::get(move || async move {
+            let items: Vec<Result<Vec<u8>, std::convert::Infallible>> =
+                chunks.into_iter().map(Ok).collect();
+            (
+                StatusCode::from_u16(status).expect("valid status"),
+                [("content-type", content_type)],
+                Body::from_stream(futures_util::stream::iter(items)),
+            )
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("stub listener");
+    let port = listener.local_addr().expect("stub address").port();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("stub server");
+    });
+    port
+}
+
 fn loader_route(error_graph: Option<&str>) -> Value {
     let mut route = json!({
         "id": "home",
@@ -781,6 +804,89 @@ async fn a_chunked_loader_response_exceeding_the_byte_ceiling_is_rejected_while_
     assert!(html.contains("\"state\":{\"kind\":\"rejected\",\"failure\":{"));
     assert!(html.contains("\"kind\":\"runtime\""));
     assert!(html.contains("\"message\":\"route loader failed\""));
+}
+
+#[tokio::test]
+async fn http_loader_error_decodes_json_media_type_and_keeps_text_json_as_text() {
+    let dir = fixture_dir();
+    let json_port = spawn_error_stub(
+        422,
+        "application/json",
+        vec![br#"{"reason":"no"}"#.to_vec()],
+    )
+    .await;
+    loader_fixture(dir.path(), json_port, Some("home-error"));
+    let html = get_html(&options(dir.path()), "/").await;
+    assert!(html.contains("\"body\":{\"reason\":\"no\"}"), "{html}");
+
+    let text_port = spawn_error_stub(422, "text/plain", vec![br#"{"reason":"no"}"#.to_vec()]).await;
+    loader_fixture(dir.path(), text_port, Some("home-error"));
+    let html = get_html(&options(dir.path()), "/").await;
+    assert!(
+        html.contains("\"body\":\"{\\\"reason\\\":\\\"no\\\"}\""),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn http_loader_error_empty_body_is_null() {
+    let dir = fixture_dir();
+    let port = spawn_error_stub(503, "text/plain", vec![]).await;
+    loader_fixture(dir.path(), port, Some("home-error"));
+    let html = get_html(&options(dir.path()), "/").await;
+    assert!(html.contains("\"body\":null"), "{html}");
+    assert!(html.contains("\"status\":503"), "{html}");
+}
+
+#[tokio::test]
+async fn loader_decode_failure_uses_the_browser_public_failure_kind() {
+    let dir = fixture_dir();
+    let port = spawn_chunked_stub(200, vec![b"not-json".to_vec()]).await;
+    loader_fixture(dir.path(), port, Some("home-error"));
+    let html = get_html(&options(dir.path()), "/").await;
+    assert!(html.contains("\"kind\":\"decode\""), "{html}");
+    assert!(
+        html.contains("\"message\":\"response JSON decode failed\""),
+        "{html}"
+    );
+    assert!(
+        html.contains(&format!("\"url\":\"http://127.0.0.1:{port}/api/data\"")),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn loader_network_failure_uses_the_browser_public_failure_kind() {
+    let dir = fixture_dir();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("unused listener");
+    let port = listener.local_addr().expect("listener address").port();
+    drop(listener);
+    loader_fixture(dir.path(), port, Some("home-error"));
+    let html = get_html(&options(dir.path()), "/").await;
+    assert!(html.contains("\"kind\":\"network\""), "{html}");
+    assert!(
+        html.contains("\"message\":\"network request failed\""),
+        "{html}"
+    );
+    assert!(
+        html.contains(&format!("\"url\":\"http://127.0.0.1:{port}/api/data\"")),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn oversized_http_error_body_is_null_without_losing_http_failure() {
+    let dir = fixture_dir();
+    let limit = plec_ir::PublicRouteLoaderFailure::MAX_BODY_BYTES;
+    let port = spawn_error_stub(502, "text/plain", vec![vec![b'x'; limit + 1]]).await;
+    loader_fixture(dir.path(), port, Some("home-error"));
+    let html = get_html(&options(dir.path()), "/").await;
+    assert!(html.contains("\"kind\":\"http\""), "{html}");
+    assert!(html.contains("\"status\":502"), "{html}");
+    assert!(html.contains("\"body\":null"), "{html}");
+    assert!(html.contains("Server rendered"), "{html}");
 }
 
 #[tokio::test]
@@ -913,8 +1019,9 @@ async fn fails_the_document_render_when_a_loop_produces_duplicate_keys() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(response.headers().get("x-plec-ssr-fallback").is_none());
     let body = text_of(response).await;
-    assert!(body.contains("Internal Server Error"), "{body}");
+    assert_eq!(body, r#"{"error":"Internal Server Error"}"#);
     assert!(!body.contains("DUPLICATE_LOOP_KEY:a"), "{body}");
 }
 
@@ -1090,7 +1197,7 @@ async fn fails_the_render_closed_when_a_reserved_attribute_is_written_literally(
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = text_of(response).await;
-    assert!(body.contains("Internal Server Error"), "{body}");
+    assert_eq!(body, r#"{"error":"Internal Server Error"}"#);
 }
 
 #[tokio::test]
@@ -1611,8 +1718,28 @@ async fn falls_back_to_the_public_shell_when_the_artifact_is_unreadable() {
     let router = create_plec_server(dev_options(dir.path()));
     let response = router.oneshot(get("/")).await.expect("response");
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.headers().get("x-plec-ssr-fallback").is_some());
+    assert!(response
+        .headers()
+        .get("x-plec-ssr-fallback")
+        .is_some_and(|value| !value.is_empty()));
     assert!(text_of(response).await.contains("shell"));
+}
+
+#[tokio::test]
+async fn production_internal_errors_are_generic_and_independent_of_diagnostic_detail() {
+    let dir = fixture_dir();
+    let router = create_plec_server(options(dir.path()));
+    let mut bodies = Vec::new();
+    for artifact in ["not-json-private-path", r#"{"manifest":{"revision":7}}"#] {
+        std::fs::write(dir.path().join("route-artifact.json"), artifact).expect("artifact write");
+        let response = router.clone().oneshot(get("/")).await.expect("response");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(response.headers().get("x-plec-ssr-fallback").is_none());
+        bodies.push(text_of(response).await);
+    }
+    assert_eq!(bodies[0], r#"{"error":"Internal Server Error"}"#);
+    assert_eq!(bodies[1], bodies[0]);
+    assert!(!bodies[0].contains("private"));
 }
 
 #[tokio::test]
@@ -1759,8 +1886,10 @@ async fn route_loaders_without_a_valid_program_fail_the_document_render() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(response.headers().get("x-plec-ssr-fallback").is_none());
     let body = text_of(response).await;
-    assert!(body.contains("Internal Server Error"), "{body}");
+    assert_eq!(body, r#"{"error":"Internal Server Error"}"#);
+    assert!(!body.contains("loader program"));
 }
 
 #[tokio::test]
@@ -2358,12 +2487,10 @@ async fn a_not_found_outcome_truncates_the_chain_at_the_boundary_owner() {
     assert_eq!(routes.len(), 1);
     assert_eq!(routes[0]["routeId"], "projects");
     assert_eq!(routes[0]["phase"], "notFound");
-    assert!(
-        payload["snapshot"]["loaders"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(payload["snapshot"]["loaders"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_valid_bootstrap(&html, &artifact, &artifact["manifest"]);
 }
 
