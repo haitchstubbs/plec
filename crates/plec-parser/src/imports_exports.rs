@@ -277,7 +277,7 @@ pub fn collect_exports(module: &Module) -> Vec<Export> {
 }
 
 pub fn module_dependencies(module: &Module) -> Vec<String> {
-    let mut deps = std::collections::HashSet::new();
+    let mut deps = std::collections::BTreeSet::new();
 
     for item in &module.body {
         match item {

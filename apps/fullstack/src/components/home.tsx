@@ -4,6 +4,7 @@ import {
   PageKicker,
 } from '../components/page-primitives';
 import { useLocation, useState } from '@plec/core';
+import logoUrl from '../assets/plec-mark.svg';
 
 export function HomePage() {
   const location = useLocation();
@@ -11,6 +12,13 @@ export function HomePage() {
   return (
     <PageFrame>
       <PageKicker>Runtime control room</PageKicker>
+      <img
+        id="compiled-asset-logo"
+        src={logoUrl}
+        alt="Plec mark"
+        width="32"
+        height="32"
+      />
       <h1 className="m-0 text-4xl font-bold tracking-tight sm:text-5xl">
         TSX enters as source. Plec owns the resulting DOM.
       </h1>

@@ -1,5 +1,5 @@
 use crate::CompilerOptions;
-use plec_parser::{module_dependencies, parse_module, ParsedModule};
+use plec_parser::{ParsedModule, module_dependencies, parse_module};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
@@ -7,6 +7,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
+use swc_ecma_visit::{Visit, VisitWith};
 
 #[derive(Debug)]
 struct WorkspaceIndex {
@@ -18,6 +19,18 @@ pub struct SourceGraph {
     pub modules: Vec<ParsedModule>,
     /// Authored import specifier -> canonical source-graph module identity.
     pub resolved_imports: HashMap<(String, String), String>,
+    /// Opaque local asset files referenced by static default imports.
+    pub assets: Vec<SourceAsset>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceAsset {
+    /// Source path relative to the owning application root (for build/watch metadata).
+    pub source_path: PathBuf,
+    /// URL baked into the synthetic default-export module.
+    pub url: String,
+    /// Source bytes copied verbatim by the build.
+    pub bytes: Vec<u8>,
 }
 
 /// Read and parse the complete source graph reachable from an entry module.
@@ -74,7 +87,10 @@ pub fn read_source_graph_with_options(
     let mut seen = HashSet::new();
     let mut modules = Vec::new();
     let mut resolved_imports = HashMap::new();
+    let mut assets = Vec::<SourceAsset>::new();
+    let mut asset_modules = HashMap::<PathBuf, String>::new();
     let mut total_source_bytes = 0u64;
+    let mut total_asset_bytes = 0u64;
     let workspace = WorkspaceIndex::load(&repo_root_dir)?;
 
     visit_module(
@@ -87,13 +103,17 @@ pub fn read_source_graph_with_options(
         &mut seen,
         &mut modules,
         &mut resolved_imports,
+        &mut assets,
+        &mut asset_modules,
         &mut total_source_bytes,
+        &mut total_asset_bytes,
         0,
     )?;
 
     Ok(SourceGraph {
         modules,
         resolved_imports,
+        assets,
     })
 }
 
@@ -108,7 +128,10 @@ fn visit_module(
     seen: &mut HashSet<PathBuf>,
     modules: &mut Vec<ParsedModule>,
     resolved_imports: &mut HashMap<(String, String), String>,
+    assets: &mut Vec<SourceAsset>,
+    asset_modules: &mut HashMap<PathBuf, String>,
     total_source_bytes: &mut u64,
+    total_asset_bytes: &mut u64,
     depth: usize,
 ) -> Result<(), String> {
     use plec_ir::limits::{MAX_IMPORT_DEPTH, MAX_MODULE_COUNT, MAX_TOTAL_SOURCE_BYTES};
@@ -153,6 +176,14 @@ fn visit_module(
         .map_err(|error| format!("Failed to parse {module_id}: {error}"))?;
 
     let dependencies = module_dependencies(&parsed.ast);
+    let parsed_imports = parsed.imports.clone();
+    let mut dynamic_assets = DynamicAssetImports::default();
+    parsed.ast.visit_with(&mut dynamic_assets);
+    if let Some(specifier) = dynamic_assets.specifiers.first() {
+        return Err(format!(
+            "Unsupported dynamic asset import {specifier:?} in {module_id}: use a static default import"
+        ));
+    }
 
     // Preserve the existing TypeScript compiler's ordering:
     //
@@ -171,6 +202,73 @@ fn visit_module(
             );
             continue;
         }
+        if is_asset_request(&specifier) {
+            if !(specifier.starts_with("./") || specifier.starts_with("../")) {
+                return Err(format!(
+                    "Asset import {specifier:?} in {module_id} must be relative to its importing module"
+                ));
+            }
+            let import = parsed_imports
+                .iter()
+                .find(|import| import.source == specifier)
+                .ok_or_else(|| format!("Unsupported asset import {specifier:?} in {module_id}: assets require a static default import"))?;
+            if import.type_only
+                || import.specifiers.len() != 1
+                || !matches!(
+                    import.specifiers.first(),
+                    Some(plec_parser::ImportSpecifier::Default(_))
+                )
+            {
+                return Err(format!(
+                    "Unsupported asset import {specifier:?} in {module_id}: use a single default import (import assetUrl from './asset.svg')"
+                ));
+            }
+            let (asset_path, url, bytes) =
+                resolve_asset(&specifier, &absolute, scope_root, root_dir, &module_id)?;
+            let target_id = if let Some(existing) = asset_modules.get(&asset_path) {
+                existing.clone()
+            } else {
+                const MAX_TOTAL_ASSET_BYTES: u64 = 128 * 1024 * 1024;
+                *total_asset_bytes = total_asset_bytes
+                    .checked_add(bytes.len() as u64)
+                    .ok_or_else(|| "Compiled asset byte accounting overflowed".to_string())?;
+                if *total_asset_bytes > MAX_TOTAL_ASSET_BYTES {
+                    return Err(format!(
+                        "Compiled assets exceed the maximum total size of {MAX_TOTAL_ASSET_BYTES} bytes"
+                    ));
+                }
+                let asset_id = format!("__plec_asset__:{url}");
+                if !modules.iter().any(|module| module.id == asset_id) {
+                    if modules.len() >= MAX_MODULE_COUNT {
+                        return Err(format!(
+                            "Source graph exceeds the maximum module count of {MAX_MODULE_COUNT}"
+                        ));
+                    }
+                    let module_source = format!("export default {url:?};");
+                    let synthetic =
+                        parse_module(asset_id.clone(), module_source).map_err(|error| {
+                            format!(
+                            "Failed to represent asset import {specifier:?} in {module_id}: {error}"
+                            )
+                        })?;
+                    modules.push(synthetic);
+                }
+                let relative = asset_path
+                    .strip_prefix(root_dir)
+                    .expect("asset containment checked")
+                    .to_path_buf();
+                assets.push(SourceAsset {
+                    source_path: relative,
+                    url,
+                    bytes,
+                });
+                asset_modules.insert(asset_path, asset_id.clone());
+                asset_id
+            };
+            resolved_imports.insert((module_id.clone(), specifier.clone()), target_id);
+            continue;
+        }
+
         let Some((resolved, target_scope)) =
             resolve_module(&specifier, &absolute, scope_root, workspace)?
         else {
@@ -193,12 +291,134 @@ fn visit_module(
             seen,
             modules,
             resolved_imports,
+            assets,
+            asset_modules,
             total_source_bytes,
+            total_asset_bytes,
             depth + 1,
         )?;
     }
 
     Ok(())
+}
+
+fn is_asset_request(specifier: &str) -> bool {
+    let extension = Path::new(specifier)
+        .extension()
+        .and_then(|value| value.to_str());
+    extension.is_some_and(|extension| {
+        !["ts", "tsx", "js", "jsx", "mjs", "cjs", "route", "generated"].contains(&extension)
+    })
+}
+
+#[derive(Default)]
+struct DynamicAssetImports {
+    specifiers: Vec<String>,
+}
+
+impl Visit for DynamicAssetImports {
+    fn visit_call_expr(&mut self, call: &swc_ecma_ast::CallExpr) {
+        if matches!(call.callee, swc_ecma_ast::Callee::Import(_)) {
+            if let Some(swc_ecma_ast::Expr::Lit(swc_ecma_ast::Lit::Str(specifier))) =
+                call.args.first().map(|argument| argument.expr.as_ref())
+            {
+                let specifier = specifier.value.to_string_lossy().into_owned();
+                if is_asset_request(&specifier) {
+                    self.specifiers.push(specifier);
+                }
+            }
+        }
+        call.visit_children_with(self);
+    }
+}
+
+const SUPPORTED_ASSET_EXTENSIONS: &[&str] = &[
+    "svg", "png", "jpg", "jpeg", "webp", "gif", "ico", "woff", "woff2", "ttf",
+];
+
+fn resolve_asset(
+    specifier: &str,
+    from_file: &Path,
+    scope_root: &Path,
+    app_root: &Path,
+    module_id: &str,
+) -> Result<(PathBuf, String, Vec<u8>), String> {
+    let requested_extension = Path::new(specifier)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !SUPPORTED_ASSET_EXTENSIONS.contains(&requested_extension.as_str()) {
+        return Err(format!(
+            "Unsupported compiled asset {specifier:?} imported by {module_id}: .{requested_extension} is not supported; place the file under public/ for a verbatim public URL"
+        ));
+    }
+    let requested = from_file
+        .parent()
+        .ok_or_else(|| format!("Cannot resolve asset {specifier:?} imported by {module_id}"))?
+        .join(specifier);
+    let canonical = fs::canonicalize(&requested).map_err(|error| {
+        format!("Cannot resolve asset {specifier:?} imported by {module_id}: {error}")
+    })?;
+    ensure_within_scope(&canonical, scope_root).map_err(|_| {
+        format!(
+            "Asset {specifier:?} imported by {module_id} resolves outside the approved source root"
+        )
+    })?;
+    let metadata = fs::metadata(&canonical).map_err(|error| {
+        format!("Cannot inspect asset {specifier:?} imported by {module_id}: {error}")
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "Asset {specifier:?} imported by {module_id} is not a regular file"
+        ));
+    }
+    const MAX_ASSET_BYTES: u64 = 32 * 1024 * 1024;
+    if metadata.len() > MAX_ASSET_BYTES {
+        return Err(format!(
+            "Asset {specifier:?} imported by {module_id} exceeds the {MAX_ASSET_BYTES}-byte limit"
+        ));
+    }
+    let mut file = fs::File::open(&canonical).map_err(|error| {
+        format!("Cannot read asset {specifier:?} imported by {module_id}: {error}")
+    })?;
+    let opened_metadata = file.metadata().map_err(|error| {
+        format!("Cannot inspect asset {specifier:?} imported by {module_id}: {error}")
+    })?;
+    if !opened_metadata.is_file() || opened_metadata.len() > MAX_ASSET_BYTES {
+        return Err(format!(
+            "Asset {specifier:?} imported by {module_id} changed or exceeds the {MAX_ASSET_BYTES}-byte limit"
+        ));
+    }
+    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+    file.read_to_end(&mut bytes).map_err(|error| {
+        format!("Cannot read asset {specifier:?} imported by {module_id}: {error}")
+    })?;
+    if bytes.len() as u64 > MAX_ASSET_BYTES {
+        return Err(format!(
+            "Asset {specifier:?} imported by {module_id} exceeds the {MAX_ASSET_BYTES}-byte limit"
+        ));
+    }
+    if fs::canonicalize(&requested).ok().as_deref() != Some(canonical.as_path()) {
+        return Err(format!(
+            "Asset {specifier:?} imported by {module_id} changed while being read"
+        ));
+    }
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(&bytes);
+    let fingerprint = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let url = format!(
+        "/assets/compiled/{}.{}",
+        &fingerprint[..24],
+        requested_extension
+    );
+    canonical.strip_prefix(app_root).map_err(|_| {
+        format!("Asset {specifier:?} imported by {module_id} resolves outside the application root")
+    })?;
+    Ok((canonical, url, bytes))
 }
 
 /// Resolve one authored import specifier to its source file and the
@@ -598,7 +818,10 @@ mod tests {
     fn resolves_workspace_wildcard_export_to_authored_svg_source() {
         let repo = tempdir().expect("repo");
         let app = repo.path().join("apps/demo");
-        write_file(&app.join("src/App.tsx"), "import { Mark } from '@scope/icons/icons/mark'; export function App(){ return <Mark />; }");
+        write_file(
+            &app.join("src/App.tsx"),
+            "import { Mark } from '@scope/icons/icons/mark'; export function App(){ return <Mark />; }",
+        );
         write_file(
             &repo.path().join("packages/icons/package.json"),
             r#"{"name":"@scope/icons","exports":{"./icons/*":{"default":"./dist/icons/*.js"}}}"#,
@@ -685,10 +908,12 @@ mod tests {
         let graph = read_source_graph_with_options(&entry, &app, repo.path(), &options)
             .expect("unconfigured imports remain outside the host map");
 
-        assert!(!graph
-            .resolved_imports
-            .values()
-            .any(|target| target == "host:icons"));
+        assert!(
+            !graph
+                .resolved_imports
+                .values()
+                .any(|target| target == "host:icons")
+        );
     }
 
     #[test]

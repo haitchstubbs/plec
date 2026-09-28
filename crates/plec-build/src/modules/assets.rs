@@ -74,8 +74,7 @@ pub fn brotli(client_path: &Path) -> Result<(), BuildError> {
 }
 
 /// Copy application-owned `public/` files into the build public directory.
-/// Plec owns `/assets/` for generated output, so application files may not
-/// claim that namespace.
+/// Application files may not claim paths reserved for framework output.
 pub fn copy_public(app_dir: &Path, public_dir: &Path) -> Result<(), BuildError> {
     let source = app_dir.join("public");
     if !source.exists() {
