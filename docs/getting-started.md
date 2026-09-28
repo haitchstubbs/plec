@@ -73,7 +73,8 @@ path escaping the importing module's approved source root fails the build.
 Use `public/` for unsupported formats or when a stable hand-authored URL is
 preferred. Imports do not transform files; dynamic, named, namespace, and
 query-string asset imports are not supported. `dist/plec-assets.json` records
-source dependencies and emitted URLs for build tooling.
+application-relative source paths and emitted URLs for build/dev dependency
+tracking. It stays outside `dist/public/` and is not required by `plec serve`.
 
 ## Dev loop
 

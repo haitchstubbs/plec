@@ -8,6 +8,7 @@ use plec_compiler::{
     read_source_graph_with_options,
 };
 use plec_model::build_semantic_graph;
+use serde::Serialize;
 
 use super::id::sanitize;
 use super::json::out;
@@ -17,6 +18,14 @@ use super::build::{BuildError, RuntimeSource, Stage};
 
 pub struct ArtifactOutput {
     pub host_components: BTreeMap<String, BTreeSet<String>>,
+}
+
+/// Build/dev dependency metadata stored outside `public/`; `plec serve` does
+/// not read this file.
+#[derive(Serialize)]
+struct AssetDependency {
+    source: String,
+    url: String,
 }
 
 /// Emit the Plec compiler artifacts for the routed application in-process.
@@ -88,7 +97,7 @@ pub fn emit(
 
     let host_components = collect_host_components(&bundle);
     let mut emitted_urls = BTreeMap::<String, Vec<u8>>::new();
-    let mut dependencies = Vec::new();
+    let mut dependencies = Vec::<AssetDependency>::new();
     for asset in &source_graph.assets {
         let target = public_dir.join(asset.url.trim_start_matches('/'));
         if let Some(previous_bytes) = emitted_urls.get(&asset.url) {
@@ -129,10 +138,10 @@ pub fn emit(
             })?;
             emitted_urls.insert(asset.url.clone(), asset.bytes.clone());
         }
-        dependencies.push(serde_json::json!({
-            "source": asset.source_path.to_string_lossy().replace('\\', "/"),
-            "url": asset.url,
-        }));
+        dependencies.push(AssetDependency {
+            source: asset.source_path.to_string_lossy().replace('\\', "/"),
+            url: asset.url.clone(),
+        });
     }
     let dependency_manifest = public_dir
         .parent()

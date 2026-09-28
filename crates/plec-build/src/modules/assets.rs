@@ -100,24 +100,7 @@ fn copy_public_tree(root: &Path, directory: &Path, destination: &Path) -> Result
         let relative = path
             .strip_prefix(root)
             .expect("entry is beneath public root");
-        let reserved = [
-            "assets/client.js",
-            "assets/client.js.br",
-            "index.html",
-            "route-manifest.json",
-            "route-artifact.json",
-            "host-providers.json",
-        ];
-        let relative_text = relative.to_string_lossy().replace('\\', "/");
-        let provider_output =
-            relative_text.starts_with("assets/providers/") && relative_text.ends_with(".js");
-        let runtime_output = relative_text == "runtime" || relative_text.starts_with("runtime/");
-        if reserved.contains(&relative_text.as_str())
-            || relative_text == "graphs"
-            || relative_text.starts_with("graphs/")
-            || provider_output
-            || runtime_output
-        {
+        if is_framework_owned_public_path(relative) {
             return Err(BuildError::new(
                 stage,
                 format!(
@@ -164,4 +147,25 @@ fn copy_public_tree(root: &Path, directory: &Path, destination: &Path) -> Result
         }
     }
     Ok(())
+}
+
+fn is_framework_owned_public_path(path: &Path) -> bool {
+    let path = path.to_string_lossy().replace('\\', "/");
+    let reserved_files = [
+        "assets/client.js",
+        "assets/client.js.br",
+        "host-providers.json",
+        "index.html",
+        "route-artifact.json",
+        "route-manifest.json",
+    ];
+    reserved_files.contains(&path.as_str())
+        || path == "graphs"
+        || path.starts_with("graphs/")
+        || path == "runtime"
+        || path.starts_with("runtime/")
+        || path == "assets/providers"
+        || path.starts_with("assets/providers/")
+        || path == "assets/compiled"
+        || path.starts_with("assets/compiled/")
 }

@@ -228,13 +228,13 @@ fn visit_module(
             let target_id = if let Some(existing) = asset_modules.get(&asset_path) {
                 existing.clone()
             } else {
-                const MAX_TOTAL_ASSET_BYTES: u64 = 128 * 1024 * 1024;
                 *total_asset_bytes = total_asset_bytes
                     .checked_add(bytes.len() as u64)
                     .ok_or_else(|| "Compiled asset byte accounting overflowed".to_string())?;
-                if *total_asset_bytes > MAX_TOTAL_ASSET_BYTES {
+                if *total_asset_bytes > plec_ir::limits::MAX_TOTAL_COMPILED_ASSET_BYTES {
                     return Err(format!(
-                        "Compiled assets exceed the maximum total size of {MAX_TOTAL_ASSET_BYTES} bytes"
+                        "Compiled assets exceed the maximum total size of {} bytes",
+                        plec_ir::limits::MAX_TOTAL_COMPILED_ASSET_BYTES
                     ));
                 }
                 let asset_id = format!("__plec_asset__:{url}");
@@ -373,10 +373,10 @@ fn resolve_asset(
             "Asset {specifier:?} imported by {module_id} is not a regular file"
         ));
     }
-    const MAX_ASSET_BYTES: u64 = 32 * 1024 * 1024;
-    if metadata.len() > MAX_ASSET_BYTES {
+    use plec_ir::limits::MAX_COMPILED_ASSET_BYTES;
+    if metadata.len() > MAX_COMPILED_ASSET_BYTES {
         return Err(format!(
-            "Asset {specifier:?} imported by {module_id} exceeds the {MAX_ASSET_BYTES}-byte limit"
+            "Asset {specifier:?} imported by {module_id} exceeds the {MAX_COMPILED_ASSET_BYTES}-byte limit"
         ));
     }
     let mut file = fs::File::open(&canonical).map_err(|error| {
@@ -385,18 +385,18 @@ fn resolve_asset(
     let opened_metadata = file.metadata().map_err(|error| {
         format!("Cannot inspect asset {specifier:?} imported by {module_id}: {error}")
     })?;
-    if !opened_metadata.is_file() || opened_metadata.len() > MAX_ASSET_BYTES {
+    if !opened_metadata.is_file() || opened_metadata.len() > MAX_COMPILED_ASSET_BYTES {
         return Err(format!(
-            "Asset {specifier:?} imported by {module_id} changed or exceeds the {MAX_ASSET_BYTES}-byte limit"
+            "Asset {specifier:?} imported by {module_id} changed or exceeds the {MAX_COMPILED_ASSET_BYTES}-byte limit"
         ));
     }
     let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
     file.read_to_end(&mut bytes).map_err(|error| {
         format!("Cannot read asset {specifier:?} imported by {module_id}: {error}")
     })?;
-    if bytes.len() as u64 > MAX_ASSET_BYTES {
+    if bytes.len() as u64 > MAX_COMPILED_ASSET_BYTES {
         return Err(format!(
-            "Asset {specifier:?} imported by {module_id} exceeds the {MAX_ASSET_BYTES}-byte limit"
+            "Asset {specifier:?} imported by {module_id} exceeds the {MAX_COMPILED_ASSET_BYTES}-byte limit"
         ));
     }
     if fs::canonicalize(&requested).ok().as_deref() != Some(canonical.as_path()) {

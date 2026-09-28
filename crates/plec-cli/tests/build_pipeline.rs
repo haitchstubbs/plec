@@ -228,6 +228,23 @@ fn public_assets_cannot_shadow_framework_output() {
     let output = run_build(&app, &output_dir("public-provider-manifest-collision"), &[]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
+
+    fs::remove_file(app.join("public/host-providers.json")).unwrap();
+    fs::create_dir_all(app.join("public/assets/compiled")).unwrap();
+    fs::write(app.join("public/assets/compiled/foo.svg"), "application").unwrap();
+    let output = run_build(&app, &output_dir("public-compiled-asset-collision"), &[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
+
+    fs::remove_dir_all(app.join("public/assets/compiled")).unwrap();
+    fs::write(app.join("public/assets/compiled"), "application").unwrap();
+    let output = run_build(
+        &app,
+        &output_dir("public-compiled-assets-path-collision"),
+        &[],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
 }
 
 #[test]
@@ -253,6 +270,7 @@ fn compiled_asset_imports_are_fingerprinted_deduplicated_and_cleaned() {
     assert_success(&run_build(&app, &out_dir, &[]));
     let manifest: serde_json::Value =
         serde_json::from_str(&read(out_dir.join("plec-assets.json"))).unwrap();
+    assert!(!out_dir.join("public/plec-assets.json").exists());
     let entries = manifest.as_array().unwrap();
     assert_eq!(
         entries.len(),
@@ -358,7 +376,7 @@ fn compiled_assets_reject_public_collisions_and_symlink_escapes() {
     let collision = run_build(&app, &output_dir("compiled-asset-collision"), &[]);
     assert!(!collision.status.success());
     assert!(String::from_utf8_lossy(&collision.stderr)
-        .contains("collides with an application public file"));
+        .contains("conflicts with Plec-owned output"));
 
     #[cfg(unix)]
     {
@@ -366,6 +384,7 @@ fn compiled_assets_reject_public_collisions_and_symlink_escapes() {
         let outside = output_dir("compiled-asset-outside.svg");
         fs::write(&outside, bytes).unwrap();
         fs::remove_file(app.join("public").join(&url_path)).unwrap();
+        fs::remove_dir_all(app.join("public/assets/compiled")).unwrap();
         symlink(&outside, app.join("src/escape.svg")).unwrap();
         fs::write(
             app.join("src/home.tsx"),
