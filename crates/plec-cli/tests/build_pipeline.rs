@@ -222,6 +222,12 @@ fn public_assets_cannot_shadow_framework_output() {
     let output = run_build(&app, &output_dir("public-runtime-collision"), &[]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
+
+    fs::remove_dir_all(app.join("public/runtime")).unwrap();
+    fs::write(app.join("public/host-providers.json"), "application").unwrap();
+    let output = run_build(&app, &output_dir("public-provider-manifest-collision"), &[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
 }
 
 #[test]
