@@ -112,9 +112,11 @@ fn copy_public_tree(root: &Path, directory: &Path, destination: &Path) -> Result
         let relative_text = relative.to_string_lossy().replace('\\', "/");
         let provider_output =
             relative_text.starts_with("assets/providers/") && relative_text.ends_with(".js");
+        let runtime_output = relative_text == "runtime" || relative_text.starts_with("runtime/");
         if reserved.contains(&relative_text.as_str())
             || relative_text.starts_with("graphs/")
             || provider_output
+            || runtime_output
         {
             return Err(BuildError::new(
                 stage,
