@@ -276,7 +276,7 @@ fn loader_execution(
             graph_id: route.graph_id.clone(),
             action,
             state: SsrLoaderState::Rejected {
-                message: failure_message(&error),
+                failure: public_loader_failure(&error),
             },
         }),
         ActionOutcome::Redirect { location, replace } => {
@@ -321,13 +321,19 @@ async fn execute_fetch(
     let response = request
         .send()
         .await
-        .map_err(|error| loader_failure(format!("fetch {} failed: {error}", url.path())))?;
+        .map_err(|_| loader_failure_record("network", "network request failed", Some(url.as_str())))?;
     if fetch.require_ok && !response.status().is_success() {
-        return Err(loader_failure(format!(
-            "fetch {} failed with status {}",
-            url.path(),
-            response.status().as_u16()
-        )));
+        let status = response.status().as_u16();
+        let status_text = response.status().canonical_reason().unwrap_or("").to_owned();
+        let bytes = read_bounded_stream(response, url.path()).await.unwrap_or_default();
+        let body = serde_json::from_slice::<JsonValue>(&bytes)
+            .map(RuntimeValue::from_json_value)
+            .unwrap_or_else(|_| RuntimeValue::String(String::from_utf8_lossy(&bytes).into_owned()));
+        let mut failure = match loader_failure_record("http", &format!("request failed ({status})"), Some(url.as_str())) { RuntimeValue::Record(record) => record, _ => unreachable!() };
+        failure.insert("status".into(), RuntimeValue::Number(status as f64));
+        failure.insert("statusText".into(), RuntimeValue::String(status_text));
+        failure.insert("body".into(), body);
+        return Err(RuntimeValue::Record(failure));
     }
     if response
         .content_length()
@@ -392,12 +398,30 @@ fn loader_failure(message: impl Into<String>) -> RuntimeValue {
     )]))
 }
 
-fn failure_message(value: &RuntimeValue) -> String {
-    value
-        .record()
-        .and_then(|record| record.get("message"))
-        .map(RuntimeValue::dom_string)
-        .unwrap_or_else(|| value.dom_string())
+fn loader_failure_record(kind: &str, message: &str, url: Option<&str>) -> RuntimeValue {
+    let mut record = std::collections::HashMap::from([
+        ("kind".into(), RuntimeValue::String(kind.into())),
+        ("message".into(), RuntimeValue::String(message.into())),
+    ]);
+    if let Some(url) = url { record.insert("url".into(), RuntimeValue::String(url.into())); }
+    RuntimeValue::Record(record)
+}
+
+fn public_loader_failure(value: &RuntimeValue) -> plec_ir::PublicRouteLoaderFailure {
+    use plec_ir::{PublicRouteLoaderFailure as Public, PublicRouteLoaderFailureKind as Kind};
+    let Some(record) = value.record() else { return Public::generic() };
+    let Some(RuntimeValue::String(kind)) = record.get("kind") else { return Public::generic() };
+    let kind = match kind.as_str() { "http" => Kind::Http, "network" => Kind::Network, "abort" => Kind::Abort, "decode" => Kind::Decode, _ => return Public::generic() };
+    let Some(RuntimeValue::String(message)) = record.get("message") else { return Public::generic() };
+    let status = record.get("status").and_then(|v| match v { RuntimeValue::Number(n) if n.is_finite() && *n >= 100.0 && *n <= 599.0 => Some(*n as u16), _ => None });
+    let status_text = record.get("statusText").and_then(|v| if let RuntimeValue::String(s) = v { Some(s.clone()) } else { None });
+    let body = record
+        .get("body")
+        .cloned()
+        .map(RuntimeValue::into_ssr_snapshot);
+    let url = record.get("url").and_then(|v| if let RuntimeValue::String(s) = v { Some(s.clone()) } else { None });
+    let failure = Public { kind, message: message.clone(), status, status_text, body, url };
+    if failure.validate().is_ok() { failure } else { Public::generic() }
 }
 
 pub(crate) fn snapshot_value_to_json(value: &plec_ir::SsrSnapshotValue) -> JsonValue {

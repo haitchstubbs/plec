@@ -173,7 +173,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                 Ok::<_, JsValue>((action, outcome))
             })
             .transpose()?;
-        if let Some((action, plec_ir::SsrLoaderState::Rejected { message })) = loader {
+        if let Some((action, plec_ir::SsrLoaderState::Rejected { failure })) = loader {
             let reference = plec_ir::loader_ref(&route.graph_id, action);
             let error_graph_id = route.error_graph_id.clone().ok_or_else(|| {
                 JsValue::from_str(&format!("mismatch:ssr-loader-error-graph:{reference}"))
@@ -217,7 +217,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
             });
             instance
                 .runtime
-                .set_route_error(ssr_loader_error(&message))?;
+                .set_route_error(ssr_loader_error(&failure))?;
             instance.runtime.apply_static_bindings()?;
             drop(typed);
         } else {
@@ -1030,14 +1030,19 @@ fn ssr_chain_agreement(
     SsrChainAgreement::Exact
 }
 
-/// The error record a rejected imported outcome restores. The snapshot
-/// carries only the message, so the record uses the transport `http` kind
-/// `normalize_route_error` passes through unchanged.
-fn ssr_loader_error(message: &str) -> RuntimeValue {
-    RuntimeValue::Record(HashMap::from([
-        ("kind".into(), RuntimeValue::String("http".into())),
-        ("message".into(), RuntimeValue::String(message.into())),
-    ]))
+/// Reconstitute the public route-loader record from the shared snapshot schema.
+fn ssr_loader_error(failure: &plec_ir::PublicRouteLoaderFailure) -> RuntimeValue {
+    use plec_ir::PublicRouteLoaderFailureKind as Kind;
+    let kind = match failure.kind { Kind::Http => "http", Kind::Network => "network", Kind::Abort => "abort", Kind::Decode => "decode", Kind::Runtime => "runtime" };
+    let mut record = HashMap::from([
+        ("kind".into(), RuntimeValue::String(kind.into())),
+        ("message".into(), RuntimeValue::String(failure.message.clone())),
+    ]);
+    if let Some(status) = failure.status { record.insert("status".into(), RuntimeValue::Number(status as f64)); }
+    if let Some(text) = &failure.status_text { record.insert("statusText".into(), RuntimeValue::String(text.clone())); }
+    if let Some(body) = &failure.body { record.insert("body".into(), RuntimeValue::from_ssr_snapshot(body)); }
+    if let Some(url) = &failure.url { record.insert("url".into(), RuntimeValue::String(url.clone())); }
+    RuntimeValue::Record(record)
 }
 
 fn typed_route_chain(manifest: &RouteManifest, pathname: &str) -> Vec<TypedRouteMatch> {

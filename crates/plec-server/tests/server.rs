@@ -686,9 +686,10 @@ async fn renders_the_error_phase_and_records_the_rejection_when_the_loader_fails
         "the error phase graph renders: {html}"
     );
     assert!(html.contains("\"phase\":\"error\""));
-    assert!(html.contains(
-        "\"state\":{\"kind\":\"rejected\",\"message\":\"fetch /api/data failed with status 500\"}"
-    ));
+    assert!(html.contains("\"state\":{\"kind\":\"rejected\",\"failure\":{"));
+    assert!(html.contains("\"kind\":\"http\""));
+    assert!(html.contains("\"status\":500"));
+    assert!(html.contains("\"statusText\":\"Internal Server Error\""));
 }
 
 /// Spawns a stub route-loader target whose success response streams in
@@ -777,9 +778,9 @@ async fn a_chunked_loader_response_exceeding_the_byte_ceiling_is_rejected_while_
         html.contains("Server rendered"),
         "the error phase graph renders: {html}"
     );
-    assert!(html.contains(
-        "\"state\":{\"kind\":\"rejected\",\"message\":\"loader response exceeds byte limit\"}"
-    ));
+    assert!(html.contains("\"state\":{\"kind\":\"rejected\",\"failure\":{"));
+    assert!(html.contains("\"kind\":\"runtime\""));
+    assert!(html.contains("\"message\":\"route loader failed\""));
 }
 
 #[tokio::test]

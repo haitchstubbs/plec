@@ -323,7 +323,7 @@ pub struct SsrLoaderOutcome {
 }
 
 /// Loader outcomes are total: a loader either resolved a value, was rejected
-/// with a message, or produced a not-found outcome. Redirects never reach a
+/// with a public failure, or produced a not-found outcome. Redirects never reach a
 /// snapshot (the server resolves them before rendering); a `Redirect` outcome
 /// arriving at any snapshot consumer must fail closed. There is no
 /// "unresolved" state to represent.
@@ -331,8 +331,64 @@ pub struct SsrLoaderOutcome {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SsrLoaderState {
     Resolved { value: SsrSnapshotValue },
-    Rejected { message: String },
+    Rejected { failure: PublicRouteLoaderFailure },
     NotFound,
+}
+
+/// The deliberately small application-visible route-loader failure contract.
+/// Internal evaluator, runtime, protocol, and resource diagnostics must not be
+/// represented here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublicRouteLoaderFailure {
+    pub kind: PublicRouteLoaderFailureKind,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<SsrSnapshotValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PublicRouteLoaderFailureKind {
+    Http,
+    Network,
+    Abort,
+    Decode,
+    Runtime,
+}
+
+impl PublicRouteLoaderFailure {
+    pub const GENERIC_MESSAGE: &'static str = "route loader failed";
+    pub const MAX_MESSAGE_BYTES: usize = 4096;
+    pub const MAX_URL_BYTES: usize = 8192;
+    pub const MAX_STATUS_TEXT_BYTES: usize = 1024;
+
+    /// Fail closed for untrusted serialized failure data. This is a public
+    /// fallback; callers must not substitute internal diagnostics.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.message.is_empty() || self.message.len() > Self::MAX_MESSAGE_BYTES {
+            return Err("invalid route loader failure message");
+        }
+        if self.status_text.as_ref().is_some_and(|s| s.len() > Self::MAX_STATUS_TEXT_BYTES)
+            || self.url.as_ref().is_some_and(|s| s.len() > Self::MAX_URL_BYTES)
+        {
+            return Err("route loader failure field exceeds limit");
+        }
+        if self.status.is_some() && self.kind != PublicRouteLoaderFailureKind::Http {
+            return Err("status is only valid for http route loader failures");
+        }
+        Ok(())
+    }
+
+    pub fn generic() -> Self {
+        Self { kind: PublicRouteLoaderFailureKind::Runtime, message: Self::GENERIC_MESSAGE.into(), status: None, status_text: None, body: None, url: None }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -557,9 +613,11 @@ impl PlecSsrSnapshot {
                         return Err(format!("loader {reference} {error}"));
                     }
                 }
-                SsrLoaderState::Rejected { message } => {
-                    if message.is_empty() {
-                        return Err(format!("loader {reference} rejection requires a message"));
+                SsrLoaderState::Rejected { failure } => {
+                    failure.validate().map_err(|error| format!("loader {reference}: {error}"))?;
+                    if let Some(body) = &failure.body {
+                        ensure_value_is_finite(body).map_err(|_| format!("loader {reference} failure body is invalid"))?;
+                        ensure_value_is_bounded(body).map_err(|_| format!("loader {reference} failure body exceeds limit"))?;
                     }
                 }
                 SsrLoaderState::NotFound => {}
@@ -2288,12 +2346,25 @@ mod tests {
     }
 
     #[test]
-    fn ssr_snapshot_rejects_loader_rejections_without_messages() {
+    fn ssr_snapshot_rejects_loader_rejections_with_invalid_messages() {
         assert_eq!(
             snapshot_error(|snapshot| snapshot.loaders[0].state =
-                SsrLoaderState::Rejected { message: "".into() }),
-            "loader app#Todo#action:0 rejection requires a message"
+                SsrLoaderState::Rejected { failure: PublicRouteLoaderFailure { message: "".into(), ..PublicRouteLoaderFailure::generic() } }),
+            "loader app#Todo#action:0: invalid route loader failure message"
         );
+    }
+
+    #[test]
+    fn public_loader_failure_rejects_status_on_non_http_and_oversized_fields() {
+        let mut failure = PublicRouteLoaderFailure {
+            kind: PublicRouteLoaderFailureKind::Network,
+            status: Some(503),
+            ..PublicRouteLoaderFailure::generic()
+        };
+        assert_eq!(failure.validate(), Err("status is only valid for http route loader failures"));
+        failure.status = None;
+        failure.message = "x".repeat(PublicRouteLoaderFailure::MAX_MESSAGE_BYTES + 1);
+        assert_eq!(failure.validate(), Err("invalid route loader failure message"));
     }
 
     #[test]

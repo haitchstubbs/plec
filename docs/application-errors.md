@@ -11,7 +11,7 @@ initiating operation.
 
 | Boundary              | Application-visible behavior                                                                                                                                                                                                            | HTTP behavior                                                                           | Serialization                                                                                                                        |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Route loader          | Successful value becomes loader data. Failed fetch/action selects the route error graph; it is not loader data. `redirect()` and `notFound()` remain terminal routing outcomes.                                                         | SSR renders the selected error graph with the normal document status; not-found is 404. | SSR loader failure snapshots currently carry only a rejection message. Client failures are normalized to a route error record.       |
+| Route loader          | Successful value becomes loader data. Failed fetch/action selects the route error graph; it is not loader data. `redirect()` and `notFound()` remain terminal routing outcomes.                                                         | SSR renders the selected error graph with the normal document status; not-found is 404. | SSR and CSR use `PublicRouteLoaderFailure` from `plec-ir`; snapshot validation bounds and checks it before adoption.                 |
 | Mutation              | A failed current invocation clears `pending`, publishes its rejection to `mutation.error`, and rejects its caller. A later successful current invocation clears the published error. Stale invocations do not publish over newer state. | None inherently.                                                                        | Local to the browser action runtime.                                                                                                 |
 | File API              | A returned `Response` is passed through as HTTP. An uncaught handler exception becomes a 500 response.                                                                                                                                  | Explicit `Response` status is authoritative; thrown failures produce 500.               | Standard HTTP response. Thrown details are redacted to `{"error":"Internal Server Error"}`.                                          |
 | Filesystem middleware | A returned `Response` remains authoritative. Uncaught failures use the host's HTTP 500 path.                                                                                                                                            | HTTP-owned.                                                                             | Standard HTTP response.                                                                                                              |
@@ -22,20 +22,20 @@ initiating operation.
 
 ## Route error values
 
-Client route error normalization admits a record with `kind` equal to
-`http`, `network`, `abort`, or `decode`, plus `message`. Missing or unsupported
-records become `{ kind: "runtime", message: "route loader failed" }`.
-Normalization does not preserve arbitrary input properties. For admitted
-transport records, the existing client contract also retains `status`,
-`statusText`, `body`, and `url` when present. SSR's current serialized loader
-rejection stores a message and restores it as an `http` route error record.
-This format is an existing transport/error convention, not a general public
-application-failure API.
+The authoritative public route-loader failure shape is `{ kind, message,
+status?, statusText?, body?, url? }`. `kind` is `http`, `network`, `abort`,
+`decode`, or `runtime`. HTTP response status, status text, body, and URL are
+preserved where available. SSR snapshots carry this same typed representation;
+adoption restores its fields without changing the failure kind. Invalid or
+over-budget serialized failures are rejected by snapshot validation and cannot
+be adopted as application data; the client falls back to its normal remount
+path. (Generic public-failure normalization for malformed snapshot entries is
+still pending.)
 
-The compiler currently does not let loader code throw arbitrary values as
-application failures, so there is no contract mapping `Error`, strings,
-numbers, `null`, or arbitrary objects into public loader failures. In
-particular, an object's `status` field is not an authoritative HTTP status.
+The compiler currently rejects unsupported loader forms rather than allowing
+arbitrary throws. There is no mapping for thrown `Error`, strings, numbers,
+`null`, or objects; this issue does not add throw syntax. An object's `status`
+field is not authoritative HTTP status.
 The HTTP API/middleware status comes only from the returned `Response` or the
 host's failure handling.
 
