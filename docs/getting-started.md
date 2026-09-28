@@ -45,9 +45,36 @@ yarn build
 ```
 
 The fullstack build runs `plec build src/app.tsx --out-dir dist`, then stages
-the application's fonts and generated CSS in `dist/public`. `plec build`
-owns compilation and application artifact generation; the app owns its CSS
-and font assets.
+the application's fonts and generated CSS in `dist/public`. For ordinary
+application-owned static files, put them under the app's `public/` directory;
+`plec build` copies them to the same relative path under `dist/public/` and
+removes old output on each build. Plec reserves generated output paths (such as
+`/assets/client.js`); a collision fails the build. Source asset imports are
+handled separately by #49.
+
+Use `public/` when an asset has an intentionally stable, manually addressed
+URL—for example `public/favicon.svg` is served as `/favicon.svg`. Use a source
+import when the asset is a dependency of application code:
+
+```tsx
+import logoUrl from './logo.svg';
+
+export function Logo() {
+  return <img src={logoUrl} alt="Logo" />;
+}
+```
+
+Plec currently accepts opaque `.svg`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`,
+`.ico`, `.woff`, `.woff2`, and `.ttf` files from relative static default imports.
+It emits the original bytes once under `/assets/compiled/<sha256-prefix>.<ext>`
+and lowers the fingerprinted URL to a string in the route graph. SSR and browser
+rendering therefore consume the same URL. A missing file, unsupported type, or
+path escaping the importing module's approved source root fails the build.
+Use `public/` for unsupported formats or when a stable hand-authored URL is
+preferred. Imports do not transform files; dynamic, named, namespace, and
+query-string asset imports are not supported. `dist/plec-assets.json` records
+application-relative source paths and emitted URLs for build/dev dependency
+tracking. It stays outside `dist/public/` and is not required by `plec serve`.
 
 ## Dev loop
 

@@ -100,6 +100,12 @@ pub const MAX_MODULE_COUNT: usize = 4_096;
 /// `MAX_MODULE_COUNT * MAX_SOURCE_FILE_BYTES` of source input.
 pub const MAX_TOTAL_SOURCE_BYTES: u64 = 32 * 1024 * 1024;
 
+/// Maximum byte length of one opaque asset imported by application source.
+pub const MAX_COMPILED_ASSET_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Maximum aggregate bytes across distinct assets imported by one application.
+pub const MAX_TOTAL_COMPILED_ASSET_BYTES: u64 = 128 * 1024 * 1024;
+
 /// Maximum number of workspace packages the compiler indexes from the
 /// repository `packages/` directory while resolving bare import specifiers.
 pub const MAX_WORKSPACE_PACKAGE_COUNT: usize = 1_024;
@@ -229,6 +235,12 @@ pub const MAX_REDIRECT_HOPS: usize = 5;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compiled_asset_limits_keep_the_existing_byte_budgets() {
+        assert_eq!(MAX_COMPILED_ASSET_BYTES, 32 * 1024 * 1024);
+        assert_eq!(MAX_TOTAL_COMPILED_ASSET_BYTES, 128 * 1024 * 1024);
+    }
 
     #[test]
     fn limits_leave_headroom_above_legitimate_output() {

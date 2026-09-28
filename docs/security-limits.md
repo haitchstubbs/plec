@@ -81,14 +81,15 @@ the body streams, before any `text()`/`json()`-style whole-body read.
 
 ## Source modules and import graph (compiler)
 
-| Boundary                 | Limit                                 | Where                                           |
-| ------------------------ | ------------------------------------- | ----------------------------------------------- |
-| Source file size         | 2 MiB (`MAX_SOURCE_FILE_BYTES`)       | `crates/plec-compiler/src/read_source_graph.rs` |
-| Aggregate source size    | 32 MiB (`MAX_TOTAL_SOURCE_BYTES`)     | same                                            |
-| Import-chain depth       | 128 (`MAX_IMPORT_DEPTH`)              | same                                            |
-| Module count per graph   | 4,096 (`MAX_MODULE_COUNT`)            | same                                            |
-| Workspace package count  | 1,024 (`MAX_WORKSPACE_PACKAGE_COUNT`) | same (`WorkspaceIndex::load`)                   |
-| Workspace manifest bytes | 1 MiB (`MAX_MANIFEST_JSON_BYTES`)     | same (`read_workspace_manifest`)                |
+| Boundary                 | Limit                                                                                                       | Where                                           |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| Source file size         | 2 MiB (`MAX_SOURCE_FILE_BYTES`)                                                                             | `crates/plec-compiler/src/read_source_graph.rs` |
+| Aggregate source size    | 32 MiB (`MAX_TOTAL_SOURCE_BYTES`)                                                                           | same                                            |
+| Compiled asset size      | 32 MiB (`MAX_COMPILED_ASSET_BYTES`) per source asset / 128 MiB (`MAX_TOTAL_COMPILED_ASSET_BYTES`) aggregate | same (`resolve_asset`)                          |
+| Import-chain depth       | 128 (`MAX_IMPORT_DEPTH`)                                                                                    | same                                            |
+| Module count per graph   | 4,096 (`MAX_MODULE_COUNT`)                                                                                  | same                                            |
+| Workspace package count  | 1,024 (`MAX_WORKSPACE_PACKAGE_COUNT`)                                                                       | same (`WorkspaceIndex::load`)                   |
+| Workspace manifest bytes | 1 MiB (`MAX_MANIFEST_JSON_BYTES`)                                                                           | same (`read_workspace_manifest`)                |
 
 Cycles are already rejected by the existing `seen` set; depth, count, and
 aggregate byte bounds extend this to deep chains and file-count/size

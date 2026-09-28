@@ -266,6 +266,23 @@ impl<'a> HirLoweringCtx<'a> {
             .ok_or_else(|| format!("Unresolved lexical binding '{name}'"))
     }
 
+    fn imported_asset_url(&self, name: &str) -> Option<String> {
+        if self
+            .scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains_key(name))
+        {
+            return None;
+        }
+        let module = self.semantic_graph.get_module(self.module_id)?;
+        let import = module.imports.get(name)?;
+        import
+            .target_module_id
+            .strip_prefix("__plec_asset__:")
+            .map(str::to_owned)
+    }
+
     fn binding_kind(&self, id: BindingId) -> &HirBindingKind {
         &self.bindings[id.0 as usize].kind
     }
@@ -3054,7 +3071,10 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
         // The executable graph has one nullish representation.  `undefined`
         // is only accepted as the unshadowed global spelling of that value.
         Expr::Ident(ident) if ident.sym == *"undefined" => HirExpr::Literal(HirValue::Null),
-        Expr::Ident(ident) => HirExpr::Binding(ctx.resolve_binding(&ident.sym)?),
+        Expr::Ident(ident) => match ctx.imported_asset_url(&ident.sym) {
+            Some(url) => HirExpr::Literal(HirValue::String(url)),
+            None => HirExpr::Binding(ctx.resolve_binding(&ident.sym)?),
+        },
 
         Expr::Lit(lit) => match lit {
             Lit::Str(s) => {

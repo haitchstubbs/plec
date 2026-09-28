@@ -189,6 +189,264 @@ fn stale_artifacts_are_removed_between_builds() {
 }
 
 #[test]
+fn copies_public_assets_nested_and_removes_deleted_assets() {
+    let out_dir = output_dir("public-assets");
+    let app = fixture_project("public-assets", "mini-app");
+    fs::create_dir_all(app.join("public/images")).unwrap();
+    fs::write(app.join("public/site.css"), "body { color: red }").unwrap();
+    fs::write(app.join("public/images/logo.svg"), "<svg/>").unwrap();
+
+    assert_success(&run_build(&app, &out_dir, &[]));
+    assert_eq!(read(out_dir.join("public/site.css")), "body { color: red }");
+    assert_eq!(read(out_dir.join("public/images/logo.svg")), "<svg/>");
+
+    fs::remove_file(app.join("public/images/logo.svg")).unwrap();
+    assert_success(&run_build(&app, &out_dir, &[]));
+    assert!(!out_dir.join("public/images/logo.svg").exists());
+}
+
+#[test]
+fn public_assets_cannot_shadow_framework_output() {
+    let out_dir = output_dir("public-collision");
+    let app = fixture_project("public-collision", "mini-app");
+    fs::create_dir_all(app.join("public/assets")).unwrap();
+    fs::write(app.join("public/assets/client.js"), "application").unwrap();
+
+    let output = run_build(&app, &out_dir, &[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
+
+    fs::remove_file(app.join("public/assets/client.js")).unwrap();
+    fs::create_dir_all(app.join("public/runtime")).unwrap();
+    fs::write(app.join("public/runtime/runtime.js"), "application").unwrap();
+    let output = run_build(&app, &output_dir("public-runtime-collision"), &[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
+
+    fs::remove_dir_all(app.join("public/runtime")).unwrap();
+    fs::write(app.join("public/host-providers.json"), "application").unwrap();
+    let output = run_build(&app, &output_dir("public-provider-manifest-collision"), &[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
+
+    fs::remove_file(app.join("public/host-providers.json")).unwrap();
+    fs::create_dir_all(app.join("public/assets/compiled")).unwrap();
+    fs::write(app.join("public/assets/compiled/foo.svg"), "application").unwrap();
+    let output = run_build(&app, &output_dir("public-compiled-asset-collision"), &[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
+
+    fs::remove_dir_all(app.join("public/assets/compiled")).unwrap();
+    fs::write(app.join("public/assets/compiled"), "application").unwrap();
+    let output = run_build(
+        &app,
+        &output_dir("public-compiled-assets-path-collision"),
+        &[],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
+}
+
+#[test]
+fn compiled_asset_imports_are_fingerprinted_deduplicated_and_cleaned() {
+    let out_dir = output_dir("compiled-assets");
+    let app = fixture_project("compiled-assets", "mini-app");
+    let asset_bytes = b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
+    fs::write(app.join("src/logo.svg"), asset_bytes).unwrap();
+    fs::write(app.join("src/duplicate.svg"), asset_bytes).unwrap();
+    fs::write(
+        app.join("src/other.tsx"),
+        "import sharedLogo from './logo.svg'; export function Other() { return <img src={sharedLogo}/>; }",
+    )
+    .unwrap();
+    fs::write(
+        app.join("src/home.tsx"),
+        "import logo from './logo.svg';\nimport secondLogo from './logo.svg';\nimport thirdLogo from './duplicate.svg';\nimport { Other } from './other';\nexport function Home() { return <div><img src={logo}/><img src={secondLogo}/><img src={thirdLogo}/><Other/></div>; }\n",
+    )
+    .unwrap();
+    fs::create_dir_all(app.join("public")).unwrap();
+    fs::write(app.join("public/favicon.svg"), "public-owned").unwrap();
+
+    assert_success(&run_build(&app, &out_dir, &[]));
+    let manifest: serde_json::Value =
+        serde_json::from_str(&read(out_dir.join("plec-assets.json"))).unwrap();
+    assert!(!out_dir.join("public/plec-assets.json").exists());
+    let entries = manifest.as_array().unwrap();
+    assert_eq!(
+        entries.len(),
+        2,
+        "both source paths should remain build dependencies"
+    );
+    assert!(entries
+        .iter()
+        .any(|entry| entry["source"] == "src/logo.svg"));
+    assert!(entries
+        .iter()
+        .any(|entry| entry["source"] == "src/duplicate.svg"));
+    let url = entries[0]["url"].as_str().unwrap();
+    assert!(url.starts_with("/assets/compiled/"));
+    let emitted = out_dir.join("public").join(url.trim_start_matches('/'));
+    assert_eq!(fs::read(emitted).unwrap(), asset_bytes);
+    assert_eq!(
+        fs::read_dir(out_dir.join("public/assets/compiled"))
+            .unwrap()
+            .count(),
+        1,
+        "byte-identical sources should share emitted output"
+    );
+    assert!(out_dir.join("public/favicon.svg").is_file());
+    let route_artifact = read(out_dir.join("public/route-artifact.json"));
+    assert!(
+        route_artifact.contains(url),
+        "compiled route artifact must contain the imported URL string"
+    );
+
+    let repeat_dir = output_dir("compiled-assets-repeat");
+    assert_success(&run_build(&app, &repeat_dir, &[]));
+    let repeated: serde_json::Value =
+        serde_json::from_str(&read(repeat_dir.join("plec-assets.json"))).unwrap();
+    assert_eq!(
+        repeated[0]["url"], url,
+        "identical bytes must have a stable URL"
+    );
+    assert_eq!(
+        manifest, repeated,
+        "dependency metadata ordering must be deterministic"
+    );
+
+    fs::write(app.join("src/logo.svg"), b"<svg changed/>").unwrap();
+    fs::write(app.join("src/duplicate.svg"), b"<svg changed/>").unwrap();
+    assert_success(&run_build(&app, &out_dir, &[]));
+    let changed: serde_json::Value =
+        serde_json::from_str(&read(out_dir.join("plec-assets.json"))).unwrap();
+    let changed_url = changed[0]["url"].as_str().unwrap();
+    assert_ne!(changed_url, url);
+    assert!(!out_dir
+        .join("public")
+        .join(url.trim_start_matches('/'))
+        .exists());
+    assert_eq!(
+        fs::read(
+            out_dir
+                .join("public")
+                .join(changed_url.trim_start_matches('/'))
+        )
+        .unwrap(),
+        b"<svg changed/>"
+    );
+
+    fs::write(
+        app.join("src/home.tsx"),
+        "export function Home() { return <div>No compiled asset reference</div>; }",
+    )
+    .unwrap();
+    assert_success(&run_build(&app, &out_dir, &[]));
+    let no_assets: serde_json::Value =
+        serde_json::from_str(&read(out_dir.join("plec-assets.json"))).unwrap();
+    assert!(no_assets.as_array().unwrap().is_empty());
+    assert!(!out_dir
+        .join("public")
+        .join(changed_url.trim_start_matches('/'))
+        .exists());
+}
+
+#[test]
+fn compiled_assets_reject_public_collisions_and_symlink_escapes() {
+    use sha2::{Digest, Sha256};
+    let app = fixture_project("compiled-assets-security", "mini-app");
+    let bytes = b"<svg collision/>";
+    let digest = Sha256::digest(bytes);
+    let fingerprint = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let url_path = format!("assets/compiled/{}.svg", &fingerprint[..24]);
+    fs::write(app.join("src/logo.svg"), bytes).unwrap();
+    fs::write(
+        app.join("src/home.tsx"),
+        "import logo from './logo.svg'; export function Home() { return <img src={logo}/>; }",
+    )
+    .unwrap();
+    fs::create_dir_all(
+        app.join("public")
+            .join(Path::new(&url_path).parent().unwrap()),
+    )
+    .unwrap();
+    fs::write(app.join("public").join(&url_path), "public-owned").unwrap();
+    let collision = run_build(&app, &output_dir("compiled-asset-collision"), &[]);
+    assert!(!collision.status.success());
+    assert!(String::from_utf8_lossy(&collision.stderr)
+        .contains("conflicts with Plec-owned output"));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let outside = output_dir("compiled-asset-outside.svg");
+        fs::write(&outside, bytes).unwrap();
+        fs::remove_file(app.join("public").join(&url_path)).unwrap();
+        fs::remove_dir_all(app.join("public/assets/compiled")).unwrap();
+        symlink(&outside, app.join("src/escape.svg")).unwrap();
+        fs::write(
+            app.join("src/home.tsx"),
+            "import logo from './escape.svg'; export function Home() { return <img src={logo}/>; }",
+        )
+        .unwrap();
+        let escaped = run_build(&app, &output_dir("compiled-asset-symlink"), &[]);
+        assert!(!escaped.status.success());
+        assert!(
+            String::from_utf8_lossy(&escaped.stderr).contains("outside the approved source root")
+        );
+    }
+}
+
+#[test]
+fn compiled_asset_imports_fail_for_missing_and_unsupported_files() {
+    let app = fixture_project("compiled-assets-errors", "mini-app");
+    fs::write(
+        app.join("src/home.tsx"),
+        "import logo from './missing.svg'; export function Home() { return <img src={logo}/>; }",
+    )
+    .unwrap();
+    let missing = run_build(&app, &output_dir("compiled-asset-missing"), &[]);
+    assert!(!missing.status.success());
+    let stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(
+        stderr.contains("missing.svg") && stderr.contains("home.tsx"),
+        "diagnostic should identify import and module: {stderr}"
+    );
+
+    fs::write(app.join("src/thing.exe"), b"not an asset").unwrap();
+    fs::write(
+        app.join("src/home.tsx"),
+        "import thing from './thing.exe'; export function Home() { return <div>{thing}</div>; }",
+    )
+    .unwrap();
+    let unsupported = run_build(&app, &output_dir("compiled-asset-unsupported"), &[]);
+    assert!(!unsupported.status.success());
+    assert!(String::from_utf8_lossy(&unsupported.stderr).contains("not supported"));
+
+    fs::write(
+        app.join("src/home.tsx"),
+        "import { logo } from './thing.svg'; export function Home() { return <div>{logo}</div>; }",
+    )
+    .unwrap();
+    let unsupported_shape = run_build(&app, &output_dir("compiled-asset-shape"), &[]);
+    assert!(!unsupported_shape.status.success());
+    assert!(
+        String::from_utf8_lossy(&unsupported_shape.stderr).contains("use a single default import")
+    );
+
+    fs::write(
+        app.join("src/home.tsx"),
+        "export async function Home() { await import('./thing.svg'); return <div/>; }",
+    )
+    .unwrap();
+    let dynamic = run_build(&app, &output_dir("compiled-asset-dynamic"), &[]);
+    assert!(!dynamic.status.success());
+    assert!(String::from_utf8_lossy(&dynamic.stderr).contains("Unsupported dynamic asset import"));
+}
+
+#[test]
 fn forbidden_browser_dependency_fails_the_build() {
     let out_dir = output_dir("zod");
     let app = fixture_project("zod", "zod-app");
