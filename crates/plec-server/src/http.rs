@@ -8,11 +8,12 @@ use axum::{
 use serde_json::json;
 
 use crate::{
+    DocumentMetadata, PlecServerOptions, ServerError, ServerState,
     artifact::{self, Manifest, Route},
     assets, loader,
     request::RequestContext,
     runtime::HostRenderRequest,
-    ssr, DocumentMetadata, PlecServerOptions, ServerError, ServerState,
+    ssr,
 };
 
 pub(crate) struct RouteMatch<'a> {
@@ -34,10 +35,13 @@ pub(crate) async fn dispatch(
 ) -> Response<Body> {
     match dispatch_inner(&state, request).await {
         Ok(response) => response,
-        Err(error) => json_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &json!({ "error": format!("Plec server failed: {error}") }),
-        ),
+        Err(error) => {
+            eprintln!("Plec server request failed: {error}");
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &json!({ "error": "Internal Server Error" }),
+            )
+        }
     }
 }
 
@@ -106,6 +110,7 @@ async fn render_document(
     match render_document_inner(state, context).await {
         Ok(response) => Ok(response),
         Err(error) => {
+            eprintln!("Plec SSR render failed: {error}");
             // A fixture without compiler artifacts remains useful for
             // HTTP-host tests. Real Plec builds always supply the artifact
             // and therefore take the SSR path above.
@@ -131,7 +136,7 @@ async fn render_document(
                 }
                 Err(_) => Ok(json_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    &json!({ "error": format!("Plec SSR failed: {error}") }),
+                    &json!({ "error": "Internal Server Error" }),
                 )),
             }
         }
@@ -161,9 +166,14 @@ async fn render_document_inner(
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect();
                 context.params = route_match.params.clone();
-                let execution =
-                    loader::execute_route_loader(&bundle, route_match.route, context, &params, &state.http)
-                        .await?;
+                let execution = loader::execute_route_loader(
+                    &bundle,
+                    route_match.route,
+                    context,
+                    &params,
+                    &state.http,
+                )
+                .await?;
                 // A not-found origin must still join the execution list so
                 // boundary resolution can see it; redirects never commit.
                 let (loader, terminal) = match execution {

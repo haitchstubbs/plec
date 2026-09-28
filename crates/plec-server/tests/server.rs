@@ -6,16 +6,16 @@
 use std::{path::Path, sync::Arc};
 
 use axum::{
+    Router,
     body::Body,
     http::{Request, Response, StatusCode},
-    Router,
 };
 use plec_ir::PlecSsrSnapshot;
 use plec_server::{
-    artifact::ArtifactBundle, create_plec_server, runtime::AppRequestHandler, DocumentMetadata,
-    PlecServerOptions,
+    DocumentMetadata, PlecServerOptions, artifact::ArtifactBundle, create_plec_server,
+    runtime::AppRequestHandler,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const BOOTSTRAP_OPEN: &str = "<script id=\"plec-bootstrap\" type=\"application/json\">";
@@ -913,8 +913,8 @@ async fn fails_the_document_render_when_a_loop_produces_duplicate_keys() {
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = text_of(response).await;
-    assert!(body.contains("Plec SSR failed"), "{body}");
-    assert!(body.contains("DUPLICATE_LOOP_KEY:a"), "{body}");
+    assert!(body.contains("Internal Server Error"), "{body}");
+    assert!(!body.contains("DUPLICATE_LOOP_KEY:a"), "{body}");
 }
 
 #[tokio::test]
@@ -1089,7 +1089,7 @@ async fn fails_the_render_closed_when_a_reserved_attribute_is_written_literally(
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = text_of(response).await;
-    assert!(body.contains("RESERVED_ATTRIBUTE:data-plec-node"), "{body}");
+    assert!(body.contains("Internal Server Error"), "{body}");
 }
 
 #[tokio::test]
@@ -1135,10 +1135,7 @@ async fn fails_the_render_closed_when_a_spread_bag_carries_a_reserved_attribute(
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = text_of(response).await;
-    assert!(
-        body.contains("RESERVED_ATTRIBUTE:data-runtime-row-key"),
-        "{body}"
-    );
+    assert!(body.contains("Internal Server Error"), "{body}");
 }
 
 #[tokio::test]
@@ -1184,7 +1181,7 @@ async fn fails_the_render_closed_on_srcdoc_and_script_url_attribute_writes() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(text_of(response).await.contains("UNSAFE_ATTRIBUTE:srcdoc"));
+    assert!(text_of(response).await.contains("Internal Server Error"));
 
     let href_dir = fixture_dir();
     let href_home = json!({
@@ -1224,9 +1221,7 @@ async fn fails_the_render_closed_on_srcdoc_and_script_url_attribute_writes() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(text_of(response)
-        .await
-        .contains("UNSAFE_URL_ATTRIBUTE:href"));
+    assert!(text_of(response).await.contains("Internal Server Error"));
 }
 
 /// Adversarial regression: a substituted artifact cannot smuggle markup
@@ -1289,10 +1284,7 @@ async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
         json!(["img src=x onerror=alert(1)"]),
     ))
     .await;
-    assert!(
-        body.contains("UNSAFE_TAG:img src=x onerror=alert(1)"),
-        "{body}"
-    );
+    assert!(body.contains("Internal Server Error"), "{body}");
 
     // Attribute-name injection: whitespace breaks out of the attribute into
     // new markup-bearing syntax.
@@ -1304,10 +1296,7 @@ async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
     component["constants"] = json!(["alert(1)"]);
     component["propPrograms"] = json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
     let body = render_error(component).await;
-    assert!(
-        body.contains("UNSAFE_ATTRIBUTE:x onerror=alert(1)"),
-        "{body}"
-    );
+    assert!(body.contains("Internal Server Error"), "{body}");
 
     // Attribute-name injection via a quote breakout.
     let mut component = set(
@@ -1319,10 +1308,7 @@ async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
     component["propPrograms"] = json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
     let body = render_error(component).await;
     // The JSON error body escapes the embedded quotes.
-    assert!(
-        body.contains(r#"UNSAFE_ATTRIBUTE:a\" onmouseover=\"alert(1)"#),
-        "{body}"
-    );
+    assert!(body.contains("Internal Server Error"), "{body}");
 
     // Uppercase URL attribute name must classify as a URL sink exactly like
     // its lowercase spelling; the script URL fails the render closed.
@@ -1330,7 +1316,7 @@ async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
     component["constants"] = json!(["JAVASCRIPT:alert(1)"]);
     component["propPrograms"] = json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
     let body = render_error(component).await;
-    assert!(body.contains("UNSAFE_URL_ATTRIBUTE:HREF"), "{body}");
+    assert!(body.contains("Internal Server Error"), "{body}");
 
     // The reserved runtime namespace is rejected in any ASCII casing.
     let mut component = set(
@@ -1341,7 +1327,7 @@ async fn fails_the_render_closed_on_tag_and_attribute_name_injection() {
     component["constants"] = json!(["forged"]);
     component["propPrograms"] = json!([{"target": 0, "writes": [{"name": 1, "constant": 0}]}]);
     let body = render_error(component).await;
-    assert!(body.contains("RESERVED_ATTRIBUTE:DATA-PLEC-NODE"), "{body}");
+    assert!(body.contains("Internal Server Error"), "{body}");
 }
 
 /// Adversarial regression: a substituted artifact cannot activate active,
@@ -1393,7 +1379,7 @@ async fn fails_the_render_closed_on_active_element_tags() {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = text_of(response).await;
         assert!(
-            body.contains(&format!("UNSAFE_TAG:{tag}")),
+            body.contains("Internal Server Error"),
             "{tag} must fail the render closed, got: {body}"
         );
     }
@@ -1442,7 +1428,7 @@ async fn unconfigured_custom_elements_fail_the_render_closed() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(text_of(response).await.contains("UNSAFE_TAG:my-widget"));
+    assert!(text_of(response).await.contains("Internal Server Error"));
 }
 
 #[tokio::test]
@@ -1614,10 +1600,7 @@ async fn rejects_oversized_application_artifacts_with_a_500_json_error() {
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = text_of(response).await;
-    assert!(
-        body.contains("application artifact exceeds byte limit"),
-        "{body}"
-    );
+    assert!(body.contains("Internal Server Error"), "{body}");
 }
 
 #[tokio::test]
@@ -1776,10 +1759,7 @@ async fn route_loaders_without_a_valid_program_fail_the_document_render() {
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = text_of(response).await;
-    assert!(
-        body.contains("route loader action is invalid for home"),
-        "{body}"
-    );
+    assert!(body.contains("Internal Server Error"), "{body}");
 }
 
 #[tokio::test]
@@ -2137,8 +2117,14 @@ async fn string_length_and_filter_pass_through_non_arrays() {
     );
 }
 
-
-fn outcome_graph(graph_id: &str, tag: &str, text: &str, action: Value, constants: Value, expressions: Value) -> Value {
+fn outcome_graph(
+    graph_id: &str,
+    tag: &str,
+    text: &str,
+    action: Value,
+    constants: Value,
+    expressions: Value,
+) -> Value {
     json!({
         "rootComponent": 0,
         "components": [{
@@ -2269,10 +2255,7 @@ async fn a_loader_redirect_loop_fails_with_a_diagnostic() {
         .expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = text_of(response).await;
-    assert!(
-        body.contains("redirect loop exceeded 5 hops"),
-        "{body}"
-    );
+    assert!(body.contains("Internal Server Error"), "{body}");
 }
 
 #[tokio::test]
@@ -2367,17 +2350,19 @@ async fn a_not_found_outcome_truncates_the_chain_at_the_boundary_owner() {
     assert!(html.contains("Projects boundary"), "{html}");
     assert!(!html.contains(">Project<"), "{html}");
     // The snapshot chain truncates at the owner with the NotFound phase.
-    let start = html
-        .find(BOOTSTRAP_OPEN)
-        .expect("bootstrap is present")
-        + BOOTSTRAP_OPEN.len();
+    let start = html.find(BOOTSTRAP_OPEN).expect("bootstrap is present") + BOOTSTRAP_OPEN.len();
     let end = html[start..].find("</script>").expect("bootstrap close") + start;
     let payload: Value = serde_json::from_str(&html[start..end]).expect("bootstrap json");
     let routes = payload["snapshot"]["routes"].as_array().expect("routes");
     assert_eq!(routes.len(), 1);
     assert_eq!(routes[0]["routeId"], "projects");
     assert_eq!(routes[0]["phase"], "notFound");
-    assert!(payload["snapshot"]["loaders"].as_array().unwrap().is_empty());
+    assert!(
+        payload["snapshot"]["loaders"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert_valid_bootstrap(&html, &artifact, &artifact["manifest"]);
 }
 
@@ -2453,7 +2438,7 @@ async fn a_malformed_redirect_target_fails_deterministically() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = text_of(response).await;
     assert!(
-        body.contains("redirect location"),
-        "the shared action machine rejects non-path targets: {body}"
+        body.contains("Internal Server Error") && !body.contains("redirect location"),
+        "the host rejects and redacts non-path targets: {body}"
     );
 }

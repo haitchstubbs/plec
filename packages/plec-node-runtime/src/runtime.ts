@@ -311,6 +311,11 @@ async function serve(
 
     sendWebResponse(outgoing, response);
   } catch (error: unknown) {
+    // Application handler exceptions are internal host diagnostics. Their
+    // messages may contain secrets or implementation details; never send
+    // them as API response data. The server process retains the original
+    // exception for local diagnostics.
+    console.error('Plec application request failed:', error);
     if (!outgoing.headersSent) {
       outgoing.writeHead(500, {
         'content-type': 'application/json; charset=utf-8',
@@ -319,7 +324,7 @@ async function serve(
 
     outgoing.end(
       JSON.stringify({
-        error: formatError(error),
+        error: 'Internal Server Error',
       }),
     );
   }
