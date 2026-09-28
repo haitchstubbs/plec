@@ -189,6 +189,35 @@ fn stale_artifacts_are_removed_between_builds() {
 }
 
 #[test]
+fn copies_public_assets_nested_and_removes_deleted_assets() {
+    let out_dir = output_dir("public-assets");
+    let app = fixture_project("public-assets", "mini-app");
+    fs::create_dir_all(app.join("public/images")).unwrap();
+    fs::write(app.join("public/site.css"), "body { color: red }").unwrap();
+    fs::write(app.join("public/images/logo.svg"), "<svg/>").unwrap();
+
+    assert_success(&run_build(&app, &out_dir, &[]));
+    assert_eq!(read(out_dir.join("public/site.css")), "body { color: red }");
+    assert_eq!(read(out_dir.join("public/images/logo.svg")), "<svg/>");
+
+    fs::remove_file(app.join("public/images/logo.svg")).unwrap();
+    assert_success(&run_build(&app, &out_dir, &[]));
+    assert!(!out_dir.join("public/images/logo.svg").exists());
+}
+
+#[test]
+fn public_assets_cannot_shadow_framework_output() {
+    let out_dir = output_dir("public-collision");
+    let app = fixture_project("public-collision", "mini-app");
+    fs::create_dir_all(app.join("public/assets")).unwrap();
+    fs::write(app.join("public/assets/client.js"), "application").unwrap();
+
+    let output = run_build(&app, &out_dir, &[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
+}
+
+#[test]
 fn forbidden_browser_dependency_fails_the_build() {
     let out_dir = output_dir("zod");
     let app = fixture_project("zod", "zod-app");

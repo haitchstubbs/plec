@@ -32,7 +32,7 @@ description = "A Plec application."
 entry = "src/server.ts"
 
 [client]
-styles = "/assets/styles.css"
+styles = "/styles.css"
 "#,
     ),
     (
@@ -92,7 +92,7 @@ export const handleRequest: AppRequestHandler = async (request) => {
 "#,
     ),
     (
-        "src/styles.css",
+        "public/styles.css",
         r#":root {
   font-family: system-ui, sans-serif;
   color: #1f2937;

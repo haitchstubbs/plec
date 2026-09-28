@@ -65,6 +65,7 @@ pub enum Stage {
     Hash,
     Brotli,
     Document,
+    PublicAssets,
 }
 
 impl std::fmt::Display for Stage {
@@ -80,6 +81,7 @@ impl std::fmt::Display for Stage {
             Stage::Hash => "hash",
             Stage::Brotli => "brotli",
             Stage::Document => "document",
+            Stage::PublicAssets => "public assets",
         };
         write!(f, "{name}")
     }
@@ -185,6 +187,7 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
         api_routes::discover(&app_dir).map_err(|error| BuildError::new(Stage::ApiRoutes, error))?;
 
     clean::prepare(&out_dir, &assets_dir)?;
+    assets::copy_public(&app_dir, &public_dir)?;
 
     let artifacts = artifacts::emit(
         &source,

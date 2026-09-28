@@ -45,9 +45,12 @@ yarn build
 ```
 
 The fullstack build runs `plec build src/app.tsx --out-dir dist`, then stages
-the application's fonts and generated CSS in `dist/public`. `plec build`
-owns compilation and application artifact generation; the app owns its CSS
-and font assets.
+the application's fonts and generated CSS in `dist/public`. For ordinary
+application-owned static files, put them under the app's `public/` directory;
+`plec build` copies them to the same relative path under `dist/public/` and
+removes old output on each build. Plec reserves generated output paths (such as
+`/assets/client.js`); a collision fails the build. Source asset imports are
+handled separately by #49.
 
 ## Dev loop
 
