@@ -2090,6 +2090,7 @@ dependencies = [
  "hyper-util",
  "indexmap 1.9.3",
  "plec-action",
+ "plec-eval",
  "plec-ir",
  "plec-schema",
  "reqwest",

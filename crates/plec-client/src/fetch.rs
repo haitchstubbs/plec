@@ -258,7 +258,7 @@ fn failure(kind: &str, message: String, url: &str) -> RuntimeValue {
 
 async fn http_failure(response: Response, url: &str) -> RuntimeValue {
     let status = response.status();
-    let status_text = response.status_text();
+    let status_text = plec_ir::canonical_status_text(status).to_owned();
     let is_json = response
         .headers()
         .get("content-type")
@@ -307,15 +307,15 @@ fn js_failure(error: JsValue, url: &str) -> RuntimeValue {
     let name = js_sys::Reflect::get(&error, &JsValue::from_str("name"))
         .ok()
         .and_then(|value| value.as_string());
+    let aborted = name.as_deref() == Some("AbortError");
     failure(
-        if name.as_deref() == Some("AbortError") {
-            "abort"
+        if aborted { "abort" } else { "network" },
+        if aborted {
+            "request aborted"
         } else {
-            "network"
-        },
-        error
-            .as_string()
-            .unwrap_or_else(|| "network request failed".into()),
+            "network request failed"
+        }
+        .into(),
         url,
     )
 }

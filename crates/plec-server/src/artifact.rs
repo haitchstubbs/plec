@@ -383,6 +383,10 @@ pub enum ExpressionInstruction {
         #[serde(default)]
         field: usize,
     },
+    LoadEventField {
+        #[serde(default)]
+        field: usize,
+    },
     Field {
         #[serde(default)]
         field: usize,
@@ -442,6 +446,9 @@ pub enum ExpressionInstruction {
         target: usize,
     },
     JumpIfFalse {
+        target: usize,
+    },
+    JumpIfTrue {
         target: usize,
     },
     Return,

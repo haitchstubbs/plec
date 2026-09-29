@@ -316,11 +316,7 @@ async fn execute_fetch(
     })?;
     if fetch.require_ok && !response.status().is_success() {
         let status = response.status().as_u16();
-        let status_text = response
-            .status()
-            .canonical_reason()
-            .unwrap_or("")
-            .to_owned();
+        let status_text = plec_ir::canonical_status_text(status).to_owned();
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)

@@ -34,6 +34,16 @@ SSR HTTP failure decoding only parses JSON media types, and malformed public
 failure records normalize to the generic public failure without relaxing
 validation of other snapshot structure.
 
+Field applicability is enforced by the shared record validator: `http` may
+carry status, statusText, body, and URL; `network`, `abort`, and `decode` may
+carry only URL in addition to message; `runtime` must be exactly the generic
+`route loader failed` record with no supplemental fields. Status is limited to
+100–599. `statusText` is the canonical phrase for the numeric status from the
+shared Rust mapping (unknown/extension codes use an empty string); it never
+comes from browser or upstream reason-phrase text. Public network failures use
+`network request failed`, and aborts use `request aborted`; host-native Fetch
+error text remains diagnostic-only.
+
 The compiler currently rejects unsupported loader forms rather than allowing
 arbitrary throws. There is no mapping for thrown `Error`, strings, numbers,
 `null`, or objects; this issue does not add throw syntax. An object's `status`

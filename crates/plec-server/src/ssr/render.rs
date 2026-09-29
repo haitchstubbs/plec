@@ -10,7 +10,9 @@ use std::{
 
 use indexmap::IndexMap;
 use plec_ir::{limits::MAX_SNAPSHOT_LOOP_KEYS, SsrSelectedBranch};
-use plec_schema::delta::{json_dom_string, json_estimated_size_bytes, json_truthy};
+use plec_schema::delta::{
+    json_dom_string, json_estimated_size_bytes, json_truthy, runtime_from_json, RuntimeValue,
+};
 use serde_json::Value;
 
 use crate::{
@@ -830,24 +832,174 @@ fn write_attribute(
     Ok(())
 }
 
-/// The SSR expression evaluator. It mirrors the runtime's typed VM op set
-/// (`plec-eval`) over the transport value representation, so a resolved
-/// binding, loop source, or loader URL observes exactly the value the
-/// browser recomputes.
+struct SsrProgram<'a>(&'a Component);
+
+impl plec_eval::core::ExpressionProgram for SsrProgram<'_> {
+    fn program_len(&self, p: usize) -> Option<usize> {
+        self.0.expressions.get(p).map(|p| p.instructions.len())
+    }
+    fn constant(&self, h: usize) -> RuntimeValue {
+        self.0
+            .constants
+            .get(h)
+            .cloned()
+            .and_then(|v| runtime_from_json(v).ok())
+            .unwrap_or_default()
+    }
+    fn string(&self, h: usize) -> Option<&str> {
+        self.0.strings.get(h).map(String::as_str)
+    }
+    fn instruction(&self, p: usize, pc: usize) -> Option<plec_eval::core::EvalInstruction> {
+        use plec_eval::core::EvalInstruction as E;
+        Some(match self.0.expressions.get(p)?.instructions.get(pc)? {
+            ExpressionInstruction::Constant { constant } => E::Constant(*constant),
+            ExpressionInstruction::LoadState { state } => E::State(*state),
+            ExpressionInstruction::LoadFrame { slot } => E::Frame(*slot),
+            ExpressionInstruction::LoadProp { prop } => E::Prop(*prop),
+            ExpressionInstruction::LoadHost { host } => E::Host(*host),
+            ExpressionInstruction::LoadRowRecord => E::RowRecord,
+            ExpressionInstruction::LoadRowField { field } => E::RowField(*field),
+            ExpressionInstruction::LoadEventField { field } => E::Event(*field),
+            ExpressionInstruction::Field { field } => E::Field(*field),
+            ExpressionInstruction::Index => E::Index,
+            ExpressionInstruction::LoadRef { reference } => E::Ref(*reference),
+            ExpressionInstruction::Filter { predicate, .. } => E::Filter(*predicate),
+            ExpressionInstruction::Map { mapper, .. } => E::Map(*mapper),
+            ExpressionInstruction::String { kind, count } => E::String(kind.clone(), *count),
+            ExpressionInstruction::OmitFields { fields } => E::OmitFields(fields.clone()),
+            ExpressionInstruction::Unary { kind } => E::Unary(kind.clone()),
+            ExpressionInstruction::Binary { kind } => E::Binary(kind.clone()),
+            ExpressionInstruction::MakeArray { count, spreads } => {
+                E::MakeArray(*count, spreads.clone())
+            }
+            ExpressionInstruction::MakeRecord { fields, spreads } => {
+                E::MakeRecord(fields.clone(), spreads.clone())
+            }
+            ExpressionInstruction::Jump { target } => E::Jump(*target),
+            ExpressionInstruction::JumpIfFalse { target } => E::JumpIfFalse(*target),
+            ExpressionInstruction::JumpIfTrue { target } => E::JumpIfTrue(*target),
+            ExpressionInstruction::Return => E::Return,
+            ExpressionInstruction::Unknown => E::Unknown,
+        })
+    }
+}
+
+struct SsrHost<'a> {
+    component: &'a Component,
+    scope: &'a Scope<'a>,
+    state: &'a mut RenderState,
+}
+impl plec_eval::core::ExpressionHost for SsrHost<'_> {
+    fn load_state(&mut self, i: usize) -> RuntimeValue {
+        self.scope
+            .states
+            .get(i)
+            .map(runtime_json)
+            .unwrap_or_default()
+    }
+    fn load_prop(&mut self, i: usize) -> RuntimeValue {
+        self.scope
+            .props
+            .get(i)
+            .map(runtime_json)
+            .unwrap_or_default()
+    }
+    fn load_frame(&mut self, i: usize) -> RuntimeValue {
+        self.scope
+            .frame
+            .get(i)
+            .map(runtime_json)
+            .unwrap_or_default()
+    }
+    fn load_row_record(&mut self) -> RuntimeValue {
+        self.scope
+            .row
+            .as_ref()
+            .map(|row| runtime_json(&Value::Object(row.clone())))
+            .unwrap_or_default()
+    }
+    fn load_row_field(&mut self, f: &str) -> RuntimeValue {
+        self.scope
+            .row
+            .as_ref()
+            .and_then(|r| r.get(f))
+            .map(runtime_json)
+            .unwrap_or_default()
+    }
+    fn load_host(&mut self, i: usize) -> RuntimeValue {
+        use plec_schema::delta::RuntimeValue as V;
+        let Some(slot) = self.component.host_slots.get(i) else {
+            return V::Null;
+        };
+        match slot.kind.as_str() {
+            "cookie" => {
+                if let Some(g) = &mut self.state.gate {
+                    if g.development {
+                        let name = slot
+                            .name
+                            .and_then(|n| self.component.strings.get(n))
+                            .cloned()
+                            .unwrap_or_else(|| "<unnamed>".into());
+                        g.gated.push(format!("cookie:{name}"));
+                    }
+                }
+                V::Null
+            }
+            "loaderData" => runtime_json(&self.scope.loader_data),
+            "routeParams" => runtime_json(&self.scope.route_params),
+            "routeSearch" => V::Record(
+                self.scope
+                    .request
+                    .query
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            match v {
+                                crate::request::QueryValue::One(s) => V::String(s.clone()),
+                                crate::request::QueryValue::Many(v) => {
+                                    V::Array(v.iter().cloned().map(V::String).collect())
+                                }
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            "location" => V::Record(HashMap::from([
+                (
+                    "pathname".into(),
+                    V::String(self.scope.request.pathname.clone()),
+                ),
+                (
+                    "search".into(),
+                    V::String(super::url_search(&self.scope.request.url)),
+                ),
+            ])),
+            _ => V::Null,
+        }
+    }
+}
+
+fn runtime_json(value: &serde_json::Value) -> RuntimeValue {
+    runtime_from_json(value.clone()).unwrap_or_default()
+}
+
+/// Evaluator errors intentionally remain soft failures during SSR: compiler
+/// validation is primary, while runtime budgets fail closed to JSON null.
 pub(crate) fn evaluate(
     component: &Component,
     expression: usize,
     scope: &Scope<'_>,
     state: &mut RenderState,
 ) -> Value {
-    // The SSR evaluator mirrors the runtime's typed VM, including its
-    // execution budgets: one shared fuel counter across nested Filter/Map
-    // work, bounded nesting, and a bounded value stack (live value count and
-    // estimated bytes). Exhaustion (or a hostile shape) fails soft to
-    // `null` — compiled artifacts are compiler-validated, so the budgets are
-    // defense in depth, not the primary contract.
-    let mut fuel = plec_ir::limits::MAX_EXPRESSION_STEPS;
-    evaluate_bounded(component, expression, scope, state, &mut fuel, 0)
+    let mut host = SsrHost {
+        component,
+        scope,
+        state,
+    };
+    plec_eval::core::evaluate(&SsrProgram(component), &mut host, expression)
+        .map(RuntimeValue::into_json_value)
+        .unwrap_or(Value::Null)
 }
 
 /// Pushes one value with the runtime evaluator's stack budgets. Returns
@@ -1472,6 +1624,48 @@ fn encode_uri_component(value: &str) -> String {
         }
     }
     encoded
+}
+
+#[cfg(test)]
+mod shared_evaluator_tests {
+    use super::*;
+    use crate::request::RequestContext;
+    use axum::http::{HeaderMap, Method};
+
+    fn request() -> RequestContext {
+        RequestContext {
+            url: "http://localhost/".into(),
+            pathname: "/".into(),
+            method: Method::GET,
+            headers: HeaderMap::new(),
+            cookies: HashMap::new(),
+            params: HashMap::new(),
+            query: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn ssr_adapter_executes_the_shared_core_and_keeps_soft_failure() {
+        let component: Component = serde_json::from_value(serde_json::json!({
+            "strings": [], "constants": [3, 4],
+            "expressions": [{"instructions": [
+                {"op":"constant","constant":0}, {"op":"constant","constant":1},
+                {"op":"binary","kind":"add"}, {"op":"return"}
+            ]}]
+        }))
+        .unwrap();
+        let request = request();
+        let scope = Scope::for_loader(&request);
+        let mut state = RenderState::bare();
+        assert_eq!(
+            evaluate(&component, 0, &scope, &mut state),
+            serde_json::json!(7.0)
+        );
+        assert_eq!(
+            evaluate(&component, usize::MAX, &scope, &mut state),
+            Value::Null
+        );
+    }
 }
 
 pub(crate) fn escape_html(value: &str) -> String {

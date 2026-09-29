@@ -419,8 +419,29 @@ impl PublicRouteLoaderFailure {
         }) {
             return Err("route loader failure body exceeds limit");
         }
-        if self.status.is_some() && self.kind != PublicRouteLoaderFailureKind::Http {
-            return Err("status is only valid for http route loader failures");
+        if self
+            .status
+            .is_some_and(|status| !(100..=599).contains(&status))
+        {
+            return Err("invalid route loader failure status");
+        }
+        let invalid_fields = match self.kind {
+            PublicRouteLoaderFailureKind::Http => false,
+            PublicRouteLoaderFailureKind::Network
+            | PublicRouteLoaderFailureKind::Abort
+            | PublicRouteLoaderFailureKind::Decode => {
+                self.status.is_some() || self.status_text.is_some() || self.body.is_some()
+            }
+            PublicRouteLoaderFailureKind::Runtime => {
+                self.message != Self::GENERIC_MESSAGE
+                    || self.status.is_some()
+                    || self.status_text.is_some()
+                    || self.body.is_some()
+                    || self.url.is_some()
+            }
+        };
+        if invalid_fields {
+            return Err("route loader failure fields are not valid for kind");
         }
         Ok(())
     }
@@ -434,6 +455,86 @@ impl PublicRouteLoaderFailure {
             body: None,
             url: None,
         }
+    }
+}
+
+/// Stable public reason phrase derived solely from the status code. Unknown
+/// and extension statuses intentionally use an empty string.
+pub fn canonical_status_text(status: u16) -> &'static str {
+    match status {
+        100 => "Continue",
+        101 => "Switching Protocols",
+        102 => "Processing",
+        103 => "Early Hints",
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        203 => "Non-Authoritative Information",
+        204 => "No Content",
+        205 => "Reset Content",
+        206 => "Partial Content",
+        207 => "Multi-Status",
+        208 => "Already Reported",
+        226 => "IM Used",
+        300 => "Multiple Choices",
+        301 => "Moved Permanently",
+        302 => "Found",
+        303 => "See Other",
+        304 => "Not Modified",
+        305 => "Use Proxy",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        402 => "Payment Required",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        407 => "Proxy Authentication Required",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        410 => "Gone",
+        411 => "Length Required",
+        412 => "Precondition Failed",
+        413 => "Payload Too Large",
+        414 => "URI Too Long",
+        415 => "Unsupported Media Type",
+        416 => "Range Not Satisfiable",
+        417 => "Expectation Failed",
+        418 => "I'm a teapot",
+        421 => "Misdirected Request",
+        422 => "Unprocessable Entity",
+        423 => "Locked",
+        424 => "Failed Dependency",
+        425 => "Too Early",
+        426 => "Upgrade Required",
+        428 => "Precondition Required",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        451 => "Unavailable For Legal Reasons",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        505 => "HTTP Version Not Supported",
+        506 => "Variant Also Negotiates",
+        507 => "Insufficient Storage",
+        508 => "Loop Detected",
+        510 => "Not Extended",
+        511 => "Network Authentication Required",
+        _ => "",
+    }
+}
+
+#[cfg(test)]
+mod public_status_text_tests {
+    #[test]
+    fn canonical_status_text_does_not_depend_on_host_reason_phrases() {
+        assert_eq!(super::canonical_status_text(503), "Service Unavailable");
+        assert_eq!(super::canonical_status_text(418), "I'm a teapot");
+        assert_eq!(super::canonical_status_text(599), "");
     }
 }
 
@@ -2416,7 +2517,12 @@ mod tests {
         for failure in [
             serde_json::json!({"kind":"unknown", "message":"secret"}),
             serde_json::json!({"kind":"http", "message":7, "status":503}),
+            serde_json::json!({"kind":"http", "message":"bad", "status":65535}),
             serde_json::json!({"kind":"network", "message":"bad", "status":503}),
+            serde_json::json!({"kind":"runtime", "message":"/srv/private/database.rs secret-token"}),
+            serde_json::json!({"kind":"runtime", "message":"route loader failed", "url":"/internal"}),
+            serde_json::json!({"kind":"decode", "message":"bad", "statusText":"Unavailable"}),
+            serde_json::json!({"kind":"abort", "message":"bad", "body":"private"}),
             serde_json::json!({"kind":"http", "message":"bad", "extra":"field"}),
             serde_json::json!({"kind":"http", "message":"bad", "body":"x".repeat(PublicRouteLoaderFailure::MAX_BODY_BYTES)}),
         ] {
@@ -2468,7 +2574,7 @@ mod tests {
         };
         assert_eq!(
             failure.validate(),
-            Err("status is only valid for http route loader failures")
+            Err("route loader failure fields are not valid for kind")
         );
         failure.status = None;
         failure.message = "x".repeat(PublicRouteLoaderFailure::MAX_MESSAGE_BYTES + 1);
@@ -2476,6 +2582,40 @@ mod tests {
             failure.validate(),
             Err("invalid route loader failure message")
         );
+    }
+
+    #[test]
+    fn public_loader_failure_enforces_field_applicability_and_runtime_canonical_form() {
+        let failures = [
+            PublicRouteLoaderFailure {
+                kind: PublicRouteLoaderFailureKind::Network,
+                status: Some(503),
+                ..PublicRouteLoaderFailure::generic()
+            },
+            PublicRouteLoaderFailure {
+                kind: PublicRouteLoaderFailureKind::Network,
+                body: Some(SsrSnapshotValue::String("body".into())),
+                ..PublicRouteLoaderFailure::generic()
+            },
+            PublicRouteLoaderFailure {
+                kind: PublicRouteLoaderFailureKind::Decode,
+                status_text: Some("Unavailable".into()),
+                ..PublicRouteLoaderFailure::generic()
+            },
+            PublicRouteLoaderFailure {
+                kind: PublicRouteLoaderFailureKind::Abort,
+                body: Some(SsrSnapshotValue::Null),
+                ..PublicRouteLoaderFailure::generic()
+            },
+            PublicRouteLoaderFailure {
+                message: "diagnostic secret".into(),
+                ..PublicRouteLoaderFailure::generic()
+            },
+        ];
+        for failure in failures {
+            assert!(failure.validate().is_err(), "accepted {failure:?}");
+        }
+        assert!(PublicRouteLoaderFailure::generic().validate().is_ok());
     }
 
     #[test]
