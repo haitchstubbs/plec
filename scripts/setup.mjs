@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import cliToolsConfig from '../cli-tools.json' with { type: 'json' };
 import { ensureOpengrep } from './install-opengrep.mjs';
+import { ensureSecurityTool as ensurePinnedSecurityTool } from './security-tool-installer.mjs';
 import {
   chromeDriverPath,
   chromeDriverTarget,
@@ -271,47 +272,19 @@ function ensureSecurityTool(name, config) {
   const binary = config.binary ?? name;
   const executable = cargoToolPath(name, binary);
   const root = cargoToolRoot(name);
-  if (
-    existsSync(executable) &&
-    versionOf(executable) === config.version
-  ) {
-    console.log(`${name} found: ${config.version}`);
-    return;
-  }
-
-  console.log(
-    `Installing pinned ${name} ${config.version} from source...`,
-  );
-  const args = [
-    'install',
-    '--git',
-    config.repository,
-    '--rev',
-    config.commit,
-    '--locked',
-    '--root',
+  ensurePinnedSecurityTool({
+    name,
+    config,
+    artifacts: cliToolsConfig['prebuilt-security-tools'],
+    platform: process.platform,
+    arch: process.arch,
+    ci: Boolean(process.env.CI),
     root,
-    '--force',
-  ];
-  if (config.features?.length) {
-    args.push('--features', config.features.join(','));
-  }
-  args.push(config.package ?? name);
-  const install = run('cargo', args, { cwd: repoRoot });
-  if (install.error || install.status !== 0) {
-    console.error(`Failed to install pinned ${name}.`);
-    process.exitCode = install.status ?? 1;
-    return;
-  }
-  const actual = versionOf(executable);
-  if (actual !== config.version) {
-    throw new Error(
-      `Pinned ${name} version mismatch: expected ${config.version}, found ${actual ?? 'missing'}.`,
-    );
-  }
-  console.log(
-    `${name} ${config.version} installed from ${config.commit}.`,
-  );
+    executable,
+    repoRoot,
+    run,
+    versionOf,
+  });
 }
 
 function findFile(root, filename) {
