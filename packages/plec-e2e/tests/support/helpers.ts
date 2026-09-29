@@ -62,17 +62,27 @@ export async function waitForMount(page: Page): Promise<void> {
 }
 
 // Collects page errors, failed same-origin requests, and fetched graph
-// artifacts. The returned assertion must be awaited before the test ends.
+// artifacts. Transition tests may ignore expected browser cancellations for
+// superseded requests. The returned assertion must be awaited before the test
+// ends.
 export function watch(
   page: Page,
-  { requireGraph = true }: { requireGraph?: boolean } = {},
+  {
+    requireGraph = true,
+    ignoreAbortedRequests = false,
+  }: { requireGraph?: boolean; ignoreAbortedRequests?: boolean } = {},
 ): () => Promise<void> {
   const errors: string[] = [];
   const graphs = new Set<string>();
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('requestfailed', (request) => {
     if (request.url().startsWith('http://127.0.0.1')) {
-      errors.push(`request failed: ${request.url()}`);
+      const failure = request.failure()?.errorText;
+      if (ignoreAbortedRequests && failure === 'net::ERR_ABORTED')
+        return;
+      errors.push(
+        `request failed${failure ? ` (${failure})` : ''}: ${request.url()}`,
+      );
     }
   });
   page.on('response', (response) => {
