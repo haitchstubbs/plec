@@ -57,7 +57,7 @@ test('sidebar links stay client-side across overlapping graph swaps', async ({
     viewport: { width: 1280, height: 720 },
   });
   const page = await context.newPage();
-  const done = watch(page);
+  const done = watch(page, { ignoreAbortedRequests: true });
   try {
     await page.addInitScript(trackAdoptions);
     await page.goto('/', { waitUntil: 'domcontentloaded' });

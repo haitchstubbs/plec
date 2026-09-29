@@ -199,18 +199,11 @@ pub(crate) async fn execute_route_loader(
             ]));
         }
     }
-    let mut run = start(
-        &component.actions,
-        action,
-        frame,
-        &mut host,
-    )
-    .map_err(loader_program_error)?;
+    let mut run =
+        start(&component.actions, action, frame, &mut host).map_err(loader_program_error)?;
     loop {
         match run {
-            Run::Complete(outcome) => {
-                return Ok(loader_execution(route, action, program, outcome))
-            }
+            Run::Complete(outcome) => return Ok(loader_execution(route, action, program, outcome)),
             Run::Suspended(mut suspension) => {
                 let result = execute_fetch(&suspension.request, context, client).await;
                 if let Ok((value, _)) = &result {
@@ -276,7 +269,7 @@ fn loader_execution(
             graph_id: route.graph_id.clone(),
             action,
             state: SsrLoaderState::Rejected {
-                message: failure_message(&error),
+                failure: plec_schema::public_route_loader_failure(&error),
             },
         }),
         ActionOutcome::Redirect { location, replace } => {
@@ -318,16 +311,47 @@ async fn execute_fetch(
     if let Some(body) = &fetch.body {
         request = request.body(body.clone());
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| loader_failure(format!("fetch {} failed: {error}", url.path())))?;
+    let response = request.send().await.map_err(|_| {
+        loader_failure_record("network", "network request failed", Some(&fetch.url))
+    })?;
     if fetch.require_ok && !response.status().is_success() {
-        return Err(loader_failure(format!(
-            "fetch {} failed with status {}",
-            url.path(),
-            response.status().as_u16()
-        )));
+        let status = response.status().as_u16();
+        let status_text = plec_ir::canonical_status_text(status).to_owned();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let bytes = read_public_failure_body(response).await.unwrap_or_default();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let body = if bytes.is_empty() {
+            RuntimeValue::Null
+        } else if content_type == "application/json"
+            || (content_type.starts_with("application/") && content_type.ends_with("+json"))
+        {
+            serde_json::from_slice::<JsonValue>(&bytes)
+                .map(RuntimeValue::from_json_value)
+                .unwrap_or_else(|_| RuntimeValue::String(text))
+        } else {
+            RuntimeValue::String(text)
+        };
+        let mut failure = match loader_failure_record(
+            "http",
+            &format!("request failed ({status})"),
+            Some(&fetch.url),
+        ) {
+            RuntimeValue::Record(record) => record,
+            _ => unreachable!(),
+        };
+        failure.insert("status".into(), RuntimeValue::Number(status as f64));
+        failure.insert("statusText".into(), RuntimeValue::String(status_text));
+        failure.insert("body".into(), body);
+        return Err(RuntimeValue::Record(failure));
     }
     if response
         .content_length()
@@ -343,8 +367,9 @@ async fn execute_fetch(
     let body = if status == 204 || status == 205 {
         RuntimeValue::Null
     } else {
-        let value: JsonValue = serde_json::from_slice(&bytes)
-            .map_err(|error| loader_failure(format!("fetch {} failed: {error}", url.path())))?;
+        let value: JsonValue = serde_json::from_slice(&bytes).map_err(|_| {
+            loader_failure_record("decode", "response JSON decode failed", Some(&fetch.url))
+        })?;
         RuntimeValue::from_json_value(value)
     };
     Ok((
@@ -365,6 +390,22 @@ async fn read_bounded_stream(response: reqwest::Response, path: &str) -> Result<
         let chunk = chunk.map_err(|error| format!("fetch {path} failed: {error}"))?;
         if bytes.len() + chunk.len() > MAX_FETCH_RESPONSE_BYTES {
             return Err("loader response exceeds byte limit".to_owned());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+/// Supplementary public failure data is deliberately much smaller than normal
+/// fetch responses so it can always fit safely inside the SSR snapshot.
+async fn read_public_failure_body(response: reqwest::Response) -> Result<Vec<u8>, String> {
+    const LIMIT: usize = plec_ir::PublicRouteLoaderFailure::MAX_BODY_BYTES;
+    let mut bytes = Vec::new();
+    let mut stream = std::pin::pin!(response.bytes_stream());
+    while let Some(chunk) = futures_util::StreamExt::next(&mut stream).await {
+        let chunk = chunk.map_err(|error| error.to_string())?;
+        if bytes.len() + chunk.len() > LIMIT {
+            return Err("public failure body exceeds limit".into());
         }
         bytes.extend_from_slice(&chunk);
     }
@@ -392,12 +433,15 @@ fn loader_failure(message: impl Into<String>) -> RuntimeValue {
     )]))
 }
 
-fn failure_message(value: &RuntimeValue) -> String {
-    value
-        .record()
-        .and_then(|record| record.get("message"))
-        .map(RuntimeValue::dom_string)
-        .unwrap_or_else(|| value.dom_string())
+fn loader_failure_record(kind: &str, message: &str, url: Option<&str>) -> RuntimeValue {
+    let mut record = std::collections::HashMap::from([
+        ("kind".into(), RuntimeValue::String(kind.into())),
+        ("message".into(), RuntimeValue::String(message.into())),
+    ]);
+    if let Some(url) = url {
+        record.insert("url".into(), RuntimeValue::String(url.into()));
+    }
+    RuntimeValue::Record(record)
 }
 
 pub(crate) fn snapshot_value_to_json(value: &plec_ir::SsrSnapshotValue) -> JsonValue {

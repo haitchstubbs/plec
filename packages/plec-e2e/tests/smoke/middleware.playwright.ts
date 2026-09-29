@@ -49,4 +49,8 @@ test('middleware rejects duplicate next calls through the application error path
   });
 
   expect(response.status()).toBe(500);
+  expect(await response.text()).toBe(
+    '{"error":"Internal Server Error"}',
+  );
+  expect(response.headers()['x-plec-ssr-fallback']).toBeUndefined();
 });

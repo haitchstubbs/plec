@@ -5939,18 +5939,30 @@ fn loader_error_artifact() -> serde_json::Value {
         "components": [{
             "id": "loader-transfer.tsx#Error",
             "rootNode": 0,
-            "strings": ["div", "button", "click", "Retry", "message", "kind"],
+            "strings": ["div", "button", "click", "Retry", "message", "kind", "status", "statusText", "body", "url", "span"],
             "constants": [null, "Retry"],
             "nodes": [
-                {"op": "element", "tag": 0, "parent": null, "children": [1, 2]},
+                {"op": "element", "tag": 0, "parent": null, "children": [1, 2, 4, 6, 8, 10]},
                 {"op": "text", "text": 0, "parent": 0},
                 {"op": "element", "tag": 1, "parent": 0, "children": [3]},
-                {"op": "text", "text": 2, "parent": 2}
+                {"op": "text", "text": 2, "parent": 2},
+                {"op": "element", "tag": 10, "parent": 0, "children": [5]},
+                {"op": "text", "text": 3, "parent": 4},
+                {"op": "element", "tag": 10, "parent": 0, "children": [7]},
+                {"op": "text", "text": 4, "parent": 6},
+                {"op": "element", "tag": 10, "parent": 0, "children": [9]},
+                {"op": "text", "text": 5, "parent": 8},
+                {"op": "element", "tag": 10, "parent": 0, "children": [11]},
+                {"op": "text", "text": 6, "parent": 10}
             ],
-            "texts": [{"binding": 0}, {"binding": 1}, {"value": "Retry"}],
+            "texts": [{"binding": 0}, {"binding": 1}, {"value": "Retry"}, {"binding": 2}, {"binding": 3}, {"binding": 4}, {"binding": 5}],
             "bindings": [
                 {"target": 1, "sink": "text", "expression": 1},
-                {"target": 2, "sink": "text", "expression": 2}
+                {"target": 2, "sink": "text", "expression": 2},
+                {"target": 4, "sink": "text", "expression": 3},
+                {"target": 6, "sink": "text", "expression": 4},
+                {"target": 8, "sink": "text", "expression": 5},
+                {"target": 10, "sink": "text", "expression": 6}
             ],
             "propPrograms": [],
             "events": [{"target": 2, "type": 2, "action": 0}],
@@ -5961,7 +5973,11 @@ fn loader_error_artifact() -> serde_json::Value {
             "expressions": [
                 {"instructions": [{"op": "constant", "constant": 0}, {"op": "return"}]},
                 {"instructions": [{"op": "loadState", "state": 0}, {"op": "field", "field": 4}, {"op": "return"}]},
-                {"instructions": [{"op": "loadState", "state": 0}, {"op": "field", "field": 5}, {"op": "return"}]}
+                {"instructions": [{"op": "loadState", "state": 0}, {"op": "field", "field": 5}, {"op": "return"}]},
+                {"instructions": [{"op": "loadState", "state": 0}, {"op": "field", "field": 6}, {"op": "return"}]},
+                {"instructions": [{"op": "loadState", "state": 0}, {"op": "field", "field": 7}, {"op": "return"}]},
+                {"instructions": [{"op": "loadState", "state": 0}, {"op": "field", "field": 8}, {"op": "return"}]},
+                {"instructions": [{"op": "loadState", "state": 0}, {"op": "field", "field": 9}, {"op": "return"}]}
             ],
             "actions": [{"routeRetry": true, "instructions": [{"op": "return"}]}],
             "loops": [],
@@ -6070,7 +6086,11 @@ fn loader_route_error_html(message: &str) -> String {
          <div data-plec-node=\"root/outlet:main/node:0\">\
          <!--plec:text:root/outlet:main:1-->{message}\
          <button data-plec-node=\"root/outlet:main/node:2\">\
-         <!--plec:text:root/outlet:main:3-->Retry</button></div></main>"
+         <!--plec:text:root/outlet:main:3-->Retry</button>\
+         <span data-plec-node=\"root/outlet:main/node:4\"><!--plec:text:root/outlet:main:5--></span>\
+         <span data-plec-node=\"root/outlet:main/node:6\"><!--plec:text:root/outlet:main:7--></span>\
+         <span data-plec-node=\"root/outlet:main/node:8\"><!--plec:text:root/outlet:main:9--></span>\
+         <span data-plec-node=\"root/outlet:main/node:10\"><!--plec:text:root/outlet:main:11--></span></div></main>"
     )
 }
 
@@ -6180,7 +6200,9 @@ async fn rejected_loader_snapshot_restores_error_phase_and_retry_runs_loader() {
         serde_json::json!([{
             "graphId": "loader-transfer.tsx#Page",
             "action": 0,
-            "state": {"kind": "rejected", "message": "fetch failed"}
+            "state": {"kind": "rejected", "failure": {
+                "kind": "network", "message": "fetch failed", "url": "/api/data"
+            }}
         }]),
     )
     .unwrap();
@@ -6193,6 +6215,139 @@ async fn rejected_loader_snapshot_restores_error_phase_and_retry_runs_loader() {
     click_fetch(&root);
     settle_fetch().await;
     assert!(loader_route_text(&root).contains("retry-value"));
+}
+
+#[wasm_bindgen_test]
+fn malformed_public_loader_failure_adopts_as_generic_route_failure() {
+    let _location = reset_browser_location_to("/todos");
+    let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
+    let root = mount_root();
+    start_loader_transfer(
+        &runtime,
+        &root,
+        &loader_route_error_html("route loader failed"),
+        "error",
+        serde_json::json!([{
+            "graphId": "loader-transfer.tsx#Page",
+            "action": 0,
+            "state": {"kind": "rejected", "failure": {
+                "kind": "unknown", "message": 7, "status": 503, "private": "must not leak"
+            }}
+        }]),
+    )
+    .expect("malformed public failure alone should not reject adoption");
+    assert!(loader_route_text(&root).contains("route loader failed"));
+    assert!(!loader_route_text(&root).contains("must not leak"));
+}
+
+#[wasm_bindgen_test(async)]
+async fn ssr_adoption_and_fresh_navigation_expose_equivalent_http_route_errors() {
+    let _location = reset_browser_location_to("/todos");
+    let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
+    let root = mount_root();
+    start_loader_transfer(
+        &runtime,
+        &root,
+        &loader_route_error_html("request failed (503)"),
+        "error",
+        serde_json::json!([{
+            "graphId": "loader-transfer.tsx#Page",
+            "action": 0,
+            "state": {"kind": "rejected", "failure": {
+                "kind": "http",
+                "message": "request failed (503)",
+                "status": 503,
+                "statusText": "Service Unavailable",
+                "body": "maintenance",
+                "url": "/api/data"
+            }}
+        }]),
+    )
+    .unwrap();
+    let adopted = loader_error_public_fields(&root);
+    assert_eq!(
+        adopted,
+        [
+            "request failed (503)",
+            "http",
+            "503",
+            "Service Unavailable",
+            "maintenance",
+            "/api/data",
+        ]
+    );
+
+    runtime.navigate("/next".into(), false).unwrap();
+    let _fetch = install_plec_fetch_queue(
+        r#"[{"status":503,"statusText":"Service Unavailable","headers":{"content-type":"text/plain"},"body":"maintenance"}]"#,
+    );
+    runtime.navigate("/todos".into(), false).unwrap();
+    settle_fetch().await;
+    assert_eq!(loader_error_public_fields(&root), adopted);
+}
+
+fn loader_error_public_fields(root: &Element) -> [String; 6] {
+    let fields = [2usize, 4, 6, 8, 10].map(|node| {
+        let tag = if node == 2 { "button" } else { "span" };
+        root.query_selector(&format!("{tag}[data-plec-node$='/node:{node}']"))
+            .unwrap()
+            .unwrap_or_else(|| panic!("missing public error node {node}: {}", root.inner_html()))
+            .text_content()
+            .unwrap_or_default()
+    });
+    let suffix = fields.concat();
+    let complete = root
+        .query_selector("div[data-plec-node$='/node:0']")
+        .unwrap()
+        .unwrap()
+        .text_content()
+        .unwrap_or_default();
+    let message = complete
+        .strip_suffix(&suffix)
+        .expect("error graph fields form the visible record suffix")
+        .to_owned();
+    [
+        message,
+        fields[0].clone(),
+        fields[1].clone(),
+        fields[2].clone(),
+        fields[3].clone(),
+        fields[4].clone(),
+    ]
+}
+
+#[wasm_bindgen_test]
+fn malformed_route_identity_still_fails_closed_when_failure_fallback_is_enabled() {
+    let _location = reset_browser_location_to("/todos");
+    let runtime = PlecRuntime::new();
+    grant_fetch_policy(&runtime);
+    let root = mount_root();
+    root.set_inner_html(&loader_route_error_html("route loader failed"));
+    register_loader_graphs(&runtime);
+    let snapshot = serde_json::json!({
+        "version": 2,
+        "revision": "rev-1",
+        "routes": [{"routeId": 7, "params": {}, "phase": "error"}],
+        "public": {"location": "/todos", "exports": {}},
+        "loaders": [{
+            "graphId": "loader-transfer.tsx#Page", "action": 0,
+            "state": {"kind": "rejected", "failure": {"kind":"bad", "message":7}}
+        }],
+        "structure": {"graphs": {"root/outlet:main": {"graphId":"loader-transfer.tsx#Root"}}}
+    });
+    let error = runtime
+        .start_adopt_snapshot(
+            root,
+            loader_manifest(true).into(),
+            serde_wasm_bindgen::to_value(&snapshot).unwrap(),
+        )
+        .unwrap_err();
+    assert!(error
+        .as_string()
+        .unwrap_or_default()
+        .starts_with("mismatch:"));
 }
 
 #[wasm_bindgen_test(async)]

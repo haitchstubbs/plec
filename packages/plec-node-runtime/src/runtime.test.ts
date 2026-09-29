@@ -168,16 +168,16 @@ describe('sidecar supervision', () => {
     expect(payload.pathname).toBe('/api/todos');
   });
 
-  it('maps handler throws to a structured 500', async () => {
+  it('maps handler throws to a redacted structured 500', async () => {
     const origin = await startRuntime(`
       export async function handleRequest() {
-        throw new Error('database exploded');
+        throw new Error('/srv/private/app/database.rs secret-token-123');
       }
     `);
     const response = await request(origin, '/api/todos');
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({
-      error: 'database exploded',
+      error: 'Internal Server Error',
     });
   });
 

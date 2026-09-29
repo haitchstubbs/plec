@@ -1,7 +1,7 @@
 //! SSR execution over the executable component graph. It deliberately has no
 //! JSX/VDOM path: every rendered fact comes from the compiled artifact, and
-//! every value coercion mirrors the runtime's typed VM so the server
-//! instantiates exactly the branch and rows the browser will resume into.
+//! expression semantics come from `plec-eval`; the server supplies only the
+//! request-scoped values needed to instantiate the graph the browser resumes.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -10,7 +10,7 @@ use std::{
 
 use indexmap::IndexMap;
 use plec_ir::{limits::MAX_SNAPSHOT_LOOP_KEYS, SsrSelectedBranch};
-use plec_schema::delta::{json_dom_string, json_estimated_size_bytes, json_truthy};
+use plec_schema::delta::{json_dom_string, json_truthy, runtime_from_json, RuntimeValue};
 use serde_json::Value;
 
 use crate::{
@@ -830,589 +830,182 @@ fn write_attribute(
     Ok(())
 }
 
-/// The SSR expression evaluator. It mirrors the runtime's typed VM op set
-/// (`plec-eval`) over the transport value representation, so a resolved
-/// binding, loop source, or loader URL observes exactly the value the
-/// browser recomputes.
+struct SsrProgram<'a>(&'a Component);
+
+impl plec_eval::core::ExpressionProgram for SsrProgram<'_> {
+    fn program_len(&self, p: usize) -> Option<usize> {
+        self.0.expressions.get(p).map(|p| p.instructions.len())
+    }
+    fn constant(&self, h: usize) -> RuntimeValue {
+        self.0
+            .constants
+            .get(h)
+            .cloned()
+            .and_then(|v| runtime_from_json(v).ok())
+            .unwrap_or_default()
+    }
+    fn string(&self, h: usize) -> Option<&str> {
+        self.0.strings.get(h).map(String::as_str)
+    }
+    fn instruction(&self, p: usize, pc: usize) -> Option<plec_eval::core::EvalInstruction> {
+        use plec_eval::core::EvalInstruction as E;
+        Some(match self.0.expressions.get(p)?.instructions.get(pc)? {
+            ExpressionInstruction::Constant { constant } => E::Constant(*constant),
+            ExpressionInstruction::LoadState { state } => E::State(*state),
+            ExpressionInstruction::LoadFrame { slot } => E::Frame(*slot),
+            ExpressionInstruction::LoadProp { prop } => E::Prop(*prop),
+            ExpressionInstruction::LoadHost { host } => E::Host(*host),
+            ExpressionInstruction::LoadRowRecord => E::RowRecord,
+            ExpressionInstruction::LoadRowField { field } => E::RowField(*field),
+            ExpressionInstruction::LoadEventField { field } => E::Event(*field),
+            ExpressionInstruction::Field { field } => E::Field(*field),
+            ExpressionInstruction::Index => E::Index,
+            ExpressionInstruction::LoadRef { reference } => E::Ref(*reference),
+            ExpressionInstruction::Filter { predicate, .. } => E::Filter(*predicate),
+            ExpressionInstruction::Map { mapper, .. } => E::Map(*mapper),
+            ExpressionInstruction::String { kind, count } => E::String(kind.clone(), *count),
+            ExpressionInstruction::OmitFields { fields } => E::OmitFields(fields.clone()),
+            ExpressionInstruction::Unary { kind } => E::Unary(kind.clone()),
+            ExpressionInstruction::Binary { kind } => E::Binary(kind.clone()),
+            ExpressionInstruction::MakeArray { count, spreads } => {
+                E::MakeArray(*count, spreads.clone())
+            }
+            ExpressionInstruction::MakeRecord { fields, spreads } => {
+                E::MakeRecord(fields.clone(), spreads.clone())
+            }
+            ExpressionInstruction::Jump { target } => E::Jump(*target),
+            ExpressionInstruction::JumpIfFalse { target } => E::JumpIfFalse(*target),
+            ExpressionInstruction::JumpIfTrue { target } => E::JumpIfTrue(*target),
+            ExpressionInstruction::Return => E::Return,
+            ExpressionInstruction::Unknown => E::Unknown,
+        })
+    }
+}
+
+struct SsrHost<'a> {
+    component: &'a Component,
+    scope: &'a Scope<'a>,
+    state: &'a mut RenderState,
+}
+impl plec_eval::core::ExpressionHost for SsrHost<'_> {
+    fn load_state(&mut self, i: usize) -> RuntimeValue {
+        self.scope
+            .states
+            .get(i)
+            .map(runtime_json)
+            .unwrap_or_default()
+    }
+    fn load_prop(&mut self, i: usize) -> RuntimeValue {
+        self.scope
+            .props
+            .get(i)
+            .map(runtime_json)
+            .unwrap_or_default()
+    }
+    fn load_frame(&mut self, i: usize) -> RuntimeValue {
+        self.scope
+            .frame
+            .get(i)
+            .map(runtime_json)
+            .unwrap_or_default()
+    }
+    fn load_row_record(&mut self) -> RuntimeValue {
+        self.scope
+            .row
+            .as_ref()
+            .map(|row| runtime_json(&Value::Object(row.clone())))
+            .unwrap_or_default()
+    }
+    fn load_row_field(&mut self, f: &str) -> RuntimeValue {
+        self.scope
+            .row
+            .as_ref()
+            .and_then(|r| r.get(f))
+            .map(runtime_json)
+            .unwrap_or_default()
+    }
+    fn load_host(&mut self, i: usize) -> RuntimeValue {
+        use plec_schema::delta::RuntimeValue as V;
+        let Some(slot) = self.component.host_slots.get(i) else {
+            return V::Null;
+        };
+        match slot.kind.as_str() {
+            "cookie" => {
+                if let Some(g) = &mut self.state.gate {
+                    if g.development {
+                        let name = slot
+                            .name
+                            .and_then(|n| self.component.strings.get(n))
+                            .cloned()
+                            .unwrap_or_else(|| "<unnamed>".into());
+                        g.gated.push(format!("cookie:{name}"));
+                    }
+                }
+                V::Null
+            }
+            "loaderData" => runtime_json(&self.scope.loader_data),
+            "routeParams" => runtime_json(&self.scope.route_params),
+            "routeSearch" => V::Record(
+                self.scope
+                    .request
+                    .query
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            match v {
+                                crate::request::QueryValue::One(s) => V::String(s.clone()),
+                                crate::request::QueryValue::Many(v) => {
+                                    V::Array(v.iter().cloned().map(V::String).collect())
+                                }
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            "location" => V::Record(HashMap::from([
+                (
+                    "pathname".into(),
+                    V::String(self.scope.request.pathname.clone()),
+                ),
+                (
+                    "search".into(),
+                    V::String(super::url_search(&self.scope.request.url)),
+                ),
+            ])),
+            _ => V::Null,
+        }
+    }
+}
+
+fn runtime_json(value: &serde_json::Value) -> RuntimeValue {
+    runtime_from_json(value.clone()).unwrap_or_default()
+}
+
+/// Evaluator errors intentionally remain soft failures during SSR: compiler
+/// validation is primary, while runtime budgets fail closed to JSON null.
 pub(crate) fn evaluate(
     component: &Component,
     expression: usize,
     scope: &Scope<'_>,
     state: &mut RenderState,
 ) -> Value {
-    // The SSR evaluator mirrors the runtime's typed VM, including its
-    // execution budgets: one shared fuel counter across nested Filter/Map
-    // work, bounded nesting, and a bounded value stack (live value count and
-    // estimated bytes). Exhaustion (or a hostile shape) fails soft to
-    // `null` — compiled artifacts are compiler-validated, so the budgets are
-    // defense in depth, not the primary contract.
-    let mut fuel = plec_ir::limits::MAX_EXPRESSION_STEPS;
-    evaluate_bounded(component, expression, scope, state, &mut fuel, 0)
-}
-
-/// Pushes one value with the runtime evaluator's stack budgets. Returns
-/// `false` — the caller fails soft to `Value::Null` — when the live value
-/// count or byte estimate would exceed `MAX_EVAL_STACK_VALUES` /
-/// `MAX_EVAL_STACK_BYTES`.
-fn evaluate_stack_push(
-    stack: &mut Vec<Value>,
-    sizes: &mut Vec<usize>,
-    bytes: &mut usize,
-    value: Value,
-) -> bool {
-    if stack.len() >= plec_ir::limits::MAX_EVAL_STACK_VALUES {
-        return false;
-    }
-    let size = json_estimated_size_bytes(&value);
-    if *bytes + size > plec_ir::limits::MAX_EVAL_STACK_BYTES {
-        return false;
-    }
-    stack.push(value);
-    sizes.push(size);
-    *bytes += size;
-    true
-}
-
-fn evaluate_stack_pop(
-    stack: &mut Vec<Value>,
-    sizes: &mut Vec<usize>,
-    bytes: &mut usize,
-) -> Option<Value> {
-    let value = stack.pop()?;
-    *bytes -= sizes.pop().unwrap_or_default();
-    Some(value)
-}
-
-fn evaluate_bounded(
-    component: &Component,
-    expression: usize,
-    scope: &Scope<'_>,
-    state: &mut RenderState,
-    fuel: &mut usize,
-    nesting: usize,
-) -> Value {
-    if nesting > plec_ir::limits::MAX_EVAL_NESTING {
-        return Value::Null;
-    }
-    let Some(instructions) = component
-        .expressions
-        .get(expression)
-        .map(|program| &program.instructions)
-    else {
-        return Value::Null;
+    let mut host = SsrHost {
+        component,
+        scope,
+        state,
     };
-    let mut stack: Vec<Value> = Vec::new();
-    let mut stack_sizes: Vec<usize> = Vec::new();
-    let mut stack_bytes = 0usize;
-    let mut pc = 0usize;
-    while pc < instructions.len() {
-        if *fuel == 0 {
-            return Value::Null;
-        }
-        *fuel -= 1;
-        match &instructions[pc] {
-            ExpressionInstruction::Constant { constant } => {
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    component
-                        .constants
-                        .get(*constant)
-                        .cloned()
-                        .unwrap_or(Value::Null),
-                ) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::LoadState { state: slot } => {
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    scope.states.get(*slot).cloned().unwrap_or(Value::Null),
-                ) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::LoadProp { prop } => {
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    scope.props.get(*prop).cloned().unwrap_or(Value::Null),
-                ) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::LoadFrame { slot } => {
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    scope.frame.get(*slot).cloned().unwrap_or(Value::Null),
-                ) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::LoadHost { host } => {
-                let slot = component.host_slots.get(*host);
-                let name = slot
-                    .and_then(|slot| slot.name)
-                    .and_then(|name| component.strings.get(name).cloned());
-                match slot.map(|slot| slot.kind.as_str()) {
-                    // Request cookies can never satisfy `validate_public_export`
-                    // (not explicitly public, server-owned private state), so
-                    // the render evaluates them as absent and records each
-                    // gate for the development-only diagnostic header.
-                    Some("cookie") => {
-                        if let Some(gate) = &mut state.gate {
-                            if gate.development {
-                                gate.gated.push(format!(
-                                    "cookie:{}",
-                                    name.unwrap_or_else(|| "<unnamed>".to_owned())
-                                ));
-                            }
-                        }
-                        if !evaluate_stack_push(
-                            &mut stack,
-                            &mut stack_sizes,
-                            &mut stack_bytes,
-                            Value::Null,
-                        ) {
-                            return Value::Null;
-                        }
-                    }
-                    Some("loaderData") => {
-                        if !evaluate_stack_push(
-                            &mut stack,
-                            &mut stack_sizes,
-                            &mut stack_bytes,
-                            scope.loader_data.clone(),
-                        ) {
-                            return Value::Null;
-                        }
-                    }
-                    Some("routeParams") => {
-                        if !evaluate_stack_push(
-                            &mut stack,
-                            &mut stack_sizes,
-                            &mut stack_bytes,
-                            scope.route_params.clone(),
-                        ) {
-                            return Value::Null;
-                        }
-                    }
-                    Some("routeSearch") => {
-                        let search = scope
-                            .request
-                            .query
-                            .iter()
-                            .map(|(name, value)| {
-                                let value = match value {
-                                    crate::request::QueryValue::One(value) => {
-                                        Value::String(value.clone())
-                                    }
-                                    crate::request::QueryValue::Many(values) => Value::Array(
-                                        values.iter().cloned().map(Value::String).collect(),
-                                    ),
-                                };
-                                (name.clone(), value)
-                            })
-                            .collect();
-                        if !evaluate_stack_push(
-                            &mut stack,
-                            &mut stack_sizes,
-                            &mut stack_bytes,
-                            Value::Object(search),
-                        ) {
-                            return Value::Null;
-                        }
-                    }
-                    Some("location") => {
-                        let mut location = serde_json::Map::new();
-                        location.insert(
-                            "pathname".to_owned(),
-                            Value::String(scope.request.pathname.clone()),
-                        );
-                        location.insert(
-                            "search".to_owned(),
-                            Value::String(super::url_search(&scope.request.url)),
-                        );
-                        if !evaluate_stack_push(
-                            &mut stack,
-                            &mut stack_sizes,
-                            &mut stack_bytes,
-                            Value::Object(location),
-                        ) {
-                            return Value::Null;
-                        }
-                    }
-                    _ => {
-                        if !evaluate_stack_push(
-                            &mut stack,
-                            &mut stack_sizes,
-                            &mut stack_bytes,
-                            Value::Null,
-                        ) {
-                            return Value::Null;
-                        }
-                    }
-                }
-            }
-            ExpressionInstruction::LoadRowRecord => {
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    scope.row.clone().map(Value::Object).unwrap_or(Value::Null),
-                ) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::LoadRowField { field } => {
-                let value = component
-                    .strings
-                    .get(*field)
-                    .and_then(|name| scope.row.as_ref().and_then(|row| row.get(name)))
-                    .cloned();
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    value.unwrap_or(Value::Null),
-                ) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::Field { field } => {
-                let object = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
-                    .unwrap_or(Value::Null);
-                let name = component.strings.get(*field).map(String::as_str);
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    match (object, name) {
-                        (Value::Object(fields), Some(name)) => {
-                            fields.get(name).cloned().unwrap_or(Value::Null)
-                        }
-                        // JS property access: `array.length` / `string.length`
-                        // are real values, and SSR expressions rely on them.
-                        (Value::Array(values), Some("length")) => number_value(values.len() as f64),
-                        (Value::String(value), Some("length")) => {
-                            number_value(value.chars().count() as f64)
-                        }
-                        _ => Value::Null,
-                    },
-                ) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::Index => {
-                let key = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
-                    .unwrap_or(Value::Null);
-                let object = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
-                    .unwrap_or(Value::Null);
-                let key = match key {
-                    Value::String(value) => value,
-                    Value::Number(value) => value
-                        .as_f64()
-                        .filter(|value| value.is_finite() && value.fract() == 0.0)
-                        .map(|value| value.to_string())
-                        .unwrap_or_default(),
-                    _ => String::new(),
-                };
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    match object {
-                        Value::Object(fields) => fields.get(&key).cloned().unwrap_or(Value::Null),
-                        Value::Array(values) => key
-                            .parse::<usize>()
-                            .ok()
-                            .and_then(|index| values.get(index))
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                        Value::String(value) => key
-                            .parse::<usize>()
-                            .ok()
-                            .and_then(|index| value.chars().nth(index))
-                            .map(|character| Value::String(character.to_string()))
-                            .unwrap_or(Value::Null),
-                        _ => Value::Null,
-                    },
-                ) {
-                    return Value::Null;
-                }
-            }
-            // Filter/Map evaluate the predicate per item with the item as the
-            // row context (`LoadRowField`), exactly like the runtime's typed
-            // VM; item/index frame slots are ignored there too. Filter keeps
-            // truthy items as records; Map keeps every mapped value.
-            ExpressionInstruction::Filter { predicate, .. }
-            | ExpressionInstruction::Map {
-                mapper: predicate, ..
-            } => {
-                let is_map = matches!(
-                    instructions.get(pc),
-                    Some(ExpressionInstruction::Map { .. })
-                );
-                let source = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
-                    .unwrap_or(Value::Null);
-                let items = match source {
-                    Value::Array(values) => values,
-                    _ => Vec::new(),
-                };
-                let mut output = Vec::with_capacity(items.len());
-                for item in items {
-                    let record = match item {
-                        Value::Object(fields) => fields,
-                        _ => serde_json::Map::new(),
-                    };
-                    let value = evaluate_bounded(
-                        component,
-                        *predicate,
-                        &Scope {
-                            row: Some(record.clone()),
-                            ..scope.clone()
-                        },
-                        state,
-                        fuel,
-                        nesting + 1,
-                    );
-                    if is_map {
-                        output.push(value);
-                    } else if truthy(&value) {
-                        output.push(Value::Object(record));
-                    }
-                }
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    Value::Array(output),
-                ) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::String { kind, count } => {
-                // `split_off` already preserves push order (first pushed
-                // first); the runtime pops LIFO and reverses to the same
-                // effect.
-                let start = stack.len().saturating_sub(*count);
-                let popped_sizes = stack_sizes.split_off(start);
-                let parts = stack.split_off(start);
-                stack_bytes -= popped_sizes.iter().sum::<usize>();
-                let first = parts.first().cloned().unwrap_or(Value::Null);
-                let value = match kind.as_str() {
-                    "trim" => Value::String(dom_string(&first).trim().to_owned()),
-                    "lower" => Value::String(dom_string(&first).to_lowercase()),
-                    "upper" => Value::String(dom_string(&first).to_uppercase()),
-                    "encodeUriComponent" => {
-                        Value::String(encode_uri_component(&dom_string(&first)))
-                    }
-                    "jsonStringify" => {
-                        Value::String(serde_json::to_string(&first).unwrap_or_default())
-                    }
-                    "includes" => {
-                        let needle = dom_string(parts.get(1).unwrap_or(&Value::Null));
-                        let haystack = dom_string(&first);
-                        Value::Bool(haystack.contains(&needle))
-                    }
-                    _ => Value::String(parts.iter().map(dom_string).collect::<String>()),
-                };
-                if !evaluate_stack_push(&mut stack, &mut stack_sizes, &mut stack_bytes, value) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::OmitFields { fields } => {
-                let value = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
-                    .unwrap_or(Value::Null);
-                let mut record = match value {
-                    Value::Object(fields) => fields,
-                    _ => serde_json::Map::new(),
-                };
-                for field in fields {
-                    if let Some(name) = component.strings.get(*field) {
-                        record.remove(name);
-                    }
-                }
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    Value::Object(record),
-                ) {
-                    return Value::Null;
-                }
-            }
-            // Refs are browser-owned values; the SSR host has none, exactly
-            // like the runtime's empty ref table.
-            ExpressionInstruction::LoadRef { .. } => {
-                if !evaluate_stack_push(&mut stack, &mut stack_sizes, &mut stack_bytes, Value::Null)
-                {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::Unary { kind } => {
-                let value = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
-                    .unwrap_or(Value::Null);
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    match kind.as_str() {
-                        "not" => Value::Bool(!truthy(&value)),
-                        "minus" => number_value(-to_number(&value)),
-                        _ => value,
-                    },
-                ) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::Binary { kind } => {
-                let right = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
-                    .unwrap_or(Value::Null);
-                let left = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
-                    .unwrap_or(Value::Null);
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    binary(kind, left, right),
-                ) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::MakeArray { count, spreads } => {
-                let start = stack.len().saturating_sub(*count);
-                let popped_sizes = stack_sizes.split_off(start);
-                let values = stack.split_off(start);
-                stack_bytes -= popped_sizes.iter().sum::<usize>();
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    Value::Array(apply_array_spreads(values, spreads)),
-                ) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::MakeRecord { fields, spreads } => {
-                let start = stack.len().saturating_sub(fields.len());
-                let popped_sizes = stack_sizes.split_off(start);
-                let values = stack.split_off(start);
-                stack_bytes -= popped_sizes.iter().sum::<usize>();
-                let mut record = serde_json::Map::new();
-                for (position, (field, value)) in fields.iter().zip(values).enumerate() {
-                    if spreads.get(position).copied().unwrap_or(false) {
-                        if let Value::Object(values) = value {
-                            record.extend(values);
-                        }
-                    } else if let Some(name) = component.strings.get(*field) {
-                        record.insert(name.clone(), value);
-                    }
-                }
-                if !evaluate_stack_push(
-                    &mut stack,
-                    &mut stack_sizes,
-                    &mut stack_bytes,
-                    Value::Object(record),
-                ) {
-                    return Value::Null;
-                }
-            }
-            ExpressionInstruction::Jump { target } => {
-                pc = *target;
-                continue;
-            }
-            ExpressionInstruction::JumpIfFalse { target } => {
-                let condition = evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
-                    .unwrap_or(Value::Null);
-                if !truthy(&condition) {
-                    pc = *target;
-                    continue;
-                }
-            }
-            ExpressionInstruction::Return => {
-                return evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes)
-                    .unwrap_or(Value::Null);
-            }
-            // Unknown instructions are skipped without stack effect, matching
-            // the TS host; SSR-path expressions never contain them.
-            _ => {}
-        }
-        pc += 1;
-    }
-    evaluate_stack_pop(&mut stack, &mut stack_sizes, &mut stack_bytes).unwrap_or(Value::Null)
+    plec_eval::core::evaluate(&SsrProgram(component), &mut host, expression)
+        .map(RuntimeValue::into_json_value)
+        .unwrap_or(Value::Null)
 }
 
-fn apply_array_spreads(values: Vec<Value>, spreads: &[bool]) -> Vec<Value> {
-    let mut output = Vec::with_capacity(values.len());
-    for (index, value) in values.into_iter().enumerate() {
-        if spreads.get(index).copied().unwrap_or(false) {
-            if let Value::Array(values) = value {
-                output.extend(values);
-            }
-        } else {
-            output.push(value);
-        }
-    }
-    output
-}
-
-fn binary(kind: &str, left: Value, right: Value) -> Value {
-    match kind {
-        "equal" => Value::Bool(left == right),
-        "notEqual" => Value::Bool(left != right),
-        "and" => {
-            if truthy(&left) {
-                right
-            } else {
-                left
-            }
-        }
-        "or" => {
-            if truthy(&left) {
-                left
-            } else {
-                right
-            }
-        }
-        "coalesce" => {
-            if left.is_null() {
-                right
-            } else {
-                left
-            }
-        }
-        "add" => match (&left, &right) {
-            (Value::Number(left), Value::Number(right)) => {
-                number_value(left.as_f64().unwrap_or(0.0) + right.as_f64().unwrap_or(0.0))
-            }
-            _ => Value::String(format!("{}{}", dom_string(&left), dom_string(&right))),
-        },
-        "subtract" => number_value(to_number(&left) - to_number(&right)),
-        "multiply" => number_value(to_number(&left) * to_number(&right)),
-        "divide" => number_value(to_number(&left) / to_number(&right)),
-        "greater" => Value::Bool(to_number(&left) > to_number(&right)),
-        "greaterEqual" => Value::Bool(to_number(&left) >= to_number(&right)),
-        "less" => Value::Bool(to_number(&left) < to_number(&right)),
-        "lessEqual" => Value::Bool(to_number(&left) <= to_number(&right)),
-        _ => Value::Null,
-    }
-}
-
-/// Mirrors `typed_truthy` so the branch the server instantiates is exactly
-/// the branch the runtime reconciles to.
+/// Truthiness for JSON-valued render facts outside expression evaluation.
 pub(crate) fn truthy(value: &Value) -> bool {
     json_truthy(value)
 }
 
-/// Mirrors `typed_value_string`: the canonical DOM string and the canonical
-/// loop key are the same runtime function.
+/// Canonical string conversion for JSON-valued render facts and loop keys.
 pub(crate) fn dom_string(value: &Value) -> String {
     json_dom_string(value)
 }
@@ -1421,57 +1014,83 @@ fn canonical_key(value: &Value) -> String {
     dom_string(value)
 }
 
-/// JavaScript `Number()` coercion for arithmetic sinks.
-fn to_number(value: &Value) -> f64 {
-    match value {
-        Value::Null => 0.0,
-        Value::Bool(value) => {
-            if *value {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        Value::Number(value) => value.as_f64().unwrap_or(0.0),
-        Value::String(value) => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                0.0
-            } else {
-                trimmed.parse().unwrap_or(f64::NAN)
-            }
-        }
-        Value::Array(values) if values.is_empty() => 0.0,
-        Value::Array(values) if values.len() == 1 => to_number(&values[0]),
-        _ => f64::NAN,
-    }
-}
+#[cfg(test)]
+mod shared_evaluator_tests {
+    use super::*;
+    use crate::request::RequestContext;
+    use axum::http::{HeaderMap, Method};
+    use plec_schema::typed::TypedApplication;
 
-/// JSON cannot represent NaN or infinities; those coerce to `null` exactly
-/// like `JSON.stringify` would.
-fn number_value(value: f64) -> Value {
-    serde_json::Number::from_f64(value)
-        .map(Value::Number)
-        .unwrap_or(Value::Null)
-}
-
-/// JavaScript `encodeURIComponent`: unreserved characters pass through,
-/// everything else is percent-encoded as UTF-8.
-fn encode_uri_component(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        let keep = byte.is_ascii_alphanumeric()
-            || matches!(
-                byte,
-                b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')'
-            );
-        if keep {
-            encoded.push(byte as char);
-        } else {
-            encoded.push_str(&format!("%{byte:02X}"));
+    fn request() -> RequestContext {
+        RequestContext {
+            url: "http://localhost/".into(),
+            pathname: "/".into(),
+            method: Method::GET,
+            headers: HeaderMap::new(),
+            cookies: HashMap::new(),
+            params: HashMap::new(),
+            query: HashMap::new(),
         }
     }
-    encoded
+
+    #[test]
+    fn ssr_adapter_executes_the_shared_core_and_keeps_soft_failure() {
+        let component: Component = serde_json::from_value(serde_json::json!({
+            "strings": [], "constants": [3, 4],
+            "expressions": [{"instructions": [
+                {"op":"constant","constant":0}, {"op":"constant","constant":1},
+                {"op":"binary","kind":"add"}, {"op":"return"}
+            ]}]
+        }))
+        .unwrap();
+        let request = request();
+        let scope = Scope::for_loader(&request);
+        let mut state = RenderState::bare();
+        assert_eq!(
+            evaluate(&component, 0, &scope, &mut state),
+            serde_json::json!(7.0)
+        );
+        assert_eq!(
+            evaluate(&component, usize::MAX, &scope, &mut state),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn browser_and_ssr_adapters_match_for_the_same_expression_fixture() {
+        let fixture = serde_json::json!({
+            "version":"0.10", "rootNode":0,
+            "strings":["name", "users"],
+            "constants":[[{"name":"  Ada  "}], 0, "!", true],
+            "routeErrorState":null,
+            "nodes":[{"op":"element","tag":0}],
+            "expressions":[
+                {"instructions":[
+                    {"op":"constant","constant":0}, {"op":"map","mapper":1,"itemSlot":0},
+                    {"op":"makeRecord","fields":[1]}, {"op":"field","field":1},
+                    {"op":"constant","constant":1}, {"op":"index"},
+                    {"op":"constant","constant":2}, {"op":"binary","kind":"add"},
+                    {"op":"constant","constant":3}, {"op":"jumpIfFalse","target":10},
+                    {"op":"return"}
+                ]},
+                {"instructions":[
+                    {"op":"loadRowRecord"}, {"op":"field","field":0},
+                    {"op":"string","kind":"trim","count":1}, {"op":"return"}
+                ]}
+            ]
+        });
+        let browser_app: TypedApplication = serde_json::from_value(fixture.clone()).unwrap();
+        let server_component: Component = serde_json::from_value(fixture).unwrap();
+        let browser = plec_eval::eval::typed_eval(&browser_app, None, 0, &[], None, 0).unwrap();
+
+        let request = request();
+        let scope = Scope::for_loader(&request);
+        let mut state = RenderState::bare();
+        let ssr = evaluate(&server_component, 0, &scope, &mut state);
+
+        assert_eq!(browser.into_json_value(), ssr);
+        assert_eq!(ssr, Value::String("Ada!".into()));
+    }
 }
 
 pub(crate) fn escape_html(value: &str) -> String {
