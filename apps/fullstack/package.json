@@ -25,7 +25,6 @@
   "dependencies": {
     "@fontsource-variable/outfit": "^5.3.0",
     "@fontsource-variable/raleway": "^5.3.0",
-    "@plec/browser": "workspace:*",
     "@plec/core": "workspace:*",
     "@plec/lucide": "workspace:*",
     "lucide": "^1.31.0"

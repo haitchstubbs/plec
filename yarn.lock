@@ -2157,7 +2157,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@plec/browser@workspace:*, @plec/browser@workspace:packages/plec-browser":
+"@plec/browser@workspace:packages/plec-browser":
   version: 0.0.0-use.local
   resolution: "@plec/browser@workspace:packages/plec-browser"
   dependencies:
@@ -4649,7 +4649,6 @@ __metadata:
   dependencies:
     "@fontsource-variable/outfit": "npm:^5.3.0"
     "@fontsource-variable/raleway": "npm:^5.3.0"
-    "@plec/browser": "workspace:*"
     "@plec/core": "workspace:*"
     "@plec/lucide": "workspace:*"
     "@tailwindcss/cli": "npm:^4.3.3"
