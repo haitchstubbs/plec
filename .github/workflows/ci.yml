@@ -201,8 +201,38 @@ jobs:
           LICENSE_GATE_OUTCOME: ${{ needs.licenses.result == 'success' && 'success' || 'failure' }}
         run: node scripts/pr-sarif-summary.mjs trivy
 
-  build-test:
-    name: Build & Test
+  native-unit:
+    name: Native & Unit
+    needs: [security, licenses, dependency-audit]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-plec
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: native-unit-v1-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**/*.toml', 'crates/**/*.rs') }}
+          cache-workspace-crates: true
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .turbo
+          key: turbo-native-unit-${{ runner.os }}-${{ hashFiles('yarn.lock', 'turbo.json', 'packages/**/package.json', 'packages/**/*.{ts,tsx,js,jsx,json}') }}
+          restore-keys: turbo-native-unit-${{ runner.os }}-
+      - run: yarn install --immutable
+      - run: cargo check --workspace --all-targets --locked
+      - run: cargo test --workspace --all-targets --locked --no-run
+      - run: cargo test --workspace --all-targets --locked
+      - run: cargo build --locked -p plec-cli
+      - run: yarn format:check
+      - run: yarn turbo run typecheck --filter='./packages/*'
+      - run: yarn turbo run test --filter='./packages/*' --filter='!@plec/core'
+      - run: yarn turbo run test:package --filter=@plec/core
+
+  wasm-release:
+    name: WASM & Release
     needs: [security, licenses, dependency-audit]
     runs-on: ubuntu-24.04
     steps:
@@ -214,13 +244,14 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          shared-key: crates-${{ runner.os }}-${{ runner.arch }}
+          shared-key: wasm-release-v1-${{ runner.os }}-${{ runner.arch }}
+          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**/*.toml', 'crates/**/*.rs') }}
           cache-workspace-crates: true
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .turbo
-          key: turbo-${{ runner.os }}-${{ hashFiles('yarn.lock', 'turbo.json', 'packages/**/package.json', 'packages/**/*.{ts,tsx,js,jsx,json}', 'apps/fullstack/package.json', 'apps/fullstack/src/**/*.{ts,tsx,js,jsx,json}', 'apps/fullstack/*.json', 'apps/fullstack/*.toml') }}
-          restore-keys: turbo-${{ runner.os }}-
+          key: turbo-wasm-release-${{ runner.os }}-${{ hashFiles('yarn.lock', 'turbo.json', 'packages/**/package.json', 'packages/**/*.{ts,tsx,js,jsx,json}', 'apps/fullstack/package.json', 'apps/fullstack/src/**/*.{ts,tsx,js,jsx,json}', 'apps/fullstack/*.json', 'apps/fullstack/*.toml') }}
+          restore-keys: turbo-wasm-release-${{ runner.os }}-
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
@@ -231,15 +262,11 @@ jobs:
       - run: yarn install --immutable
       - run: yarn install:build-tools
       - run: yarn install:browser-tools
-      - run: cargo check --workspace --all-targets --locked
-      - run: cargo test --workspace --all-targets --locked --no-run
-      - run: cargo test --workspace --all-targets --locked
+      - run: yarn install:cargo-deny
+      - run: yarn workspace @plec/query compile
       - run: cargo build --locked -p plec-cli
       - run: echo "PLEC_BIN=$GITHUB_WORKSPACE/target/debug/plec" >> "$GITHUB_ENV"
-      - run: yarn format:check
-      - run: yarn turbo run build typecheck --filter='./packages/*'
-      - run: yarn turbo run test --filter='./packages/*' --filter='!@plec/core'
-      - run: yarn turbo run test:package --filter=@plec/core
+      - run: yarn turbo run build --filter='./packages/*'
       - run: yarn test:wasm
       - run: yarn workspace fullstack build
       - run: yarn workspace fullstack typecheck:ci
@@ -253,7 +280,7 @@ jobs:
 
   acceptance:
     name: Acceptance
-    needs: build-test
+    needs: wasm-release
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -278,7 +305,7 @@ jobs:
 
   e2e:
     name: E2E
-    needs: build-test
+    needs: wasm-release
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -310,7 +337,8 @@ jobs:
         licenses,
         dependency-audit,
         trivy-summary,
-        build-test,
+        native-unit,
+        wasm-release,
         acceptance,
         e2e,
       ]
