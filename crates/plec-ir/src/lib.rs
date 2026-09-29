@@ -425,6 +425,14 @@ impl PublicRouteLoaderFailure {
         {
             return Err("invalid route loader failure status");
         }
+        if let Some(status_text) = self.status_text.as_deref() {
+            let Some(status) = self.status else {
+                return Err("route loader failure statusText requires status");
+            };
+            if status_text != canonical_status_text(status) {
+                return Err("route loader failure statusText is not canonical");
+            }
+        }
         let invalid_fields = match self.kind {
             PublicRouteLoaderFailureKind::Http => false,
             PublicRouteLoaderFailureKind::Network
@@ -2518,6 +2526,9 @@ mod tests {
             serde_json::json!({"kind":"unknown", "message":"secret"}),
             serde_json::json!({"kind":"http", "message":7, "status":503}),
             serde_json::json!({"kind":"http", "message":"bad", "status":65535}),
+            serde_json::json!({"kind":"http", "message":"bad", "status":503, "statusText":"Unavailable"}),
+            serde_json::json!({"kind":"http", "message":"bad", "statusText":"OK"}),
+            serde_json::json!({"kind":"http", "message":"bad", "status":599, "statusText":"unknown upstream phrase"}),
             serde_json::json!({"kind":"network", "message":"bad", "status":503}),
             serde_json::json!({"kind":"runtime", "message":"/srv/private/database.rs secret-token"}),
             serde_json::json!({"kind":"runtime", "message":"route loader failed", "url":"/internal"}),
@@ -2616,6 +2627,44 @@ mod tests {
             assert!(failure.validate().is_err(), "accepted {failure:?}");
         }
         assert!(PublicRouteLoaderFailure::generic().validate().is_ok());
+    }
+
+    #[test]
+    fn http_status_text_must_be_canonical_and_attached_to_a_status() {
+        for (status, status_text) in [(Some(503), "Service Unavailable"), (Some(599), "")] {
+            let failure = PublicRouteLoaderFailure {
+                kind: PublicRouteLoaderFailureKind::Http,
+                message: "request failed".into(),
+                status,
+                status_text: Some(status_text.into()),
+                ..PublicRouteLoaderFailure::generic()
+            };
+            assert!(failure.validate().is_ok(), "rejected {failure:?}");
+        }
+
+        let missing_status = PublicRouteLoaderFailure {
+            kind: PublicRouteLoaderFailureKind::Http,
+            status_text: Some("OK".into()),
+            ..PublicRouteLoaderFailure::generic()
+        };
+        assert_eq!(
+            missing_status.validate(),
+            Err("route loader failure statusText requires status")
+        );
+
+        for (status, status_text) in [(Some(503), "Unavailable"), (Some(599), "Not Found")] {
+            let failure = PublicRouteLoaderFailure {
+                kind: PublicRouteLoaderFailureKind::Http,
+                message: "request failed".into(),
+                status,
+                status_text: Some(status_text.into()),
+                ..PublicRouteLoaderFailure::generic()
+            };
+            assert_eq!(
+                failure.validate(),
+                Err("route loader failure statusText is not canonical")
+            );
+        }
     }
 
     #[test]

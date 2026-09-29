@@ -39,7 +39,11 @@ pub fn public_route_loader_failure(value: &RuntimeValue) -> plec_ir::PublicRoute
     }
     let status_text = match record.get("statusText") {
         None => None,
-        Some(RuntimeValue::String(s)) => Some(s.clone()),
+        Some(RuntimeValue::String(_)) if kind == Kind::Http => match status {
+            Some(status) => Some(plec_ir::canonical_status_text(status).to_owned()),
+            None => return Public::generic(),
+        },
+        Some(RuntimeValue::String(_)) => return Public::generic(),
         Some(_) => return Public::generic(),
     };
     let body = record
@@ -130,13 +134,58 @@ mod route_failure_tests {
         let public = public_route_loader_failure(&source);
         assert_eq!(public.kind, Kind::Http);
         assert_eq!(public.status, Some(503));
-        assert_eq!(public.status_text.as_deref(), Some("Unavailable"));
+        assert_eq!(public.status_text.as_deref(), Some("Service Unavailable"));
         assert_eq!(public.url.as_deref(), Some("/api/data"));
         assert_eq!(
             public.body,
             Some(SsrSnapshotValue::String("maintenance".into()))
         );
-        assert_eq!(route_loader_failure_value(&public), source);
+        let restored = route_loader_failure_value(&public);
+        assert_eq!(
+            restored.record().unwrap().get("statusText"),
+            Some(&RuntimeValue::String("Service Unavailable".into()))
+        );
+    }
+
+    #[test]
+    fn status_text_is_canonicalized_only_for_http_with_status() {
+        let http_without_phrase = RuntimeValue::Record(std::collections::HashMap::from([
+            ("kind".into(), RuntimeValue::String("http".into())),
+            (
+                "message".into(),
+                RuntimeValue::String("request failed (599)".into()),
+            ),
+            ("status".into(), RuntimeValue::Number(599.0)),
+        ]));
+        let public = public_route_loader_failure(&http_without_phrase);
+        assert_eq!(public.status, Some(599));
+        assert_eq!(public.status_text, None);
+
+        let http_with_unknown_phrase = RuntimeValue::Record(std::collections::HashMap::from([
+            ("kind".into(), RuntimeValue::String("http".into())),
+            (
+                "message".into(),
+                RuntimeValue::String("request failed (599)".into()),
+            ),
+            ("status".into(), RuntimeValue::Number(599.0)),
+            (
+                "statusText".into(),
+                RuntimeValue::String("upstream phrase".into()),
+            ),
+        ]));
+        let public = public_route_loader_failure(&http_with_unknown_phrase);
+        assert_eq!(public.status, Some(599));
+        assert_eq!(public.status_text.as_deref(), Some(""));
+
+        let phrase_without_status = RuntimeValue::Record(std::collections::HashMap::from([
+            ("kind".into(), RuntimeValue::String("http".into())),
+            ("message".into(), RuntimeValue::String("failure".into())),
+            ("statusText".into(), RuntimeValue::String("OK".into())),
+        ]));
+        assert_eq!(
+            public_route_loader_failure(&phrase_without_status),
+            plec_ir::PublicRouteLoaderFailure::generic()
+        );
     }
 
     #[test]

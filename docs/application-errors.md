@@ -24,9 +24,12 @@ initiating operation.
 
 The authoritative public route-loader failure shape is `{ kind, message,
 status?, statusText?, body?, url? }`. `kind` is `http`, `network`, `abort`,
-`decode`, or `runtime`. HTTP response status, status text, body, and URL are
-preserved where available. SSR snapshots carry this same typed representation;
-adoption restores its fields without changing the failure kind. Supplementary
+`decode`, or `runtime`. HTTP response status, canonical status text, body, and
+URL are represented where available. RuntimeValue failures with a string
+`statusText` and valid HTTP status are normalized to the canonical phrase;
+omitted text stays omitted. A phrase without status is malformed. SSR snapshots
+carry this same typed representation; adoption restores its fields without
+changing the failure kind. Supplementary
 failure bodies are capped at `PublicRouteLoaderFailure::MAX_BODY_BYTES` (512
 KiB), safely below the 4 MiB snapshot ceiling; unreadable or over-budget HTTP
 error bodies normalize to `null` while retaining the HTTP failure. Browser and
@@ -38,9 +41,11 @@ Field applicability is enforced by the shared record validator: `http` may
 carry status, statusText, body, and URL; `network`, `abort`, and `decode` may
 carry only URL in addition to message; `runtime` must be exactly the generic
 `route loader failed` record with no supplemental fields. Status is limited to
-100–599. `statusText` is the canonical phrase for the numeric status from the
-shared Rust mapping (unknown/extension codes use an empty string); it never
-comes from browser or upstream reason-phrase text. Public network failures use
+100–599. If present, `statusText` must exactly match the canonical phrase for
+that numeric status from the shared Rust mapping (unknown/extension codes use
+the empty string). Serialized snapshots with a missing status or noncanonical
+phrase normalize to the generic failure. The phrase never comes from browser
+or upstream reason-phrase text. Public network failures use
 `network request failed`, and aborts use `request aborted`; host-native Fetch
 error text remains diagnostic-only.
 
