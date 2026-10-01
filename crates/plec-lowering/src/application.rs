@@ -1,9 +1,9 @@
 use plec_hir::{HirApplication, HirBindingKind, HirNode, HirParameterSource, HirProp};
 use plec_ir::{
-    ComponentApplication, ExecutableApplication, ExecutableComponent, COMPONENT_VERSION,
+    COMPONENT_VERSION, ComponentApplication, ExecutableApplication, ExecutableComponent,
 };
 
-use crate::{component::lower_component, ComponentTarget, ComponentTargets, LoweringError};
+use crate::{ComponentTarget, ComponentTargets, LoweringError, component::lower_component};
 
 pub fn lower_application_to_executable(
     application: &HirApplication,
@@ -155,6 +155,7 @@ pub fn lower_application_to_executable(
             inputs: app.inputs,
             host_slots: app.host_slots,
             capabilities: app.capabilities,
+            server_actions: app.server_actions,
             state_slots: app.state_slots,
             ref_slots: app.ref_slots,
             host_refs: app.host_refs,
@@ -198,6 +199,7 @@ pub(crate) fn component_budget_usage(
         app.inputs.len(),
         app.host_slots.len(),
         app.capabilities.len(),
+        app.server_actions.len(),
         app.state_slots.len(),
         app.ref_slots.len(),
         app.host_refs.len(),

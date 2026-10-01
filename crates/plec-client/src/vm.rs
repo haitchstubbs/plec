@@ -123,6 +123,8 @@ pub struct ActionRunContext {
 pub enum BrowserRequest {
     #[cfg(feature = "fetch")]
     Fetch(TypedLoaderFetchRequest),
+    #[cfg(feature = "fetch")]
+    ServerAction(TypedLoaderFetchRequest),
     Cookie {
         request: TypedCookieRequest,
         value: Option<String>,
@@ -144,7 +146,10 @@ pub(crate) fn pending_browser_capability(
     context: ActionRunContext,
 ) -> PendingBrowserCapability {
     #[cfg(feature = "fetch")]
-    let is_fetch = matches!(suspension.request, BrowserRequest::Fetch(_));
+    let is_fetch = matches!(
+        suspension.request,
+        BrowserRequest::Fetch(_) | BrowserRequest::ServerAction(_)
+    );
     #[cfg(feature = "fetch")]
     if is_fetch {
         return PendingBrowserCapability::Fetch(TypedPendingFetch {
@@ -228,6 +233,9 @@ impl ActionHost for BrowserActionHost<'_> {
             TypedCapabilityRequest::Fetch(request) => self.prepare_fetch_capability(request, frame),
             TypedCapabilityRequest::Cookie(request) => {
                 self.prepare_cookie_capability(request, frame)
+            }
+            TypedCapabilityRequest::ServerAction(request) => {
+                self.prepare_server_action(request, frame)
             }
         }
     }
@@ -430,6 +438,60 @@ impl ActionHost for BrowserActionHost<'_> {
 }
 
 impl BrowserActionHost<'_> {
+    #[cfg(feature = "fetch")]
+    fn prepare_server_action(
+        &mut self,
+        request: &plec_schema::typed::TypedServerActionRequest,
+        frame: &[RuntimeValue],
+    ) -> Result<BrowserRequest, ActionError> {
+        let action_id = self
+            .runtime
+            .app
+            .server_actions
+            .get(request.action)
+            .map(|action| action.id.clone())
+            .ok_or_else(|| ActionError("server action handle out of range".into()))?;
+        let arguments = request
+            .arguments
+            .iter()
+            .map(|expression| self.evaluate(*expression, frame))
+            .collect::<Result<Vec<_>, _>>()?;
+        for argument in &arguments {
+            argument
+                .check_limits()
+                .map_err(|_| ActionError("server action argument exceeds value limits".into()))?;
+        }
+        let body = serde_json::to_string(&arguments)
+            .map_err(|_| ActionError("server action arguments are not serializable".into()))?;
+        if body.len() > plec_ir::limits::MAX_REQUEST_BODY_BYTES {
+            return Err(ActionError(
+                "server action arguments exceed byte limit".into(),
+            ));
+        }
+        let origin = web_sys::window()
+            .and_then(|window| window.location().origin().ok())
+            .ok_or_else(|| ActionError("server action origin unavailable".into()))?;
+        Ok(BrowserRequest::ServerAction(TypedLoaderFetchRequest {
+            url: format!("{origin}/_plec/actions/{action_id}"),
+            method: "POST".into(),
+            headers: vec![("content-type".into(), "application/json".into())],
+            body: Some(body),
+            decode: "json".into(),
+            require_ok: true,
+        }))
+    }
+
+    #[cfg(not(feature = "fetch"))]
+    fn prepare_server_action(
+        &mut self,
+        _request: &plec_schema::typed::TypedServerActionRequest,
+        _frame: &[RuntimeValue],
+    ) -> Result<BrowserRequest, ActionError> {
+        Err(ActionError(
+            "server actions require the fetch capability".into(),
+        ))
+    }
+
     #[cfg(feature = "fetch")]
     fn prepare_fetch_capability(
         &mut self,
@@ -1094,9 +1156,11 @@ mod tests {
         // never run.
         let suspended_generation = instance.runtime.graph_generation;
         instance.runtime.invalidate_fetches();
-        assert!(instance
-            .runtime_for_generation_mut(suspended_generation)
-            .is_none());
+        assert!(
+            instance
+                .runtime_for_generation_mut(suspended_generation)
+                .is_none()
+        );
         assert_eq!(instance.runtime.states[0], RuntimeValue::Bool(true));
         assert_eq!(instance.runtime.states[1], RuntimeValue::Null);
         assert_eq!(instance.runtime.states[2], RuntimeValue::Null);
@@ -1146,7 +1210,7 @@ mod tests {
         let first = runtime.take_pending_fetches();
         assert_eq!(first.len(), 1);
         let request = match &first[0].suspension.request {
-            BrowserRequest::Fetch(request) => request,
+            BrowserRequest::Fetch(request) | BrowserRequest::ServerAction(request) => request,
             BrowserRequest::Cookie { .. } => panic!("expected fetch suspension"),
         };
         assert_eq!(request.url, "/todos");
@@ -1247,7 +1311,7 @@ mod tests {
         loader: &Suspension<TypedLoaderFetchRequest>,
     ) {
         let request = match &browser.request {
-            BrowserRequest::Fetch(request) => request,
+            BrowserRequest::Fetch(request) | BrowserRequest::ServerAction(request) => request,
             BrowserRequest::Cookie { .. } => panic!("expected fetch suspension"),
         };
         assert_eq!(request.url, loader.request.url);

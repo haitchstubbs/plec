@@ -53,6 +53,8 @@ pub struct TypedApplication {
     pub host_slots: Vec<TypedHostSlot>,
     #[serde(default)]
     pub capabilities: Vec<TypedCookieCapability>,
+    #[serde(default)]
+    pub server_actions: Vec<TypedServerActionRef>,
     #[serde(skip)]
     pub host_inputs: HashMap<String, RuntimeValue>,
     #[serde(skip)]
@@ -298,6 +300,7 @@ fn component_ir_entries(component: &TypedApplication) -> usize {
         + component.route_outlets.len()
         + component.host_slots.len()
         + component.capabilities.len()
+        + component.server_actions.len()
 }
 
 fn runtime_value_nodes(value: &RuntimeValue) -> usize {
@@ -519,6 +522,11 @@ pub struct TypedCookieCapability {
     pub secure: Option<bool>,
     pub expiry_modes: Vec<String>,
 }
+
+#[derive(Clone, Deserialize)]
+pub struct TypedServerActionRef {
+    pub id: String,
+}
 fn default_cookie_path() -> String {
     "/".into()
 }
@@ -702,6 +710,15 @@ impl Default for TypedReturnOutcome {
 pub enum TypedCapabilityRequest {
     Fetch(TypedFetchRequest),
     Cookie(TypedCookieRequest),
+    ServerAction(TypedServerActionRequest),
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypedServerActionRequest {
+    pub action: usize,
+    #[serde(default)]
+    pub arguments: Vec<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1043,14 +1060,14 @@ pub fn validate_typed_action_contract(
             match (kind.as_str(), value) {
                 ("append" | "keyedReplace", Some(value)) if *value < expression_count => {}
                 ("append" | "keyedReplace", Some(_)) => {
-                    return Err("collection mutation value expression handle out of range")
+                    return Err("collection mutation value expression handle out of range");
                 }
                 ("append" | "keyedReplace", None) => {
-                    return Err("collection mutation requires a value expression")
+                    return Err("collection mutation requires a value expression");
                 }
                 ("keyedRemove", None) => {}
                 ("keyedRemove", Some(_)) => {
-                    return Err("collection remove forbids a value expression")
+                    return Err("collection remove forbids a value expression");
                 }
                 _ => return Err("unknown collection mutation kind"),
             }
@@ -1448,6 +1465,15 @@ impl TypedApplication {
         collection_ok(self.route_outlets.len())?;
         collection_ok(self.host_slots.len())?;
         collection_ok(self.capabilities.len())?;
+        collection_ok(self.server_actions.len())?;
+        let mut action_ids = HashSet::new();
+        if self.server_actions.iter().any(|action| {
+            action.id.is_empty()
+                || action.id.len() > MAX_COMPONENT_STRING_BYTES
+                || !action_ids.insert(action.id.as_str())
+        }) {
+            return Err("invalid or duplicate server action id");
+        }
         for string in &self.strings {
             if string.len() > MAX_COMPONENT_STRING_BYTES {
                 return Err("component string pool entry exceeds limit");
@@ -1575,7 +1601,7 @@ impl TypedApplication {
                         event.target,
                     ) =>
                 {
-                    return Err("event target is outside its loop template")
+                    return Err("event target is outside its loop template");
                 }
                 None if in_any_loop => return Err("loop event is missing loop ownership"),
                 _ => {}
@@ -1605,12 +1631,12 @@ impl TypedApplication {
                     TypedActionInstruction::Evaluate { expression }
                         if *expression >= self.expressions.len() =>
                     {
-                        return Err("action expression handle out of range")
+                        return Err("action expression handle out of range");
                     }
                     TypedActionInstruction::StoreState { state }
                         if *state >= self.state_slots.len() =>
                     {
-                        return Err("action state handle out of range")
+                        return Err("action state handle out of range");
                     }
                     TypedActionInstruction::MutationStart {
                         generation,
@@ -1620,7 +1646,7 @@ impl TypedApplication {
                         .iter()
                         .any(|state| **state >= self.state_slots.len()) =>
                     {
-                        return Err("mutation state handle out of range")
+                        return Err("mutation state handle out of range");
                     }
                     TypedActionInstruction::MutationPublish {
                         generation,
@@ -1636,23 +1662,23 @@ impl TypedApplication {
                         || *invocation_slot >= action.frame_slots
                         || *value_slot >= action.frame_slots =>
                     {
-                        return Err("invalid mutation publication")
+                        return Err("invalid mutation publication");
                     }
                     TypedActionInstruction::StoreRef { reference }
                         if *reference >= self.ref_slots.len() =>
                     {
-                        return Err("action ref handle out of range")
+                        return Err("action ref handle out of range");
                     }
                     TypedActionInstruction::CaptureActiveElement { reference }
                     | TypedActionInstruction::FocusRef { reference }
                         if *reference >= self.ref_slots.len() =>
                     {
-                        return Err("action ref handle out of range")
+                        return Err("action ref handle out of range");
                     }
                     TypedActionInstruction::FocusHostRef { reference }
                         if *reference >= self.host_refs.len() =>
                     {
-                        return Err("action host ref handle out of range")
+                        return Err("action host ref handle out of range");
                     }
                     TypedActionInstruction::CallProp { prop, arguments }
                         if self
@@ -1664,7 +1690,7 @@ impl TypedApplication {
                                 .iter()
                                 .any(|expression| *expression >= self.expressions.len()) =>
                     {
-                        return Err("action callable prop out of range")
+                        return Err("action callable prop out of range");
                     }
                     TypedActionInstruction::Call {
                         action: callee,
@@ -1746,7 +1772,7 @@ impl TypedApplication {
                     | TypedActionInstruction::JumpIfFalse { target }
                         if *target >= action.instructions.len() =>
                     {
-                        return Err("action jump target out of range")
+                        return Err("action jump target out of range");
                     }
                     TypedActionInstruction::CapabilityRequest {
                         request,
@@ -1758,6 +1784,7 @@ impl TypedApplication {
                         ..
                     } if matches!(request, TypedCapabilityRequest::Fetch(request) if request.url >= self.expressions.len() || request.body.map(|body| body >= self.expressions.len()).unwrap_or(false) || request.headers.iter().any(|header| header.name >= self.strings.len() || header.value >= self.expressions.len()))
                         || matches!(request, TypedCapabilityRequest::Cookie(request) if request.name >= self.strings.len() || request.value.map(|value| value >= self.expressions.len()).unwrap_or(false) || !["get", "set", "delete"].contains(&request.operation.as_str()) || (request.operation == "set" && request.value.is_none()) || !["session", "maxAge"].contains(&request.expiry.as_str()) || (request.expiry == "maxAge" && request.max_age.is_none()) || (request.expiry == "session" && request.max_age.is_some()) || request.same_site.as_deref().is_some_and(|same_site| !["lax", "strict", "none"].contains(&same_site)))
+                        || matches!(request, TypedCapabilityRequest::ServerAction(request) if request.action >= self.server_actions.len() || request.arguments.len() > crate::limits::MAX_COMPONENT_COLLECTION_LEN || request.arguments.iter().any(|argument| *argument >= self.expressions.len()))
                         || *success_pc >= action.instructions.len()
                         || *failure_pc >= action.instructions.len()
                         || finally_pc
@@ -1766,17 +1793,17 @@ impl TypedApplication {
                         || *result_slot >= action.frame_slots
                         || *error_slot >= action.frame_slots =>
                     {
-                        return Err("invalid action continuation")
+                        return Err("invalid action continuation");
                     }
                     TypedActionInstruction::StoreHostRef { r#ref }
                         if *r#ref >= self.strings.len() =>
                     {
-                        return Err("host ref string handle out of range")
+                        return Err("host ref string handle out of range");
                     }
                     TypedActionInstruction::Return {
                         value: Some(value), ..
                     } if *value >= self.expressions.len() => {
-                        return Err("action return expression handle out of range")
+                        return Err("action return expression handle out of range");
                     }
                     _ => {}
                 }
@@ -1907,6 +1934,40 @@ mod tests {
         .unwrap()
     }
 
+    #[test]
+    fn server_action_capability_round_trips_and_rejects_local_handles_out_of_range() {
+        let valid = serde_json::json!({
+            "version":"0.10", "rootNode":0, "strings":["div"],
+            "nodes":[{"op":"element","tag":0,"parent":null}],
+            "serverActions":[{"id":"sa_opaque"}],
+            "expressions":[{"instructions":[]}],
+            "actions":[{"frameSlots":2,"instructions":[
+                {"op":"capabilityRequest","capability":"serverAction","request":{"action":0,"arguments":[0]},"successPc":1,"failurePc":1,"resultSlot":0,"errorSlot":1},
+                {"op":"return"}
+            ]}]
+        });
+        let typed: TypedApplication = serde_json::from_value(valid.clone()).unwrap();
+        typed
+            .validate_contract()
+            .expect("valid server action handle");
+        assert!(matches!(
+            &typed.actions[0].instructions[0],
+            TypedActionInstruction::CapabilityRequest {
+                request: TypedCapabilityRequest::ServerAction(request), ..
+            } if request.action == 0 && request.arguments == [0]
+        ));
+        let encoded = serde_json::to_string(&valid).unwrap();
+        let decoded: TypedApplication = serde_json::from_str(&encoded).unwrap();
+        decoded
+            .validate_contract()
+            .expect("serialized schema round trip");
+
+        let mut invalid = valid;
+        invalid["actions"][0]["instructions"][0]["request"]["action"] = 9.into();
+        let typed: TypedApplication = serde_json::from_value(invalid).unwrap();
+        assert!(typed.validate_contract().is_err());
+    }
+
     fn event_application(event: Value, nodes: Value, loops: Value) -> TypedApplication {
         serde_json::from_value(serde_json::json!({
             "version": "0.10",
@@ -1971,37 +2032,43 @@ mod tests {
             serde_json::json!({"op":"collectionMutation","input":0,"kind":"append","key":0,"value":0}),
             "scalar",
         );
-        assert!(validate_typed_action_contract(
-            &scalar.actions[0],
-            scalar.expressions.len(),
-            &["scalar".into()]
-        )
-        .unwrap_err()
-        .contains("collection input"));
+        assert!(
+            validate_typed_action_contract(
+                &scalar.actions[0],
+                scalar.expressions.len(),
+                &["scalar".into()]
+            )
+            .unwrap_err()
+            .contains("collection input")
+        );
 
         let missing_value = typed_action_artifact(
             serde_json::json!({"op":"collectionMutation","input":0,"kind":"append","key":0}),
             "collection",
         );
-        assert!(validate_typed_action_contract(
-            &missing_value.actions[0],
-            missing_value.expressions.len(),
-            &["collection".into()]
-        )
-        .unwrap_err()
-        .contains("requires a value"));
+        assert!(
+            validate_typed_action_contract(
+                &missing_value.actions[0],
+                missing_value.expressions.len(),
+                &["collection".into()]
+            )
+            .unwrap_err()
+            .contains("requires a value")
+        );
 
         let remove_value = typed_action_artifact(
             serde_json::json!({"op":"collectionMutation","input":0,"kind":"keyedRemove","key":0,"value":0}),
             "collection",
         );
-        assert!(validate_typed_action_contract(
-            &remove_value.actions[0],
-            remove_value.expressions.len(),
-            &["collection".into()]
-        )
-        .unwrap_err()
-        .contains("forbids a value"));
+        assert!(
+            validate_typed_action_contract(
+                &remove_value.actions[0],
+                remove_value.expressions.len(),
+                &["collection".into()]
+            )
+            .unwrap_err()
+            .contains("forbids a value")
+        );
     }
 
     #[cfg(not(feature = "fetch"))]
@@ -2019,13 +2086,15 @@ mod tests {
         let mut app = typed_action_artifact(serde_json::json!({"op":"return"}), "collection");
         app.actions[0].frame_slots = 1;
         app.actions[0].parameter_slots = vec![0, 0];
-        assert!(validate_typed_action_contract(
-            &app.actions[0],
-            app.expressions.len(),
-            &["collection".into()]
-        )
-        .unwrap_err()
-        .contains("duplicate"));
+        assert!(
+            validate_typed_action_contract(
+                &app.actions[0],
+                app.expressions.len(),
+                &["collection".into()]
+            )
+            .unwrap_err()
+            .contains("duplicate")
+        );
     }
 
     #[test]
@@ -2092,27 +2161,31 @@ mod tests {
             ],
             r#loop: None,
         });
-        assert!(validate_typed_event_contract(
-            &app.events[0],
-            app.nodes.len(),
-            app.strings.len(),
-            app.actions.len(),
-            app.loops.len(),
-            app.actions[0].frame_slots,
-        )
-        .is_err());
+        assert!(
+            validate_typed_event_contract(
+                &app.events[0],
+                app.nodes.len(),
+                app.strings.len(),
+                app.actions.len(),
+                app.loops.len(),
+                app.actions[0].frame_slots,
+            )
+            .is_err()
+        );
 
         app.events[0].fields.pop();
         app.events[0].r#loop = Some(0);
-        assert!(validate_typed_event_contract(
-            &app.events[0],
-            app.nodes.len(),
-            app.strings.len(),
-            app.actions.len(),
-            app.loops.len(),
-            app.actions[0].frame_slots,
-        )
-        .is_err());
+        assert!(
+            validate_typed_event_contract(
+                &app.events[0],
+                app.nodes.len(),
+                app.strings.len(),
+                app.actions.len(),
+                app.loops.len(),
+                app.actions[0].frame_slots,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -2408,13 +2481,15 @@ mod tests {
                 component
             })
             .collect();
-        assert!(TypedComponentApplication {
-            version: "0.10".into(),
-            root_component: 0,
-            components,
-        }
-        .validate()
-        .is_ok());
+        assert!(
+            TypedComponentApplication {
+                version: "0.10".into(),
+                root_component: 0,
+                components,
+            }
+            .validate()
+            .is_ok()
+        );
     }
 
     fn topology_application(nodes: Value, loops: Value) -> TypedApplication {
@@ -2685,9 +2760,11 @@ mod tests {
         let policy = plec_ir::sink::TagPolicy {
             custom_elements: std::collections::BTreeSet::from([String::from("my-widget")]),
         };
-        assert!(policy_application("my-widget")
-            .validate_with_policy(&policy)
-            .is_ok());
+        assert!(
+            policy_application("my-widget")
+                .validate_with_policy(&policy)
+                .is_ok()
+        );
         // The policy cannot rehabilitate forbidden tags: strict validation
         // still rejects `script` with the same identity rule.
         assert_eq!(
@@ -2773,9 +2850,11 @@ mod tests {
             tag_application("svg:script", "html").validate_contract(),
             Err("unsafe element tag")
         );
-        assert!(tag_application("clipPath", "svg")
-            .validate_contract()
-            .is_ok());
+        assert!(
+            tag_application("clipPath", "svg")
+                .validate_contract()
+                .is_ok()
+        );
 
         let text = topology_application(
             serde_json::json!([

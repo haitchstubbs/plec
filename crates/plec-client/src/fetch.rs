@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use crate::runtime::*;
 use crate::vm::*;
-use plec_action::{charge_response_bytes, ActionOutcome, Run, Suspension};
+use plec_action::{ActionOutcome, Run, Suspension, charge_response_bytes};
 use plec_dom::platform::*;
 use web_sys::{ReadableStreamDefaultReader, RequestCredentials, TextDecoder};
 
@@ -218,6 +218,19 @@ impl RuntimeState {
         method: &str,
         headers: &[(String, String)],
     ) -> Result<bool, String> {
+        if let Ok(target) = web_sys::Url::new(url) {
+            let same_origin = web_sys::window()
+                .and_then(|window| window.location().origin().ok())
+                .is_some_and(|origin| origin.eq_ignore_ascii_case(&target.origin()));
+            if same_origin
+                && target.pathname().starts_with("/_plec/actions/")
+                && method.eq_ignore_ascii_case("POST")
+                && headers.len() == 1
+                && headers[0].0.eq_ignore_ascii_case("content-type")
+            {
+                return Ok(true);
+            }
+        }
         let grants = self.fetch_policy.borrow();
         let grants = grants
             .as_ref()
@@ -430,7 +443,7 @@ fn bounded_response_value(value: JsValue, url: &str) -> Result<RuntimeValue, Run
 impl RuntimeState {
     pub fn start_typed_fetch(&self, mut pending: TypedPendingFetch) -> Result<(), JsValue> {
         let request = match pending.suspension.request.clone() {
-            BrowserRequest::Fetch(request) => request,
+            BrowserRequest::Fetch(request) | BrowserRequest::ServerAction(request) => request,
             BrowserRequest::Cookie { .. } => {
                 return Err(JsValue::from_str(
                     "cookie suspension routed through fetch transport",
@@ -568,7 +581,9 @@ impl RuntimeState {
         result: Result<RuntimeValue, RuntimeValue>,
     ) -> Result<(), JsValue> {
         let url = match &pending.suspension.request {
-            BrowserRequest::Fetch(request) => request.url.clone(),
+            BrowserRequest::Fetch(request) | BrowserRequest::ServerAction(request) => {
+                request.url.clone()
+            }
             BrowserRequest::Cookie { .. } => String::new(),
         };
         let result = match result {

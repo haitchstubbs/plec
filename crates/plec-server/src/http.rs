@@ -76,11 +76,123 @@ async fn dispatch_inner(
         return handle_api(state, request, context).await;
     }
 
+    if context.pathname.starts_with("/_plec/actions/") {
+        return handle_server_action(state, request, context).await;
+    }
+
     if is_document_request(&context.pathname) {
         return render_document(state, &mut context).await;
     }
 
     Ok(assets::serve(state, request).await)
+}
+
+async fn handle_server_action(
+    state: &ServerState,
+    request: Request<Body>,
+    context: RequestContext,
+) -> Result<Response<Body>, ServerError> {
+    let fail = |status, message: &str| json_response(status, &json!({"error": message}));
+    if request.method() != Method::POST {
+        return Ok(fail(StatusCode::METHOD_NOT_ALLOWED, "method not allowed"));
+    }
+    // Credential-bearing action POSTs are same-origin only. Browsers send
+    // Origin for fetch POST; compare its authority against the request host.
+    let origin = context
+        .headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok());
+    let expected = context.url.split('/').take(3).collect::<Vec<_>>().join("/");
+    if origin != Some(expected.as_str()) {
+        return Ok(fail(
+            StatusCode::FORBIDDEN,
+            "same-origin action POST required",
+        ));
+    }
+    let Some(id) = context
+        .pathname
+        .strip_prefix("/_plec/actions/")
+        .filter(|id| {
+            !id.is_empty()
+                && !id.contains('/')
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        })
+    else {
+        return Ok(fail(StatusCode::NOT_FOUND, "unknown server action"));
+    };
+    let (parts, body) = request.into_parts();
+    let bytes = match crate::request::read_bounded_body(&parts.headers, body).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return Ok(fail(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "server action request exceeds limit",
+            ));
+        }
+    };
+    let arguments: Vec<plec_schema::RuntimeValue> = match serde_json::from_slice(&bytes) {
+        Ok(arguments) => arguments,
+        Err(_) => {
+            return Ok(fail(
+                StatusCode::BAD_REQUEST,
+                "invalid server action arguments",
+            ));
+        }
+    };
+    if arguments.len() > plec_ir::limits::MAX_COMPONENT_COLLECTION_LEN {
+        return Ok(fail(
+            StatusCode::BAD_REQUEST,
+            "server action argument count exceeds limit",
+        ));
+    }
+    if arguments
+        .iter()
+        .any(|argument| argument.check_limits().is_err())
+    {
+        return Ok(fail(
+            StatusCode::BAD_REQUEST,
+            "server action arguments exceed value limits",
+        ));
+    }
+    let Some(runtime) = state.options.application_runtime.as_deref() else {
+        return Ok(fail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server actions unavailable",
+        ));
+    };
+    match runtime
+        .invoke_action(crate::runtime::ServerActionRequest {
+            id: id.to_owned(),
+            arguments,
+        })
+        .await
+    {
+        Ok(value) => {
+            if value.check_limits().is_err() {
+                return Ok(fail(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server action result exceeds value limits",
+                ));
+            }
+            let value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
+            Ok(json_response(StatusCode::OK, &value))
+        }
+        Err(error) => {
+            if matches!(error, ServerError::UnknownServerAction) {
+                return Ok(fail(
+                    StatusCode::NOT_FOUND,
+                    "unknown or stale server action",
+                ));
+            }
+            eprintln!("Plec server action failed: {error}");
+            Ok(fail(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server action failed",
+            ))
+        }
+    }
 }
 
 async fn handle_api(

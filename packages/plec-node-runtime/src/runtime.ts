@@ -73,13 +73,18 @@ interface RuntimeReady {
   address: string;
 }
 
-const PROTOCOL_VERSION: number = 2;
+const PROTOCOL_VERSION: number = 3;
 const INTERNAL_TOKEN_HEADER: string = 'x-plec-internal-token';
 const UNHANDLED_HEADER: string = 'x-plec-runtime-result';
 const UNHANDLED_VALUE: string = 'unhandled';
 const HEALTH_PATH: string = '/_plec-runtime/health';
 const HOST_RENDER_PATH: string = '/_plec-runtime/host-render';
+const ACTION_PATH: string = '/_plec-runtime/action';
 const MAX_HOST_RENDER_BYTES: number = 1024 * 1024;
+const MAX_ACTION_RESULT_BYTES: number = 1024 * 1024;
+const MAX_RUNTIME_VALUE_DEPTH: number = 64;
+const MAX_RUNTIME_VALUE_NODES: number = 100_000;
+const MAX_RUNTIME_VALUE_STRING_BYTES: number = 1024 * 1024;
 const LOCALHOST_PRIVATE: string = '127.0.0.1';
 const TCP_PREFIX: string = 'tcp:';
 
@@ -296,6 +301,37 @@ async function serve(
       return;
     }
 
+    const internalPath = new URL(incoming.url ?? '/', 'http://plec.internal').pathname;
+    if (internalPath === ACTION_PATH) {
+      if (incoming.method !== HttpMethod.POST) {
+        outgoing.writeHead(405, { 'cache-control': 'no-store' });
+        outgoing.end();
+        return;
+      }
+      const value: unknown = await (await toWebRequest(incoming)).json();
+      if (!value || typeof value !== 'object') throw new Error('invalid action request');
+      const { id, arguments: args } = value as Record<string, unknown>;
+      if (typeof id !== 'string' || !Array.isArray(args)) throw new Error('invalid action request');
+      const invoke = (application as ApplicationModule & {
+        invokeAction?: (id: string, args: unknown[]) => Promise<unknown>;
+        hasAction?: (id: string) => boolean;
+      }).invokeAction;
+      if (typeof invoke !== 'function') throw new Error('action registry unavailable');
+      const hasAction = (application as ApplicationModule & { hasAction?: (id: string) => boolean }).hasAction;
+      if (typeof hasAction !== 'function' || !hasAction(id)) {
+        outgoing.writeHead(404, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        outgoing.end(JSON.stringify({ error: 'unknown server action' }));
+        return;
+      }
+      const result = await invoke(id, args);
+      validateRuntimeValue(result);
+      const body = JSON.stringify({ ok: true, value: result });
+      if (Buffer.byteLength(body) > MAX_ACTION_RESULT_BYTES) throw new Error('action result exceeds limit');
+      outgoing.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      outgoing.end(body);
+      return;
+    }
+
     const request = await toWebRequest(incoming);
     const context = buildContext(incoming);
     const response = await application.handleRequest(request, context);
@@ -319,6 +355,7 @@ async function serve(
     if (!outgoing.headersSent) {
       outgoing.writeHead(500, {
         'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
       });
     }
 
@@ -328,6 +365,44 @@ async function serve(
       }),
     );
   }
+}
+
+function validateRuntimeValue(root: unknown): void {
+  const ancestors = new WeakSet<object>();
+  let nodes = 0;
+  let bytes = 0;
+  const visit = (value: unknown, depth: number): void => {
+    nodes += 1;
+    if (nodes > MAX_RUNTIME_VALUE_NODES || depth > MAX_RUNTIME_VALUE_DEPTH)
+      throw new Error('action result exceeds value limits');
+    if (value === null || typeof value === 'boolean') return;
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) throw new Error('action result contains a non-finite number');
+      return;
+    }
+    if (typeof value === 'string') {
+      bytes += Buffer.byteLength(value);
+      if (bytes > MAX_RUNTIME_VALUE_STRING_BYTES) throw new Error('action result exceeds string limits');
+      return;
+    }
+    if (typeof value !== 'object') throw new Error('action result contains an unsupported value');
+    if (ancestors.has(value)) throw new Error('action result is cyclic');
+    ancestors.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+    } else {
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Object.prototype && prototype !== null)
+        throw new Error('action result contains an unsupported object');
+      for (const [key, item] of Object.entries(value)) {
+        bytes += Buffer.byteLength(key);
+        visit(item, depth + 1);
+      }
+      if (bytes > MAX_RUNTIME_VALUE_STRING_BYTES) throw new Error('action result exceeds string limits');
+    }
+    ancestors.delete(value);
+  };
+  visit(root, 0);
 }
 
 async function importApplication(

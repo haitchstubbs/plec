@@ -8,6 +8,19 @@ import {
 const sleep = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+test('server action returns through the Rust and Node execution boundary', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await waitForMount(page);
+  const invocation = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.startsWith('/_plec/actions/'),
+  );
+  await page.getByRole('button', { name: 'Call server action' }).click();
+  const response = await invocation;
+  expect(response.status()).toBe(200);
+  expect(await response.json()).toMatchObject({ echoed: 'browser-to-node' });
+  await expect(page.locator('#server-action-result')).toHaveText('browser-to-node');
+});
+
 test('todo create, complete, rename, and delete stay targeted', async ({
   browser,
 }) => {

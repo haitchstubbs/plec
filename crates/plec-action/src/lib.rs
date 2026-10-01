@@ -784,6 +784,9 @@ mod tests {
                 TypedCapabilityRequest::Cookie(_) => Err(ActionError(
                     "unsupported route loader capability: cookie".into(),
                 )),
+                TypedCapabilityRequest::ServerAction(_) => Err(ActionError(
+                    "unsupported route loader capability: server action".into(),
+                )),
             }
         }
     }
@@ -1219,6 +1222,7 @@ mod tests {
                     Ok("cookie".into())
                 }
                 TypedCapabilityRequest::Fetch(_) => Ok("fetch".into()),
+                TypedCapabilityRequest::ServerAction(_) => Ok("serverAction".into()),
             }
         }
 

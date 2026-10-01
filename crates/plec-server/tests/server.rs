@@ -6,16 +6,16 @@
 use std::{path::Path, sync::Arc};
 
 use axum::{
+    Router,
     body::Body,
     http::{Request, Response, StatusCode},
-    Router,
 };
 use plec_ir::PlecSsrSnapshot;
 use plec_server::{
-    artifact::ArtifactBundle, create_plec_server, runtime::AppRequestHandler, DocumentMetadata,
-    PlecServerOptions,
+    DocumentMetadata, PlecServerOptions, artifact::ArtifactBundle, create_plec_server,
+    runtime::AppRequestHandler,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const BOOTSTRAP_OPEN: &str = "<script id=\"plec-bootstrap\" type=\"application/json\">";
@@ -94,6 +94,104 @@ async fn text_of(response: Response<Body>) -> String {
         .await
         .expect("response body");
     String::from_utf8(bytes.to_vec()).expect("utf-8 body")
+}
+
+struct EchoActionRuntime;
+
+impl plec_server::ApplicationRuntime for EchoActionRuntime {
+    fn dispatch<'a>(
+        &'a self,
+        _request: Request<Body>,
+        _context: plec_server::request::RequestContext,
+    ) -> plec_server::runtime::ApplicationDispatch<'a> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn invoke_action<'a>(
+        &'a self,
+        request: plec_server::ServerActionRequest,
+    ) -> plec_server::runtime::ServerActionDispatch<'a> {
+        Box::pin(async move {
+            if request.id == "sa_fail" {
+                return Err(plec_server::ServerError::Other(
+                    "TOP_SECRET_ACTION_FAILURE".into(),
+                ));
+            }
+            if request.id != "sa_echo" {
+                return Err(plec_server::ServerError::UnknownServerAction);
+            }
+            Ok(plec_schema::RuntimeValue::Record(
+                std::collections::HashMap::from([(
+                    "echoed".into(),
+                    request
+                        .arguments
+                        .first()
+                        .cloned()
+                        .unwrap_or(plec_schema::RuntimeValue::Null),
+                )]),
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn reserved_server_action_endpoint_dispatches_only_post_and_redacts_failures() {
+    let dir = fixture_dir();
+    let mut config = options(dir.path());
+    config.application_runtime = Some(Arc::new(EchoActionRuntime));
+    let router = create_plec_server(config);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/_plec/actions/sa_echo")
+        .header("origin", "http://localhost")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"["ok"]"#))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text_of(response).await).unwrap(),
+        json!({"echoed":"ok"})
+    );
+
+    let non_post = router
+        .clone()
+        .oneshot(get("/_plec/actions/sa_echo"))
+        .await
+        .unwrap();
+    assert_eq!(non_post.status(), StatusCode::METHOD_NOT_ALLOWED);
+    let unknown = Request::builder()
+        .method("POST")
+        .uri("/_plec/actions/sa_missing")
+        .header("origin", "http://localhost")
+        .body(Body::from("[]"))
+        .unwrap();
+    assert_eq!(
+        router.clone().oneshot(unknown).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+    let cross_origin = Request::builder()
+        .method("POST")
+        .uri("/_plec/actions/sa_echo")
+        .header("origin", "https://attacker.invalid")
+        .body(Body::from("[]"))
+        .unwrap();
+    assert_eq!(
+        router.clone().oneshot(cross_origin).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    let failure = Request::builder()
+        .method("POST")
+        .uri("/_plec/actions/sa_fail")
+        .header("origin", "http://localhost")
+        .body(Body::from("[]"))
+        .unwrap();
+    let failure = router.clone().oneshot(failure).await.unwrap();
+    assert_eq!(failure.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = text_of(failure).await;
+    assert!(body.contains("server action failed"));
+    assert!(!body.contains("TOP_SECRET_ACTION_FAILURE"));
 }
 
 async fn get_html(options: &PlecServerOptions, uri: &str) -> String {
@@ -1718,10 +1816,12 @@ async fn falls_back_to_the_public_shell_when_the_artifact_is_unreadable() {
     let router = create_plec_server(dev_options(dir.path()));
     let response = router.oneshot(get("/")).await.expect("response");
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(response
-        .headers()
-        .get("x-plec-ssr-fallback")
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        response
+            .headers()
+            .get("x-plec-ssr-fallback")
+            .is_some_and(|value| !value.is_empty())
+    );
     assert!(text_of(response).await.contains("shell"));
 }
 
@@ -2487,10 +2587,12 @@ async fn a_not_found_outcome_truncates_the_chain_at_the_boundary_owner() {
     assert_eq!(routes.len(), 1);
     assert_eq!(routes[0]["routeId"], "projects");
     assert_eq!(routes[0]["phase"], "notFound");
-    assert!(payload["snapshot"]["loaders"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        payload["snapshot"]["loaders"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert_valid_bootstrap(&html, &artifact, &artifact["manifest"]);
 }
 

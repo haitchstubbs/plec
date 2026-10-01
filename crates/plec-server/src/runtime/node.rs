@@ -17,17 +17,20 @@ use axum::{
 use tokio::{
     io::AsyncBufReadExt,
     sync::oneshot,
-    time::{timeout, Duration},
+    time::{Duration, timeout},
 };
 
 use super::{
-    internal::{dispatch_internal, InternalAddress, InternalRequest},
+    internal::{InternalAddress, InternalRequest, dispatch_internal},
     protocol,
 };
 use crate::{
-    request::{read_bounded_body, RequestContext},
-    runtime::{ApplicationDispatch, HostRenderDispatch, HostRenderRequest},
     ApplicationRuntime, PlecServerOptions, ServerError,
+    request::{RequestContext, read_bounded_body},
+    runtime::{
+        ApplicationDispatch, HostRenderDispatch, HostRenderRequest, ServerActionDispatch,
+        ServerActionRequest,
+    },
 };
 
 /// How the sidecar is launched. Paths are resolved by the caller (usually
@@ -404,6 +407,67 @@ impl ApplicationRuntime for NodeApplicationRuntime {
                     .failed("host render response exceeds byte limit"));
             }
             Ok(Some(response.html))
+        })
+    }
+
+    fn invoke_action<'a>(&'a self, request: ServerActionRequest) -> ServerActionDispatch<'a> {
+        Box::pin(async move {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "id": request.id,
+                "arguments": request.arguments,
+            }))
+            .map_err(|error| {
+                ServerError::message(format!(
+                    "server action request serialization failed: {error}"
+                ))
+            })?;
+            let internal = dispatch_internal(
+                &self.process.address,
+                &self.process.token,
+                InternalRequest {
+                    method: Method::POST,
+                    uri: protocol::ACTION_PATH.parse().expect("action path is valid"),
+                    headers: Default::default(),
+                    body: body.into(),
+                },
+            )
+            .await
+            .map_err(|error| self.process.failed(error))?;
+            if internal.status != StatusCode::OK {
+                if internal.status == StatusCode::NOT_FOUND {
+                    return Err(ServerError::UnknownServerAction);
+                }
+                return Err(self
+                    .process
+                    .failed(format!("server action returned {}", internal.status)));
+            }
+            #[derive(serde::Deserialize)]
+            struct ActionResponse {
+                ok: bool,
+                value: Option<serde_json::Value>,
+            }
+            let response: ActionResponse =
+                serde_json::from_slice(&internal.body).map_err(|_| {
+                    self.process
+                        .failed("server action returned an invalid response")
+                })?;
+            if !response.ok {
+                return Err(ServerError::message("server action failed"));
+            }
+            let value: plec_schema::RuntimeValue = serde_json::from_value(
+                response
+                    .value
+                    .ok_or_else(|| self.process.failed("server action response omitted value"))?,
+            )
+            .map_err(|_| {
+                self.process
+                    .failed("server action returned an unsupported value")
+            })?;
+            value.check_limits().map_err(|_| {
+                self.process
+                    .failed("server action result exceeds value limits")
+            })?;
+            Ok(value)
         })
     }
 }

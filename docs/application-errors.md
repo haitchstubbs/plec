@@ -18,7 +18,7 @@ initiating operation.
 | SSR internal failure  | Not application loader data. The server returns its failure response (or the configured development shell fallback).                                                                                                                    | Server-owned 500/fallback behavior; not-found is 404.                                   | Generic 500 response in production-facing body. Development fallback diagnostics may be emitted in the `x-plec-ssr-fallback` header. |
 | Client navigation     | Failed loaders select the route error graph; interrupted route data is not committed.                                                                                                                                                   | None.                                                                                   | Already local to the browser. The route error value is a `RuntimeValue` record.                                                      |
 | Browser action        | A failed action remains a rejected operation.                                                                                                                                                                                           | None.                                                                                   | Normally local to the browser. Internal action-machine errors are host errors, not generated application records.                    |
-| Server actions        | Not implemented.                                                                                                                                                                                                                        | —                                                                                       | —                                                                                                                                    |
+| Server actions        | Successful serializable result resolves the compiled action; invocation failures reject it and flow into `useMutation.error` when wrapped by a mutation.                                                                                 | Reserved same-origin POST endpoint. Unknown IDs return 404; implementation failures return a generic 500. | Plec RuntimeValue arguments/results are bounded; uncaught Node exceptions are redacted.                                              |
 
 ## Route error values
 
@@ -66,6 +66,12 @@ redacts uncaught handler exceptions to the generic JSON body
 server process. The Rust HTTP host likewise uses a generic 500 body for
 uncaught host/SSR errors. Explicit application `Response` objects are not
 rewritten.
+
+Server-action implementation failures follow the same redaction boundary:
+Node logs the original exception, while the Rust-owned reserved endpoint
+returns only a generic action failure. Unknown/stale action IDs are a distinct
+404. The action ID is not an authorization mechanism; every action must perform
+application-specific authentication and authorization itself.
 
 No stack, cause, prototype, arbitrary custom field, filesystem path, or
 sidecar detail is part of the production 500 payload. Development SSR fallback

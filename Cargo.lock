@@ -1862,9 +1862,11 @@ dependencies = [
  "plec-compiler",
  "plec-ir",
  "plec-model",
+ "plec-parser",
  "serde",
  "serde_json",
  "sha2",
+ "swc_ecma_ast",
  "tempfile",
  "toml",
 ]

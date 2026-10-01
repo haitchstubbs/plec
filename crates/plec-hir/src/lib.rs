@@ -97,6 +97,7 @@ mod tests {
             reactions: vec![],
             listeners: vec![],
             callables: vec![],
+            server_actions: vec![],
             root_nodes: vec![NodeId(2)],
             nodes,
             expressions,

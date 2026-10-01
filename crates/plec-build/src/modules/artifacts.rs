@@ -18,6 +18,7 @@ use super::build::{BuildError, RuntimeSource, Stage};
 
 pub struct ArtifactOutput {
     pub host_components: BTreeMap<String, BTreeSet<String>>,
+    pub server_actions: Vec<super::server::ServerActionImport>,
 }
 
 /// Build/dev dependency metadata stored outside `public/`; `plec serve` does
@@ -58,6 +59,8 @@ pub fn emit(
     let semantic_graph =
         build_semantic_graph(&source_graph.modules, &source_graph.resolved_imports)
             .map_err(|error| BuildError::new(stage, error.to_string()))?;
+
+    let server_actions = discover_server_actions(&source_graph.modules)?;
 
     let routes = lower_routes(&source_graph.modules, &semantic_graph)
         .map_err(|error| BuildError::new(stage, error.to_string()))?;
@@ -151,7 +154,77 @@ pub fn emit(
         BuildError::with_source(stage, "failed to write asset dependency manifest", error)
     })?;
     stage_runtime(app_dir, repo_root, public_dir, runtime_source)?;
-    Ok(ArtifactOutput { host_components })
+    Ok(ArtifactOutput {
+        host_components,
+        server_actions,
+    })
+}
+
+fn discover_server_actions(
+    modules: &[plec_parser::ParsedModule],
+) -> Result<Vec<super::server::ServerActionImport>, BuildError> {
+    use swc_ecma_ast::{Decl, Expr, ModuleDecl, ModuleItem, Pat, VarDeclKind};
+    let mut actions = Vec::new();
+    for module in modules {
+        for item in &module.ast.body {
+            let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) = item else {
+                continue;
+            };
+            let Decl::Var(declaration) = &export.decl else {
+                continue;
+            };
+            if declaration.kind != VarDeclKind::Const {
+                continue;
+            }
+            for declarator in &declaration.decls {
+                let (Pat::Ident(name), Some(initializer)) = (&declarator.name, &declarator.init)
+                else {
+                    continue;
+                };
+                let Expr::Call(call) = initializer.as_ref() else {
+                    continue;
+                };
+                if !matches!(&call.callee, swc_ecma_ast::Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(ident) if ident.sym == "action"))
+                {
+                    continue;
+                }
+                let valid = call.args.len() == 1
+                    && matches!(call.args[0].expr.as_ref(), Expr::Arrow(arrow) if arrow.is_async);
+                if !valid {
+                    return Err(BuildError::new(
+                        Stage::Compile,
+                        format!(
+                            "server action {} in {} must be action(async (...) => ...)",
+                            name.id.sym, module.id
+                        ),
+                    ));
+                }
+                let identity = format!(
+                    "{}#{}#{}",
+                    module.id.replace('\\', "/"),
+                    name.id.sym,
+                    module.source
+                );
+                use sha2::Digest;
+                let digest = sha2::Sha256::digest(identity.as_bytes());
+                let id = format!(
+                    "sa_{}",
+                    digest
+                        .iter()
+                        .take(16)
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                );
+                actions.push(super::server::ServerActionImport {
+                    id,
+                    import_path: format!("./{}", module.id.replace('\\', "/")),
+                    export_name: name.id.sym.to_string(),
+                });
+            }
+        }
+    }
+    actions.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(actions)
 }
 
 fn collect_host_components(
@@ -211,4 +284,29 @@ fn stage_runtime(
             format!("failed to stage Plec runtime: {error}"),
         )
     })
+}
+
+#[cfg(test)]
+mod server_action_tests {
+    use super::*;
+
+    #[test]
+    fn server_action_discovery_requires_exported_async_arrow_and_has_stable_ids() {
+        let module = |source: &str| plec_parser::parse_module("src/actions.ts", source).unwrap();
+        let valid =
+            module("export const echo = action(async (value) => ({ echoed: value }));");
+        let first = discover_server_actions(std::slice::from_ref(&valid)).unwrap();
+        let repeat = discover_server_actions(std::slice::from_ref(&valid)).unwrap();
+        assert_eq!(first, repeat);
+        assert_eq!(first[0].import_path, "./src/actions.ts");
+
+        let changed = module(
+            "export const echo = action(async (value) => ({ echoed: value, changed: true }));",
+        );
+        let changed = discover_server_actions(std::slice::from_ref(&changed)).unwrap();
+        assert_ne!(first[0].id, changed[0].id);
+
+        let unsupported = module("export const echo = action((value) => value);");
+        assert!(discover_server_actions(std::slice::from_ref(&unsupported)).is_err());
+    }
 }

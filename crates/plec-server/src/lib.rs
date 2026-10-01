@@ -19,7 +19,9 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use axum::Router;
 use serde::Deserialize;
 
-pub use runtime::{ApplicationRuntime, NodeApplicationRuntime, NodeRuntimeOptions};
+pub use runtime::{
+    ApplicationRuntime, NodeApplicationRuntime, NodeRuntimeOptions, ServerActionRequest,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
@@ -27,6 +29,8 @@ pub enum ServerError {
     RequestBodyTooLarge,
     #[error("application artifact exceeds byte limit")]
     ArtifactTooLarge,
+    #[error("unknown or stale server action")]
+    UnknownServerAction,
     #[error("{0}")]
     Other(String),
 }

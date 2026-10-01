@@ -68,6 +68,46 @@ function request(
 }
 
 describe('sidecar supervision', () => {
+  it('invokes only registered generated server actions over the authenticated protocol', async () => {
+    const origin = await startRuntime(`
+      export async function handleRequest() {}
+      const actions = new Map([['sa_echo', async (value) => ({ echoed: value })]]);
+      export function hasAction(id) { return actions.has(id); }
+      export async function invokeAction(id, args) {
+        const action = actions.get(id);
+        if (typeof action !== 'function') throw new Error('unknown action');
+        return action(...args);
+      }
+    `);
+    const accepted = await request(origin, '/_plec-runtime/action', {
+      method: 'POST', body: JSON.stringify({ id: 'sa_echo', arguments: ['value'] }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toEqual({ ok: true, value: { echoed: 'value' } });
+    const unknown = await request(origin, '/_plec-runtime/action', {
+      method: 'POST', body: JSON.stringify({ id: 'sa_missing', arguments: [] }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(unknown.status).toBe(404);
+  });
+
+  it('redacts server-action implementation exceptions', async () => {
+    const origin = await startRuntime(`
+      export async function handleRequest() {}
+      export function hasAction(id) { return id === 'sa_boom'; }
+      export async function invokeAction() { throw new Error('PRIVATE_ACTION_SECRET'); }
+    `);
+    const response = await request(origin, '/_plec-runtime/action', {
+      method: 'POST', body: JSON.stringify({ id: 'sa_boom', arguments: [] }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(response.status).toBe(500);
+    const body = await response.text();
+    expect(body).toContain('Internal Server Error');
+    expect(body).not.toContain('PRIVATE_ACTION_SECRET');
+  });
+
   it('refuses requests without the internal token before any dispatch', async () => {
     const origin = await startRuntime(`
       export async function handleRequest() {

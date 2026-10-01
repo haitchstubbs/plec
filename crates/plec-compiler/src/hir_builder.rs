@@ -14,7 +14,7 @@ use plec_ir::limits::{
     MAX_TOTAL_HIR_ENTRIES,
 };
 use plec_ir::sink::is_safe_attribute_value;
-use plec_model::{resolve_component, ComponentPropKind, SemanticGraph};
+use plec_model::{ComponentPropKind, SemanticGraph, resolve_component};
 use swc_common::{Span, Spanned};
 use swc_ecma_ast::{
     ArrowFunctionBody, BinaryOp, Callee, Decl, Expr, Function, JSXAttr, JSXAttrName,
@@ -77,6 +77,68 @@ fn normalize_event_name(jsx_name: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn discover_server_action_ids(
+    modules: &[plec_parser::ParsedModule],
+) -> Result<std::collections::HashMap<(String, String), String>, String> {
+    use sha2::Digest;
+    use swc_ecma_ast::{Callee, Decl, Expr, ModuleDecl, ModuleItem, Pat, VarDeclKind};
+    let mut actions = std::collections::HashMap::new();
+    for module in modules {
+        for item in &module.ast.body {
+            let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) = item else {
+                continue;
+            };
+            let Decl::Var(declaration) = &export.decl else {
+                continue;
+            };
+            for declarator in &declaration.decls {
+                let Some(initializer) = &declarator.init else {
+                    continue;
+                };
+                let Expr::Call(call) = initializer.as_ref() else {
+                    continue;
+                };
+                if !matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(ident) if ident.sym == *"action"))
+                {
+                    continue;
+                }
+                let Pat::Ident(name) = &declarator.name else {
+                    return Err(format!(
+                        "action in {} must initialize an exported const identifier",
+                        module.id
+                    ));
+                };
+                if declaration.kind != VarDeclKind::Const
+                    || call.args.len() != 1
+                    || !matches!(call.args[0].expr.as_ref(), Expr::Arrow(arrow) if arrow.is_async)
+                {
+                    return Err(format!(
+                        "server action {} in {} must be exported const name = action(async (...) => ...)",
+                        name.id.sym, module.id
+                    ));
+                }
+                let exported = name.id.sym.to_string();
+                let identity = format!(
+                    "{}#{}#{}",
+                    module.id.replace('\\', "/"),
+                    exported,
+                    module.source
+                );
+                let hash = sha2::Sha256::digest(identity.as_bytes());
+                let id = format!(
+                    "sa_{}",
+                    hash.iter()
+                        .take(16)
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                );
+                actions.insert((module.id.clone(), exported), id);
+            }
+        }
+    }
+    Ok(actions)
 }
 
 #[derive(Clone, Copy)]
@@ -179,6 +241,8 @@ struct HirLoweringCtx<'a> {
     /// compile-time element diagnostics and the runtime element policy
     /// enforce the same identity rule (crates/plec-ir/src/sink.rs).
     custom_elements: std::collections::BTreeSet<String>,
+    server_action_ids: std::collections::HashMap<(String, String), String>,
+    server_actions: Vec<String>,
 }
 
 impl<'a> HirLoweringCtx<'a> {
@@ -212,6 +276,8 @@ impl<'a> HirLoweringCtx<'a> {
             semantic_graph,
             module_id,
             custom_elements: custom_elements.clone(),
+            server_action_ids: std::collections::HashMap::new(),
+            server_actions: Vec::new(),
         }
     }
 
@@ -283,6 +349,31 @@ impl<'a> HirLoweringCtx<'a> {
             .map(str::to_owned)
     }
 
+    fn server_action_id(&self, name: &str) -> Option<String> {
+        let module = self.semantic_graph.get_module(self.module_id)?;
+        let symbol =
+            if let Some(import) = module.imports.get(name).filter(|import| !import.type_only) {
+                plec_model::resolve_export(
+                    self.semantic_graph,
+                    &import.target_module_id,
+                    &import.imported_name,
+                )?
+            } else {
+                if self
+                    .scopes
+                    .iter()
+                    .rev()
+                    .any(|scope| scope.contains_key(name))
+                {
+                    return None;
+                }
+                plec_model::resolve_local_symbol(self.semantic_graph, self.module_id, name)?
+            };
+        self.server_action_ids
+            .get(&(symbol.module_id, symbol.local_name))
+            .cloned()
+    }
+
     fn binding_kind(&self, id: BindingId) -> &HirBindingKind {
         &self.bindings[id.0 as usize].kind
     }
@@ -336,7 +427,17 @@ pub fn lower_root_component_with_options(
     semantic_graph: &SemanticGraph,
     custom_elements: &std::collections::BTreeSet<String>,
 ) -> Result<HirComponent, String> {
+    lower_root_component_with_actions(root, semantic_graph, custom_elements, &Default::default())
+}
+
+fn lower_root_component_with_actions(
+    root: &RootComponent<'_>,
+    semantic_graph: &SemanticGraph,
+    custom_elements: &std::collections::BTreeSet<String>,
+    action_ids: &std::collections::HashMap<(String, String), String>,
+) -> Result<HirComponent, String> {
     let mut ctx = HirLoweringCtx::new(semantic_graph, &root.symbol.module_id, custom_elements);
+    ctx.server_action_ids = action_ids.clone();
     let span = source_span_from_swc(root.symbol.span, &root.symbol.module_id);
 
     lower_component_program(&root.declaration, &root.symbol.local_name, &mut ctx)?;
@@ -374,6 +475,7 @@ pub fn lower_root_component_with_options(
         reactions: ctx.reactions,
         listeners: ctx.listeners,
         callables: ctx.callables,
+        server_actions: ctx.server_actions,
         root_nodes: vec![root_node_id],
         nodes: ctx.nodes,
         expressions: ctx.expressions,
@@ -400,11 +502,13 @@ pub fn lower_application_with_options(
     semantic_graph: &SemanticGraph,
     custom_elements: &std::collections::BTreeSet<String>,
 ) -> Result<HirApplication, String> {
+    let server_action_ids = discover_server_action_ids(parsed_modules)?;
     fn visit(
         parsed_modules: &[plec_parser::ParsedModule],
         root: &RootComponent<'_>,
         semantic_graph: &SemanticGraph,
         custom_elements: &std::collections::BTreeSet<String>,
+        server_action_ids: &std::collections::HashMap<(String, String), String>,
         visiting: &mut Vec<ComponentId>,
         components: &mut Vec<HirComponent>,
         depth: usize,
@@ -426,7 +530,12 @@ pub fn lower_application_with_options(
             return Ok(());
         }
         visiting.push(id.clone());
-        let component = lower_root_component_with_options(root, semantic_graph, custom_elements)?;
+        let component = lower_root_component_with_actions(
+            root,
+            semantic_graph,
+            custom_elements,
+            server_action_ids,
+        )?;
         let targets = component
             .nodes
             .iter()
@@ -468,6 +577,7 @@ pub fn lower_application_with_options(
                 &child,
                 semantic_graph,
                 custom_elements,
+                server_action_ids,
                 visiting,
                 components,
                 depth + 1,
@@ -484,6 +594,7 @@ pub fn lower_application_with_options(
         root,
         semantic_graph,
         custom_elements,
+        &server_action_ids,
         &mut Vec::new(),
         &mut components,
         0,
@@ -660,7 +771,7 @@ fn lower_component_patterns(
                                 _ => {
                                     return Err(
                                         "Component props must use identifier keys".to_string()
-                                    )
+                                    );
                                 }
                             };
                             let Pat::Ident(local) = key_value.value.as_ref() else {
@@ -798,7 +909,7 @@ fn lower_component_patterns(
         _ => {
             return Err(format!(
                 "Unsupported component parameter pattern in {component_name}"
-            ))
+            ));
         }
     }
     Ok(())
@@ -1322,6 +1433,7 @@ fn lower_callable_statements(
 fn lower_awaited_call(
     awaited: &swc_ecma_ast::AwaitExpr,
     target: Option<BindingId>,
+    return_value: bool,
     span: SourceSpan,
     ctx: &mut HirLoweringCtx<'_>,
 ) -> Result<HirStmt, String> {
@@ -1401,6 +1513,30 @@ fn lower_awaited_call(
     let Expr::Ident(callee) = callee.as_ref() else {
         return Err("await must call fetch or a local action".into());
     };
+    if let Some(id) = ctx.server_action_id(&callee.sym.to_string()) {
+        if call.args.iter().any(|arg| arg.spread.is_some()) {
+            return Err("server action calls do not support spread arguments".into());
+        }
+        let action = match ctx.server_actions.iter().position(|known| known == &id) {
+            Some(action) => action,
+            None => {
+                let action = ctx.server_actions.len();
+                ctx.server_actions.push(id);
+                action
+            }
+        };
+        return Ok(HirStmt::AwaitServerAction {
+            target,
+            action,
+            arguments: call
+                .args
+                .iter()
+                .map(|arg| lower_expression(&arg.expr, ctx))
+                .collect::<Result<_, _>>()?,
+            return_value,
+            span,
+        });
+    }
     let callee = ctx.resolve_binding(&callee.sym)?;
     if !ctx.is_callable_binding(callee) || call.args.iter().any(|arg| arg.spread.is_some()) {
         return Err("awaited calls require a local action and non-spread arguments".into());
@@ -1730,7 +1866,7 @@ fn lower_cookie_options(
                 return Err(
                     "cookie options must be static path, sameSite, secure, and maxAge values"
                         .into(),
-                )
+                );
             }
             _ => return Err("unsupported cookie option".into()),
         }
@@ -1756,7 +1892,7 @@ fn lower_async_variable(
         source_span_from_swc(name.id.span, ctx.module_id),
     )?;
     match declaration.init.as_deref().map(erase_type_assertions) {
-        Some(Expr::Await(awaited)) => lower_awaited_call(awaited, Some(target), span, ctx),
+        Some(Expr::Await(awaited)) => lower_awaited_call(awaited, Some(target), false, span, ctx),
         Some(initializer) => Ok(HirStmt::AsyncAssign {
             target,
             value: lower_expression(initializer, ctx)?,
@@ -1822,7 +1958,7 @@ fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result
                 return Err("only ref.current assignment is supported".into());
             }
             if let Expr::Await(awaited) = expr_stmt.expr.as_ref() {
-                return lower_awaited_call(awaited, None, span, ctx);
+                return lower_awaited_call(awaited, None, false, span, ctx);
             }
             let expression = match expr_stmt.expr.as_ref() {
                 Expr::Unary(unary) if matches!(unary.op, swc_ecma_ast::UnaryOp::Void) => {
@@ -1942,7 +2078,7 @@ fn lower_callable_statement(stmt: &Stmt, ctx: &mut HirLoweringCtx<'_>) -> Result
         }
         Stmt::Return(return_stmt) => {
             if let Some(Expr::Await(awaited)) = return_stmt.arg.as_deref() {
-                return lower_awaited_call(awaited, None, span, ctx);
+                return lower_awaited_call(awaited, None, true, span, ctx);
             }
             Ok(HirStmt::Return {
                 value: return_stmt
@@ -2024,7 +2160,7 @@ fn lower_state_update_value(
             _ => return Err("State updater blocks must contain one return expression".into()),
         },
         ArrowFunctionBody::FunctionBody(_) => {
-            return Err("State updater blocks must contain one return expression".into())
+            return Err("State updater blocks must contain one return expression".into());
         }
     };
     ctx.push_scope();
@@ -2581,7 +2717,7 @@ fn lower_jsx_attr(
         None => {
             return Err(format!(
                 "Boolean JSX attribute '{name}' is not supported by structural HIR"
-            ))
+            ));
         }
         Some(_) => return Err(format!("Unsupported JSX attribute value for '{name}'")),
     }
@@ -2923,8 +3059,7 @@ fn lower_structural_expression(
             }
             Err(format!(
                 "Unsupported structural expression: Call at {}..{} (only .map() is supported as structural)",
-                span.start,
-                span.end
+                span.start, span.end
             ))
         }
         _ => Err(format!(
@@ -3096,7 +3231,7 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
                     optional: false,
                 },
                 swc_ecma_ast::MemberProp::PrivateName(_) => {
-                    return Err("Private member properties not supported".to_string())
+                    return Err("Private member properties not supported".to_string());
                 }
                 swc_ecma_ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
@@ -3162,12 +3297,14 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
                     _ => {
                         return Err(
                             "Private optional member properties are not supported".to_string()
-                        )
+                        );
                     }
                 }
             }
             swc_ecma_ast::OptChainBase::Call(_) => {
-                return Err("Optional calls are unsupported except ref.current?.focus()".to_string())
+                return Err(
+                    "Optional calls are unsupported except ref.current?.focus()".to_string()
+                );
             }
         },
 
@@ -3216,7 +3353,7 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
                 swc_ecma_ast::UnaryOp::Void
                 | swc_ecma_ast::UnaryOp::Delete
                 | swc_ecma_ast::UnaryOp::TypeOf => {
-                    return Err("Unsupported unary operator".to_string())
+                    return Err("Unsupported unary operator".to_string());
                 }
                 _ => return Err("Unsupported unary operator".to_string()),
             };
@@ -3312,7 +3449,7 @@ fn lower_expression(expr: &Expr, ctx: &mut HirLoweringCtx<'_>) -> Result<ExprId,
                                 swc_ecma_ast::PropName::Num(n) => n.value.to_string(),
                                 swc_ecma_ast::PropName::BigInt(n) => n.value.to_string(),
                                 swc_ecma_ast::PropName::Computed(_) => {
-                                    return Err("Computed property names not supported".to_string())
+                                    return Err("Computed property names not supported".to_string());
                                 }
                             };
                             let value_id = lower_expression(&kv.value, ctx)?;
@@ -3755,14 +3892,18 @@ mod tests {
         let executable = crate::lower_component_to_executable(&hir)
             .expect("host values should produce executable IR");
         assert_eq!(executable.host_slots.len(), 2);
-        assert!(executable
-            .host_slots
-            .iter()
-            .any(|slot| slot.kind == "location"));
-        assert!(executable
-            .host_slots
-            .iter()
-            .any(|slot| slot.kind == "cookie"));
+        assert!(
+            executable
+                .host_slots
+                .iter()
+                .any(|slot| slot.kind == "location")
+        );
+        assert!(
+            executable
+                .host_slots
+                .iter()
+                .any(|slot| slot.kind == "cookie")
+        );
         assert_eq!(executable.capabilities[0].name, "sidebar");
     }
 
@@ -4163,9 +4304,11 @@ mod tests {
             }
         "#;
 
-        assert!(build_and_lower(source)
-            .unwrap_err()
-            .contains("Callable values"));
+        assert!(
+            build_and_lower(source)
+                .unwrap_err()
+                .contains("Callable values")
+        );
     }
 
     #[test]
@@ -4978,9 +5121,11 @@ mod tests {
     #[test]
     fn rejects_unresolved_component_calls() {
         let source = "export function App() { return <Missing />; }";
-        assert!(build_and_lower(source)
-            .unwrap_err()
-            .contains("Unresolved component 'Missing'"));
+        assert!(
+            build_and_lower(source)
+                .unwrap_err()
+                .contains("Unresolved component 'Missing'")
+        );
     }
 
     #[test]
@@ -5017,10 +5162,11 @@ mod tests {
             "export function App() { const [enabled, setEnabled] = useState(true); function save() {} return <button onClick={() => { if (enabled) void save(); }}>Save</button>; }",
         )
         .unwrap();
-        assert!(hir
-            .nodes
-            .iter()
-            .any(|node| matches!(node, HirNode::Element(_))));
+        assert!(
+            hir.nodes
+                .iter()
+                .any(|node| matches!(node, HirNode::Element(_)))
+        );
     }
 
     #[test]
@@ -5029,10 +5175,11 @@ mod tests {
             "export function Icon({ title, ...props }) { return <svg {...props}>{title}</svg>; }",
         )
         .unwrap();
-        assert!(hir
-            .expressions
-            .iter()
-            .any(|expression| matches!(expression.expression, HirExpr::ObjectWithout { .. })));
+        assert!(
+            hir.expressions
+                .iter()
+                .any(|expression| matches!(expression.expression, HirExpr::ObjectWithout { .. }))
+        );
         assert!(hir.nodes.iter().any(|node| matches!(node,
             HirNode::Element(HirElement { props, .. }) if props.iter().any(|prop| matches!(prop, HirProp::Spread { .. }))
         )));
@@ -5069,14 +5216,16 @@ mod tests {
         let hir = build_and_lower(
             "export function App() { const [items, setItems] = useState([]); const visible = items.filter(item => item.title.toLowerCase().includes('a')); return <button onClick={() => setItems(values => values.map(item => ({ ...item, title: item.title.trim() })))}>{visible.length}</button>; }",
         ).unwrap();
-        assert!(hir
-            .expressions
-            .iter()
-            .any(|expression| matches!(expression.expression, HirExpr::Filter { .. })));
-        assert!(hir
-            .expressions
-            .iter()
-            .any(|expression| matches!(expression.expression, HirExpr::Map { .. })));
+        assert!(
+            hir.expressions
+                .iter()
+                .any(|expression| matches!(expression.expression, HirExpr::Filter { .. }))
+        );
+        assert!(
+            hir.expressions
+                .iter()
+                .any(|expression| matches!(expression.expression, HirExpr::Map { .. }))
+        );
     }
 
     #[test]
@@ -5095,10 +5244,12 @@ mod tests {
         .unwrap();
         assert!(hir.inputs.iter().any(|input| input.kind == "routeParams"));
         let executable = crate::lower_component_to_executable(&hir).unwrap();
-        assert!(executable
-            .host_slots
-            .iter()
-            .any(|slot| slot.kind == "routeParams"));
+        assert!(
+            executable
+                .host_slots
+                .iter()
+                .any(|slot| slot.kind == "routeParams")
+        );
     }
 
     #[test]
@@ -5117,10 +5268,12 @@ mod tests {
         .unwrap();
         assert!(hir.inputs.iter().any(|input| input.kind == "routeSearch"));
         let executable = crate::lower_component_to_executable(&hir).unwrap();
-        assert!(executable
-            .host_slots
-            .iter()
-            .any(|slot| slot.kind == "routeSearch"));
+        assert!(
+            executable
+                .host_slots
+                .iter()
+                .any(|slot| slot.kind == "routeSearch")
+        );
     }
 
     #[test]
@@ -5144,10 +5297,11 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert!(hir
-            .bindings
-            .iter()
-            .any(|binding| matches!(binding.kind, HirBindingKind::RouteReload)));
+        assert!(
+            hir.bindings
+                .iter()
+                .any(|binding| matches!(binding.kind, HirBindingKind::RouteReload))
+        );
         let executable = crate::lower_component_to_executable(&hir).unwrap();
         assert!(executable.actions.iter().any(|action| {
             action
@@ -5258,41 +5412,48 @@ mod tests {
             "function A() { return <p>A</p>; } function B() { return <p>B</p>; } export function App() { const [on, setOn] = useState(true); const Choice = on ? A : B; return <Choice />; }",
             "App",
         ).unwrap();
-        assert!(hir
-            .nodes
-            .iter()
-            .any(|node| matches!(node, HirNode::Conditional(_))));
+        assert!(
+            hir.nodes
+                .iter()
+                .any(|node| matches!(node, HirNode::Conditional(_)))
+        );
     }
 
     #[test]
     fn lowers_reachable_components_and_rejects_cycles() {
-        let modules = vec![parse_module(
-            "App.tsx",
-            r#"
+        let modules = vec![
+            parse_module(
+                "App.tsx",
+                r#"
             export function App() { return <Child />; }
             function Child() { return <div>child</div>; }
         "#,
-        )
-        .unwrap()];
+            )
+            .unwrap(),
+        ];
         let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
         let root = discover_root_component(&modules, &graph, "App.tsx", Some("App")).unwrap();
         let app = lower_application(&modules, &root, &graph).unwrap();
         assert_eq!(app.components.len(), 2);
         assert_eq!(app.root, ComponentId::new("App.tsx", "App"));
 
-        let modules = vec![parse_module(
-            "Cycle.tsx",
-            r#"
+        let modules = vec![
+            parse_module(
+                "Cycle.tsx",
+                r#"
             export function App() { return <Child />; }
             function Child() { return <App />; }
         "#,
-        )
-        .unwrap()];
+            )
+            .unwrap(),
+        ];
         let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
         let root = discover_root_component(&modules, &graph, "Cycle.tsx", Some("App")).unwrap();
-        assert!(lower_application(&modules, &root, &graph)
-            .unwrap_err()
-            .contains("Recursive component 'App'"));
+        assert!(
+            lower_application(&modules, &root, &graph)
+                .unwrap_err()
+                .contains("Recursive component 'App'")
+        );
     }
 
     fn lower_with_custom_elements(
@@ -5362,10 +5523,11 @@ mod tests {
             &["my-widget"],
         )
         .expect("configured custom element must compile");
-        assert!(hir
-            .nodes
-            .iter()
-            .any(|node| matches!(node, HirNode::Element(element) if element.tag == "my-widget")));
+        assert!(
+            hir.nodes.iter().any(
+                |node| matches!(node, HirNode::Element(element) if element.tag == "my-widget")
+            )
+        );
     }
 
     #[test]
@@ -5375,10 +5537,11 @@ mod tests {
             &[],
         )
         .expect("standard HTML/SVG elements must compile");
-        assert!(hir
-            .nodes
-            .iter()
-            .any(|node| matches!(node, HirNode::Element(element) if element.tag == "circle")));
+        assert!(
+            hir.nodes
+                .iter()
+                .any(|node| matches!(node, HirNode::Element(element) if element.tag == "circle"))
+        );
     }
 
     fn build_and_lower_application(source: &str) -> Result<plec_hir::HirApplication, String> {
