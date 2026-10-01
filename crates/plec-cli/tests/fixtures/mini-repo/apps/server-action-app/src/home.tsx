@@ -5,5 +5,9 @@ export function Home() {
   const save = useMutation(async (value: string) => {
     return await echo(value);
   });
-  return <button onClick={() => save.run('fixture')}>{save.data.echoed}</button>;
+  return (
+    <button onClick={() => save.run('fixture')}>
+      {save.data.echoed}
+    </button>
+  );
 }

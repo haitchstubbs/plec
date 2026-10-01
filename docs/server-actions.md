@@ -6,7 +6,9 @@ compiled Plec actions:
 ```ts
 import { action } from '@plec/core';
 
-export const echo = action(async (value: string) => ({ echoed: value }));
+export const echo = action(async (value: string) => ({
+  echoed: value,
+}));
 ```
 
 Only an exported `const` initialized directly with

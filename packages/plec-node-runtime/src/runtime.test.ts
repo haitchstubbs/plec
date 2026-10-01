@@ -80,13 +80,18 @@ describe('sidecar supervision', () => {
       }
     `);
     const accepted = await request(origin, '/_plec-runtime/action', {
-      method: 'POST', body: JSON.stringify({ id: 'sa_echo', arguments: ['value'] }),
+      method: 'POST',
+      body: JSON.stringify({ id: 'sa_echo', arguments: ['value'] }),
       headers: { 'content-type': 'application/json' },
     });
     expect(accepted.status).toBe(200);
-    expect(await accepted.json()).toEqual({ ok: true, value: { echoed: 'value' } });
+    expect(await accepted.json()).toEqual({
+      ok: true,
+      value: { echoed: 'value' },
+    });
     const unknown = await request(origin, '/_plec-runtime/action', {
-      method: 'POST', body: JSON.stringify({ id: 'sa_missing', arguments: [] }),
+      method: 'POST',
+      body: JSON.stringify({ id: 'sa_missing', arguments: [] }),
       headers: { 'content-type': 'application/json' },
     });
     expect(unknown.status).toBe(404);
@@ -99,7 +104,8 @@ describe('sidecar supervision', () => {
       export async function invokeAction() { throw new Error('PRIVATE_ACTION_SECRET'); }
     `);
     const response = await request(origin, '/_plec-runtime/action', {
-      method: 'POST', body: JSON.stringify({ id: 'sa_boom', arguments: [] }),
+      method: 'POST',
+      body: JSON.stringify({ id: 'sa_boom', arguments: [] }),
       headers: { 'content-type': 'application/json' },
     });
     expect(response.status).toBe(500);

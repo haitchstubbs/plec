@@ -301,33 +301,59 @@ async function serve(
       return;
     }
 
-    const internalPath = new URL(incoming.url ?? '/', 'http://plec.internal').pathname;
+    const internalPath = new URL(
+      incoming.url ?? '/',
+      'http://plec.internal',
+    ).pathname;
     if (internalPath === ACTION_PATH) {
       if (incoming.method !== HttpMethod.POST) {
         outgoing.writeHead(405, { 'cache-control': 'no-store' });
         outgoing.end();
         return;
       }
-      const value: unknown = await (await toWebRequest(incoming)).json();
-      if (!value || typeof value !== 'object') throw new Error('invalid action request');
+      const value: unknown = await (
+        await toWebRequest(incoming)
+      ).json();
+      if (!value || typeof value !== 'object')
+        throw new Error('invalid action request');
       const { id, arguments: args } = value as Record<string, unknown>;
-      if (typeof id !== 'string' || !Array.isArray(args)) throw new Error('invalid action request');
-      const invoke = (application as ApplicationModule & {
-        invokeAction?: (id: string, args: unknown[]) => Promise<unknown>;
-        hasAction?: (id: string) => boolean;
-      }).invokeAction;
-      if (typeof invoke !== 'function') throw new Error('action registry unavailable');
-      const hasAction = (application as ApplicationModule & { hasAction?: (id: string) => boolean }).hasAction;
+      if (typeof id !== 'string' || !Array.isArray(args))
+        throw new Error('invalid action request');
+      const invoke = (
+        application as ApplicationModule & {
+          invokeAction?: (
+            id: string,
+            args: unknown[],
+          ) => Promise<unknown>;
+          hasAction?: (id: string) => boolean;
+        }
+      ).invokeAction;
+      if (typeof invoke !== 'function')
+        throw new Error('action registry unavailable');
+      const hasAction = (
+        application as ApplicationModule & {
+          hasAction?: (id: string) => boolean;
+        }
+      ).hasAction;
       if (typeof hasAction !== 'function' || !hasAction(id)) {
-        outgoing.writeHead(404, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-        outgoing.end(JSON.stringify({ error: 'unknown server action' }));
+        outgoing.writeHead(404, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        outgoing.end(
+          JSON.stringify({ error: 'unknown server action' }),
+        );
         return;
       }
       const result = await invoke(id, args);
       validateRuntimeValue(result);
       const body = JSON.stringify({ ok: true, value: result });
-      if (Buffer.byteLength(body) > MAX_ACTION_RESULT_BYTES) throw new Error('action result exceeds limit');
-      outgoing.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      if (Buffer.byteLength(body) > MAX_ACTION_RESULT_BYTES)
+        throw new Error('action result exceeds limit');
+      outgoing.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
       outgoing.end(body);
       return;
     }
@@ -373,20 +399,27 @@ function validateRuntimeValue(root: unknown): void {
   let bytes = 0;
   const visit = (value: unknown, depth: number): void => {
     nodes += 1;
-    if (nodes > MAX_RUNTIME_VALUE_NODES || depth > MAX_RUNTIME_VALUE_DEPTH)
+    if (
+      nodes > MAX_RUNTIME_VALUE_NODES ||
+      depth > MAX_RUNTIME_VALUE_DEPTH
+    )
       throw new Error('action result exceeds value limits');
     if (value === null || typeof value === 'boolean') return;
     if (typeof value === 'number') {
-      if (!Number.isFinite(value)) throw new Error('action result contains a non-finite number');
+      if (!Number.isFinite(value))
+        throw new Error('action result contains a non-finite number');
       return;
     }
     if (typeof value === 'string') {
       bytes += Buffer.byteLength(value);
-      if (bytes > MAX_RUNTIME_VALUE_STRING_BYTES) throw new Error('action result exceeds string limits');
+      if (bytes > MAX_RUNTIME_VALUE_STRING_BYTES)
+        throw new Error('action result exceeds string limits');
       return;
     }
-    if (typeof value !== 'object') throw new Error('action result contains an unsupported value');
-    if (ancestors.has(value)) throw new Error('action result is cyclic');
+    if (typeof value !== 'object')
+      throw new Error('action result contains an unsupported value');
+    if (ancestors.has(value))
+      throw new Error('action result is cyclic');
     ancestors.add(value);
     if (Array.isArray(value)) {
       for (const item of value) visit(item, depth + 1);
@@ -398,7 +431,8 @@ function validateRuntimeValue(root: unknown): void {
         bytes += Buffer.byteLength(key);
         visit(item, depth + 1);
       }
-      if (bytes > MAX_RUNTIME_VALUE_STRING_BYTES) throw new Error('action result exceeds string limits');
+      if (bytes > MAX_RUNTIME_VALUE_STRING_BYTES)
+        throw new Error('action result exceeds string limits');
     }
     ancestors.delete(value);
   };
