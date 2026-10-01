@@ -14,6 +14,15 @@ import {
 
 // The sidecar always authenticates with this header before any dispatch.
 const TOKEN = 'test-token-0123456789abcdef';
+const CONTEXT = {
+  url: 'https://example.test/action',
+  pathname: '/action',
+  method: 'POST',
+  headers: { cookie: 'session=one' },
+  cookies: { session: 'one' },
+  params: {},
+  query: {},
+};
 
 const servers: Array<Awaited<ReturnType<typeof start>>> = [];
 afterEach(async () => {
@@ -81,7 +90,11 @@ describe('sidecar supervision', () => {
     `);
     const accepted = await request(origin, '/_plec-runtime/action', {
       method: 'POST',
-      body: JSON.stringify({ id: 'sa_echo', arguments: ['value'] }),
+      body: JSON.stringify({
+        id: 'sa_echo',
+        arguments: ['value'],
+        context: CONTEXT,
+      }),
       headers: { 'content-type': 'application/json' },
     });
     expect(accepted.status).toBe(200);
@@ -91,10 +104,49 @@ describe('sidecar supervision', () => {
     });
     const unknown = await request(origin, '/_plec-runtime/action', {
       method: 'POST',
-      body: JSON.stringify({ id: 'sa_missing', arguments: [] }),
+      body: JSON.stringify({
+        id: 'sa_missing',
+        arguments: [],
+        context: CONTEXT,
+      }),
       headers: { 'content-type': 'application/json' },
     });
     expect(unknown.status).toBe(404);
+  });
+
+  it('keeps concurrent action request contexts isolated through invocation', async () => {
+    const origin = await startRuntime(`
+      import { AsyncLocalStorage } from 'node:async_hooks';
+      export async function handleRequest() {}
+      const contexts = new AsyncLocalStorage();
+      export function hasAction(id) { return id === 'sa_context'; }
+      export async function invokeAction(id, args, context) {
+        return contexts.run(context, async () => {
+          await new Promise((resolve) => setTimeout(resolve, args[0]));
+          return { sessionObserved: contexts.getStore().cookies.session === args[1] };
+        });
+      }
+    `);
+    const invoke = (delay: number, session: string) =>
+      request(origin, '/_plec-runtime/action', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: 'sa_context',
+          arguments: [delay, session],
+          context: { ...CONTEXT, cookies: { session } },
+        }),
+        headers: { 'content-type': 'application/json' },
+      });
+    const [first, second] = await Promise.all([
+      invoke(15, 'first'),
+      invoke(0, 'second'),
+    ]);
+    expect(await first.json()).toMatchObject({
+      value: { sessionObserved: true },
+    });
+    expect(await second.json()).toMatchObject({
+      value: { sessionObserved: true },
+    });
   });
 
   it('redacts server-action implementation exceptions', async () => {
@@ -105,7 +157,11 @@ describe('sidecar supervision', () => {
     `);
     const response = await request(origin, '/_plec-runtime/action', {
       method: 'POST',
-      body: JSON.stringify({ id: 'sa_boom', arguments: [] }),
+      body: JSON.stringify({
+        id: 'sa_boom',
+        arguments: [],
+        context: CONTEXT,
+      }),
       headers: { 'content-type': 'application/json' },
     });
     expect(response.status).toBe(500);

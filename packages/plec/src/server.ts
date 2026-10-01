@@ -31,7 +31,7 @@ export type AppRequestHandler = (
  * function itself remains ordinary JavaScript in the Node server bundle.
  */
 export function action<Args extends unknown[], Result>(
-  implementation: (...args: Args) => Result,
-): (...args: Args) => Result {
+  implementation: (...args: Args) => Promise<Result>,
+): (...args: Args) => Promise<Result> {
   return implementation;
 }

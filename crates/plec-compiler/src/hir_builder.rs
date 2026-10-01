@@ -79,68 +79,6 @@ fn normalize_event_name(jsx_name: &str) -> Option<String> {
     }
 }
 
-fn discover_server_action_ids(
-    modules: &[plec_parser::ParsedModule],
-) -> Result<std::collections::HashMap<(String, String), String>, String> {
-    use sha2::Digest;
-    use swc_ecma_ast::{Callee, Decl, Expr, ModuleDecl, ModuleItem, Pat, VarDeclKind};
-    let mut actions = std::collections::HashMap::new();
-    for module in modules {
-        for item in &module.ast.body {
-            let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) = item else {
-                continue;
-            };
-            let Decl::Var(declaration) = &export.decl else {
-                continue;
-            };
-            for declarator in &declaration.decls {
-                let Some(initializer) = &declarator.init else {
-                    continue;
-                };
-                let Expr::Call(call) = initializer.as_ref() else {
-                    continue;
-                };
-                if !matches!(&call.callee, Callee::Expr(callee) if matches!(callee.as_ref(), Expr::Ident(ident) if ident.sym == *"action"))
-                {
-                    continue;
-                }
-                let Pat::Ident(name) = &declarator.name else {
-                    return Err(format!(
-                        "action in {} must initialize an exported const identifier",
-                        module.id
-                    ));
-                };
-                if declaration.kind != VarDeclKind::Const
-                    || call.args.len() != 1
-                    || !matches!(call.args[0].expr.as_ref(), Expr::Arrow(arrow) if arrow.is_async)
-                {
-                    return Err(format!(
-                        "server action {} in {} must be exported const name = action(async (...) => ...)",
-                        name.id.sym, module.id
-                    ));
-                }
-                let exported = name.id.sym.to_string();
-                let identity = format!(
-                    "{}#{}#{}",
-                    module.id.replace('\\', "/"),
-                    exported,
-                    module.source
-                );
-                let hash = sha2::Sha256::digest(identity.as_bytes());
-                let id = format!(
-                    "sa_{}",
-                    hash.iter()
-                        .take(16)
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>()
-                );
-                actions.insert((module.id.clone(), exported), id);
-            }
-        }
-    }
-    Ok(actions)
-}
-
 #[derive(Clone, Copy)]
 enum CallablePolicy {
     InlineOnly,
@@ -502,7 +440,15 @@ pub fn lower_application_with_options(
     semantic_graph: &SemanticGraph,
     custom_elements: &std::collections::BTreeSet<String>,
 ) -> Result<HirApplication, String> {
-    let server_action_ids = discover_server_action_ids(parsed_modules)?;
+    let server_action_ids = crate::discover_server_actions(parsed_modules, semantic_graph)?
+        .into_iter()
+        .map(|declaration| {
+            (
+                (declaration.module_id, declaration.export_name),
+                declaration.id,
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     fn visit(
         parsed_modules: &[plec_parser::ParsedModule],
         root: &RootComponent<'_>,

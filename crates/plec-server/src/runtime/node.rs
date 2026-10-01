@@ -17,20 +17,20 @@ use axum::{
 use tokio::{
     io::AsyncBufReadExt,
     sync::oneshot,
-    time::{Duration, timeout},
+    time::{timeout, Duration},
 };
 
 use super::{
-    internal::{InternalAddress, InternalRequest, dispatch_internal},
+    internal::{dispatch_internal, InternalAddress, InternalRequest},
     protocol,
 };
 use crate::{
-    ApplicationRuntime, PlecServerOptions, ServerError,
-    request::{RequestContext, read_bounded_body},
+    request::{read_bounded_body, RequestContext},
     runtime::{
         ApplicationDispatch, HostRenderDispatch, HostRenderRequest, ServerActionDispatch,
         ServerActionRequest,
     },
+    ApplicationRuntime, PlecServerOptions, ServerError,
 };
 
 /// How the sidecar is launched. Paths are resolved by the caller (usually
@@ -415,6 +415,7 @@ impl ApplicationRuntime for NodeApplicationRuntime {
             let body = serde_json::to_vec(&serde_json::json!({
                 "id": request.id,
                 "arguments": request.arguments,
+                "context": request_context_json(&request.context),
             }))
             .map_err(|error| {
                 ServerError::message(format!(
@@ -470,6 +471,41 @@ impl ApplicationRuntime for NodeApplicationRuntime {
             Ok(value)
         })
     }
+}
+
+fn request_context_json(context: &RequestContext) -> serde_json::Value {
+    let headers = context
+        .headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value.to_str().ok().map(|value| {
+                (
+                    name.as_str().to_owned(),
+                    serde_json::Value::String(value.to_owned()),
+                )
+            })
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let query = context
+        .query
+        .iter()
+        .map(|(name, value)| {
+            let value = match value {
+                crate::request::QueryValue::One(value) => serde_json::Value::String(value.clone()),
+                crate::request::QueryValue::Many(values) => serde_json::json!(values),
+            };
+            (name.clone(), value)
+        })
+        .collect::<serde_json::Map<_, _>>();
+    serde_json::json!({
+        "url": context.url,
+        "pathname": context.pathname,
+        "method": context.method.as_str(),
+        "headers": headers,
+        "cookies": context.cookies,
+        "params": context.params,
+        "query": query,
+    })
 }
 
 /// Rolling sidecar output used to make startup failures diagnosable: the

@@ -81,6 +81,45 @@ fn server_action_implementation_is_absent_from_every_public_output() {
     let server_bundle = read(out_dir.join("server/app.mjs"));
     assert!(server_bundle.contains(SECRET));
     assert!(server_bundle.contains("invokeAction"));
+    let route_artifact: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("public/route-artifact.json")).unwrap())
+            .expect("route artifact JSON");
+    fn action_ids(value: &serde_json::Value, output: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if let Some(actions) = object
+                    .get("serverActions")
+                    .and_then(|value| value.as_array())
+                {
+                    output.extend(actions.iter().filter_map(|action| {
+                        action
+                            .get("id")
+                            .and_then(|id| id.as_str())
+                            .map(str::to_owned)
+                    }));
+                }
+                for value in object.values() {
+                    action_ids(value, output);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    action_ids(value, output);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut ids = Vec::new();
+    action_ids(&route_artifact, &mut ids);
+    assert!(
+        !ids.is_empty(),
+        "compiled public IR should contain the action reference"
+    );
+    assert!(
+        ids.iter().all(|id| server_bundle.contains(id)),
+        "generated registry IDs must match public IR: {ids:?}"
+    );
 
     let public_dir = out_dir.join("public");
     let mut public_files = Vec::new();

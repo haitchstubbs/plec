@@ -4,6 +4,7 @@ mod loader;
 mod lowering;
 mod read_source_graph;
 mod routes;
+mod server_actions;
 
 pub use component_discovery::{
     ComponentDeclaration, ComponentDiscoveryError, ReturnedComponentExpression, RootComponent,
@@ -21,6 +22,7 @@ pub use routes::{
     RouteArtifact, RouteArtifactBundle, RouteError, lower_route_application_to_executable,
     lower_route_artifacts, lower_route_artifacts_with_options, lower_route_manifest, lower_routes,
 };
+pub use server_actions::{ServerActionDeclaration, discover_server_actions};
 
 use plec_ir::ComponentApplication;
 use std::{collections::BTreeMap, path::Path};
@@ -159,11 +161,18 @@ mod tests {
         fs::write(
             temp.path().join("actions.ts"),
             r#"
-            export const echo = action(async (value: string) => {
+            import { action as serverAction } from './packages/plec/src/server';
+            export const echo = serverAction(async (value: string) => {
               const privateMarker = 'PLEC_SERVER_ACTION_SECRET_7D3F';
               return { echoed: value, markerLength: privateMarker.length };
             });
         "#,
+        )
+        .unwrap();
+        fs::create_dir_all(temp.path().join("packages/plec/src")).unwrap();
+        fs::write(
+            temp.path().join("packages/plec/src/server.ts"),
+            "export function action(fn) { return fn; }",
         )
         .unwrap();
         fs::write(
@@ -197,6 +206,8 @@ mod tests {
         let graph = &app.components[app.root_component];
         assert_eq!(graph.server_actions.len(), 1);
         assert!(graph.server_actions[0].id.starts_with("sa_"));
+        let discovered = discover_server_actions(&source.modules, &semantic).unwrap();
+        assert_eq!(graph.server_actions[0].id, discovered[0].id);
         assert!(
             graph
                 .actions

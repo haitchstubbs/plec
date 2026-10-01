@@ -316,14 +316,23 @@ async function serve(
       ).json();
       if (!value || typeof value !== 'object')
         throw new Error('invalid action request');
-      const { id, arguments: args } = value as Record<string, unknown>;
-      if (typeof id !== 'string' || !Array.isArray(args))
+      const {
+        id,
+        arguments: args,
+        context,
+      } = value as Record<string, unknown>;
+      if (
+        typeof id !== 'string' ||
+        !Array.isArray(args) ||
+        !isRequestContext(context)
+      )
         throw new Error('invalid action request');
       const invoke = (
         application as ApplicationModule & {
           invokeAction?: (
             id: string,
             args: unknown[],
+            context: RequestContext,
           ) => Promise<unknown>;
           hasAction?: (id: string) => boolean;
         }
@@ -345,7 +354,7 @@ async function serve(
         );
         return;
       }
-      const result = await invoke(id, args);
+      const result = await invoke(id, args, context);
       validateRuntimeValue(result);
       const body = JSON.stringify({ ok: true, value: result });
       if (Buffer.byteLength(body) > MAX_ACTION_RESULT_BYTES)
@@ -437,6 +446,24 @@ function validateRuntimeValue(root: unknown): void {
     ancestors.delete(value);
   };
   visit(root, 0);
+}
+
+function isRequestContext(value: unknown): value is RequestContext {
+  if (!value || typeof value !== 'object') return false;
+  const context = value as Partial<RequestContext>;
+  return (
+    typeof context.url === 'string' &&
+    typeof context.pathname === 'string' &&
+    typeof context.method === 'string' &&
+    !!context.headers &&
+    typeof context.headers === 'object' &&
+    !!context.cookies &&
+    typeof context.cookies === 'object' &&
+    !!context.params &&
+    typeof context.params === 'object' &&
+    !!context.query &&
+    typeof context.query === 'object'
+  );
 }
 
 async function importApplication(

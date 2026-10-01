@@ -165,14 +165,15 @@ const serverActions = new Map([
     }
     source.push_str(
         r#"]);
+import { withRequestContext } from '@plec/core/server-context';
 for (const action of serverActions.values()) {
   if (typeof action !== 'function') throw new Error('generated server action is not callable');
 }
 
-export async function invokeAction(id, args) {
+export async function invokeAction(id, args, context) {
   const action = serverActions.get(id);
   if (typeof action !== 'function') throw new Error('unknown server action');
-  return await action(...args);
+  return await withRequestContext(context, () => action(...args));
 }
 
 export function hasAction(id) {
@@ -262,7 +263,7 @@ mod tests {
         assert!(source.contains("import { echo as serverAction0 } from \"./src/actions.ts\""));
         assert!(source.contains("['sa_01abcd', serverAction0]"));
         assert!(source.contains("serverActions.get(id)"));
-        assert!(source.contains("export async function invokeAction(id, args)"));
+        assert!(source.contains("export async function invokeAction(id, args, context)"));
     }
 
     #[test]

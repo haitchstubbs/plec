@@ -1470,6 +1470,10 @@ impl TypedApplication {
         if self.server_actions.iter().any(|action| {
             action.id.is_empty()
                 || action.id.len() > MAX_COMPONENT_STRING_BYTES
+                || !action
+                    .id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
                 || !action_ids.insert(action.id.as_str())
         }) {
             return Err("invalid or duplicate server action id");
@@ -1966,6 +1970,26 @@ mod tests {
         invalid["actions"][0]["instructions"][0]["request"]["action"] = 9.into();
         let typed: TypedApplication = serde_json::from_value(invalid).unwrap();
         assert!(typed.validate_contract().is_err());
+    }
+
+    #[test]
+    fn server_action_ids_use_the_routable_ascii_grammar_and_must_be_unique() {
+        let application = |ids: &[&str]| {
+            let mut value = serde_json::json!({
+                "version":"0.10", "rootNode":0, "strings":["div"],
+                "nodes":[{"op":"element","tag":0,"parent":null}],
+                "serverActions": ids.iter().map(|id| serde_json::json!({"id":id})).collect::<Vec<_>>(),
+                "expressions":[{"instructions":[]}],
+                "actions":[{"instructions":[{"op":"return"}]}]
+            });
+            let typed: TypedApplication = serde_json::from_value(value.take()).unwrap();
+            typed.validate_contract()
+        };
+        assert!(application(&["sa_ab12_X-y"]).is_ok());
+        for invalid in ["", "sa/a", "sa a", "sa.a"] {
+            assert!(application(&[invalid]).is_err(), "accepted {invalid:?}");
+        }
+        assert!(application(&["sa_same", "sa_same"]).is_err());
     }
 
     fn event_application(event: Value, nodes: Value, loops: Value) -> TypedApplication {

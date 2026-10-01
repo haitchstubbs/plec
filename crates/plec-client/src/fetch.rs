@@ -1,7 +1,8 @@
 use crate::prelude::*;
 use crate::runtime::*;
+use crate::state::FetchPolicyGrant;
 use crate::vm::*;
-use plec_action::{ActionOutcome, Run, Suspension, charge_response_bytes};
+use plec_action::{charge_response_bytes, ActionOutcome, Run, Suspension};
 use plec_dom::platform::*;
 use web_sys::{ReadableStreamDefaultReader, RequestCredentials, TextDecoder};
 
@@ -33,6 +34,68 @@ fn fetch_origin(url: &str) -> Option<String> {
         .map(|url| url.origin())
 }
 
+fn trusted_action_transport(
+    request: Option<&BrowserRequest>,
+    pathname: &str,
+    same_origin: bool,
+    method: &str,
+    headers: &[(String, String)],
+) -> bool {
+    matches!(request, Some(BrowserRequest::ServerAction(_)))
+        && same_origin
+        && pathname.starts_with("/_plec/actions/")
+        && method.eq_ignore_ascii_case("POST")
+        && headers.len() == 1
+        && headers[0].0.eq_ignore_ascii_case("content-type")
+}
+
+fn authorize_fetch_policy(
+    url: &str,
+    method: &str,
+    headers: &[(String, String)],
+    request: Option<&BrowserRequest>,
+    current_origin: Option<&str>,
+    grants: Option<&[FetchPolicyGrant]>,
+) -> Result<bool, String> {
+    if matches!(request, Some(BrowserRequest::ServerAction(_))) {
+        if let (Some(current_origin), Ok(target)) = (current_origin, web_sys::Url::new(url)) {
+            if trusted_action_transport(
+                request,
+                &target.pathname(),
+                current_origin.eq_ignore_ascii_case(&target.origin()),
+                method,
+                headers,
+            ) {
+                return Ok(true);
+            }
+        }
+    }
+    let grants = grants.ok_or_else(|| "fetch origin denied by runtime policy".to_string())?;
+    let origin =
+        fetch_origin(url).ok_or_else(|| "fetch origin denied by runtime policy".to_string())?;
+    let grant = grants
+        .iter()
+        .find(|grant| grant.origin.eq_ignore_ascii_case(&origin))
+        .ok_or_else(|| "fetch origin denied by runtime policy".to_string())?;
+    if !grant
+        .methods
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(method))
+    {
+        return Err("fetch method denied by runtime policy".into());
+    }
+    for (name, _) in headers {
+        if !grant
+            .headers
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(name))
+        {
+            return Err("fetch header denied by runtime policy".into());
+        }
+    }
+    Ok(grant.credentials)
+}
+
 impl RuntimeState {
     pub fn start_typed_loader_fetch(
         &self,
@@ -40,7 +103,7 @@ impl RuntimeState {
     ) -> Result<(), JsValue> {
         let request = pending.suspension.request.clone();
         let credentials =
-            match self.authorize_fetch(&request.url, &request.method, &request.headers) {
+            match self.authorize_fetch(&request.url, &request.method, &request.headers, None) {
                 Ok(credentials) => credentials,
                 Err(message) => {
                     return self.complete_typed_loader_fetch(
@@ -217,47 +280,93 @@ impl RuntimeState {
         url: &str,
         method: &str,
         headers: &[(String, String)],
+        request: Option<&BrowserRequest>,
     ) -> Result<bool, String> {
-        if let Ok(target) = web_sys::Url::new(url) {
-            let same_origin = web_sys::window()
-                .and_then(|window| window.location().origin().ok())
-                .is_some_and(|origin| origin.eq_ignore_ascii_case(&target.origin()));
-            if same_origin
-                && target.pathname().starts_with("/_plec/actions/")
-                && method.eq_ignore_ascii_case("POST")
-                && headers.len() == 1
-                && headers[0].0.eq_ignore_ascii_case("content-type")
-            {
-                return Ok(true);
-            }
-        }
+        let current_origin = web_sys::window().and_then(|window| window.location().origin().ok());
         let grants = self.fetch_policy.borrow();
-        let grants = grants
-            .as_ref()
-            .ok_or_else(|| "fetch origin denied by runtime policy".to_string())?;
-        let origin =
-            fetch_origin(url).ok_or_else(|| "fetch origin denied by runtime policy".to_string())?;
-        let grant = grants
-            .iter()
-            .find(|grant| grant.origin.eq_ignore_ascii_case(&origin))
-            .ok_or_else(|| "fetch origin denied by runtime policy".to_string())?;
-        if !grant
-            .methods
-            .iter()
-            .any(|allowed| allowed.eq_ignore_ascii_case(method))
-        {
-            return Err("fetch method denied by runtime policy".into());
+        authorize_fetch_policy(
+            url,
+            method,
+            headers,
+            request,
+            current_origin.as_deref(),
+            grants.as_deref(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod authorization_tests {
+    use super::*;
+
+    fn request(server_action: bool, url: &str) -> BrowserRequest {
+        let request = TypedLoaderFetchRequest {
+            url: url.into(),
+            method: "POST".into(),
+            headers: vec![("content-type".into(), "application/json".into())],
+            body: None,
+            decode: "json".into(),
+            require_ok: false,
+        };
+        if server_action {
+            BrowserRequest::ServerAction(request)
+        } else {
+            BrowserRequest::Fetch(request)
         }
-        for (name, _) in headers {
-            if !grant
-                .headers
-                .iter()
-                .any(|allowed| allowed.eq_ignore_ascii_case(name))
-            {
-                return Err("fetch header denied by runtime policy".into());
-            }
-        }
-        Ok(grant.credentials)
+    }
+
+    #[test]
+    fn reserved_endpoint_privilege_requires_the_server_action_variant() {
+        let url = "https://app.example/_plec/actions/sa_test";
+        let server_action = request(true, url);
+        let BrowserRequest::ServerAction(action_request) = &server_action else {
+            unreachable!()
+        };
+        assert!(trusted_action_transport(
+            Some(&server_action),
+            "/_plec/actions/sa_test",
+            true,
+            &action_request.method,
+            &action_request.headers
+        ));
+        let ordinary = request(false, url);
+        let BrowserRequest::Fetch(request) = &ordinary else {
+            unreachable!()
+        };
+        let exempt = trusted_action_transport(
+            Some(&ordinary),
+            "/_plec/actions/sa_test",
+            true,
+            &request.method,
+            &request.headers,
+        );
+        assert!(
+            !exempt,
+            "ordinary fetch must fall through to normal policy; with no grants that path denies it"
+        );
+        assert!(authorize_fetch_policy(
+            &request.url,
+            &request.method,
+            &request.headers,
+            Some(&ordinary),
+            None,
+            None
+        )
+        .is_err());
+        assert!(!trusted_action_transport(
+            Some(&server_action),
+            "/_plec/actions/sa_test",
+            false,
+            &action_request.method,
+            &action_request.headers
+        ));
+        assert!(!trusted_action_transport(
+            Some(&server_action),
+            "/_plec/actions/sa_test",
+            true,
+            "GET",
+            &action_request.headers
+        ));
     }
 }
 
@@ -443,7 +552,8 @@ fn bounded_response_value(value: JsValue, url: &str) -> Result<RuntimeValue, Run
 impl RuntimeState {
     pub fn start_typed_fetch(&self, mut pending: TypedPendingFetch) -> Result<(), JsValue> {
         let request = match pending.suspension.request.clone() {
-            BrowserRequest::Fetch(request) | BrowserRequest::ServerAction(request) => request,
+            BrowserRequest::Fetch(request) => request,
+            BrowserRequest::ServerAction(request) => request,
             BrowserRequest::Cookie { .. } => {
                 return Err(JsValue::from_str(
                     "cookie suspension routed through fetch transport",
@@ -453,15 +563,18 @@ impl RuntimeState {
         // Host-policy gate before any browser resource is touched. A denial
         // completes the action through its failure path without a network
         // request, exactly like any other fetch failure.
-        let credentials =
-            match self.authorize_fetch(&request.url, &request.method, &request.headers) {
-                Ok(credentials) => credentials,
-                Err(message) => {
-                    let url = request.url.clone();
-                    return self
-                        .complete_typed_fetch(pending, Err(failure("policy", message, &url)));
-                }
-            };
+        let credentials = match self.authorize_fetch(
+            &request.url,
+            &request.method,
+            &request.headers,
+            Some(&pending.suspension.request),
+        ) {
+            Ok(credentials) => credentials,
+            Err(message) => {
+                let url = request.url.clone();
+                return self.complete_typed_fetch(pending, Err(failure("policy", message, &url)));
+            }
+        };
         let controller = AbortController::new()?;
         let init = RequestInit::new();
         init.set_method(&request.method);

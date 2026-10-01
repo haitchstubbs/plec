@@ -4,6 +4,7 @@ import {
   waitForMount,
   watch,
 } from '../support/helpers';
+import { baseURL } from '../../config.shared';
 
 const sleep = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -11,6 +12,13 @@ const sleep = (ms: number) =>
 test('server action returns through the Rust and Node execution boundary', async ({
   page,
 }) => {
+  await page.context().addCookies([
+    {
+      name: 'session',
+      value: 'action-session',
+      url: baseURL,
+    },
+  ]);
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await waitForMount(page);
   const invocation = page.waitForResponse((response) =>
@@ -23,6 +31,7 @@ test('server action returns through the Rust and Node execution boundary', async
   expect(response.status()).toBe(200);
   expect(await response.json()).toMatchObject({
     echoed: 'browser-to-node',
+    hasExpectedSession: true,
   });
   await expect(page.locator('#server-action-result')).toHaveText(
     'browser-to-node',

@@ -166,6 +166,7 @@ async fn handle_server_action(
         .invoke_action(crate::runtime::ServerActionRequest {
             id: id.to_owned(),
             arguments,
+            context,
         })
         .await
     {

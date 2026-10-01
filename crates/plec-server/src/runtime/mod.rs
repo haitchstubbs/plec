@@ -12,7 +12,7 @@ use axum::{
     http::{Request, Response},
 };
 
-use crate::{ServerError, request::RequestContext};
+use crate::{request::RequestContext, ServerError};
 
 pub(crate) mod internal;
 pub mod node;
@@ -51,6 +51,7 @@ pub type HostRenderDispatch<'a> =
 pub struct ServerActionRequest {
     pub id: String,
     pub arguments: Vec<plec_schema::RuntimeValue>,
+    pub context: RequestContext,
 }
 
 pub type ServerActionDispatch<'a> =
