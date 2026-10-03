@@ -381,6 +381,38 @@ export interface PlecRouterMountOptions {
   /** Development/test visibility for SSR adoption decisions. Production hosts
    * may omit this and transparently take the normal mount path. */
   onAdoptionDiagnostic?: (diagnostic: PlecAdoptionDiagnostic) => void;
+  /** Optional structured visibility into actionable browser boundary failures. */
+  onDiagnostic?: (diagnostic: PlecDevelopmentDiagnostic) => void;
+  /** Enables detailed diagnostic causes; keep false for production hosts. */
+  development?: boolean;
+}
+export interface PlecDevelopmentDiagnostic {
+  code: string;
+  phase:
+    | 'artifact'
+    | 'browser-runtime'
+    | 'adoption'
+    | 'provider'
+    | 'protocol';
+  message: string;
+  detail?: string;
+  suggestion?: string;
+  graphId?: string;
+}
+
+/** Reports safe, browser-local context through a callback and a DOM event. */
+export function emitPlecDiagnostic(
+  options: Pick<PlecRouterMountOptions, 'onDiagnostic'>,
+  diagnostic: PlecDevelopmentDiagnostic,
+): void {
+  options.onDiagnostic?.(diagnostic);
+  if (
+    typeof window !== 'undefined' &&
+    typeof CustomEvent !== 'undefined'
+  )
+    window.dispatchEvent(
+      new CustomEvent('plec:diagnostic', { detail: diagnostic }),
+    );
 }
 export interface PlecFetchPolicyGrant {
   /** Exact serialized origin the grant applies to (`https://api.example.com`). */
@@ -710,9 +742,22 @@ export async function startPlecRouter(
         );
         routedInputBridge.hydrate();
       })
-      .catch((error) =>
-        console.error(`Failed to load Plec graph ${graphId}`, error),
-      );
+      .catch((error) => {
+        const detail =
+          error instanceof Error ? error.message : String(error);
+        emitPlecDiagnostic(options, {
+          code: 'PLEC-BROWSER-GRAPH-LOAD',
+          phase: 'artifact',
+          message: `Failed to load Plec graph ${graphId}`,
+          graphId,
+          ...(options.development ? { detail } : {}),
+          suggestion:
+            'Check the graph artifact request and rebuild the application if it is missing or stale.',
+        });
+        console.error(
+          `[PLEC-BROWSER-GRAPH-LOAD] artifact: Failed to load Plec graph ${graphId}`,
+        );
+      });
   };
   window.addEventListener('plec:graph-needed', onGraphNeeded);
   if (!adopted) runtime.start(options.root, manifest);
@@ -868,6 +913,19 @@ function emitAdoptionDiagnostic(
   diagnostic: PlecAdoptionDiagnostic,
 ) {
   options.onAdoptionDiagnostic?.(diagnostic);
+  if (diagnostic.outcome === 'fallback')
+    emitPlecDiagnostic(options, {
+      code: diagnostic.mismatchCodes[0] ?? 'PLEC-SSR-ADOPTION-FALLBACK',
+      phase: 'adoption',
+      message:
+        'SSR output could not be adopted; Plec mounted the route normally.',
+      ...(options.development
+        ? { detail: diagnostic.mismatchCodes.join(', ') }
+        : {}),
+      suggestion:
+        'Check that the server and browser artifacts come from the same build.',
+      ...(diagnostic.routeId ? { graphId: diagnostic.routeId } : {}),
+    });
   if (typeof window !== 'undefined')
     window.dispatchEvent(
       new CustomEvent('plec:adoption', { detail: diagnostic }),

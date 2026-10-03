@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use plec_server::{manifest::LoadedServerManifest, NodeRuntimeOptions};
+use plec_server::{NodeRuntimeOptions, manifest::LoadedServerManifest};
 
 pub struct ServeOptions {
     /// Build output directory containing `plec-server.json`.
@@ -41,9 +41,11 @@ pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
         (Some(entry), Some(script)) => {
             let spawned = std::thread::spawn(move || {
                 tokio::runtime::Runtime::new()?.block_on(
-                    plec_server::NodeApplicationRuntime::spawn(NodeRuntimeOptions::new(
-                        script, entry,
-                    )),
+                    plec_server::NodeApplicationRuntime::spawn({
+                        let mut options = NodeRuntimeOptions::new(script, entry);
+                        options.development = development;
+                        options
+                    }),
                 )
             });
             let runtime = Some(spawned.join().map_err(|_| -> Box<dyn std::error::Error> {
@@ -100,7 +102,7 @@ pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
 
         let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
 

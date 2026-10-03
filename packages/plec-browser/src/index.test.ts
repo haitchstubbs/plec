@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   boundedResponseBytes,
+  emitPlecDiagnostic,
   markPlecTiming,
   adaptLiveCollection,
   registerPlecProviders,
@@ -149,6 +150,30 @@ describe('ssr route chain gate', () => {
 });
 
 describe('compiled browser adapter', () => {
+  it('surfaces structured browser diagnostics through the callback and DOM event', () => {
+    const onDiagnostic = vi.fn();
+    vi.stubGlobal('window', { dispatchEvent: vi.fn() });
+    emitPlecDiagnostic(
+      { onDiagnostic },
+      {
+        code: 'PLEC-BROWSER-GRAPH-LOAD',
+        phase: 'artifact',
+        message: 'Failed to load graph home',
+        detail: 'private transport detail',
+      },
+    );
+    expect(onDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'PLEC-BROWSER-GRAPH-LOAD',
+        phase: 'artifact',
+      }),
+    );
+    expect((window.dispatchEvent as any).mock.calls[0][0].type).toBe(
+      'plec:diagnostic',
+    );
+    vi.unstubAllGlobals();
+  });
+
   it('rejects provider modules outside the build-owned asset boundary', async () => {
     vi.stubGlobal('window', {
       location: { origin: 'http://plec.test' },

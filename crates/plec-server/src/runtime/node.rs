@@ -17,20 +17,20 @@ use axum::{
 use tokio::{
     io::AsyncBufReadExt,
     sync::oneshot,
-    time::{timeout, Duration},
+    time::{Duration, timeout},
 };
 
 use super::{
-    internal::{dispatch_internal, InternalAddress, InternalRequest},
+    internal::{InternalAddress, InternalRequest, dispatch_internal},
     protocol,
 };
 use crate::{
-    request::{read_bounded_body, RequestContext},
+    ApplicationRuntime, PlecServerOptions, ServerError,
+    request::{RequestContext, read_bounded_body},
     runtime::{
         ApplicationDispatch, HostRenderDispatch, HostRenderRequest, ServerActionDispatch,
         ServerActionRequest,
     },
-    ApplicationRuntime, PlecServerOptions, ServerError,
 };
 
 /// How the sidecar is launched. Paths are resolved by the caller (usually
@@ -44,6 +44,8 @@ pub struct NodeRuntimeOptions {
     pub script: std::path::PathBuf,
     /// The application server bundle (`server/app.mjs`).
     pub bundle: std::path::PathBuf,
+    /// Include captured sidecar detail in host diagnostics.
+    pub development: bool,
 }
 
 impl NodeRuntimeOptions {
@@ -55,6 +57,7 @@ impl NodeRuntimeOptions {
             node: "node".into(),
             script: script.into(),
             bundle: bundle.into(),
+            development: false,
         }
     }
 }
@@ -91,6 +94,7 @@ impl NodeApplicationRuntime {
     /// bundle does not export `handleRequest`, or the sidecar never reports
     /// the structured READY line.
     pub async fn spawn(options: NodeRuntimeOptions) -> Result<Self, ServerError> {
+        let development = options.development;
         let token = generate_token();
         let runtime_dir = create_runtime_dir(&token)?;
 
@@ -177,7 +181,9 @@ impl NodeApplicationRuntime {
             tokio::spawn(async move {
                 while let Ok(Some(line)) = stderr.next_line().await {
                     diagnostics.record_diagnostic(line.clone());
-                    eprintln!("{line}");
+                    if development {
+                        eprintln!("{line}");
+                    }
                 }
             });
         }
@@ -189,6 +195,7 @@ impl NodeApplicationRuntime {
                     &mut child,
                     &runtime_dir,
                     &diagnostics,
+                    development,
                     "sidecar exited before reporting readiness",
                 ));
             }
@@ -197,6 +204,7 @@ impl NodeApplicationRuntime {
                     &mut child,
                     &runtime_dir,
                     &diagnostics,
+                    development,
                     "sidecar did not report readiness",
                 ));
             }
@@ -206,6 +214,7 @@ impl NodeApplicationRuntime {
                 &mut child,
                 &runtime_dir,
                 &diagnostics,
+                development,
                 &format!(
                     "unsupported sidecar protocol {} (expected {})",
                     ready._protocol,
@@ -218,6 +227,7 @@ impl NodeApplicationRuntime {
                 &mut child,
                 &runtime_dir,
                 &diagnostics,
+                development,
                 &format!(
                     "sidecar reported socket {} instead of {}",
                     ready.address, socket_env
@@ -270,6 +280,7 @@ impl NodeApplicationRuntime {
                 &mut child,
                 &runtime.process.runtime_dir,
                 &diagnostics,
+                development,
                 &format!("sidecar health probe failed: {error}"),
             ));
         }
@@ -290,22 +301,34 @@ impl NodeApplicationRuntime {
         child: &mut tokio::process::Child,
         runtime_dir: &std::path::Path,
         diagnostics: &Diagnostics,
+        development: bool,
         reason: &str,
     ) -> ServerError {
         let _ = child.start_kill();
         let _ = std::fs::remove_dir_all(runtime_dir);
-        let tail = diagnostics.tail();
-        ServerError::message(if tail.is_empty() {
-            format!("node application runtime failed: {reason}")
+        let tail = if development {
+            diagnostics.tail()
         } else {
-            format!("node application runtime failed: {reason}: {tail}")
+            String::new()
+        };
+        let (code, phase) = if reason.contains("protocol") {
+            ("PLEC-SIDECAR-PROTOCOL", "protocol")
+        } else {
+            ("PLEC-SIDECAR-STARTUP", "sidecar")
+        };
+        ServerError::message(if tail.is_empty() {
+            format!("[{code}] {phase}: sidecar startup failed: {reason}")
+        } else {
+            format!("[{code}] {phase}: sidecar startup failed: {reason}: {tail}")
         })
     }
 }
 
 impl RuntimeProcess {
     fn failed(&self, error: impl std::fmt::Display) -> ServerError {
-        ServerError::message(format!("application runtime unavailable: {error}"))
+        ServerError::message(format!(
+            "[PLEC-SIDECAR-REQUEST] sidecar: application runtime request failed: {error}"
+        ))
     }
 }
 

@@ -77,6 +77,28 @@ sidecar detail is part of the production 500 payload. Development SSR fallback
 diagnostics are available only on the server response header and do not alter
 the browser bootstrap payload.
 
+## Development diagnostics
+
+Development-facing boundary diagnostics use a stable code, owning phase, and
+concise message; source locations and detail are included only when the owning
+boundary already knows them and it is safe to expose them. Compiler errors
+continue to use their compiler diagnostic codes and source spans. Native host
+startup/request failures identify the server or sidecar phase in the CLI
+output. Sidecar stderr and captured startup detail are included only when the
+host is started in development mode (`NODE_ENV` is not `production`).
+
+The browser adapter publishes actionable boundary failures to the optional
+`onDiagnostic` callback and as a `plec:diagnostic` `CustomEvent`. Existing
+adoption outcome reporting remains available through `onAdoptionDiagnostic`
+and `plec:adoption`; a fallback also produces a concise common diagnostic.
+Set `development: true` in `PlecRouterMountOptions` to include safe local
+failure detail. Production diagnostics omit that detail. Browser diagnostic
+codes identify the failing boundary; `phase` tells whether to inspect artifact
+loading, runtime validation, SSR adoption, provider resolution, or protocol
+compatibility. The CLI/server console is the place to inspect server-side
+details; they are never copied into public HTTP bodies or browser bootstrap
+state.
+
 ## Compatibility
 
 - `redirect()` and `notFound()` remain distinct framework routing outcomes.

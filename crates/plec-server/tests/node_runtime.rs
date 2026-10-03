@@ -10,8 +10,8 @@ use axum::{
     http::{Request, StatusCode},
 };
 use plec_server::{
-    create_plec_server, request::RequestContext, runtime::NodeRuntimeOptions, ApplicationRuntime,
-    DocumentMetadata, NodeApplicationRuntime, PlecServerOptions, ServerError,
+    ApplicationRuntime, DocumentMetadata, NodeApplicationRuntime, PlecServerOptions, ServerError,
+    create_plec_server, request::RequestContext, runtime::NodeRuntimeOptions,
 };
 use tower::ServiceExt;
 
@@ -269,17 +269,21 @@ async fn oversized_bodies_fail_closed_before_reaching_the_sidecar() {
 async fn a_bundle_without_handle_request_fails_startup_precisely() {
     let dir = tempfile::tempdir().expect("fixture dir");
     std::fs::write(dir.path().join("app.mjs"), "export const wrong = 1;").expect("bundle write");
-    let error = NodeApplicationRuntime::spawn(NodeRuntimeOptions::new(
-        runtime_script(),
-        dir.path().join("app.mjs"),
-    ))
-    .await
-    .expect_err("spawn must fail");
+    let mut options = NodeRuntimeOptions::new(runtime_script(), dir.path().join("app.mjs"));
+    options.development = true;
+    let error = NodeApplicationRuntime::spawn(options)
+        .await
+        .expect_err("spawn must fail");
     assert!(
         error
             .to_string()
             .contains("server entry does not export handleRequest(request, context)"),
         "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("[PLEC-SIDECAR-STARTUP] sidecar:")
     );
 }
 
@@ -287,12 +291,11 @@ async fn a_bundle_without_handle_request_fails_startup_precisely() {
 async fn a_bundle_that_fails_to_import_fails_startup_with_the_reason() {
     let dir = tempfile::tempdir().expect("fixture dir");
     std::fs::write(dir.path().join("app.mjs"), "import 'missing-module';").expect("bundle write");
-    let error = NodeApplicationRuntime::spawn(NodeRuntimeOptions::new(
-        runtime_script(),
-        dir.path().join("app.mjs"),
-    ))
-    .await
-    .expect_err("spawn must fail");
+    let mut options = NodeRuntimeOptions::new(runtime_script(), dir.path().join("app.mjs"));
+    options.development = true;
+    let error = NodeApplicationRuntime::spawn(options)
+        .await
+        .expect_err("spawn must fail");
     assert!(
         error.to_string().contains("server bundle failed to import"),
         "{error}"
@@ -315,6 +318,11 @@ async fn a_sidecar_that_exits_early_reports_the_startup_failure() {
             .to_string()
             .contains("sidecar exited before reporting readiness"),
         "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("[PLEC-SIDECAR-STARTUP] sidecar:")
     );
 }
 
@@ -342,6 +350,7 @@ async fn a_missing_node_binary_fails_spawn() {
         node: "/nonexistent/node-binary".into(),
         script: "/nonexistent/plec-runtime.mjs".into(),
         bundle: "/nonexistent/bundle.mjs".into(),
+        development: false,
     })
     .await
     .expect_err("spawn must fail");
