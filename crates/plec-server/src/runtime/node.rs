@@ -26,7 +26,10 @@ use super::{
 };
 use crate::{
     request::{read_bounded_body, RequestContext},
-    runtime::{ApplicationDispatch, HostRenderDispatch, HostRenderRequest},
+    runtime::{
+        ApplicationDispatch, HostRenderDispatch, HostRenderRequest, ServerActionDispatch,
+        ServerActionRequest,
+    },
     ApplicationRuntime, PlecServerOptions, ServerError,
 };
 
@@ -405,6 +408,147 @@ impl ApplicationRuntime for NodeApplicationRuntime {
             }
             Ok(Some(response.html))
         })
+    }
+
+    fn invoke_action<'a>(&'a self, request: ServerActionRequest) -> ServerActionDispatch<'a> {
+        Box::pin(async move {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "id": request.id,
+                "arguments": request.arguments,
+                "context": request_context_json(&request.context),
+            }))
+            .map_err(|error| {
+                ServerError::message(format!(
+                    "server action request serialization failed: {error}"
+                ))
+            })?;
+            let internal = dispatch_internal(
+                &self.process.address,
+                &self.process.token,
+                InternalRequest {
+                    method: Method::POST,
+                    uri: protocol::ACTION_PATH.parse().expect("action path is valid"),
+                    headers: Default::default(),
+                    body: body.into(),
+                },
+            )
+            .await
+            .map_err(|error| self.process.failed(error))?;
+            if internal.status != StatusCode::OK {
+                if internal.status == StatusCode::NOT_FOUND {
+                    return Err(ServerError::UnknownServerAction);
+                }
+                return Err(self
+                    .process
+                    .failed(format!("server action returned {}", internal.status)));
+            }
+            #[derive(serde::Deserialize)]
+            struct ActionResponse {
+                ok: bool,
+                value: Option<serde_json::Value>,
+            }
+            let response: ActionResponse =
+                serde_json::from_slice(&internal.body).map_err(|_| {
+                    self.process
+                        .failed("server action returned an invalid response")
+                })?;
+            if !response.ok {
+                return Err(ServerError::message("server action failed"));
+            }
+            let value: plec_schema::RuntimeValue = serde_json::from_value(
+                response
+                    .value
+                    .ok_or_else(|| self.process.failed("server action response omitted value"))?,
+            )
+            .map_err(|_| {
+                self.process
+                    .failed("server action returned an unsupported value")
+            })?;
+            value.check_limits().map_err(|_| {
+                self.process
+                    .failed("server action result exceeds value limits")
+            })?;
+            Ok(value)
+        })
+    }
+}
+
+fn request_context_json(context: &RequestContext) -> serde_json::Value {
+    // The public TS contract is a string record, so duplicate field values are
+    // intentionally flattened to the first value in HeaderMap's stored order.
+    // Use an ordered map for deterministic serialization and never expose the
+    // sidecar's private authentication credential through application context.
+    let headers = context
+        .headers
+        .keys()
+        .filter(|name| name.as_str() != super::protocol::INTERNAL_TOKEN_HEADER)
+        .filter_map(|name| {
+            context
+                .headers
+                .get_all(name)
+                .iter()
+                .next()
+                .and_then(|value| value.to_str().ok())
+                .map(|value| {
+                    (
+                        name.as_str().to_owned(),
+                        serde_json::Value::String(value.to_owned()),
+                    )
+                })
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let query = context
+        .query
+        .iter()
+        .map(|(name, value)| {
+            let value = match value {
+                crate::request::QueryValue::One(value) => serde_json::Value::String(value.clone()),
+                crate::request::QueryValue::Many(values) => serde_json::json!(values),
+            };
+            (name.clone(), value)
+        })
+        .collect::<serde_json::Map<_, _>>();
+    serde_json::json!({
+        "url": context.url,
+        "pathname": context.pathname,
+        "method": context.method.as_str(),
+        "headers": headers,
+        "cookies": context.cookies,
+        "params": context.params,
+        "query": query,
+    })
+}
+
+#[cfg(test)]
+mod request_context_tests {
+    use super::*;
+
+    #[test]
+    fn request_context_hides_sidecar_token_and_flattens_duplicate_headers() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.append("authorization", "Bearer first".parse().unwrap());
+        headers.append("authorization", "Bearer second".parse().unwrap());
+        headers.insert(
+            super::protocol::INTERNAL_TOKEN_HEADER,
+            "private-token".parse().unwrap(),
+        );
+        let context = RequestContext {
+            url: "https://example.test/".into(),
+            pathname: "/".into(),
+            method: Method::GET,
+            headers,
+            cookies: Default::default(),
+            params: Default::default(),
+            query: Default::default(),
+        };
+        let json = request_context_json(&context);
+        assert!(!json.to_string().contains("private-token"));
+        assert!(
+            json["headers"]
+                .get(super::protocol::INTERNAL_TOKEN_HEADER)
+                .is_none()
+        );
+        assert_eq!(json["headers"]["authorization"], "Bearer first");
     }
 }
 

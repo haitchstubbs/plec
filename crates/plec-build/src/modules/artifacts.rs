@@ -4,8 +4,8 @@ use std::{
 };
 
 use plec_compiler::{
-    CompilerOptions, lower_route_artifacts_with_options, lower_routes,
-    read_source_graph_with_options,
+    lower_route_artifacts_with_options, lower_routes, read_source_graph_with_options,
+    CompilerOptions,
 };
 use plec_model::build_semantic_graph;
 use serde::Serialize;
@@ -18,6 +18,7 @@ use super::build::{BuildError, RuntimeSource, Stage};
 
 pub struct ArtifactOutput {
     pub host_components: BTreeMap<String, BTreeSet<String>>,
+    pub server_actions: Vec<super::server::ServerActionImport>,
 }
 
 /// Build/dev dependency metadata stored outside `public/`; `plec serve` does
@@ -58,6 +59,17 @@ pub fn emit(
     let semantic_graph =
         build_semantic_graph(&source_graph.modules, &source_graph.resolved_imports)
             .map_err(|error| BuildError::new(stage, error.to_string()))?;
+
+    let server_actions =
+        plec_compiler::discover_server_actions(&source_graph.modules, &semantic_graph)
+            .map_err(|error| BuildError::new(stage, error))?
+            .into_iter()
+            .map(|action| super::server::ServerActionImport {
+                id: action.id,
+                import_path: format!("./{}", action.module_id.replace('\\', "/")),
+                export_name: action.export_name,
+            })
+            .collect::<Vec<_>>();
 
     let routes = lower_routes(&source_graph.modules, &semantic_graph)
         .map_err(|error| BuildError::new(stage, error.to_string()))?;
@@ -151,7 +163,10 @@ pub fn emit(
         BuildError::with_source(stage, "failed to write asset dependency manifest", error)
     })?;
     stage_runtime(app_dir, repo_root, public_dir, runtime_source)?;
-    Ok(ArtifactOutput { host_components })
+    Ok(ArtifactOutput {
+        host_components,
+        server_actions,
+    })
 }
 
 fn collect_host_components(

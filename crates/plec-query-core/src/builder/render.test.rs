@@ -18,6 +18,28 @@ static VALIDATION_TEST_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 static VALIDATION_EXECUTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+thread_local! {
+    static TRACK_VALIDATION_EXECUTIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+struct ValidationTestGuard {
+    _guard: parking_lot::MutexGuard<'static, ()>,
+}
+
+impl ValidationTestGuard {
+    fn new() -> Self {
+        let guard = VALIDATION_TEST_GUARD.lock();
+        TRACK_VALIDATION_EXECUTIONS.with(|tracking| tracking.set(true));
+        Self { _guard: guard }
+    }
+}
+
+impl Drop for ValidationTestGuard {
+    fn drop(&mut self) {
+        TRACK_VALIDATION_EXECUTIONS.with(|tracking| tracking.set(false));
+    }
+}
+
 pub(crate) fn record_cache_lookup(key: u64) {
     let mut counts = CACHE_LOOKUP_COUNTS.lock();
     let entry = counts.entry(key).or_insert(0);
@@ -31,7 +53,7 @@ pub(crate) fn record_build_execution(key: u64) {
 }
 
 pub(crate) fn record_validation_execution() {
-    if VALIDATION_TEST_GUARD.try_lock().is_none() {
+    if TRACK_VALIDATION_EXECUTIONS.with(std::cell::Cell::get) {
         VALIDATION_EXECUTION_COUNT.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -136,7 +158,7 @@ fn build_simple_render_handle() -> String {
 
 #[test]
 fn validation_cache_reuses_successful_validation_for_same_handle_state() {
-    let _guard = VALIDATION_TEST_GUARD.lock();
+    let _guard = ValidationTestGuard::new();
     test_reset_build_execution_count();
     let handle = build_simple_render_handle();
 
@@ -151,7 +173,7 @@ fn validation_cache_reuses_successful_validation_for_same_handle_state() {
 
 #[test]
 fn validation_cache_invalidates_after_mutation() {
-    let _guard = VALIDATION_TEST_GUARD.lock();
+    let _guard = ValidationTestGuard::new();
     test_reset_build_execution_count();
     let handle = build_simple_render_handle();
 
@@ -167,7 +189,7 @@ fn validation_cache_invalidates_after_mutation() {
 
 #[test]
 fn validation_cache_reuses_pending_join_validation_errors() {
-    let _guard = VALIDATION_TEST_GUARD.lock();
+    let _guard = ValidationTestGuard::new();
     test_reset_build_execution_count();
 
     let handle = builder_new(Some("sqlite"));

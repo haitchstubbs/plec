@@ -14,6 +14,15 @@ import {
 
 // The sidecar always authenticates with this header before any dispatch.
 const TOKEN = 'test-token-0123456789abcdef';
+const CONTEXT = {
+  url: 'https://example.test/action',
+  pathname: '/action',
+  method: 'POST',
+  headers: { cookie: 'session=one' },
+  cookies: { session: 'one' },
+  params: {},
+  query: {},
+};
 
 const servers: Array<Awaited<ReturnType<typeof start>>> = [];
 afterEach(async () => {
@@ -68,6 +77,99 @@ function request(
 }
 
 describe('sidecar supervision', () => {
+  it('invokes only registered generated server actions over the authenticated protocol', async () => {
+    const origin = await startRuntime(`
+      export async function handleRequest() {}
+      const actions = new Map([['sa_echo', async (value) => ({ echoed: value })]]);
+      export function hasAction(id) { return actions.has(id); }
+      export async function invokeAction(id, args) {
+        const action = actions.get(id);
+        if (typeof action !== 'function') throw new Error('unknown action');
+        return action(...args);
+      }
+    `);
+    const accepted = await request(origin, '/_plec-runtime/action', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: 'sa_echo',
+        arguments: ['value'],
+        context: CONTEXT,
+      }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toEqual({
+      ok: true,
+      value: { echoed: 'value' },
+    });
+    const unknown = await request(origin, '/_plec-runtime/action', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: 'sa_missing',
+        arguments: [],
+        context: CONTEXT,
+      }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(unknown.status).toBe(404);
+  });
+
+  it('keeps concurrent action request contexts isolated through invocation', async () => {
+    const origin = await startRuntime(`
+      import { AsyncLocalStorage } from 'node:async_hooks';
+      export async function handleRequest() {}
+      const contexts = new AsyncLocalStorage();
+      export function hasAction(id) { return id === 'sa_context'; }
+      export async function invokeAction(id, args, context) {
+        return contexts.run(context, async () => {
+          await new Promise((resolve) => setTimeout(resolve, args[0]));
+          return { sessionObserved: contexts.getStore().cookies.session === args[1] };
+        });
+      }
+    `);
+    const invoke = (delay: number, session: string) =>
+      request(origin, '/_plec-runtime/action', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: 'sa_context',
+          arguments: [delay, session],
+          context: { ...CONTEXT, cookies: { session } },
+        }),
+        headers: { 'content-type': 'application/json' },
+      });
+    const [first, second] = await Promise.all([
+      invoke(15, 'first'),
+      invoke(0, 'second'),
+    ]);
+    expect(await first.json()).toMatchObject({
+      value: { sessionObserved: true },
+    });
+    expect(await second.json()).toMatchObject({
+      value: { sessionObserved: true },
+    });
+  });
+
+  it('redacts server-action implementation exceptions', async () => {
+    const origin = await startRuntime(`
+      export async function handleRequest() {}
+      export function hasAction(id) { return id === 'sa_boom'; }
+      export async function invokeAction() { throw new Error('PRIVATE_ACTION_SECRET'); }
+    `);
+    const response = await request(origin, '/_plec-runtime/action', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: 'sa_boom',
+        arguments: [],
+        context: CONTEXT,
+      }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(response.status).toBe(500);
+    const body = await response.text();
+    expect(body).toContain('Internal Server Error');
+    expect(body).not.toContain('PRIVATE_ACTION_SECRET');
+  });
+
   it('refuses requests without the internal token before any dispatch', async () => {
     const origin = await startRuntime(`
       export async function handleRequest() {

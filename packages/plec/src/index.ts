@@ -18,6 +18,7 @@ import {
 } from './routes/router';
 import { useLocation } from './routes/use-location';
 import { cookie } from './cookie';
+import { action } from './server';
 
 export {
   Fragment,
@@ -32,6 +33,7 @@ export {
   useListener,
   useLocation,
   cookie,
+  action,
   useNavigate,
   createRootRoute,
   createRoute,
@@ -70,6 +72,7 @@ export const Plec = {
   useListener,
   useLocation,
   cookie,
+  action,
   useNavigate,
   createRootRoute,
   createRoute,

@@ -1,5 +1,5 @@
 use super::doctor::{
-    compile_application, resolution_status, resolve_graph, resolved_component, GraphResolution,
+    GraphResolution, compile_application, resolution_status, resolve_graph, resolved_component,
 };
 use super::repo::Repo;
 use plec_ir::{ComponentApplication, ExecutableComponent, Node};
@@ -293,6 +293,7 @@ mod tests {
             inputs: vec![],
             host_slots: vec![],
             capabilities: vec![],
+            server_actions: vec![],
             state_slots: vec![],
             ref_slots: vec![],
             host_refs: vec![],
@@ -390,9 +391,11 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("consequent")));
         assert!(lines.iter().any(|line| line.contains("alternate")));
         assert!(lines.iter().any(|line| line.contains("keyed loop[0]")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("call component[1] (Panel)")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("call component[1] (Panel)"))
+        );
         assert!(lines.iter().any(|line| line.contains("call-site children")));
     }
 
@@ -449,11 +452,15 @@ mod tests {
         let lines = render_tree(&application, &component);
 
         assert!(lines.iter().any(|line| line.contains("<invalid tag>")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("node[9] invalid handle")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("text[9] invalid handle")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("node[9] invalid handle"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("text[9] invalid handle"))
+        );
     }
 }

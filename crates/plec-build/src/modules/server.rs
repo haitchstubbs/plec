@@ -4,18 +4,26 @@ use super::api_routes::{ApiRoute, Segment};
 use super::build::{BuildError, Stage};
 use super::esbuild;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerActionImport {
+    pub id: String,
+    pub import_path: String,
+    pub export_name: String,
+}
+
 /// Generate and bundle the application server entry. Routes run before the
 /// optional application-owned fallback handler.
 pub fn bundle(
     app_dir: &Path,
     fallback_entry: Option<&Path>,
     routes: &[ApiRoute],
+    server_actions: &[ServerActionImport],
     outfile: &Path,
     optimize: bool,
 ) -> Result<(), BuildError> {
     let stage = Stage::ServerBundle;
     let esbuild_bin = esbuild::resolve(app_dir).map_err(|error| BuildError::new(stage, error))?;
-    let source = generated_source(app_dir, fallback_entry, routes);
+    let source = generated_source(app_dir, fallback_entry, routes, server_actions);
     let mut args = vec![
         esbuild_bin.to_string_lossy().into_owned(),
         "--bundle".into(),
@@ -39,7 +47,12 @@ pub fn bundle(
         .map_err(|error| BuildError::new(stage, error));
 }
 
-fn generated_source(app_dir: &Path, fallback_entry: Option<&Path>, routes: &[ApiRoute]) -> String {
+fn generated_source(
+    app_dir: &Path,
+    fallback_entry: Option<&Path>,
+    routes: &[ApiRoute],
+    server_actions: &[ServerActionImport],
+) -> String {
     let mut source = String::new();
     for (index, route) in routes.iter().enumerate() {
         source.push_str(&format!(
@@ -52,6 +65,12 @@ fn generated_source(app_dir: &Path, fallback_entry: Option<&Path>, routes: &[Api
                 middleware.import_path
             ));
         }
+    }
+    for (index, action) in server_actions.iter().enumerate() {
+        source.push_str(&format!(
+            "import {{ {} as serverAction{index} }} from \"{}\";\n",
+            action.export_name, action.import_path
+        ));
     }
     if fallback_entry.is_some() {
         source.push_str("import * as fallbackModule from \"");
@@ -134,8 +153,34 @@ function matchRoute(pathname) {
   return typeof fallbackHandleRequest === 'function'
     ? fallbackHandleRequest(request, context)
     : undefined;
-}
+ }
+
+const serverActions = new Map([
 "#);
+    for (index, action) in server_actions.iter().enumerate() {
+        source.push_str(&format!(
+            "  ['{}', serverAction{index}],\n",
+            js_string(&action.id)
+        ));
+    }
+    source.push_str(
+        r#"]);
+import { withRequestContext } from '@plec/core/server-context';
+for (const action of serverActions.values()) {
+  if (typeof action !== 'function') throw new Error('generated server action is not callable');
+}
+
+export async function invokeAction(id, args, context) {
+  const action = serverActions.get(id);
+  if (typeof action !== 'function') throw new Error('unknown server action');
+  return await withRequestContext(context, () => action(...args));
+}
+
+export function hasAction(id) {
+  return serverActions.has(id);
+}
+"#,
+    );
 
     source
 }
@@ -199,11 +244,26 @@ mod tests {
             Path::new("/app"),
             Some(Path::new("/app/src/server.ts")),
             &[route],
+            &[],
         );
         assert!(source.contains("params[segment[1]] = decodeURIComponent(path[index])"));
         assert!(source.contains("fallbackModule.handleRequest"));
         assert!(source.contains("status: 405"));
         assert!(source.contains("status: 204"));
+    }
+
+    #[test]
+    fn generated_server_action_registry_is_static_and_explicit() {
+        let action = ServerActionImport {
+            id: "sa_01abcd".into(),
+            import_path: "./src/actions.ts".into(),
+            export_name: "echo".into(),
+        };
+        let source = generated_source(Path::new("/app"), None, &[], &[action]);
+        assert!(source.contains("import { echo as serverAction0 } from \"./src/actions.ts\""));
+        assert!(source.contains("['sa_01abcd', serverAction0]"));
+        assert!(source.contains("serverActions.get(id)"));
+        assert!(source.contains("export async function invokeAction(id, args, context)"));
     }
 
     #[test]
@@ -226,10 +286,12 @@ mod tests {
                 },
             ],
         };
-        let source = generated_source(Path::new("/app"), None, &[route]);
+        let source = generated_source(Path::new("/app"), None, &[route], &[]);
 
-        assert!(source
-            .contains("import { middleware as middleware0_0 } from \"./api/_middleware.ts\";"));
+        assert!(
+            source
+                .contains("import { middleware as middleware0_0 } from \"./api/_middleware.ts\";")
+        );
         assert!(source.contains(
             "import { middleware as middleware0_1 } from \"./api/admin/_middleware.js\";"
         ));

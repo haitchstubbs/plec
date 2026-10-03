@@ -59,6 +59,84 @@ fn read(path: impl AsRef<Path>) -> String {
     fs::read_to_string(path).expect("artifact should exist")
 }
 
+fn files_below(directory: &Path, files: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(directory).expect("directory should be readable") {
+        let path = entry.expect("entry should be readable").path();
+        if path.is_dir() {
+            files_below(&path, files);
+        } else {
+            files.push(path);
+        }
+    }
+}
+
+#[test]
+fn server_action_implementation_is_absent_from_every_public_output() {
+    const SECRET: &str = "PLEC_SERVER_ACTION_SECRET_7D3F";
+    let app = fixture_project("server-action-secret", "server-action-app");
+    let out_dir = output_dir("server-action-secret");
+    let output = run_build(&app, &out_dir, &[]);
+    assert_success(&output);
+
+    let server_bundle = read(out_dir.join("server/app.mjs"));
+    assert!(server_bundle.contains(SECRET));
+    assert!(server_bundle.contains("invokeAction"));
+    let route_artifact: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("public/route-artifact.json")).unwrap())
+            .expect("route artifact JSON");
+    fn action_ids(value: &serde_json::Value, output: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if let Some(actions) = object
+                    .get("serverActions")
+                    .and_then(|value| value.as_array())
+                {
+                    output.extend(actions.iter().filter_map(|action| {
+                        action
+                            .get("id")
+                            .and_then(|id| id.as_str())
+                            .map(str::to_owned)
+                    }));
+                }
+                for value in object.values() {
+                    action_ids(value, output);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    action_ids(value, output);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut ids = Vec::new();
+    action_ids(&route_artifact, &mut ids);
+    assert!(
+        !ids.is_empty(),
+        "compiled public IR should contain the action reference"
+    );
+    assert!(
+        ids.iter().all(|id| server_bundle.contains(id)),
+        "generated registry IDs must match public IR: {ids:?}"
+    );
+
+    let public_dir = out_dir.join("public");
+    let mut public_files = Vec::new();
+    files_below(&public_dir, &mut public_files);
+    assert!(!public_files.is_empty());
+    for path in public_files {
+        let bytes = fs::read(&path).expect("public artifact should be readable");
+        assert!(
+            !bytes
+                .windows(SECRET.len())
+                .any(|window| window == SECRET.as_bytes()),
+            "server implementation leaked into {}",
+            path.display(),
+        );
+    }
+}
+
 #[test]
 fn builds_expected_output_structure() {
     let out_dir = output_dir("structure");
@@ -277,12 +355,16 @@ fn compiled_asset_imports_are_fingerprinted_deduplicated_and_cleaned() {
         2,
         "both source paths should remain build dependencies"
     );
-    assert!(entries
-        .iter()
-        .any(|entry| entry["source"] == "src/logo.svg"));
-    assert!(entries
-        .iter()
-        .any(|entry| entry["source"] == "src/duplicate.svg"));
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["source"] == "src/logo.svg")
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["source"] == "src/duplicate.svg")
+    );
     let url = entries[0]["url"].as_str().unwrap();
     assert!(url.starts_with("/assets/compiled/"));
     let emitted = out_dir.join("public").join(url.trim_start_matches('/'));
@@ -321,10 +403,12 @@ fn compiled_asset_imports_are_fingerprinted_deduplicated_and_cleaned() {
         serde_json::from_str(&read(out_dir.join("plec-assets.json"))).unwrap();
     let changed_url = changed[0]["url"].as_str().unwrap();
     assert_ne!(changed_url, url);
-    assert!(!out_dir
-        .join("public")
-        .join(url.trim_start_matches('/'))
-        .exists());
+    assert!(
+        !out_dir
+            .join("public")
+            .join(url.trim_start_matches('/'))
+            .exists()
+    );
     assert_eq!(
         fs::read(
             out_dir
@@ -344,10 +428,12 @@ fn compiled_asset_imports_are_fingerprinted_deduplicated_and_cleaned() {
     let no_assets: serde_json::Value =
         serde_json::from_str(&read(out_dir.join("plec-assets.json"))).unwrap();
     assert!(no_assets.as_array().unwrap().is_empty());
-    assert!(!out_dir
-        .join("public")
-        .join(changed_url.trim_start_matches('/'))
-        .exists());
+    assert!(
+        !out_dir
+            .join("public")
+            .join(changed_url.trim_start_matches('/'))
+            .exists()
+    );
 }
 
 #[test]
@@ -375,8 +461,9 @@ fn compiled_assets_reject_public_collisions_and_symlink_escapes() {
     fs::write(app.join("public").join(&url_path), "public-owned").unwrap();
     let collision = run_build(&app, &output_dir("compiled-asset-collision"), &[]);
     assert!(!collision.status.success());
-    assert!(String::from_utf8_lossy(&collision.stderr)
-        .contains("conflicts with Plec-owned output"));
+    assert!(
+        String::from_utf8_lossy(&collision.stderr).contains("conflicts with Plec-owned output")
+    );
 
     #[cfg(unix)]
     {

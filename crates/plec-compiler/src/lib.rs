@@ -4,24 +4,25 @@ mod loader;
 mod lowering;
 mod read_source_graph;
 mod routes;
+mod server_actions;
 
 pub use component_discovery::{
-    discover_root_component, ComponentDeclaration, ComponentDiscoveryError,
-    ReturnedComponentExpression, RootComponent,
+    ComponentDeclaration, ComponentDiscoveryError, ReturnedComponentExpression, RootComponent,
+    discover_root_component,
 };
 pub use hir_builder::{lower_application, lower_application_with_options, lower_root_component};
 pub use lowering::{
-    lower_application_to_executable, lower_component_to_executable,
-    lower_route_loader_to_executable, LoweringError,
+    LoweringError, lower_application_to_executable, lower_component_to_executable,
+    lower_route_loader_to_executable,
 };
 pub use read_source_graph::{
-    read_source_graph, read_source_graph_with_options, SourceAsset, SourceGraph,
+    SourceAsset, SourceGraph, read_source_graph, read_source_graph_with_options,
 };
 pub use routes::{
-    lower_route_application_to_executable, lower_route_artifacts,
-    lower_route_artifacts_with_options, lower_route_manifest, lower_routes, RouteArtifact,
-    RouteArtifactBundle, RouteError,
+    RouteArtifact, RouteArtifactBundle, RouteError, lower_route_application_to_executable,
+    lower_route_artifacts, lower_route_artifacts_with_options, lower_route_manifest, lower_routes,
 };
+pub use server_actions::{ServerActionDeclaration, discover_server_actions};
 
 use plec_ir::ComponentApplication;
 use std::{collections::BTreeMap, path::Path};
@@ -151,5 +152,74 @@ mod tests {
         assert!(props.iter().any(|prop| {
             matches!(prop, ComponentProp::Callable { name, action } if component.strings[*name] == "onActivate" && *action < component.actions.len())
         }));
+    }
+
+    #[test]
+    fn imported_server_action_lowers_to_capability_reference() {
+        let temp = tempdir().expect("temporary app");
+        let entry = temp.path().join("App.tsx");
+        fs::write(
+            temp.path().join("actions.ts"),
+            r#"
+            import { action as serverAction } from './packages/plec/src/server';
+            export const echo = serverAction(async (value: string) => {
+              const privateMarker = 'PLEC_SERVER_ACTION_SECRET_7D3F';
+              return { echoed: value, markerLength: privateMarker.length };
+            });
+        "#,
+        )
+        .unwrap();
+        fs::create_dir_all(temp.path().join("packages/plec/src")).unwrap();
+        fs::write(
+            temp.path().join("packages/plec/src/server.ts"),
+            "export function action(fn) { return fn; }",
+        )
+        .unwrap();
+        fs::write(
+            &entry,
+            r#"
+            import { echo } from './actions';
+            export function App() {
+              const save = useMutation(async (value: string) => { return await echo(value); });
+              return <button onClick={() => save.run('hi')}>save</button>;
+            }
+        "#,
+        )
+        .unwrap();
+        let source = read_source_graph_with_options(
+            &entry,
+            temp.path(),
+            temp.path(),
+            &CompilerOptions::default(),
+        )
+        .expect("source graph resolves");
+        let semantic = plec_model::build_semantic_graph(&source.modules, &source.resolved_imports)
+            .expect("semantic graph builds");
+        let root = discover_root_component(&source.modules, &semantic, &source.modules[0].id, None)
+            .expect("root resolves");
+        let hir =
+            lower_application_with_options(&source.modules, &root, &semantic, &Default::default())
+                .expect("server action HIR lowers");
+        let app = lower_application_to_executable(&hir).expect("server action compiles");
+        let public_graph = serde_json::to_string(&app).unwrap();
+        assert!(!public_graph.contains("PLEC_SERVER_ACTION_SECRET_7D3F"));
+        let graph = &app.components[app.root_component];
+        assert_eq!(graph.server_actions.len(), 1);
+        assert!(graph.server_actions[0].id.starts_with("sa_"));
+        let discovered = discover_server_actions(&source.modules, &semantic).unwrap();
+        assert_eq!(graph.server_actions[0].id, discovered[0].id);
+        assert!(
+            graph
+                .actions
+                .iter()
+                .flat_map(|action| &action.instructions)
+                .any(|instruction| matches!(
+                    instruction,
+                    plec_ir::ActionInstruction::CapabilityRequest {
+                        request: plec_ir::CapabilityRequest::ServerAction { action: 0, .. },
+                        ..
+                    }
+                ))
+        );
     }
 }
