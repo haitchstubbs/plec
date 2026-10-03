@@ -475,20 +475,26 @@ impl ApplicationRuntime for NodeApplicationRuntime {
 
 fn request_context_json(context: &RequestContext) -> serde_json::Value {
     // The public TS contract is a string record, so duplicate field values are
-    // intentionally flattened to the last value in HeaderMap iteration order.
+    // intentionally flattened to the first value in HeaderMap's stored order.
     // Use an ordered map for deterministic serialization and never expose the
     // sidecar's private authentication credential through application context.
     let headers = context
         .headers
-        .iter()
-        .filter(|(name, _)| *name != super::protocol::INTERNAL_TOKEN_HEADER)
-        .filter_map(|(name, value)| {
-            value.to_str().ok().map(|value| {
-                (
-                    name.as_str().to_owned(),
-                    serde_json::Value::String(value.to_owned()),
-                )
-            })
+        .keys()
+        .filter(|name| name.as_str() != super::protocol::INTERNAL_TOKEN_HEADER)
+        .filter_map(|name| {
+            context
+                .headers
+                .get_all(name)
+                .iter()
+                .next()
+                .and_then(|value| value.to_str().ok())
+                .map(|value| {
+                    (
+                        name.as_str().to_owned(),
+                        serde_json::Value::String(value.to_owned()),
+                    )
+                })
         })
         .collect::<serde_json::Map<_, _>>();
     let query = context
@@ -520,8 +526,8 @@ mod request_context_tests {
     #[test]
     fn request_context_hides_sidecar_token_and_flattens_duplicate_headers() {
         let mut headers = axum::http::HeaderMap::new();
-        headers.append("x-visible", "first".parse().unwrap());
-        headers.append("x-visible", "second".parse().unwrap());
+        headers.append("authorization", "Bearer first".parse().unwrap());
+        headers.append("authorization", "Bearer second".parse().unwrap());
         headers.insert(
             super::protocol::INTERNAL_TOKEN_HEADER,
             "private-token".parse().unwrap(),
@@ -542,10 +548,7 @@ mod request_context_tests {
                 .get(super::protocol::INTERNAL_TOKEN_HEADER)
                 .is_none()
         );
-        assert!(matches!(
-            json["headers"]["x-visible"].as_str(),
-            Some("first" | "second")
-        ));
+        assert_eq!(json["headers"]["authorization"], "Bearer first");
     }
 }
 

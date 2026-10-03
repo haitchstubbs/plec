@@ -34,22 +34,6 @@ fn fetch_origin(url: &str) -> Option<String> {
         .map(|url| url.origin())
 }
 
-fn trusted_action_transport(
-    request: Option<&BrowserRequest>,
-    pathname: &str,
-    same_origin: bool,
-    method: &str,
-    headers: &[(String, String)],
-) -> bool {
-    trusted_action_transport_facts(
-        matches!(request, Some(BrowserRequest::ServerAction(_))),
-        pathname,
-        same_origin,
-        method,
-        headers,
-    )
-}
-
 fn trusted_action_transport_facts(
     is_server_action: bool,
     pathname: &str,
@@ -65,6 +49,26 @@ fn trusted_action_transport_facts(
         && headers[0].0.eq_ignore_ascii_case("content-type")
 }
 
+/// Returns the credentials mode when request facts qualify for the reserved
+/// transport. `Some(false)` means authorized without credentials; `None`
+/// falls through to the application's ordinary fetch grants.
+fn trusted_action_credentials(
+    request: Option<&BrowserRequest>,
+    pathname: &str,
+    same_origin: bool,
+    method: &str,
+    headers: &[(String, String)],
+) -> Option<bool> {
+    trusted_action_transport_facts(
+        matches!(request, Some(BrowserRequest::ServerAction(_))),
+        pathname,
+        same_origin,
+        method,
+        headers,
+    )
+    .then_some(false)
+}
+
 fn authorize_fetch_policy(
     url: &str,
     method: &str,
@@ -75,14 +79,14 @@ fn authorize_fetch_policy(
 ) -> Result<bool, String> {
     if matches!(request, Some(BrowserRequest::ServerAction(_))) {
         if let (Some(current_origin), Ok(target)) = (current_origin, web_sys::Url::new(url)) {
-            if trusted_action_transport(
+            if let Some(credentials) = trusted_action_credentials(
                 request,
                 &target.pathname(),
                 current_origin.eq_ignore_ascii_case(&target.origin()),
                 method,
                 headers,
             ) {
-                return Ok(true);
+                return Ok(credentials);
             }
         }
     }
@@ -338,28 +342,10 @@ mod authorization_tests {
         let BrowserRequest::ServerAction(action_request) = &server_action else {
             unreachable!()
         };
-        assert!(trusted_action_transport(
-            Some(&server_action),
-            "/_plec/actions/sa_test",
-            true,
-            &action_request.method,
-            &action_request.headers
-        ));
         let ordinary = request(false, url);
         let BrowserRequest::Fetch(request) = &ordinary else {
             unreachable!()
         };
-        let exempt = trusted_action_transport(
-            Some(&ordinary),
-            "/_plec/actions/sa_test",
-            true,
-            &request.method,
-            &request.headers,
-        );
-        assert!(
-            !exempt,
-            "ordinary fetch must fall through to normal policy; with no grants that path denies it"
-        );
         assert!(
             authorize_fetch_policy(
                 &request.url,
@@ -377,26 +363,36 @@ mod authorization_tests {
             "POST",
             request.headers.as_slice(),
         );
-        assert!(trusted_action_transport_facts(
-            true, facts.0, facts.1, facts.2, facts.3
-        ));
-        assert!(!trusted_action_transport_facts(
-            false, facts.0, facts.1, facts.2, facts.3
-        ));
-        assert!(!trusted_action_transport(
-            Some(&server_action),
-            "/_plec/actions/sa_test",
-            false,
-            &action_request.method,
-            &action_request.headers
-        ));
-        assert!(!trusted_action_transport(
-            Some(&server_action),
-            "/_plec/actions/sa_test",
-            true,
-            "GET",
-            &action_request.headers
-        ));
+        assert_eq!(
+            trusted_action_credentials(Some(&server_action), facts.0, facts.1, facts.2, facts.3),
+            Some(false),
+            "server-action request is authorized without enabling credentials"
+        );
+        assert_eq!(
+            trusted_action_credentials(Some(&ordinary), facts.0, facts.1, facts.2, facts.3),
+            None,
+            "ordinary fetch must continue to require an application grant"
+        );
+        assert_eq!(
+            trusted_action_credentials(
+                Some(&server_action),
+                "/_plec/actions/sa_test",
+                false,
+                &action_request.method,
+                &action_request.headers
+            ),
+            None
+        );
+        assert_eq!(
+            trusted_action_credentials(
+                Some(&server_action),
+                "/_plec/actions/sa_test",
+                true,
+                "GET",
+                &action_request.headers
+            ),
+            None
+        );
     }
 }
 
