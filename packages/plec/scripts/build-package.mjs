@@ -51,7 +51,9 @@ export async function buildWorkspaceSurface() {
   run('yarn', ['exec', 'tsc', '-p', 'packages/plec/tsconfig.json']);
   for (const output of ['server-context.js', 'server-context.d.ts']) {
     if (!fs.existsSync(path.join(distDir, output))) {
-      throw new Error(`@plec/core exports ./server-context but build omitted ${output}`);
+      throw new Error(
+        `@plec/core exports ./server-context but build omitted ${output}`,
+      );
     }
   }
 
