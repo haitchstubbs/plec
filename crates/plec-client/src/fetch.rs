@@ -50,8 +50,8 @@ fn trusted_action_transport_facts(
 }
 
 /// Returns the credentials mode when request facts qualify for the reserved
-/// transport. `Some(false)` means authorized without credentials; `None`
-/// falls through to the application's ordinary fetch grants.
+/// transport. Same-origin server actions include application credentials;
+/// `None` falls through to the application's ordinary fetch grants.
 fn trusted_action_credentials(
     request: Option<&BrowserRequest>,
     pathname: &str,
@@ -66,7 +66,7 @@ fn trusted_action_credentials(
         method,
         headers,
     )
-    .then_some(false)
+    .then_some(true)
 }
 
 fn authorize_fetch_policy(
@@ -365,8 +365,8 @@ mod authorization_tests {
         );
         assert_eq!(
             trusted_action_credentials(Some(&server_action), facts.0, facts.1, facts.2, facts.3),
-            Some(false),
-            "server-action request is authorized without enabling credentials"
+            Some(true),
+            "same-origin server actions carry application credentials"
         );
         assert_eq!(
             trusted_action_credentials(Some(&ordinary), facts.0, facts.1, facts.2, facts.3),
