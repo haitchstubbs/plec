@@ -1,4 +1,4 @@
-use plec_model::{resolve_local_symbol, SemanticGraph};
+use plec_model::{SemanticGraph, resolve_local_symbol};
 use sha2::Digest;
 use swc_ecma_ast::{Callee, Decl, Expr, ModuleDecl, ModuleItem, Pat, VarDeclKind};
 
@@ -271,10 +271,47 @@ mod tests {
 
     #[test]
     fn canonical_relative_module_identity_makes_action_ids_root_independent() {
-        // The source resolver strips the workspace root before assigning IDs,
-        // so distinct build roots produce this same canonical module identity.
-        let id_a = server_action_id("apps/fullstack/src/actions.ts", "foo", "const foo = 1;");
-        let id_b = server_action_id("apps/fullstack/src/actions.ts", "foo", "const foo = 1;");
+        use std::{fs, path::Path};
+
+        fn compile_id(root: &Path) -> String {
+            let app = root.join("apps/app");
+            let core = root.join("packages/plec");
+            fs::create_dir_all(app.join("src")).unwrap();
+            fs::create_dir_all(core.join("src")).unwrap();
+            fs::write(app.join("package.json"), r#"{"name":"app"}"#).unwrap();
+            fs::write(
+                core.join("package.json"),
+                r#"{"name":"@plec/core","exports":{".":"./dist/index.js"}}"#,
+            )
+            .unwrap();
+            fs::write(
+                core.join("src/server.ts"),
+                "export function action(fn) { return fn; }",
+            )
+            .unwrap();
+            fs::write(
+                core.join("src/index.ts"),
+                "export { action } from './server';",
+            )
+            .unwrap();
+            fs::write(
+                app.join("src/App.tsx"),
+                "import { action } from '@plec/core'; export const foo = action(async () => 1);",
+            )
+            .unwrap();
+            let source = crate::read_source_graph(app.join("src/App.tsx"), &app, root).unwrap();
+            let graph = plec_model::build_semantic_graph(&source.modules, &source.resolved_imports)
+                .unwrap();
+            discover_server_actions(&source.modules, &graph).unwrap()[0]
+                .id
+                .clone()
+        }
+
+        let root_a = tempfile::tempdir().unwrap();
+        let root_b = tempfile::tempdir().unwrap();
+        assert_ne!(root_a.path(), root_b.path());
+        let id_a = compile_id(root_a.path());
+        let id_b = compile_id(root_b.path());
         assert_eq!(id_a, id_b);
     }
 }
