@@ -127,6 +127,12 @@ pub(crate) fn lower_component(
     targets: Option<&ComponentTargets>,
 ) -> Result<ExecutableApplication, LoweringError> {
     let mut ctx = Ctx::new(component, targets);
+    ctx.app.server_actions = component
+        .server_actions
+        .iter()
+        .cloned()
+        .map(|id| plec_ir::ServerActionRef { id })
+        .collect();
     let mut attached_host_refs = std::collections::HashSet::new();
     for node in &component.nodes {
         if let HirNode::Element(element) = node {

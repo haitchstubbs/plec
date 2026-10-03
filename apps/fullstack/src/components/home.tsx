@@ -3,12 +3,21 @@ import {
   PageFrame,
   PageKicker,
 } from '../components/page-primitives';
-import { useLocation, useState } from '@plec/core';
+import { useLocation, useMutation, useState } from '@plec/core';
 import logoUrl from '../assets/plec-mark.svg';
+import { echoAction } from '../server-actions';
 
 export function HomePage() {
   const location = useLocation();
   const [count, setCount] = useState(0);
+  const [echoed, setEchoed] = useState('not called');
+  const echo = useMutation(async (value: string) => {
+    return await echoAction(value);
+  });
+  async function callEcho() {
+    const result = await echo.run('browser-to-node');
+    setEchoed(result.echoed);
+  }
   return (
     <PageFrame>
       <PageKicker>Runtime control room</PageKicker>
@@ -37,6 +46,17 @@ export function HomePage() {
       >
         SSR counter: {count}
       </button>
+      <section aria-label="Server action demo">
+        <button
+          id="server-action-echo"
+          type="button"
+          onClick={callEcho}
+          disabled={echo.pending}
+        >
+          {echo.pending ? 'Calling server…' : 'Call server action'}
+        </button>
+        <output id="server-action-result">{echoed}</output>
+      </section>
       <div className="grid gap-4 md:grid-cols-2">
         <InfoCard title="Renderer">
           <p className="font-semibold !text-emerald-700 dark:!text-emerald-400">

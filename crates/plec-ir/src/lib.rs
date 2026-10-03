@@ -1074,6 +1074,8 @@ pub struct ExecutableComponent {
     pub host_slots: Vec<HostSlot>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub capabilities: Vec<CookieCapability>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub server_actions: Vec<ServerActionRef>,
     pub state_slots: Vec<StateSlot>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub ref_slots: Vec<RefSlot>,
@@ -1144,6 +1146,8 @@ pub struct ExecutableApplication {
     pub host_slots: Vec<HostSlot>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub capabilities: Vec<CookieCapability>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub server_actions: Vec<ServerActionRef>,
     pub state_slots: Vec<StateSlot>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub ref_slots: Vec<RefSlot>,
@@ -1178,6 +1182,7 @@ impl Default for ExecutableApplication {
             inputs: vec![],
             host_slots: vec![],
             capabilities: vec![],
+            server_actions: vec![],
             state_slots: vec![],
             ref_slots: vec![],
             host_refs: vec![],
@@ -1630,6 +1635,18 @@ pub enum CapabilityRequest {
         #[serde(rename = "maxAge", skip_serializing_if = "Option::is_none")]
         max_age: Option<i64>,
     },
+    ServerAction {
+        action: usize,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        arguments: Vec<usize>,
+    },
+}
+
+/// Opaque externally routable server-action identity. It is never a local
+/// table index and is safe to include in public executable graphs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServerActionRef {
+    pub id: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FetchHeader {
@@ -1741,10 +1758,12 @@ mod tests {
     fn route_manifest_rejects_a_non_v3_version() {
         let value =
             serde_json::json!({"version":2,"revision":"x","rootGraphId":"root","routes":[]});
-        assert!(serde_json::from_value::<RouteManifest>(value)
-            .unwrap()
-            .validate()
-            .is_err());
+        assert!(
+            serde_json::from_value::<RouteManifest>(value)
+                .unwrap()
+                .validate()
+                .is_err()
+        );
     }
 
     fn test_manifest() -> RouteManifest {
@@ -1798,6 +1817,7 @@ mod tests {
             inputs: vec![],
             host_slots: vec![],
             capabilities: vec![],
+            server_actions: vec![],
             state_slots: vec![],
             ref_slots: vec![],
             host_refs: vec![],
@@ -2204,12 +2224,14 @@ mod tests {
         let snapshot = valid_snapshot();
         let manifest = test_manifest();
         let application = test_application(true);
-        assert!(snapshot
-            .validate(&SsrSnapshotReferences {
-                manifest: &manifest,
-                application: &application,
-            })
-            .is_ok());
+        assert!(
+            snapshot
+                .validate(&SsrSnapshotReferences {
+                    manifest: &manifest,
+                    application: &application,
+                })
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2284,8 +2306,7 @@ mod tests {
     fn ssr_snapshot_round_trips_nested_records() {
         let json = serde_json::to_value(valid_snapshot()).unwrap();
         assert_eq!(
-            json["structure"]["nested"]["root/outlet:main/outlet:main/key:todos/component:1"]
-                ["graphId"],
+            json["structure"]["nested"]["root/outlet:main/outlet:main/key:todos/component:1"]["graphId"],
             "app#Todo"
         );
         assert_eq!(
@@ -2425,24 +2446,26 @@ mod tests {
 
     #[test]
     fn ssr_snapshot_rejects_duplicate_and_unordered_branch_selections() {
-        assert!(snapshot_error(|snapshot| {
-            snapshot
-                .structure
-                .graphs
-                .get_mut("root/outlet:main/outlet:main/key:todos")
-                .unwrap()
-                .branches = vec![
-                SsrBranchSelection {
-                    node: 0,
-                    selected: SsrSelectedBranch::Consequent,
-                },
-                SsrBranchSelection {
-                    node: 0,
-                    selected: SsrSelectedBranch::None,
-                },
-            ];
-        })
-        .contains("must be ordered by node handle without duplicates"));
+        assert!(
+            snapshot_error(|snapshot| {
+                snapshot
+                    .structure
+                    .graphs
+                    .get_mut("root/outlet:main/outlet:main/key:todos")
+                    .unwrap()
+                    .branches = vec![
+                    SsrBranchSelection {
+                        node: 0,
+                        selected: SsrSelectedBranch::Consequent,
+                    },
+                    SsrBranchSelection {
+                        node: 0,
+                        selected: SsrSelectedBranch::None,
+                    },
+                ];
+            })
+            .contains("must be ordered by node handle without duplicates")
+        );
     }
 
     #[test]
@@ -2568,12 +2591,14 @@ mod tests {
         let snapshot: PlecSsrSnapshot = serde_json::from_value(json).unwrap();
         let manifest = test_manifest();
         let application = test_application(true);
-        assert!(snapshot
-            .validate(&SsrSnapshotReferences {
-                manifest: &manifest,
-                application: &application,
-            })
-            .is_err());
+        assert!(
+            snapshot
+                .validate(&SsrSnapshotReferences {
+                    manifest: &manifest,
+                    application: &application,
+                })
+                .is_err()
+        );
     }
 
     #[test]

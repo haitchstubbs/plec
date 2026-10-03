@@ -198,6 +198,7 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
         &host_config.custom_elements,
         options.runtime_source,
     )?;
+    let server_actions = artifacts.server_actions;
 
     let automatic_providers = artifacts
         .host_components
@@ -248,12 +249,15 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
         &app_dir,
         server_entry.exists().then_some(server_entry.as_path()),
         &api_routes,
+        &server_actions,
         &server_bundle,
         options.optimize,
     )?;
 
     let has_node_runtime = host::emit_node_runtime(&repo_root, &app_dir, &out_dir)?;
-    if !has_node_runtime && (server_entry.exists() || !api_routes.is_empty()) {
+    if !has_node_runtime
+        && (server_entry.exists() || !api_routes.is_empty() || !server_actions.is_empty())
+    {
         // The app authored server code, but this workspace does not vendor
         // the Node application runtime: the emitted manifest carries no
         // `server` section and `/api/*` will 404 at runtime. Loud here beats

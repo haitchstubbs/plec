@@ -43,7 +43,7 @@ impl RuntimeState {
         let (request, value) = match &pending.suspension.request {
             BrowserRequest::Cookie { request, value } => (request.clone(), value.clone()),
             #[cfg(feature = "fetch")]
-            BrowserRequest::Fetch(_) => {
+            BrowserRequest::Fetch(_) | BrowserRequest::ServerAction(_) => {
                 return Err(JsValue::from_str(
                     "fetch suspension routed through cookie transport",
                 ));

@@ -42,6 +42,10 @@
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js"
     },
+    "./server-context": {
+      "types": "./dist/server-context.d.ts",
+      "import": "./dist/server-context.js"
+    },
     "./browser": {
       "types": "./dist/browser.d.ts",
       "import": "./dist/browser.js"

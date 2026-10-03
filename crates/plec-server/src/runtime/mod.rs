@@ -47,6 +47,16 @@ pub struct HostRenderRequest {
 pub type HostRenderDispatch<'a> =
     Pin<Box<dyn Future<Output = Result<Option<String>, ServerError>> + Send + 'a>>;
 
+#[derive(Debug, Clone)]
+pub struct ServerActionRequest {
+    pub id: String,
+    pub arguments: Vec<plec_schema::RuntimeValue>,
+    pub context: RequestContext,
+}
+
+pub type ServerActionDispatch<'a> =
+    Pin<Box<dyn Future<Output = Result<plec_schema::RuntimeValue, ServerError>> + Send + 'a>>;
+
 pub trait ApplicationRuntime: Send + Sync + 'static {
     fn dispatch<'a>(
         &'a self,
@@ -56,6 +66,10 @@ pub trait ApplicationRuntime: Send + Sync + 'static {
 
     fn render_host<'a>(&'a self, _request: HostRenderRequest) -> HostRenderDispatch<'a> {
         Box::pin(async { Ok(None) })
+    }
+
+    fn invoke_action<'a>(&'a self, _request: ServerActionRequest) -> ServerActionDispatch<'a> {
+        Box::pin(async { Err(ServerError::message("server action runtime unavailable")) })
     }
 }
 

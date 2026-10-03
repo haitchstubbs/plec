@@ -422,6 +422,63 @@ impl Ctx<'_> {
                     code.push(ActionInstruction::Evaluate { expression });
                     code.push(ActionInstruction::StoreRef { reference });
                 }
+                HirStmt::AwaitServerAction {
+                    target,
+                    action,
+                    arguments,
+                    return_value,
+                    ..
+                } => {
+                    if *action >= self.component.server_actions.len() {
+                        return Err(self.err("server action reference handle out of range"));
+                    }
+                    let arguments = arguments
+                        .iter()
+                        .map(|argument| self.expression(*argument, row).map(|(value, _)| value))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let result_slot = target
+                        .and_then(|binding| self.async_slots.get(&binding).copied())
+                        .unwrap_or_else(|| {
+                            let slot = *frame_slots;
+                            *frame_slots += 1;
+                            slot
+                        });
+                    let error_slot = *frame_slots;
+                    *frame_slots += 1;
+                    let return_expression = if *return_value {
+                        let expression = self.app.expressions.len();
+                        self.app.expressions.push(ExpressionProgram {
+                            instructions: vec![
+                                ExpressionInstruction::LoadFrame { slot: result_slot },
+                                ExpressionInstruction::Return,
+                            ],
+                        });
+                        Some(expression)
+                    } else {
+                        None
+                    };
+                    code.push(ActionInstruction::CapabilityRequest {
+                        request: CapabilityRequest::ServerAction {
+                            action: *action,
+                            arguments,
+                        },
+                        success_pc: if *return_value {
+                            code.len() + 1
+                        } else {
+                            usize::MAX
+                        },
+                        failure_pc: usize::MAX,
+                        finally_pc: None,
+                        result_slot,
+                        error_slot,
+                    });
+                    if let Some(expression) = return_expression {
+                        code.push(ActionInstruction::Return {
+                            outcome: plec_ir::ReturnOutcome::Success,
+                            value: Some(expression),
+                        });
+                    }
+                }
                 HirStmt::AwaitCall {
                     target,
                     callee,
@@ -849,6 +906,10 @@ fn reserve_async_slots(body: &HirCallableBody, next: &mut usize) -> HashMap<Bind
                     target: Some(binding),
                     ..
                 }
+                | HirStmt::AwaitServerAction {
+                    target: Some(binding),
+                    ..
+                }
                 | HirStmt::AwaitCookie {
                     target: Some(binding),
                     ..
@@ -925,6 +986,7 @@ fn statement_may_suspend(statement: &HirStmt) -> bool {
         HirStmt::AwaitFetch { .. } => true,
         HirStmt::AwaitCookie { .. } => true,
         HirStmt::AwaitCall { .. } => true,
+        HirStmt::AwaitServerAction { .. } => true,
         HirStmt::If {
             consequent,
             alternate,
