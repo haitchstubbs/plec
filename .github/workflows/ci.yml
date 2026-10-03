@@ -275,6 +275,7 @@ jobs:
           name: fullstack-dist
           path: |
             apps/fullstack/dist/
+            packages/plec/dist/
             target/debug/plec
           retention-days: 1
 

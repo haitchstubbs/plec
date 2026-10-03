@@ -41,7 +41,23 @@ fn trusted_action_transport(
     method: &str,
     headers: &[(String, String)],
 ) -> bool {
-    matches!(request, Some(BrowserRequest::ServerAction(_)))
+    trusted_action_transport_facts(
+        matches!(request, Some(BrowserRequest::ServerAction(_))),
+        pathname,
+        same_origin,
+        method,
+        headers,
+    )
+}
+
+fn trusted_action_transport_facts(
+    is_server_action: bool,
+    pathname: &str,
+    same_origin: bool,
+    method: &str,
+    headers: &[(String, String)],
+) -> bool {
+    is_server_action
         && same_origin
         && pathname.starts_with("/_plec/actions/")
         && method.eq_ignore_ascii_case("POST")
@@ -344,15 +360,29 @@ mod authorization_tests {
             !exempt,
             "ordinary fetch must fall through to normal policy; with no grants that path denies it"
         );
-        assert!(authorize_fetch_policy(
-            &request.url,
-            &request.method,
-            &request.headers,
-            Some(&ordinary),
-            None,
-            None
-        )
-        .is_err());
+        assert!(
+            authorize_fetch_policy(
+                &request.url,
+                &request.method,
+                &request.headers,
+                Some(&ordinary),
+                None,
+                None
+            )
+            .is_err()
+        );
+        let facts = (
+            "/_plec/actions/sa_test",
+            true,
+            "POST",
+            request.headers.as_slice(),
+        );
+        assert!(trusted_action_transport_facts(
+            true, facts.0, facts.1, facts.2, facts.3
+        ));
+        assert!(!trusted_action_transport_facts(
+            false, facts.0, facts.1, facts.2, facts.3
+        ));
         assert!(!trusted_action_transport(
             Some(&server_action),
             "/_plec/actions/sa_test",

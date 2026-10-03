@@ -474,9 +474,14 @@ impl ApplicationRuntime for NodeApplicationRuntime {
 }
 
 fn request_context_json(context: &RequestContext) -> serde_json::Value {
+    // The public TS contract is a string record, so duplicate field values are
+    // intentionally flattened to the last value in HeaderMap iteration order.
+    // Use an ordered map for deterministic serialization and never expose the
+    // sidecar's private authentication credential through application context.
     let headers = context
         .headers
         .iter()
+        .filter(|(name, _)| *name != super::protocol::INTERNAL_TOKEN_HEADER)
         .filter_map(|(name, value)| {
             value.to_str().ok().map(|value| {
                 (
@@ -506,6 +511,42 @@ fn request_context_json(context: &RequestContext) -> serde_json::Value {
         "params": context.params,
         "query": query,
     })
+}
+
+#[cfg(test)]
+mod request_context_tests {
+    use super::*;
+
+    #[test]
+    fn request_context_hides_sidecar_token_and_flattens_duplicate_headers() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.append("x-visible", "first".parse().unwrap());
+        headers.append("x-visible", "second".parse().unwrap());
+        headers.insert(
+            super::protocol::INTERNAL_TOKEN_HEADER,
+            "private-token".parse().unwrap(),
+        );
+        let context = RequestContext {
+            url: "https://example.test/".into(),
+            pathname: "/".into(),
+            method: Method::GET,
+            headers,
+            cookies: Default::default(),
+            params: Default::default(),
+            query: Default::default(),
+        };
+        let json = request_context_json(&context);
+        assert!(!json.to_string().contains("private-token"));
+        assert!(
+            json["headers"]
+                .get(super::protocol::INTERNAL_TOKEN_HEADER)
+                .is_none()
+        );
+        assert!(matches!(
+            json["headers"]["x-visible"].as_str(),
+            Some("first" | "second")
+        ));
+    }
 }
 
 /// Rolling sidecar output used to make startup failures diagnosable: the

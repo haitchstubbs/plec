@@ -56,7 +56,10 @@ pub fn discover_server_actions(
                     || call.args.len() != 1
                     || !matches!(call.args[0].expr.as_ref(), Expr::Arrow(arrow) if arrow.is_async)
                 {
-                    return Err(format!("server action {} in {} must be exported const name = action(async (...) => ...)", name.id.sym, module.id));
+                    return Err(format!(
+                        "server action {} in {} must be exported const name = action(async (...) => ...)",
+                        name.id.sym, module.id
+                    ));
                 }
                 let export_name = name.id.sym.to_string();
                 actions.push(ServerActionDeclaration {
@@ -102,6 +105,10 @@ fn resolve_plec_action_symbol(
 }
 
 fn is_plec_core_action_module(module_id: &str) -> bool {
+    // These are the canonical module IDs emitted by `read_source_graph` for
+    // the package's source/workspace and published runtime module layouts.
+    // Package resolution itself remains owned by that source graph; this is
+    // only the narrow identity check for the defining `action` symbol.
     let module_id = module_id.replace('\\', "/");
     module_id.ends_with("packages/plec/src/server.ts")
         || module_id.ends_with("packages/plec/dist/server.js")
@@ -164,8 +171,14 @@ mod tests {
     #[test]
     fn recognizes_canonical_and_aliased_plec_action_imports() {
         for (source, local) in [
-            ("import { action } from '@plec/core'; export const foo = action(async () => 1);", "foo"),
-            ("import { action as serverAction } from '@plec/core'; export const foo = serverAction(async () => 1);", "foo"),
+            (
+                "import { action } from '@plec/core'; export const foo = action(async () => 1);",
+                "foo",
+            ),
+            (
+                "import { action as serverAction } from '@plec/core'; export const foo = serverAction(async () => 1);",
+                "foo",
+            ),
         ] {
             assert_eq!(discover(source, Some("@plec/core"))[0].export_name, local);
         }
@@ -173,11 +186,13 @@ mod tests {
 
     #[test]
     fn ignores_local_and_third_party_action_names() {
-        assert!(discover(
-            "function action(fn) { return fn; } export const foo = action(async () => 1);",
-            None
-        )
-        .is_empty());
+        assert!(
+            discover(
+                "function action(fn) { return fn; } export const foo = action(async () => 1);",
+                None
+            )
+            .is_empty()
+        );
         let app =
             "import { action } from 'another-package'; export const foo = action(async () => 1);";
         // The unresolved third-party import is intentionally not mapped to Plec.
@@ -200,5 +215,66 @@ mod tests {
         );
         assert_eq!(first, repeat);
         assert_ne!(first[0].id, changed[0].id);
+    }
+
+    #[test]
+    fn workspace_source_resolution_discovers_aliased_core_action_semantically() {
+        use std::fs;
+        let repo = tempfile::tempdir().unwrap();
+        let app = repo.path().join("apps/app");
+        let core = repo.path().join("packages/plec");
+        fs::create_dir_all(app.join("src")).unwrap();
+        fs::create_dir_all(core.join("src")).unwrap();
+        fs::write(app.join("package.json"), r#"{"name":"app"}"#).unwrap();
+        fs::write(
+            core.join("package.json"),
+            r#"{"name":"@plec/core","exports":{".":"./dist/index.js","./server":"./dist/server.js"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            core.join("src/server.ts"),
+            "export function action(fn) { return fn; }",
+        )
+        .unwrap();
+        fs::write(
+            core.join("src/index.ts"),
+            "export { action } from './server';",
+        )
+        .unwrap();
+        fs::write(
+            app.join("src/App.tsx"),
+            "import { action as serverAction } from '@plec/core'; export const foo = serverAction(async () => 1);",
+        )
+        .unwrap();
+
+        let source = crate::read_source_graph(app.join("src/App.tsx"), &app, repo.path()).unwrap();
+        let graph =
+            plec_model::build_semantic_graph(&source.modules, &source.resolved_imports).unwrap();
+        let actions = discover_server_actions(&source.modules, &graph).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].export_name, "foo");
+        let action_module = source
+            .modules
+            .iter()
+            .find(|module| {
+                module.imports.iter().any(|import| {
+                    import.specifiers.iter().any(|specifier| {
+                        matches!(specifier, plec_parser::ImportSpecifier::Named { local, .. } if local == "serverAction")
+                    })
+                })
+            })
+            .unwrap();
+        let resolved = resolve_plec_action_symbol(&graph, &action_module.id, "serverAction")
+            .expect("semantic import resolves");
+        assert!(is_plec_core_action_module(&resolved.module_id));
+    }
+
+    #[test]
+    fn canonical_relative_module_identity_makes_action_ids_root_independent() {
+        // The source resolver strips the workspace root before assigning IDs,
+        // so distinct build roots produce this same canonical module identity.
+        let id_a = server_action_id("apps/fullstack/src/actions.ts", "foo", "const foo = 1;");
+        let id_b = server_action_id("apps/fullstack/src/actions.ts", "foo", "const foo = 1;");
+        assert_eq!(id_a, id_b);
     }
 }
