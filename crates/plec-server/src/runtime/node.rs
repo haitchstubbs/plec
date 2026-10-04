@@ -181,9 +181,11 @@ impl NodeApplicationRuntime {
                     } else if let Some(message) = line.strip_prefix(protocol::ERROR_PREFIX) {
                         diagnostics.record_error(message.to_owned());
                     }
-                    if development {
-                        println!("{line}");
-                    }
+                    // stdout carries ordinary application logs as well as
+                    // the READY/error protocol records. Forward it in every
+                    // environment; only captured startup detail is
+                    // development-gated below.
+                    println!("{line}");
                 }
             });
         }
@@ -193,9 +195,10 @@ impl NodeApplicationRuntime {
             tokio::spawn(async move {
                 while let Ok(Some(line)) = stderr.next_line().await {
                     diagnostics.record_diagnostic(line.clone());
-                    if development {
-                        eprintln!("{line}");
-                    }
+                    // stderr is the application process log stream. Forward
+                    // it unchanged; only the bounded tail included in a
+                    // structured startup diagnostic is development-only.
+                    eprintln!("{line}");
                 }
             });
         }
@@ -329,11 +332,12 @@ impl NodeApplicationRuntime {
         } else {
             String::new()
         };
-        let (code, phase) = if reason.contains("protocol") {
-            ("PLEC-SIDECAR-PROTOCOL", "protocol")
-        } else {
-            ("PLEC-SIDECAR-STARTUP", "sidecar")
-        };
+        let (code, phase) =
+            if reason.contains("protocol") || reason.contains("sidecar reported socket") {
+                ("PLEC-SIDECAR-PROTOCOL", "protocol")
+            } else {
+                ("PLEC-SIDECAR-STARTUP", "sidecar")
+            };
         ServerError::message(if tail.is_empty() {
             format!("[{code}] {phase}: sidecar startup failed: {reason}{process_status}")
         } else {
@@ -448,7 +452,7 @@ impl ApplicationRuntime for NodeApplicationRuntime {
             }
             if internal.status != StatusCode::OK {
                 return Err(ServerError::message(format!(
-                    "[PLEC-SIDECAR-PROTOCOL] protocol: host render returned {}",
+                    "[PLEC-PROVIDER-RENDER] provider: server render failed (sidecar returned {})",
                     internal.status
                 )));
             }
@@ -499,7 +503,7 @@ impl ApplicationRuntime for NodeApplicationRuntime {
                     return Err(ServerError::UnknownServerAction);
                 }
                 return Err(ServerError::message(format!(
-                    "[PLEC-SIDECAR-PROTOCOL] protocol: server action returned {}",
+                    "[PLEC-SERVER-ACTION] action: application action failed (sidecar returned {})",
                     internal.status
                 )));
             }

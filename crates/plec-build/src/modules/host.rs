@@ -238,14 +238,14 @@ fn read_app_config(config_path: &Path) -> Result<Option<AppConfig>, BuildError> 
     }
     let text = std::fs::read_to_string(config_path).map_err(|error| {
         BuildError::with_source(
-            Stage::ServerManifest,
+            Stage::Configuration,
             format!("cannot read {}", config_path.display()),
             error,
         )
     })?;
     toml::from_str(&text).map(Some).map_err(|error| {
         BuildError::with_source(
-            Stage::ServerManifest,
+            Stage::Configuration,
             format!("invalid {}: {error}", config_path.display()),
             error,
         )
@@ -261,7 +261,7 @@ fn validate_host_imports(
         .find(|(specifier, provider)| specifier.trim().is_empty() || provider.trim().is_empty())
     {
         return Err(BuildError::new(
-            Stage::ServerManifest,
+            Stage::Configuration,
             format!(
                 "invalid host import binding in {}: import specifier and provider id must be non-empty (found {specifier:?} -> {provider:?})",
                 config_path.display()
@@ -280,7 +280,7 @@ fn validate_host_adapters(
         .find(|(provider, adapter)| provider.trim().is_empty() || adapter.trim().is_empty())
     {
         return Err(BuildError::new(
-            Stage::ServerManifest,
+            Stage::Configuration,
             format!(
                 "invalid host provider adapter in {}: provider id and adapter module must be non-empty (found {provider:?} -> {adapter:?})",
                 config_path.display()

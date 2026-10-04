@@ -15,10 +15,10 @@ pub(crate) struct DevelopmentDiagnostic {
 
 impl DevelopmentDiagnostic {
     pub(crate) fn compiler(error: impl fmt::Display) -> Self {
-        Self::compiler_message(error.to_string())
+        Self::compiler_message(error.to_string(), verbose())
     }
 
-    fn compiler_message(raw: String) -> Self {
+    fn compiler_message(raw: String, include_detail: bool) -> Self {
         let parsed = raw.strip_prefix("Failed to parse ").and_then(|value| {
             let (module, rest) = value.split_once(": ")?;
             let rest = rest.strip_prefix(&format!("{module}:"))?;
@@ -44,7 +44,7 @@ impl DevelopmentDiagnostic {
             message,
             source,
             location,
-            detail: verbose().then_some(raw),
+            detail: include_detail.then_some(raw),
             suggestion: has_source
                 .then_some("Check the reported source location for a TypeScript/TSX syntax error."),
         }
@@ -52,12 +52,10 @@ impl DevelopmentDiagnostic {
 
     pub(crate) fn build(error: BuildError) -> Self {
         let (code, phase) = match error.stage {
+            Stage::Configuration => ("PLEC-BUILD-CONFIG", "build"),
             Stage::Compile => ("PLEC-COMPILE-001", "compile"),
             Stage::ApiRoutes => ("PLEC-DISCOVERY-ROUTES", "discovery"),
-            Stage::ServerManifest if error.message.contains("plec.toml") => {
-                ("PLEC-BUILD-CONFIG", "build")
-            }
-            _ => ("PLEC-BUILD-001", "build"),
+            _ => ("PLEC-BUILD-FAILURE", "build"),
         };
         let detail = verbose()
             .then(|| error.source().map(ToString::to_string))
@@ -88,7 +86,11 @@ impl DevelopmentDiagnostic {
 }
 
 fn verbose() -> bool {
-    std::env::var("PLEC_DIAGNOSTICS").as_deref() == Ok("verbose")
+    verbose_from(std::env::var("PLEC_DIAGNOSTICS").ok().as_deref())
+}
+
+fn verbose_from(setting: Option<&str>) -> bool {
+    setting == Some("verbose")
 }
 
 impl fmt::Display for DevelopmentDiagnostic {
@@ -125,24 +127,58 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn compiler_diagnostic_keeps_module_and_source_position() {
+    fn verbose_mode_is_opted_in_only_by_the_documented_value() {
+        assert!(!verbose_from(None));
+        assert!(!verbose_from(Some("true")));
+        assert!(verbose_from(Some("verbose")));
+    }
+
+    #[test]
+    fn compiler_diagnostic_keeps_root_and_imported_source_positions() {
         let directory = tempfile::tempdir().expect("source root");
         let routes = directory.path().join("src/routes");
         std::fs::create_dir_all(&routes).unwrap();
-        let source = routes.join("todos.tsx");
-        std::fs::write(&source, "export const = 1;").unwrap();
-        let error = plec_compiler::read_source_graph_with_options(
-            &source,
+        let entry = directory.path().join("src/router.tsx");
+        std::fs::write(&entry, "import './routes/todos';").unwrap();
+        let imported = routes.join("todos.tsx");
+        std::fs::write(&imported, "export const = 1;").unwrap();
+
+        let imported_error = plec_compiler::read_source_graph_with_options(
+            &entry,
             directory.path(),
             directory.path(),
             &Default::default(),
         )
-        .expect_err("unsupported source must be diagnosed");
-        let diagnostic = DevelopmentDiagnostic::compiler(error);
-        let output = diagnostic.to_string();
-        assert!(output.contains("[PLEC-PARSE-001] parse:"));
-        assert!(output.contains("src/routes/todos.tsx:1:"));
-        assert!(output.contains("TSX syntax could not be parsed"));
+        .expect_err("invalid imported source must be diagnosed");
+        let imported_diagnostic = DevelopmentDiagnostic::compiler(imported_error);
+        let imported_output = imported_diagnostic.to_string();
+        assert!(imported_output.contains("[PLEC-PARSE-001] parse:"));
+        assert!(imported_output.contains("src/routes/todos.tsx:1:"));
+        assert_eq!(imported_output.matches("src/routes/todos.tsx").count(), 1);
+        assert!(imported_output.contains("TSX syntax could not be parsed"));
+
+        let root = directory.path().join("src/entry.tsx");
+        std::fs::write(&root, "export const = 1;").unwrap();
+        let root_error = plec_compiler::read_source_graph_with_options(
+            &root,
+            directory.path(),
+            directory.path(),
+            &Default::default(),
+        )
+        .expect_err("invalid entry source must be diagnosed");
+        let root_output = DevelopmentDiagnostic::compiler(root_error).to_string();
+        assert!(root_output.contains("src/entry.tsx:1:"));
+        assert_eq!(root_output.matches("src/entry.tsx").count(), 1);
+    }
+
+    #[test]
+    fn verbose_compiler_diagnostic_adds_original_detail_only_when_requested() {
+        let raw = "Failed to parse src/app.tsx: src/app.tsx:2:7: UnexpectedToken".to_owned();
+        let concise = DevelopmentDiagnostic::compiler_message(raw.clone(), false).to_string();
+        let verbose = DevelopmentDiagnostic::compiler_message(raw.clone(), true).to_string();
+        assert!(concise.contains("src/app.tsx:2:7"));
+        assert!(!concise.contains("UnexpectedToken"));
+        assert!(verbose.contains("UnexpectedToken"));
     }
 
     #[test]
@@ -162,6 +198,7 @@ mod tests {
             runtime_source: RuntimeSource::Auto,
         };
         let error = resolve_host_config(directory.path(), &options).unwrap_err();
+        assert_eq!(error.stage, Stage::Configuration);
         let output = DevelopmentDiagnostic::build(error).to_string();
         assert!(output.contains("[PLEC-BUILD-CONFIG] build:"));
         assert!(output.contains("plec.toml"));

@@ -10,8 +10,9 @@ use axum::{
     http::{Request, StatusCode},
 };
 use plec_server::{
-    ApplicationRuntime, DocumentMetadata, NodeApplicationRuntime, PlecServerOptions, ServerError,
-    create_plec_server, request::RequestContext, runtime::NodeRuntimeOptions,
+    ApplicationRuntime, DocumentMetadata, NodeApplicationRuntime, PlecServerOptions,
+    ServerActionRequest, ServerError, create_plec_server, request::RequestContext,
+    runtime::NodeRuntimeOptions,
 };
 use tower::ServiceExt;
 
@@ -186,7 +187,7 @@ async fn uncaught_api_handler_failure_is_redacted_http_500_and_runtime_survives(
         r#"
         export async function handleRequest(request) {
           if (new URL(request.url).pathname === '/api/fail') {
-            throw new Error('secret-token /srv/private/handler.ts');
+            throw new Error('PLEC_PRIVATE_DIAGNOSTIC_MARKER');
           }
           return new Response('alive');
         }
@@ -199,14 +200,106 @@ async fn uncaught_api_handler_failure_is_redacted_http_500_and_runtime_survives(
         .expect("failed application response");
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body, r#"{"error":"Internal Server Error"}"#);
-    assert!(!body.contains("secret-token"));
-    assert!(!body.contains("/srv/private"));
+    assert!(!body.contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER"));
 
     let (status, body) = dispatch(&runtime, "GET", "/api/ok", None)
         .await
         .expect("sidecar remains available");
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "alive");
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn public_api_http_boundary_redacts_a_private_sidecar_exception() {
+    let (runtime, _dir) = spawn_runtime(
+        r#"
+        export async function handleRequest() {
+          throw new Error('PLEC_PRIVATE_DIAGNOSTIC_MARKER');
+        }
+      "#,
+    )
+    .await;
+    let router = create_plec_server(options(runtime.clone()));
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/private")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("public API response");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert_eq!(body, r#"{"error":"Internal Server Error"}"#);
+    assert!(!body.contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER"));
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn thrown_server_action_has_an_action_diagnostic_but_public_response_is_redacted() {
+    let (runtime, _dir) = spawn_runtime(
+        r#"
+        export async function handleRequest() { return new Response('alive'); }
+        export function hasAction(id) { return id === 'sa_private'; }
+        export async function invokeAction() {
+          throw new Error('PLEC_PRIVATE_DIAGNOSTIC_MARKER');
+        }
+      "#,
+    )
+    .await;
+
+    let internal = runtime
+        .invoke_action(ServerActionRequest {
+            id: "sa_private".into(),
+            arguments: Vec::new(),
+            context: test_context("POST", "/_plec/actions/sa_private"),
+        })
+        .await
+        .expect_err("application action exception must fail internally");
+    assert!(
+        internal
+            .to_string()
+            .contains("[PLEC-SERVER-ACTION] action:")
+    );
+    assert!(!internal.to_string().contains("PLEC-SIDECAR-PROTOCOL"));
+    assert!(
+        !internal
+            .to_string()
+            .contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER")
+    );
+
+    let router = create_plec_server(options(runtime.clone()));
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/_plec/actions/sa_private")
+                .header("origin", "http://localhost")
+                .header("content-type", "application/json")
+                .body(Body::from("[]"))
+                .unwrap(),
+        )
+        .await
+        .expect("public action response");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert_eq!(body, r#"{"error":"server action failed"}"#);
+    assert!(!body.contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER"));
     runtime.shutdown().await;
 }
 

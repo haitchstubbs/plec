@@ -56,6 +56,7 @@ pub struct BuildResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     Clean,
+    Configuration,
     Compile,
     BrowserBundle,
     DependencyValidation,
@@ -72,6 +73,7 @@ impl std::fmt::Display for Stage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
             Stage::Clean => "clean",
+            Stage::Configuration => "configuration",
             Stage::Compile => "compile",
             Stage::BrowserBundle => "browser bundle",
             Stage::DependencyValidation => "dependency validation",

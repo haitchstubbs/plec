@@ -36,11 +36,7 @@ pub(crate) async fn dispatch(
     match dispatch_inner(&state, request).await {
         Ok(response) => response,
         Err(error) => {
-            if state.options.development {
-                eprintln!("[PLEC-SERVER-REQUEST] server: request failed: {error}");
-            } else {
-                eprintln!("[PLEC-SERVER-REQUEST] server: request failed");
-            }
+            eprintln!("[PLEC-SERVER-REQUEST] server: request failed: {error}");
             json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &json!({ "error": "Internal Server Error" }),
@@ -191,11 +187,7 @@ async fn handle_server_action(
                     "unknown or stale server action",
                 ));
             }
-            if state.options.development {
-                eprintln!("[PLEC-SERVER-ACTION] action: invocation failed: {error}");
-            } else {
-                eprintln!("[PLEC-SERVER-ACTION] action: invocation failed");
-            }
+            eprintln!("[PLEC-SERVER-ACTION] action: invocation failed: {error}");
             Ok(fail(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "server action failed",
@@ -231,11 +223,7 @@ async fn render_document(
     match render_document_inner(state, context).await {
         Ok(response) => Ok(response),
         Err(error) => {
-            if state.options.development {
-                eprintln!("[PLEC-SSR-RENDER] ssr: render failed: {error}");
-            } else {
-                eprintln!("[PLEC-SSR-RENDER] ssr: render failed");
-            }
+            eprintln!("[PLEC-SSR-RENDER] ssr: render failed: {error}");
             // A fixture without compiler artifacts remains useful for
             // HTTP-host tests. Real Plec builds always supply the artifact
             // and therefore take the SSR path above.

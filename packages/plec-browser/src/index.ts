@@ -452,6 +452,7 @@ export function wireRoutedInputs(
   runtime: RoutedInputRuntime,
   inputs: Record<string, CompiledInputProducer<any>>,
   onQueryUpdate?: (update: CompiledQueryUpdate) => void,
+  onRuntimeError?: (error: unknown) => void,
 ): { hydrate(): void; dispose(): void } {
   const hydrate = () => {
     for (const [inputId, producer] of Object.entries(inputs)) {
@@ -468,7 +469,13 @@ export function wireRoutedInputs(
       isDeltaInput(producer)
         ? [
             producer.subscribeDeltas((deltas) =>
-              publishDeltas(runtime, deltas, onQueryUpdate),
+              publishDeltas(
+                runtime,
+                deltas,
+                onQueryUpdate,
+                0,
+                onRuntimeError,
+              ),
             ),
           ]
         : [],
@@ -738,6 +745,7 @@ async function startPlecRouterInner(
     runtime,
     routedInputs,
     options.onQueryUpdate,
+    (error) => emitBrowserFailure(options, error),
   );
   const onGraphNeeded = (event: Event) => {
     const graphId = (event as CustomEvent<{ graphId?: string }>).detail
@@ -752,14 +760,14 @@ async function startPlecRouterInner(
         routedInputBridge.hydrate();
       })
       .catch((error) => {
-        const detail =
-          error instanceof Error ? error.message : String(error);
-        emitPlecDiagnostic(options, {
-          ...plecRuntimeDiagnostic(error, graphId),
-          detail: options.development ? detail : undefined,
-        });
+        const diagnostic = plecRuntimeDiagnostic(
+          error,
+          graphId,
+          options.development === true,
+        );
+        emitPlecDiagnostic(options, diagnostic);
         console.error(
-          `[PLEC-ARTIFACT-LOAD] artifact: Failed to load Plec graph ${graphId}`,
+          `[${diagnostic.code}] ${diagnostic.phase}: ${diagnostic.message}`,
         );
       });
   };
@@ -772,7 +780,12 @@ async function startPlecRouterInner(
     hydrationQueued = true;
     queueMicrotask(() => {
       hydrationQueued = false;
-      routedInputBridge.hydrate();
+      try {
+        routedInputBridge.hydrate();
+      } catch (error) {
+        emitBrowserFailure(options, error);
+        throw error;
+      }
     });
   };
   const onRouteClick = (event: Event) => {
@@ -939,8 +952,17 @@ function emitAdoptionDiagnostic(
 export function plecRuntimeDiagnostic(
   error: unknown,
   graphId?: string,
+  development = false,
 ): PlecDevelopmentDiagnostic {
   const detail = error instanceof Error ? error.message : String(error);
+  const diagnostic = classifyRuntimeDiagnostic(detail, graphId);
+  return development ? { ...diagnostic, detail } : diagnostic;
+}
+
+function classifyRuntimeDiagnostic(
+  detail: string,
+  graphId?: string,
+): PlecDevelopmentDiagnostic {
   const provider = detail.match(
     /(?:unknown host component|host component mount is not callable):\s*([^\s]+)/,
   )?.[1];
@@ -956,7 +978,12 @@ export function plecRuntimeDiagnostic(
         : 'Install a provider registry and confirm that it implements resolve(provider, component).',
       ...(graphId ? { graphId } : {}),
     };
-  if (/protocol|version mismatch|incompatible/i.test(detail))
+  // The WASM facade exposes failures as JsValue strings, not a typed JS
+  // exception. Keep this adapter narrow and pin the known error vocabulary.
+  if (
+    /protocol|incompatible/i.test(detail) ||
+    /(?:mismatch|unsupported).{0,24}version/i.test(detail)
+  )
     return {
       code: 'PLEC-PROTOCOL-COMPATIBILITY',
       phase: 'protocol',
@@ -991,12 +1018,10 @@ function emitBrowserFailure(
   error: unknown,
   graphId?: string,
 ): void {
-  const diagnostic = plecRuntimeDiagnostic(error, graphId);
-  const detail = error instanceof Error ? error.message : String(error);
-  emitPlecDiagnostic(options, {
-    ...diagnostic,
-    ...(options.development ? { detail } : {}),
-  });
+  emitPlecDiagnostic(
+    options,
+    plecRuntimeDiagnostic(error, graphId, options.development === true),
+  );
 }
 
 /** Adapt a host collection into the runtime's stable keyed-delta protocol. */
@@ -1031,6 +1056,7 @@ function publishDeltas(
   deltas: RuntimeDelta[],
   onQueryUpdate?: (update: CompiledQueryUpdate) => void,
   reconciliationMs = 0,
+  onRuntimeError?: (error: unknown) => void,
 ): CompiledQueryUpdate {
   const adapterStart = performance.now();
   const total: CompiledQueryUpdate = {
@@ -1047,7 +1073,14 @@ function publishDeltas(
     domNodesMoved: 0,
     wasmDomUs: 0,
   };
-  if (deltas.length > 0) addMetrics(total, applyBatch(runtime, deltas));
+  if (deltas.length > 0) {
+    try {
+      addMetrics(total, applyBatch(runtime, deltas));
+    } catch (error) {
+      onRuntimeError?.(error);
+      throw error;
+    }
+  }
   total.adapterMs = performance.now() - adapterStart;
   onQueryUpdate?.(total);
   return total;
