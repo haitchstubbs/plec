@@ -6,6 +6,7 @@
 //! application code for which Node semantics actually matter.
 
 use std::{
+    io::{self, Write},
     process::Stdio,
     sync::{Arc, Mutex},
 };
@@ -185,7 +186,7 @@ impl NodeApplicationRuntime {
                     // the READY/error protocol records. Forward it in every
                     // environment; only captured startup detail is
                     // development-gated below.
-                    println!("{line}");
+                    let _ = forward_sidecar_log_line(&mut io::stdout().lock(), &line);
                 }
             });
         }
@@ -198,7 +199,7 @@ impl NodeApplicationRuntime {
                     // stderr is the application process log stream. Forward
                     // it unchanged; only the bounded tail included in a
                     // structured startup diagnostic is development-only.
-                    eprintln!("{line}");
+                    let _ = forward_sidecar_log_line(&mut io::stderr().lock(), &line);
                 }
             });
         }
@@ -367,6 +368,10 @@ fn sidecar_protocol_error(message: impl std::fmt::Display) -> ServerError {
     ServerError::message(format!(
         "[PLEC-SIDECAR-PROTOCOL] protocol: invalid sidecar response: {message}"
     ))
+}
+
+fn forward_sidecar_log_line(writer: &mut impl Write, line: &str) -> io::Result<()> {
+    writeln!(writer, "{line}")
 }
 
 impl ApplicationRuntime for NodeApplicationRuntime {
@@ -608,6 +613,21 @@ mod request_context_tests {
                 .is_none()
         );
         assert_eq!(json["headers"]["authorization"], "Bearer first");
+    }
+}
+
+#[cfg(test)]
+mod sidecar_log_forwarding_tests {
+    use super::forward_sidecar_log_line;
+
+    #[test]
+    fn ordinary_sidecar_output_is_forwarded_without_a_development_gate() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        forward_sidecar_log_line(&mut stdout, "app console.log").unwrap();
+        forward_sidecar_log_line(&mut stderr, "app console.error").unwrap();
+        assert_eq!(stdout, b"app console.log\n");
+        assert_eq!(stderr, b"app console.error\n");
     }
 }
 
