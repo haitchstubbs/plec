@@ -151,21 +151,8 @@ fn copy_public_tree(root: &Path, directory: &Path, destination: &Path) -> Result
 
 fn is_framework_owned_public_path(path: &Path) -> bool {
     let path = path.to_string_lossy().replace('\\', "/");
-    let reserved_files = [
-        "assets/client.js",
-        "assets/client.js.br",
-        "host-providers.json",
-        "index.html",
-        "route-artifact.json",
-        "route-manifest.json",
-    ];
+    let reserved_files = ["index.html"];
     reserved_files.contains(&path.as_str())
-        || path == "graphs"
-        || path.starts_with("graphs/")
-        || path == "runtime"
-        || path.starts_with("runtime/")
-        || path == "assets/providers"
-        || path.starts_with("assets/providers/")
         || path == "assets/compiled"
         || path.starts_with("assets/compiled/")
 }

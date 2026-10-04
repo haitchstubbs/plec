@@ -90,7 +90,7 @@ export function registerPlecProviders(): Promise<void> {
 async function loadPlecProviders() {
   const revision = new URL(import.meta.url).searchParams.get('v');
   const manifestUrl = new URL(
-    '/host-providers.json',
+    '/_plec/host-providers.json',
     window.location.origin,
   );
   if (revision) manifestUrl.searchParams.set('v', revision);
@@ -167,7 +167,7 @@ function providerModuleUrl(
   const url = new URL(entry.module, window.location.origin);
   if (
     url.origin !== window.location.origin ||
-    !url.pathname.startsWith('/assets/providers/') ||
+    !url.pathname.startsWith('/_plec/assets/providers/') ||
     url.searchParams.get('v') !== revision ||
     url.searchParams.size !== 1 ||
     url.hash
@@ -331,8 +331,8 @@ interface WasmRuntimeModule {
   default(input?: unknown): Promise<unknown>;
   PlecRuntime: new () => WasmRuntimeInstance;
 }
-const DEFAULT_RUNTIME_JS_URL = '/runtime/runtime.js';
-const DEFAULT_RUNTIME_WASM_URL = '/runtime/runtime_bg.wasm';
+const DEFAULT_RUNTIME_JS_URL = '/_plec/runtime/runtime.js';
+const DEFAULT_RUNTIME_WASM_URL = '/_plec/runtime/runtime_bg.wasm';
 
 export interface PlecRouterMountOptions {
   root: Element;
@@ -579,7 +579,7 @@ async function startPlecRouterInner(
   const manifestResponse = await fetch(
     options.applicationUrl ??
       options.manifestUrl ??
-      '/route-manifest.json',
+      '/_plec/route-manifest.json',
   );
   if (!manifestResponse.ok)
     throw new Error(
@@ -595,7 +595,8 @@ async function startPlecRouterInner(
     : undefined;
   const manifest = (compiled?.manifest ??
     artifact) as PlecRouteManifest;
-  const graphUrl = options.graphUrl ?? ((id) => `/graphs/${id}.json`);
+  const graphUrl =
+    options.graphUrl ?? ((id) => `/_plec/graphs/${id}.json`);
   const runtimeModule = await loadRuntimeModule(
     options.runtimeJsUrl ?? DEFAULT_RUNTIME_JS_URL,
   );

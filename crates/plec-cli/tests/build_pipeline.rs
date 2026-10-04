@@ -82,7 +82,7 @@ fn server_action_implementation_is_absent_from_every_public_output() {
     assert!(server_bundle.contains(SECRET));
     assert!(server_bundle.contains("invokeAction"));
     let route_artifact: serde_json::Value =
-        serde_json::from_slice(&fs::read(out_dir.join("public/route-artifact.json")).unwrap())
+        serde_json::from_slice(&fs::read(out_dir.join("server/route-artifact.json")).unwrap())
             .expect("route artifact JSON");
     fn action_ids(value: &serde_json::Value, output: &mut Vec<String>) {
         match value {
@@ -151,12 +151,12 @@ fn builds_expected_output_structure() {
         "plec-server.json",
         "client.meta.json",
         "public/index.html",
-        "public/assets/client.js",
-        "public/assets/client.js.br",
-        "public/route-manifest.json",
-        "public/route-artifact.json",
-        "public/runtime/runtime.js",
-        "public/runtime/runtime_bg.wasm",
+        "client/assets/client.js",
+        "client/assets/client.js.br",
+        "client/route-manifest.json",
+        "server/route-artifact.json",
+        "client/runtime/runtime.js",
+        "client/runtime/runtime_bg.wasm",
     ] {
         assert!(
             out_dir.join(artifact).is_file(),
@@ -170,7 +170,7 @@ fn builds_expected_output_structure() {
     );
 
     // Plec compiler route graphs.
-    let graphs_dir = out_dir.join("public/graphs");
+    let graphs_dir = out_dir.join("client/graphs");
     let graphs = fs::read_dir(&graphs_dir)
         .expect("graphs directory should exist")
         .collect::<Result<Vec<_>, _>>()
@@ -184,8 +184,8 @@ fn builds_expected_output_structure() {
     );
 
     // Brotli sidecar must decompress back to the client artifact.
-    let client = fs::read(out_dir.join("public/assets/client.js")).expect("client.js");
-    let compressed = fs::read(out_dir.join("public/assets/client.js.br")).expect("client.js.br");
+    let client = fs::read(out_dir.join("client/assets/client.js")).expect("client.js");
+    let compressed = fs::read(out_dir.join("client/assets/client.js.br")).expect("client.js.br");
 
     let mut decompressed = Vec::new();
     let mut reader = brotli::Decompressor::new(compressed.as_slice(), 4096);
@@ -202,8 +202,13 @@ fn builds_expected_output_structure() {
     assert!(index.contains(r#"<div id="app" aria-live="polite"></div>"#));
 
     let revision = client_revision(&client);
-    assert!(index.contains(&format!("/assets/client.js?v={revision}")));
+    assert!(index.contains(&format!("/_plec/assets/client.js?v={revision}")));
     assert!(index.contains(&format!("/assets/styles.css?v={revision}")));
+    assert!(!out_dir.join("public/runtime").exists());
+    assert!(!out_dir.join("public/graphs").exists());
+    assert!(out_dir.join("public").is_dir());
+    assert!(out_dir.join("client").is_dir());
+    assert!(out_dir.join("server").is_dir());
 
     // The revision is also reported on stdout.
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -237,8 +242,8 @@ fn revision_derives_from_emitted_client_artifact() {
     );
 
     let index = read(second_dir.join("public/index.html"));
-    assert!(index.contains(&format!("/assets/client.js?v={second}")));
-    assert!(!index.contains(&format!("/assets/client.js?v={first}")));
+    assert!(index.contains(&format!("/_plec/assets/client.js?v={second}")));
+    assert!(!index.contains(&format!("/_plec/assets/client.js?v={first}")));
 }
 
 #[test]
@@ -284,30 +289,8 @@ fn copies_public_assets_nested_and_removes_deleted_assets() {
 }
 
 #[test]
-fn public_assets_cannot_shadow_framework_output() {
-    let out_dir = output_dir("public-collision");
+fn public_assets_cannot_shadow_compiled_asset_output() {
     let app = fixture_project("public-collision", "mini-app");
-    fs::create_dir_all(app.join("public/assets")).unwrap();
-    fs::write(app.join("public/assets/client.js"), "application").unwrap();
-
-    let output = run_build(&app, &out_dir, &[]);
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
-
-    fs::remove_file(app.join("public/assets/client.js")).unwrap();
-    fs::create_dir_all(app.join("public/runtime")).unwrap();
-    fs::write(app.join("public/runtime/runtime.js"), "application").unwrap();
-    let output = run_build(&app, &output_dir("public-runtime-collision"), &[]);
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
-
-    fs::remove_dir_all(app.join("public/runtime")).unwrap();
-    fs::write(app.join("public/host-providers.json"), "application").unwrap();
-    let output = run_build(&app, &output_dir("public-provider-manifest-collision"), &[]);
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
-
-    fs::remove_file(app.join("public/host-providers.json")).unwrap();
     fs::create_dir_all(app.join("public/assets/compiled")).unwrap();
     fs::write(app.join("public/assets/compiled/foo.svg"), "application").unwrap();
     let output = run_build(&app, &output_dir("public-compiled-asset-collision"), &[]);
@@ -377,7 +360,7 @@ fn compiled_asset_imports_are_fingerprinted_deduplicated_and_cleaned() {
         "byte-identical sources should share emitted output"
     );
     assert!(out_dir.join("public/favicon.svg").is_file());
-    let route_artifact = read(out_dir.join("public/route-artifact.json"));
+    let route_artifact = read(out_dir.join("server/route-artifact.json"));
     assert!(
         route_artifact.contains(url),
         "compiled route artifact must contain the imported URL string"
@@ -673,7 +656,7 @@ fn builds_out_of_repo_app_from_installed_plec_package() {
 
     // The staged runtime must be the installed package's, not some
     // workspace-ancestor copy: no workspace exists above this directory.
-    let staged = read(out_dir.join("public/runtime/runtime.js"));
+    let staged = read(out_dir.join("client/runtime/runtime.js"));
     assert_eq!(
         staged, "installed-package-runtime",
         "runtime assets must stage from node_modules/@plec/core/dist/runtime"
@@ -685,8 +668,8 @@ fn builds_out_of_repo_app_from_installed_plec_package() {
         "plec-server.json",
         "client.meta.json",
         "public/index.html",
-        "public/route-manifest.json",
-        "public/runtime/runtime_bg.wasm",
+        "client/route-manifest.json",
+        "client/runtime/runtime_bg.wasm",
     ] {
         assert!(
             out_dir.join(artifact).is_file(),
@@ -724,7 +707,7 @@ fn staging_failure_names_installed_package_resolution_path() {
 
 fn emitted_revision(out_dir: &Path) -> String {
     let index = read(out_dir.join("public/index.html"));
-    let marker = "/assets/client.js?v=";
+    let marker = "/_plec/assets/client.js?v=";
 
     let start = index
         .find(marker)

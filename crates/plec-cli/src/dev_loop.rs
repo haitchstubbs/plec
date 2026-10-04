@@ -2,7 +2,7 @@
 //! output while polling application sources for changes.
 
 use crate::diagnostic::DevelopmentDiagnostic;
-use plec_build::{build, modules::build::Stage, BuildError, BuildOptions, RuntimeSource};
+use plec_build::{BuildError, BuildOptions, RuntimeSource, build, modules::build::Stage};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
@@ -11,8 +11,8 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -59,7 +59,10 @@ pub fn run(options: DevOptions) -> Result<(), Box<dyn std::error::Error>> {
     replace_output(&live.out_dir, &out_dir)?;
     drop(initial_candidate);
 
-    let state_path = out_dir.with_file_name(format!(".plec-dev-state-{}.json", std::process::id()));
+    let state_path = app_dir
+        .join(".plec")
+        .join(format!("dev-state-{}.json", std::process::id()));
+    fs::create_dir_all(state_path.parent().expect("dev state has a parent"))?;
     let session = format!(
         "{}-{}",
         std::process::id(),
@@ -299,7 +302,7 @@ impl ShutdownSignals {
             runtime.block_on(async move {
                 #[cfg(unix)]
                 {
-                    use tokio::signal::unix::{signal, SignalKind};
+                    use tokio::signal::unix::{SignalKind, signal};
                     let Ok(mut interrupt) = signal(SignalKind::interrupt()) else {
                         return;
                     };
@@ -614,7 +617,7 @@ fn visit(
         if relative.components().any(|component| {
             matches!(
                 component.as_os_str().to_str(),
-                Some("node_modules" | ".git" | "dist")
+                Some("node_modules" | ".git" | ".plec" | "dist")
             ) || component
                 .as_os_str()
                 .to_string_lossy()
@@ -646,10 +649,12 @@ mod tests {
         fs::create_dir_all(dir.path().join("src")).unwrap();
         fs::create_dir_all(dir.path().join("api")).unwrap();
         fs::create_dir_all(dir.path().join("node_modules/pkg")).unwrap();
+        fs::create_dir_all(dir.path().join(".plec")).unwrap();
         fs::create_dir_all(dir.path().join("dist")).unwrap();
         fs::write(dir.path().join("src/router.tsx"), "route").unwrap();
         fs::write(dir.path().join("api/todos.ts"), "route").unwrap();
         fs::write(dir.path().join("node_modules/pkg/index.js"), "ignored").unwrap();
+        fs::write(dir.path().join(".plec/dev-state.json"), "ignored").unwrap();
         fs::write(dir.path().join("dist/index.html"), "ignored").unwrap();
         let snapshot = source_snapshot(dir.path(), &dir.path().join("dist")).unwrap();
         assert_eq!(snapshot.len(), 2);

@@ -35,7 +35,7 @@ pub fn write_index(public_dir: &Path, title: &str, revision: &str) -> Result<(),
   <div id="app" aria-live="polite"></div>
   <script
     type="module"
-    src="/assets/client.js?v={revision}"
+    src="/_plec/assets/client.js?v={revision}"
   ></script>
 </body>
 </html>

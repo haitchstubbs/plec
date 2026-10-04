@@ -40,6 +40,39 @@ test('desktop sidebar collapses and restores', async ({ browser }) => {
     await expect(
       page.locator('[data-collapsed]').first(),
     ).toHaveAttribute('data-collapsed', 'true');
+    const collapsedLinks = await page
+      .getByRole('navigation', { name: 'Primary navigation' })
+      .getByRole('link')
+      .evaluateAll((links) =>
+        links.map((link) => {
+          const linkRect = link.getBoundingClientRect();
+          const iconRect = link
+            .querySelector('svg')
+            ?.getBoundingClientRect();
+          return {
+            width: linkRect.width,
+            height: linkRect.height,
+            iconCentered:
+              iconRect !== undefined &&
+              Math.abs(
+                iconRect.x +
+                  iconRect.width / 2 -
+                  (linkRect.x + linkRect.width / 2),
+              ) < 0.5 &&
+              Math.abs(
+                iconRect.y +
+                  iconRect.height / 2 -
+                  (linkRect.y + linkRect.height / 2),
+              ) < 0.5,
+          };
+        }),
+      );
+    expect(collapsedLinks.length).toBeGreaterThan(0);
+    for (const link of collapsedLinks) {
+      expect(link.width).toBe(36);
+      expect(link.height).toBe(36);
+      expect(link.iconCentered).toBe(true);
+    }
     await page.getByRole('button', { name: 'Toggle sidebar' }).click();
     await expect(
       page.locator('[data-collapsed]').first(),
@@ -77,7 +110,7 @@ test('sidebar links stay client-side across overlapping graph swaps', async ({
       firstGraphContinued = resolve;
     });
     let delayNextGraph = true;
-    await page.route('**/graphs/*.json*', async (route) => {
+    await page.route('**/_plec/graphs/*.json*', async (route) => {
       if (delayNextGraph) {
         delayNextGraph = false;
         firstGraphRequested();

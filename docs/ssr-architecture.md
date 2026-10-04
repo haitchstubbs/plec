@@ -18,8 +18,8 @@ SSR works because one compiled artifact is consumed three ways — the compiler'
 flowchart LR
     subgraph build["Build time (plec build)"]
         SRC["TSX source\n(router.tsx)"] --> RC["Rust compiler\n(crates/plec-compiler)"]
-        RC --> RA["route-artifact.json\nmanifest + all graphs\n(SSR server input)"]
-        RC --> RM["route-manifest.json +\ngraphs/*.json\n(client input)"]
+        RC --> RA["server/route-artifact.json\nmanifest + all graphs\n(private SSR server input)"]
+        RC --> RM["client/route-manifest.json +\nclient/graphs/*.json\n(client input; served at /_plec/)"]
         RC --> WASM["runtime.js +\nruntime_bg.wasm"]
     end
 

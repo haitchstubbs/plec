@@ -21,6 +21,8 @@ pub struct ServerManifest {
     pub version: u32,
     #[serde(default = "default_public_dir")]
     pub public_dir: PathBuf,
+    #[serde(default = "default_client_dir")]
+    pub client_dir: PathBuf,
     #[serde(default = "default_artifact")]
     pub artifact: PathBuf,
     #[serde(default)]
@@ -59,8 +61,12 @@ fn default_public_dir() -> PathBuf {
     PathBuf::from("public")
 }
 
+fn default_client_dir() -> PathBuf {
+    PathBuf::from("client")
+}
+
 fn default_artifact() -> PathBuf {
-    PathBuf::from("public/route-artifact.json")
+    PathBuf::from("server/route-artifact.json")
 }
 
 /// A manifest loaded from disk, with every relative path resolved against
@@ -100,6 +106,10 @@ impl LoadedServerManifest {
         self.base.join(&self.manifest.public_dir)
     }
 
+    pub fn client_dir(&self) -> PathBuf {
+        self.base.join(&self.manifest.client_dir)
+    }
+
     /// The compiled application artifact.
     pub fn artifact_path(&self) -> PathBuf {
         self.base.join(&self.manifest.artifact)
@@ -126,6 +136,7 @@ impl LoadedServerManifest {
     pub fn options(&self, development: bool) -> PlecServerOptions {
         PlecServerOptions {
             public_dir: self.public_dir(),
+            client_dir: self.client_dir(),
             artifact_path: self.artifact_path(),
             client_script: self.manifest.client_script.clone(),
             styles_href: self.manifest.styles_href.clone(),

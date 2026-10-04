@@ -14,6 +14,7 @@ node_modules/
 # Build outputs
 dist/
 build/
+.plec/
 apps/fullstack/public/assets/styles.css
 apps/fullstack/public/assets/files/
 !crates/plec-cli/src/com/build

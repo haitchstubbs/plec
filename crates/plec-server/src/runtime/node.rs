@@ -144,7 +144,7 @@ impl NodeApplicationRuntime {
                     .bundle
                     .parent()
                     .and_then(std::path::Path::parent)
-                    .map(|dir| dir.join("public/host-providers.json"))
+                    .map(|dir| dir.join("client/host-providers.json"))
                     .unwrap_or_else(|| std::path::PathBuf::from("host-providers.json")),
             )
             .env("PLEC_RUNTIME_TOKEN", &token)

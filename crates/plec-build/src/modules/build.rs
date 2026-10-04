@@ -22,7 +22,7 @@ pub struct BuildOptions {
     pub client_entry: PathBuf,
     /// Server entry (e.g. `src/server.ts`).
     pub server_entry: PathBuf,
-    /// Build output root. Plec-owned artifacts land under `public/`.
+    /// Build output root. Browser artifacts are separated into `client/`.
     pub out_dir: PathBuf,
     pub optimize: bool,
     /// Document title for the generated HTML shell and server manifest.
@@ -182,6 +182,7 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
     let repo_root = find_repo_root(&app_dir);
     let public_dir = out_dir.join("public");
     let assets_dir = public_dir.join("assets");
+    let client_dir = out_dir.join("client");
     let client_entry = resolve_entry(&options.client_entry, &app_dir);
     let host_config = host::resolve_host_config(&app_dir, &options)?;
     let server_entry = resolve_entry(&host_config.server_entry, &app_dir);
@@ -196,6 +197,8 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
         &app_dir,
         &repo_root,
         &public_dir,
+        &client_dir,
+        &out_dir.join("server"),
         &host_config.host_imports,
         &host_config.custom_elements,
         options.runtime_source,
@@ -212,11 +215,11 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
         &automatic_providers,
         &host_config.host_adapters,
         &app_dir,
-        &assets_dir,
+        &client_dir.join("assets"),
         options.optimize,
     )?;
 
-    let client_path = assets_dir.join("client.js");
+    let client_path = client_dir.join("assets/client.js");
     let metafile_path = out_dir.join("client.meta.json");
 
     bundle(
@@ -231,13 +234,14 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
 
     let mut revision_paths = vec![client_path.clone()];
     revision_paths.extend(automatic_providers.keys().map(|provider| {
-        assets_dir
+        client_dir
+            .join("assets")
             .join("providers")
             .join(format!("{}.js", super::id::sanitize(provider)))
     }));
     let revision = assets::revision(&revision_paths)?;
     host::emit_provider_manifest(
-        &public_dir,
+        &client_dir,
         &automatic_providers,
         &host_config.host_ssr_providers,
         &revision,

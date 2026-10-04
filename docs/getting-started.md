@@ -45,11 +45,22 @@ yarn build
 ```
 
 The fullstack build runs `plec build src/app.tsx --out-dir dist`, then stages
-the application's fonts and generated CSS in `dist/public`. For ordinary
+the application's fonts and generated CSS in `dist/public`. The output roots
+separate application ownership from Plec's browser implementation:
+
+```text
+dist/public/  application public/static content, served at /
+dist/client/  Plec-generated browser artifacts, served at /_plec/
+dist/server/  private server/application-runtime output
+```
+
+`/_plec/` is a reserved framework URL prefix; deployment hosts should expose
+`dist/client/*` only below that prefix. Browser artifacts remain client-visible.
+For ordinary
 application-owned static files, put them under the app's `public/` directory;
 `plec build` copies them to the same relative path under `dist/public/` and
-removes old output on each build. Plec reserves generated output paths (such as
-`/assets/client.js`); a collision fails the build. Source asset imports are
+removes old output on each build. Plec bootstrap/runtime resources are under
+`/_plec/`; app assets keep their ordinary paths. Source asset imports are
 handled separately by #49.
 
 Use `public/` when an asset has an intentionally stable, manually addressed
@@ -111,7 +122,7 @@ plec workspace artifact stale   # non-zero when dist/staged WASM is stale or pro
 
 **Stale `.br` trap:** the dev server serves `.br` brotli variants when the
 client sends `accept-encoding: br`. If you hand-copy fresh `runtime.js` /
-`runtime_bg.wasm` into `apps/fullstack/dist/public/runtime/` without
+`runtime_bg.wasm` into `apps/fullstack/dist/client/runtime/` without
 regenerating the `.br` files, the browser silently runs the old code. Delete
 the `.br` files or re-run the fullstack build instead of hand-copying.
 

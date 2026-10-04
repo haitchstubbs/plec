@@ -24,10 +24,10 @@ const origin = window.location.origin;
 const stressFeed = createRuntimeStressFeed();
 const app = await startPlecRouter({
   root,
-  manifestUrl: assetUrl('/route-manifest.json'),
+  manifestUrl: assetUrl('/_plec/route-manifest.json'),
   graphUrl: (graphId) =>
     assetUrl(
-      `/graphs/${graphId.replace(/[\/\\]/g, '--').replace('#', '--')}.json`,
+      `/_plec/graphs/${graphId.replace(/[\/\\]/g, '--').replace('#', '--')}.json`,
     ),
   cookiePolicy: {
     sidebar_state: { operations: ['getSync', 'set'] },

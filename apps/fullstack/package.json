@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "yarn check:no-react && yarn build:css:public && yarn copy:fonts:public && (tailwindcss --watch -i src/styles.css -o public/assets/styles.css & css_pid=$!; trap 'kill \"$css_pid\" 2>/dev/null || true' EXIT INT TERM; plec dev src/app.tsx --out-dir dist)",
+    "dev": "bash scripts/dev.sh",
     "start": "yarn --cwd ../.. rust:deps:check && cargo run --locked --quiet -p plec-cli -- serve dist",
     "prep:assetdir": "mkdir -p dist/public/assets/files",
     "copy:fonts:outfit": "yarn prep:assetdir && cp ../../node_modules/@fontsource-variable/outfit/files/*.woff2 dist/public/assets/files/",

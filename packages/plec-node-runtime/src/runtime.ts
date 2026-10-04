@@ -97,13 +97,14 @@ async function loadSsrProviders(
   ) as unknown;
   if (!isHostProviderManifest(parsed))
     throw new BundleError('invalid host provider manifest');
-  const publicDir = resolve(manifestPath, '..');
+  const clientDir = resolve(manifestPath, '..');
   const providers = new Map<string, PlecHostProvider>();
   for (const entry of parsed.providers) {
     if (!entry.ssr) continue;
     const url = new URL(entry.module, 'http://plec.internal');
-    const modulePath = resolve(publicDir, `.${url.pathname}`);
-    const providerDir = resolve(publicDir, 'assets/providers');
+    const providerPath = url.pathname.replace(/^\/_plec\//, '');
+    const modulePath = resolve(clientDir, providerPath);
+    const providerDir = resolve(clientDir, 'assets/providers');
     if (!modulePath.startsWith(`${providerDir}/`))
       throw new BundleError(
         `invalid host provider module for ${entry.id}`,

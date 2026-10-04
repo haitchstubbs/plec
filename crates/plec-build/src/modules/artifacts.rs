@@ -4,8 +4,8 @@ use std::{
 };
 
 use plec_compiler::{
-    lower_route_artifacts_with_options, lower_routes, read_source_graph_with_options,
-    CompilerOptions,
+    CompilerOptions, lower_route_artifacts_with_options, lower_routes,
+    read_source_graph_with_options,
 };
 use plec_model::build_semantic_graph;
 use serde::Serialize;
@@ -39,6 +39,8 @@ pub fn emit(
     app_dir: &Path,
     repo_root: &Path,
     public_dir: &Path,
+    client_dir: &Path,
+    server_dir: &Path,
     host_imports: &std::collections::BTreeMap<String, String>,
     custom_elements: &std::collections::BTreeSet<String>,
     runtime_source: RuntimeSource,
@@ -87,7 +89,7 @@ pub fn emit(
         )
     })?;
 
-    let graphs_dir = public_dir.join("graphs");
+    let graphs_dir = client_dir.join("graphs");
 
     for artifact in &bundle.graphs {
         let filename = format!("{}.json", sanitize(&artifact.graph_id));
@@ -98,13 +100,13 @@ pub fn emit(
     }
 
     out(
-        &public_dir.join("route-manifest.json"),
+        &client_dir.join("route-manifest.json"),
         &bundle.manifest,
         true,
     )
     .map_err(|error| BuildError::with_source(stage, "failed to write route manifest", error))?;
 
-    out(&public_dir.join("route-artifact.json"), &bundle, false)
+    out(&server_dir.join("route-artifact.json"), &bundle, false)
         .map_err(|error| BuildError::with_source(stage, "failed to write route artifact", error))?;
 
     let host_components = collect_host_components(&bundle);
@@ -162,7 +164,7 @@ pub fn emit(
     out(&dependency_manifest, &dependencies, true).map_err(|error| {
         BuildError::with_source(stage, "failed to write asset dependency manifest", error)
     })?;
-    stage_runtime(app_dir, repo_root, public_dir, runtime_source)?;
+    stage_runtime(app_dir, repo_root, client_dir, runtime_source)?;
     Ok(ArtifactOutput {
         host_components,
         server_actions,
@@ -217,10 +219,10 @@ fn collect_host_components(
 fn stage_runtime(
     app_dir: &Path,
     repo_root: &Path,
-    public_dir: &Path,
+    client_dir: &Path,
     runtime_source: RuntimeSource,
 ) -> Result<(), BuildError> {
-    stage(app_dir, repo_root, public_dir, runtime_source).map_err(|error| {
+    stage(app_dir, repo_root, client_dir, runtime_source).map_err(|error| {
         BuildError::new(
             Stage::Compile,
             format!("failed to stage Plec runtime: {error}"),

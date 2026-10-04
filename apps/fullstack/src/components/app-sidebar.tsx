@@ -39,10 +39,10 @@ const NavLink = ({
       to={href}
       onClick={onCloseMobile}
       aria-current={location.pathname === href ? 'page' : undefined}
-      className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium no-underline transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-sidebar-accent-foreground md:data-[collapsed=true]:justify-center md:data-[collapsed=true]:px-2"
+      className="flex items-center gap-3 rounded-lg p-2 text-sm font-medium no-underline transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-sidebar-accent-foreground md:group-data-[collapsed=true]:size-9 md:group-data-[collapsed=true]:justify-center md:group-data-[collapsed=true]:gap-0 md:group-data-[collapsed=true]:p-0"
     >
       <Icon className="size-4 shrink-0" />
-      <span className="md:data-[collapsed=true]:hidden">
+      <span className="md:group-data-[collapsed=true]:hidden">
         {children}
       </span>
     </PlecLink>
@@ -96,7 +96,7 @@ export function AppSidebar({
       />
       <aside
         ref={panelRef}
-        className="fixed inset-y-2 left-2 z-20 flex w-72 -translate-x-[calc(100%+0.75rem)] flex-col gap-4 overflow-hidden rounded-xl border border-sidebar-border bg-sidebar shadow-sm outline-none transition-[width,transform] duration-200 group-data-[mobile-open=true]:translate-x-0 md:w-64 md:translate-x-0 md:group-data-[collapsed=true]:w-12"
+        className="fixed inset-y-2 left-2 z-20 flex w-72 -translate-x-[calc(100%+0.75rem)] flex-col gap-4 overflow-hidden rounded-xl border border-sidebar-border bg-sidebar shadow-sm outline-none transition-[width,transform] duration-200 group-data-[mobile-open=true]:translate-x-0 md:w-64 md:translate-x-0 md:group-data-[collapsed=true]:w-14 py-1"
         tabIndex={-1}
       >
         <div className="flex items-center gap-3 p-3 md:group-data-[collapsed=true]:justify-center md:group-data-[collapsed=true]:p-2">
@@ -114,7 +114,7 @@ export function AppSidebar({
           </div>
         </div>
         <nav
-          className="flex flex-col gap-1 p-2"
+          className="flex flex-col gap-1 mx-auto"
           aria-label="Primary navigation"
         >
           <NavLink href="/" Icon={House} onCloseMobile={onCloseMobile}>

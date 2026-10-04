@@ -201,7 +201,7 @@ pub fn resolve_host_imports(app_dir: &Path) -> Result<BTreeMap<String, String>, 
 }
 
 /// The bundler-facing view: provider id -> browser adapter module. Only
-/// providers with a configured adapter get a bundled `/assets/providers/*.js`
+/// providers with a configured adapter get a bundled `/_plec/assets/providers/*.js`
 /// entry and a `host-providers.json` record.
 pub fn resolve_host_adapters(app_dir: &Path) -> Result<BTreeMap<String, String>, BuildError> {
     let config_path = app_dir.join("plec.toml");
@@ -295,6 +295,7 @@ fn validate_host_adapters(
 struct ServerManifest {
     version: u32,
     public_dir: &'static str,
+    client_dir: &'static str,
     artifact: &'static str,
     client_script: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -352,11 +353,11 @@ struct ProviderManifestEntry<'a> {
     ssr: bool,
 }
 
-/// Emits `dist/public/host-providers.json` for `registerPlecProviders` in
+/// Emits `dist/client/host-providers.json` for `registerPlecProviders` in
 /// `packages/plec-browser`. Module paths are build-owned asset URLs so the
-/// browser gate can reject everything outside `/assets/providers/`.
+/// browser gate can reject everything outside `/_plec/assets/providers/`.
 pub fn emit_provider_manifest(
-    public_dir: &Path,
+    client_dir: &Path,
     providers: &BTreeMap<String, BTreeSet<String>>,
     ssr_providers: &BTreeSet<String>,
     revision: &str,
@@ -369,7 +370,7 @@ pub fn emit_provider_manifest(
             .map(|(id, components)| ProviderManifestEntry {
                 id,
                 module: format!(
-                    "/assets/providers/{}.js?v={revision}",
+                    "/_plec/assets/providers/{}.js?v={revision}",
                     super::id::sanitize(id)
                 ),
                 components: components.iter().map(String::as_str).collect(),
@@ -384,12 +385,12 @@ pub fn emit_provider_manifest(
             error,
         )
     })?;
-    std::fs::write(public_dir.join("host-providers.json"), json).map_err(|error| {
+    std::fs::write(client_dir.join("host-providers.json"), json).map_err(|error| {
         BuildError::with_source(
             Stage::BrowserBundle,
             format!(
                 "cannot write {}",
-                public_dir.join("host-providers.json").display()
+                client_dir.join("host-providers.json").display()
             ),
             error,
         )
@@ -407,10 +408,11 @@ pub fn emit_server_manifest(
     let manifest = ServerManifest {
         version: 1,
         public_dir: "public",
-        artifact: "public/route-artifact.json",
+        client_dir: "client",
+        artifact: "server/route-artifact.json",
         // The build owns where it emitted the client bundle; the app never
         // writes this path.
-        client_script: "/assets/client.js",
+        client_script: "/_plec/assets/client.js",
         styles_href: config.styles_href.clone(),
         preloads: config.preloads.clone(),
         custom_elements: config.custom_elements.iter().cloned().collect(),
@@ -589,8 +591,8 @@ preloads = ["/a.woff2", "/b.woff2"]
         .expect("json");
         assert_eq!(json["version"], 1);
         assert_eq!(json["publicDir"], "public");
-        assert_eq!(json["artifact"], "public/route-artifact.json");
-        assert_eq!(json["clientScript"], "/assets/client.js");
+        assert_eq!(json["artifact"], "server/route-artifact.json");
+        assert_eq!(json["clientScript"], "/_plec/assets/client.js");
         assert_eq!(json["server"]["entry"], "server/app.mjs");
         assert_eq!(json["server"]["runtime"], "server/runtime.mjs");
         assert_eq!(json["document"]["title"], "Plec fullstack playground");
@@ -642,15 +644,15 @@ preloads = ["/a.woff2", "/b.woff2"]
     #[test]
     fn provider_manifest_records_build_owned_module_urls() {
         let dir = tempfile::tempdir().expect("dir");
-        let public_dir = dir.path().join("public");
-        std::fs::create_dir_all(&public_dir).expect("public dir");
+        let client_dir = dir.path().join("client");
+        std::fs::create_dir_all(&client_dir).expect("client dir");
         let providers = BTreeMap::from([(
             String::from("lucide"),
             BTreeSet::from([String::from("House"), String::from("Beaker")]),
         )]);
 
         emit_provider_manifest(
-            &public_dir,
+            &client_dir,
             &providers,
             &BTreeSet::from([String::from("lucide")]),
             "revision-1",
@@ -658,7 +660,7 @@ preloads = ["/a.woff2", "/b.woff2"]
         .expect("manifest");
 
         let json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(public_dir.join("host-providers.json"))
+            &std::fs::read_to_string(client_dir.join("host-providers.json"))
                 .expect("manifest read"),
         )
         .expect("json");
@@ -667,7 +669,7 @@ preloads = ["/a.woff2", "/b.woff2"]
         assert_eq!(json["providers"][0]["id"], "lucide");
         assert_eq!(
             json["providers"][0]["module"],
-            "/assets/providers/lucide.js?v=revision-1"
+            "/_plec/assets/providers/lucide.js?v=revision-1"
         );
         assert_eq!(json["providers"][0]["components"][0], "Beaker");
         assert_eq!(json["providers"][0]["components"][1], "House");

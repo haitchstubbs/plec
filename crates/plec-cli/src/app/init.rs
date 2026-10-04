@@ -73,9 +73,9 @@ if (!root) throw new Error('The Plec application root is missing.');
 
 await startPlecRouter({
   root,
-  manifestUrl: '/route-manifest.json',
+  manifestUrl: '/_plec/route-manifest.json',
   graphUrl: (graphId) =>
-    `/graphs/${graphId.replace(/[\/\\]/g, '--').replace('#', '--')}.json`,
+    `/_plec/graphs/${graphId.replace(/[\/\\]/g, '--').replace('#', '--')}.json`,
 });
 "#,
     ),
@@ -110,7 +110,7 @@ main {
 }
 "#,
     ),
-    (".gitignore", "node_modules/\ndist/\n"),
+    (".gitignore", "node_modules/\ndist/\n.plec/\n"),
     (
         "README.md",
         r#"# My Plec App
@@ -215,9 +215,11 @@ mod tests {
 
         assert!(target.join("src/router.tsx").is_file());
         assert_eq!(fs::read_to_string(target.join("keep.txt")).unwrap(), "keep");
-        assert!(fs::read_to_string(target.join("src/server.ts"))
-            .unwrap()
-            .contains("AppRequestHandler"));
+        assert!(
+            fs::read_to_string(target.join("src/server.ts"))
+                .unwrap()
+                .contains("AppRequestHandler")
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@ test('home renders through SSR and mounts', async ({ page }) => {
   expect((await compiledAssetResponse).status()).toBe(200);
   const logo = page.locator('#compiled-asset-logo');
   const ssrLogoUrl = await logo.getAttribute('src');
-  expect(ssrLogoUrl).toMatch(/^\/assets\/compiled\/[a-f0-9]{24}\.svg$/);
+  expect(ssrLogoUrl).toMatch(/^\/assets\/compiled\/[a-f0-9]{24}\.png$/);
   await waitForMount(page);
   await expect(logo).toHaveAttribute('src', ssrLogoUrl!);
   await expect(logo).toHaveJSProperty('complete', true);

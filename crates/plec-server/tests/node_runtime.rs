@@ -67,12 +67,12 @@ async fn spawn_runtime(bundle_source: &str) -> (NodeApplicationRuntime, tempfile
     let dir = tempfile::tempdir().expect("fixture dir");
     let out_dir = dir.path().join("dist");
     let server_dir = out_dir.join("server");
-    let public_dir = out_dir.join("public");
+    let client_dir = out_dir.join("client");
     std::fs::create_dir_all(&server_dir).expect("server fixture dir");
-    std::fs::create_dir_all(&public_dir).expect("public fixture dir");
+    std::fs::create_dir_all(&client_dir).expect("client fixture dir");
     std::fs::write(server_dir.join("app.mjs"), bundle_source).expect("bundle write");
     std::fs::write(
-        public_dir.join("host-providers.json"),
+        client_dir.join("host-providers.json"),
         r#"{"version":2,"revision":"test","providers":[]}"#,
     )
     .expect("provider manifest write");
@@ -615,6 +615,7 @@ async fn shutdown_cleans_up_and_dispatch_fails_fast_afterwards() {
 fn options(runtime: NodeApplicationRuntime) -> PlecServerOptions {
     PlecServerOptions {
         public_dir: PathBuf::from("nonexistent-public"),
+        client_dir: PathBuf::from("nonexistent-client"),
         artifact_path: PathBuf::from("nonexistent-artifact.json"),
         client_script: None,
         styles_href: None,

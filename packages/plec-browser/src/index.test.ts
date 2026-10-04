@@ -242,9 +242,9 @@ describe('compiled browser adapter', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
-        if (url === '/route-manifest.json')
+        if (url === '/_plec/route-manifest.json')
           return Response.json({ rootGraphId: 'root', routes: [] });
-        if (url === '/graphs/root.json') return Response.json({});
+        if (url === '/_plec/graphs/root.json') return Response.json({});
         return new Response(runtimeModule);
       }),
     );
@@ -315,13 +315,13 @@ describe('compiled browser adapter', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
-        if (url === '/route-manifest.json')
+        if (url === '/_plec/route-manifest.json')
           return Response.json({
             rootGraphId: 'root',
             revision: 'revision-1',
             routes: [{ id: 'home', graphId: 'root' }],
           });
-        if (url === '/graphs/root.json') return Response.json({});
+        if (url === '/_plec/graphs/root.json') return Response.json({});
         return new Response(runtimeModule);
       }),
     );

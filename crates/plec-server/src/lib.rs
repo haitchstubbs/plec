@@ -54,6 +54,8 @@ impl From<std::io::Error> for ServerError {
 #[derive(Clone)]
 pub struct PlecServerOptions {
     pub public_dir: PathBuf,
+    /// Plec-generated browser artifacts, exposed only below `/_plec/`.
+    pub client_dir: PathBuf,
     /// Rust compiler output written by the application build.
     pub artifact_path: PathBuf,
 
@@ -89,15 +91,18 @@ pub(crate) struct ServerState {
     /// Static asset service; precompressed sidecar support is configured by
     /// `assets::service`.
     pub(crate) assets: tower_http::services::ServeDir,
+    pub(crate) client_assets: tower_http::services::ServeDir,
     /// Shared route-loader fetch client.
     pub(crate) http: reqwest::Client,
 }
 
 pub fn create_plec_server(options: PlecServerOptions) -> Router {
     let assets = assets::service(&options.public_dir);
+    let client_assets = assets::service(&options.client_dir);
     let state = ServerState {
         options: Arc::new(options),
         assets,
+        client_assets,
         http: reqwest::Client::new(),
     };
 

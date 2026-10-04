@@ -167,7 +167,7 @@ impl DevChild {
     fn generation(&self) -> u64 {
         let marker = self
             .app
-            .join(format!(".plec-dev-state-{}.json", self.child.id()));
+            .join(format!(".plec/dev-state-{}.json", self.child.id()));
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Ok(value) =
@@ -359,12 +359,13 @@ fn spawned_dev_session_rebuilds_preserves_failures_recovers_restarts_and_cleans_
     dev.wait_generation(5);
     assert_eq!(dev.generation(), 5, "watching continues after rollback");
 
-    let marker = app.join(format!(".plec-dev-state-{}.json", dev.child.id()));
+    let marker = app.join(format!(".plec/dev-state-{}.json", dev.child.id()));
     dev.stop();
     assert!(!marker.exists(), "dev marker is removed at shutdown");
-    assert!(!app
-        .join(format!("dist.previous-{}", dev.child.id()))
-        .exists());
+    assert!(
+        !app.join(format!("dist.previous-{}", dev.child.id()))
+            .exists()
+    );
     assert!(!app.join("dist.next").exists());
     assert!(
         TcpListener::bind(("127.0.0.1", port)).is_ok(),
