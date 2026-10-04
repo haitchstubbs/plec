@@ -14,11 +14,14 @@ test, and typecheck time.
 
 ```sh
 yarn workspace @plec/core build:runtime             # once: build the WASM runtime
-yarn workspace fullstack dev    # build + plec serve dist
+yarn workspace fullstack dev    # watch, rebuild, and serve
 ```
 
-Serves on `PORT` (default `3000`). TSX edits require a rebuild — the Rust
-compiler emits graphs at build time; there is no HMR.
+Serves on `PORT` (default `3000`). Source edits trigger a rebuild and a
+full-page browser reload after a successful build. Failed builds keep serving
+the last successful output. Tailwind runs in watch mode and its generated
+stylesheet and the self-hosted fonts are included in dev output. This is not
+HMR: component state is not preserved.
 
 ## Test
 

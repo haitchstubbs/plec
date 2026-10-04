@@ -209,8 +209,8 @@ export function TodosPage() {
                 (updateTodo.pending && updatingId === todo.id) ||
                 (removeTodo.pending && removingId === todo.id)
               }
-              onToggle={() =>
-                updateTodoFor(todo, { completed: !todo.completed })
+              onToggle={(checked) =>
+                updateTodoFor(todo, { completed: checked })
               }
               onStartEdit={() => {
                 setEditingId(todo.id);
@@ -256,7 +256,7 @@ function TodoRow({
   editing: boolean;
   editingTitle: string;
   pending: boolean;
-  onToggle(): void;
+  onToggle(checked: boolean): void;
   onStartEdit(): void;
   onEditTitle(title: string): void;
   onSave(): void;
@@ -268,7 +268,11 @@ function TodoRow({
       <input
         type="checkbox"
         checked={todo.completed}
-        onChange={onToggle}
+        onChange={(event: Event) =>
+          onToggle(
+            (event.target as HTMLInputElement).checked,
+          )
+        }
         disabled={pending}
         aria-label={`Mark ${todo.title} ${todo.completed ? 'open' : 'complete'}`}
       />

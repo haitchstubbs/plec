@@ -21,4 +21,17 @@ test('home renders through SSR and mounts', async ({ page }) => {
   await expect(
     page.getByRole('navigation', { name: 'Breadcrumb' }),
   ).toHaveCount(1);
+  const duck = page.locator('#plec-duck-head');
+  await expect(duck.locator('img')).toHaveCount(9);
+  await expect(
+    duck.locator('img[data-duck-yaw="0"][data-duck-pitch="0"]'),
+  ).toHaveCSS('opacity', '1');
+
+  const primaryNavigation = page.getByRole('navigation', {
+    name: 'Primary navigation',
+  });
+  await primaryNavigation.getByRole('link', { name: 'About' }).click();
+  await expect(duck).toHaveCount(0);
+  await primaryNavigation.getByRole('link', { name: 'Home' }).click();
+  await expect(page.locator('#plec-duck-head img')).toHaveCount(9);
 });

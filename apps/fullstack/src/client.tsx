@@ -5,6 +5,7 @@ import {
 import { installPlecPerformance } from './performance';
 import { installDevelopmentMemoryHud } from '@plec/core/client/effects/development-memory-hud';
 import { createRuntimeStressFeed } from './stress-feed';
+import { installDuckTracking } from './duck-tracking';
 
 installPlecPerformance();
 await registerPlecProviders();
@@ -42,10 +43,12 @@ const app = await startPlecRouter({
   inputs: stressFeed.inputs,
   onQueryUpdate: stressFeed.recordRuntimeUpdate,
 });
+const disposeDuckTracking = installDuckTracking(root);
 stressFeed.start();
 window.addEventListener(
   'pagehide',
   () => {
+    disposeDuckTracking();
     stressFeed.stop();
     app.dispose();
   },
