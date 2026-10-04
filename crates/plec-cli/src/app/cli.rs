@@ -1,11 +1,11 @@
 use crate::diagnostic::DevelopmentDiagnostic;
 use clap::{Parser, Subcommand};
 use plec_build::{
-    BuildOptions, RuntimeSource, build, modules::host::resolve_custom_elements,
-    modules::host::resolve_host_imports,
+    build, modules::host::resolve_custom_elements, modules::host::resolve_host_imports,
+    BuildOptions, RuntimeSource,
 };
 use plec_compiler::{
-    CompilerOptions, compile_with_options, load_with_options, lower_route_manifest, lower_routes,
+    compile_with_options, load_with_options, lower_route_manifest, lower_routes, CompilerOptions,
 };
 use plec_inspect::Inspector;
 use pollster::block_on;
@@ -123,6 +123,8 @@ enum Command {
         /// Development mode (also enabled unless NODE_ENV=production).
         #[arg(long)]
         development: bool,
+        #[arg(long, hide = true)]
+        dev_state: Option<PathBuf>,
     },
 }
 
@@ -218,11 +220,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             host,
             port,
             development,
+            dev_state,
         } => crate::serve::serve(crate::serve::ServeOptions {
             dir,
             host,
             port,
             development,
+            dev_state,
         })?,
     }
     Ok(())

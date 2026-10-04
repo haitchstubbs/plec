@@ -82,12 +82,17 @@ tracking. It stays outside `dist/public/` and is not required by `plec serve`.
 yarn workspace fullstack dev
 ```
 
-This rebuilds the application and runs its `start` script, which launches
-`plec serve dist`. The native server listens on `PORT` (default `3000`).
+`plec dev` builds into an isolated candidate directory, then serves the last
+successful build while watching application source, configuration, public
+files, and compiled source-asset dependencies. Relevant edits are coalesced
+before rebuilding. A failed build prints the structured Plec diagnostic and
+leaves the last successful application available; fixing the source triggers
+another build automatically. Server-owned changes restart the native host and
+application sidecar when needed. After the replacement is ready, connected
+browsers perform a full-page reload.
 
-There is no vite/HMR: the Rust compiler emits the route manifest and graphs
-at build time. TSX edits require re-running the fullstack build — the `dev`
-script does that before restarting the server.
+This is full-page development reload, not HMR: component state is not preserved
+and Plec does not hot-replace modules.
 
 ## Rebuilding the WASM runtime
 

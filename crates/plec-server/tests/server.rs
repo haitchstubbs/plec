@@ -6,16 +6,16 @@
 use std::{path::Path, sync::Arc};
 
 use axum::{
-    Router,
     body::Body,
     http::{Request, Response, StatusCode},
+    Router,
 };
 use plec_ir::PlecSsrSnapshot;
 use plec_server::{
-    DocumentMetadata, PlecServerOptions, artifact::ArtifactBundle, create_plec_server,
-    runtime::AppRequestHandler,
+    artifact::ArtifactBundle, create_plec_server, runtime::AppRequestHandler, DocumentMetadata,
+    PlecServerOptions,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const BOOTSTRAP_OPEN: &str = "<script id=\"plec-bootstrap\" type=\"application/json\">";
@@ -79,6 +79,26 @@ fn dev_options(dir: &Path) -> PlecServerOptions {
     let mut options = options(dir);
     options.development = true;
     options
+}
+
+#[tokio::test]
+async fn dev_events_endpoint_requires_private_supervisor_state() {
+    unsafe {
+        std::env::remove_var("PLEC_DEV_STATE");
+    }
+    let dir = fixture_dir();
+    let response = create_plec_server(options(dir.path()))
+        .oneshot(get("/__plec/dev/events"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // `--development` diagnostics alone do not expose reload transport.
+    let response = create_plec_server(dev_options(dir.path()))
+        .oneshot(get("/__plec/dev/events"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 fn get(uri: &str) -> Request<Body> {
@@ -1816,15 +1836,13 @@ async fn falls_back_to_the_public_shell_when_the_artifact_is_unreadable() {
     let router = create_plec_server(dev_options(dir.path()));
     let response = router.oneshot(get("/")).await.expect("response");
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(
-        response
-            .headers()
-            .get("x-plec-ssr-fallback")
-            .is_some_and(|value| value
-                .to_str()
-                .unwrap()
-                .starts_with("[PLEC-SSR-RENDER] ssr:"))
-    );
+    assert!(response
+        .headers()
+        .get("x-plec-ssr-fallback")
+        .is_some_and(|value| value
+            .to_str()
+            .unwrap()
+            .starts_with("[PLEC-SSR-RENDER] ssr:")));
     assert!(text_of(response).await.contains("shell"));
 }
 
@@ -2590,12 +2608,10 @@ async fn a_not_found_outcome_truncates_the_chain_at_the_boundary_owner() {
     assert_eq!(routes.len(), 1);
     assert_eq!(routes[0]["routeId"], "projects");
     assert_eq!(routes[0]["phase"], "notFound");
-    assert!(
-        payload["snapshot"]["loaders"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(payload["snapshot"]["loaders"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_valid_bootstrap(&html, &artifact, &artifact["manifest"]);
 }
 

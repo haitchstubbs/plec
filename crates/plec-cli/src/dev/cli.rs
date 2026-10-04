@@ -95,6 +95,8 @@ enum Command {
         /// Development mode (also enabled unless NODE_ENV=production).
         #[arg(long)]
         development: bool,
+        #[arg(long, hide = true)]
+        dev_state: Option<PathBuf>,
     },
 
     /// Developer workflow helpers for working on the Plec workspace itself.
@@ -184,12 +186,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             host,
             port,
             development,
+            dev_state,
         } => {
             crate::serve::serve(crate::serve::ServeOptions {
                 dir,
                 host,
                 port,
                 development,
+                dev_state,
             })?;
         }
 
