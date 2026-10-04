@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import {
   cpSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -70,10 +71,16 @@ function stop(child: ChildProcess) {
 test('plec dev keeps failed builds live and reloads the browser once after recovery', async ({
   page,
 }) => {
-  execFileSync('cargo', ['build', '-p', 'plec-cli'], {
-    cwd: repo,
-    stdio: 'ignore',
-  });
+  test.setTimeout(120_000);
+  const plecBinary = process.env.PLEC_BIN
+    ? path.resolve(process.env.PLEC_BIN)
+    : path.join(repo, 'target/debug/plec');
+  if (!existsSync(plecBinary)) {
+    execFileSync('cargo', ['build', '-p', 'plec-cli'], {
+      cwd: repo,
+      stdio: 'ignore',
+    });
+  }
   const sessionRoot = mkdtempSync(
     path.join(os.tmpdir(), 'plec-dev-browser-'),
   );
@@ -95,7 +102,7 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
     );
     writeFileSync(path.join(app, 'src/client.tsx'), 'export {};\n');
     child = spawn(
-      path.join(repo, 'target/debug/plec'),
+      plecBinary,
       ['dev', 'src/router.tsx', '--port', String(port)],
       {
         cwd: app,
