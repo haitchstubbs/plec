@@ -96,7 +96,11 @@ impl NodeApplicationRuntime {
     pub async fn spawn(options: NodeRuntimeOptions) -> Result<Self, ServerError> {
         let development = options.development;
         let token = generate_token();
-        let runtime_dir = create_runtime_dir(&token)?;
+        let runtime_dir = create_runtime_dir(&token).map_err(|error| {
+            ServerError::message(format!(
+                "[PLEC-SIDECAR-STARTUP] sidecar: cannot prepare private runtime directory: {error}"
+            ))
+        })?;
 
         #[cfg(unix)]
         let address = InternalAddress::UnixSocket(runtime_dir.join("app.sock"));
@@ -105,10 +109,14 @@ impl NodeApplicationRuntime {
             // Loopback only, ephemeral port; the token is the access
             // boundary, never the bind address.
             let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
-                ServerError::message(format!("cannot reserve sidecar port: {error}"))
+                ServerError::message(format!(
+                    "[PLEC-SIDECAR-STARTUP] sidecar: cannot reserve private port: {error}"
+                ))
             })?;
             let address = listener.local_addr().map_err(|error| {
-                ServerError::message(format!("cannot reserve sidecar port: {error}"))
+                ServerError::message(format!(
+                    "[PLEC-SIDECAR-STARTUP] sidecar: cannot reserve private port: {error}"
+                ))
             })?;
             drop(listener);
             InternalAddress::Tcp(address)
@@ -145,7 +153,9 @@ impl NodeApplicationRuntime {
             .kill_on_drop(true)
             .spawn()
             .map_err(|error| {
-                ServerError::message(format!("cannot spawn node application runtime: {error}"))
+                ServerError::message(format!(
+                    "[PLEC-SIDECAR-STARTUP] sidecar: cannot spawn Node process: {error}"
+                ))
             })?;
 
         // Child output is protocol output on stdout and diagnostics on
@@ -171,7 +181,9 @@ impl NodeApplicationRuntime {
                     } else if let Some(message) = line.strip_prefix(protocol::ERROR_PREFIX) {
                         diagnostics.record_error(message.to_owned());
                     }
-                    println!("{line}");
+                    if development {
+                        println!("{line}");
+                    }
                 }
             });
         }
@@ -304,6 +316,12 @@ impl NodeApplicationRuntime {
         development: bool,
         reason: &str,
     ) -> ServerError {
+        let process_status = child
+            .try_wait()
+            .ok()
+            .flatten()
+            .map(|status| format!("; sidecar process exited with {status}"))
+            .unwrap_or_default();
         let _ = child.start_kill();
         let _ = std::fs::remove_dir_all(runtime_dir);
         let tail = if development {
@@ -317,19 +335,34 @@ impl NodeApplicationRuntime {
             ("PLEC-SIDECAR-STARTUP", "sidecar")
         };
         ServerError::message(if tail.is_empty() {
-            format!("[{code}] {phase}: sidecar startup failed: {reason}")
+            format!("[{code}] {phase}: sidecar startup failed: {reason}{process_status}")
         } else {
-            format!("[{code}] {phase}: sidecar startup failed: {reason}: {tail}")
+            format!("[{code}] {phase}: sidecar startup failed: {reason}{process_status}: {tail}")
         })
     }
 }
 
 impl RuntimeProcess {
-    fn failed(&self, error: impl std::fmt::Display) -> ServerError {
+    async fn failed(&self, error: impl std::fmt::Display) -> ServerError {
+        let process_status = self
+            .child
+            .lock()
+            .await
+            .try_wait()
+            .ok()
+            .flatten()
+            .map(|status| format!("; sidecar process exited with {status}"))
+            .unwrap_or_default();
         ServerError::message(format!(
-            "[PLEC-SIDECAR-REQUEST] sidecar: application runtime request failed: {error}"
+            "[PLEC-SIDECAR-REQUEST] sidecar: application runtime unavailable: {error}{process_status}"
         ))
     }
+}
+
+fn sidecar_protocol_error(message: impl std::fmt::Display) -> ServerError {
+    ServerError::message(format!(
+        "[PLEC-SIDECAR-PROTOCOL] protocol: invalid sidecar response: {message}"
+    ))
 }
 
 impl ApplicationRuntime for NodeApplicationRuntime {
@@ -358,7 +391,7 @@ impl ApplicationRuntime for NodeApplicationRuntime {
             .await
             {
                 Ok(response) => response,
-                Err(error) => return Err(self.process.failed(error)),
+                Err(error) => return Err(self.process.failed(error).await),
             };
 
             // Only the sidecar's own sentinel (injected for an `undefined`
@@ -393,7 +426,7 @@ impl ApplicationRuntime for NodeApplicationRuntime {
             .map_err(|error| {
                 ServerError::message(format!("host render request serialization failed: {error}"))
             })?;
-            let internal = dispatch_internal(
+            let internal = match dispatch_internal(
                 &self.process.address,
                 &self.process.token,
                 InternalRequest {
@@ -406,28 +439,29 @@ impl ApplicationRuntime for NodeApplicationRuntime {
                 },
             )
             .await
-            .map_err(|error| self.process.failed(error))?;
+            {
+                Ok(response) => response,
+                Err(error) => return Err(self.process.failed(error).await),
+            };
             if internal.status == StatusCode::NO_CONTENT {
                 return Ok(None);
             }
             if internal.status != StatusCode::OK {
-                return Err(self
-                    .process
-                    .failed(format!("host render returned {}", internal.status)));
+                return Err(ServerError::message(format!(
+                    "[PLEC-SIDECAR-PROTOCOL] protocol: host render returned {}",
+                    internal.status
+                )));
             }
             #[derive(serde::Deserialize)]
             struct HostRenderResponse {
                 html: String,
             }
-            let response: HostRenderResponse =
-                serde_json::from_slice(&internal.body).map_err(|_| {
-                    self.process
-                        .failed("host render returned an invalid response")
-                })?;
+            let response: HostRenderResponse = serde_json::from_slice(&internal.body)
+                .map_err(|_| sidecar_protocol_error("host render returned invalid JSON"))?;
             if response.html.len() > plec_ir::limits::MAX_PROVIDER_MANIFEST_JSON_BYTES {
-                return Err(self
-                    .process
-                    .failed("host render response exceeds byte limit"));
+                return Err(sidecar_protocol_error(
+                    "host render response exceeds byte limit",
+                ));
             }
             Ok(Some(response.html))
         })
@@ -445,7 +479,7 @@ impl ApplicationRuntime for NodeApplicationRuntime {
                     "server action request serialization failed: {error}"
                 ))
             })?;
-            let internal = dispatch_internal(
+            let internal = match dispatch_internal(
                 &self.process.address,
                 &self.process.token,
                 InternalRequest {
@@ -456,41 +490,39 @@ impl ApplicationRuntime for NodeApplicationRuntime {
                 },
             )
             .await
-            .map_err(|error| self.process.failed(error))?;
+            {
+                Ok(response) => response,
+                Err(error) => return Err(self.process.failed(error).await),
+            };
             if internal.status != StatusCode::OK {
                 if internal.status == StatusCode::NOT_FOUND {
                     return Err(ServerError::UnknownServerAction);
                 }
-                return Err(self
-                    .process
-                    .failed(format!("server action returned {}", internal.status)));
+                return Err(ServerError::message(format!(
+                    "[PLEC-SIDECAR-PROTOCOL] protocol: server action returned {}",
+                    internal.status
+                )));
             }
             #[derive(serde::Deserialize)]
             struct ActionResponse {
                 ok: bool,
                 value: Option<serde_json::Value>,
             }
-            let response: ActionResponse =
-                serde_json::from_slice(&internal.body).map_err(|_| {
-                    self.process
-                        .failed("server action returned an invalid response")
-                })?;
+            let response: ActionResponse = serde_json::from_slice(&internal.body)
+                .map_err(|_| sidecar_protocol_error("server action returned invalid JSON"))?;
             if !response.ok {
                 return Err(ServerError::message("server action failed"));
             }
-            let value: plec_schema::RuntimeValue = serde_json::from_value(
-                response
-                    .value
-                    .ok_or_else(|| self.process.failed("server action response omitted value"))?,
-            )
-            .map_err(|_| {
-                self.process
-                    .failed("server action returned an unsupported value")
-            })?;
-            value.check_limits().map_err(|_| {
-                self.process
-                    .failed("server action result exceeds value limits")
-            })?;
+            let value: plec_schema::RuntimeValue =
+                serde_json::from_value(response.value.ok_or_else(|| {
+                    sidecar_protocol_error("server action response omitted value")
+                })?)
+                .map_err(|_| {
+                    sidecar_protocol_error("server action returned an unsupported value")
+                })?;
+            value
+                .check_limits()
+                .map_err(|_| sidecar_protocol_error("server action result exceeds value limits"))?;
             Ok(value)
         })
     }

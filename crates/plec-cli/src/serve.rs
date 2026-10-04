@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use crate::diagnostic::DevelopmentDiagnostic;
 use plec_server::{NodeRuntimeOptions, manifest::LoadedServerManifest};
 
 pub struct ServeOptions {
@@ -21,7 +22,8 @@ pub struct ServeOptions {
 pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
     println!("➠          Starting Plec host...");
     let dir = std::path::absolute(&options.dir)?;
-    let loaded = LoadedServerManifest::load(&dir)?;
+    let loaded =
+        LoadedServerManifest::load(&dir).map_err(DevelopmentDiagnostic::server_manifest)?;
 
     let port = options
         .port

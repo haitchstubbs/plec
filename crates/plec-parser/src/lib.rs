@@ -1,13 +1,14 @@
 mod imports_exports;
 
 pub use imports_exports::{
-    collect_exports, collect_imports, module_dependencies, Export, ExportKind, Import,
-    ImportSpecifier,
+    Export, ExportKind, Import, ImportSpecifier, collect_exports, collect_imports,
+    module_dependencies,
 };
 
-use swc_common::{sync::Lrc, FileName, SourceMap};
+use swc_common::Spanned;
+use swc_common::{FileName, SourceMap, sync::Lrc};
 use swc_ecma_ast::Module;
-use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsSyntax};
+use swc_ecma_parser::{Parser, StringInput, Syntax, TsSyntax, lexer::Lexer};
 
 #[derive(Debug)]
 pub struct SourceModule {
@@ -54,14 +55,14 @@ pub fn parse_module(
 
     let ast = parser
         .parse_module()
-        .map_err(|error| format!("{error:?}"))?;
+        .map_err(|error| format_parse_error(&source_map, &id, error))?;
 
     let errors = parser.take_errors();
 
     if !errors.is_empty() {
         return Err(errors
             .into_iter()
-            .map(|error| format!("{error:?}"))
+            .map(|error| format_parse_error(&source_map, &id, error))
             .collect::<Vec<_>>()
             .join("\n"));
     }
@@ -76,6 +77,20 @@ pub fn parse_module(
         imports,
         exports,
     })
+}
+
+fn format_parse_error(
+    source_map: &SourceMap,
+    module_id: &str,
+    error: swc_ecma_parser::error::Error,
+) -> String {
+    let location = source_map.lookup_char_pos(error.span().lo);
+    format!(
+        "{module_id}:{}:{}: {:?}",
+        location.line,
+        location.col_display + 1,
+        error.kind()
+    )
 }
 
 pub fn parse_modules(
@@ -317,6 +332,13 @@ mod tests {
         "#;
 
         assert!(parse(source).is_err());
+    }
+
+    #[test]
+    fn parser_failure_retains_named_module_and_line_column() {
+        let error = parse_module("src/routes/todos.tsx", "export const = 1;")
+            .expect_err("invalid declaration must fail parsing");
+        assert!(error.contains("src/routes/todos.tsx:1:"), "{error}");
     }
 
     #[test]

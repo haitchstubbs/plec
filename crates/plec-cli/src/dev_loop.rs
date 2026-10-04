@@ -1,7 +1,8 @@
 //! Consumer development loop: build into isolation, then serve the last good
 //! output while polling application sources for changes.
 
-use plec_build::{build, BuildOptions, RuntimeSource};
+use crate::diagnostic::DevelopmentDiagnostic;
+use plec_build::{BuildError, BuildOptions, RuntimeSource, build, modules::build::Stage};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,7 +20,16 @@ pub struct DevOptions {
 }
 
 pub fn run(options: DevOptions) -> Result<(), Box<dyn std::error::Error>> {
-    let source = fs::canonicalize(&options.source)?;
+    let source = fs::canonicalize(&options.source).map_err(|error| {
+        DevelopmentDiagnostic::build(BuildError::with_source(
+            Stage::Compile,
+            format!(
+                "cannot resolve application entry {}",
+                options.source.display()
+            ),
+            error,
+        ))
+    })?;
     let app_dir = source
         .parent()
         .and_then(Path::parent)
@@ -69,7 +79,10 @@ pub fn run(options: DevOptions) -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(error) => {
                 remove_dir(&next.out_dir);
-                eprintln!("Plec dev: build failed: {error}");
+                eprintln!(
+                    "Plec dev: build failed: {}",
+                    DevelopmentDiagnostic::build(error)
+                );
                 eprintln!("Plec dev: serving previous successful build");
             }
         }
@@ -95,7 +108,7 @@ fn build_and_promote(
     options: &BuildOptions,
     out_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    build(options.clone())?;
+    build(options.clone()).map_err(DevelopmentDiagnostic::build)?;
     replace_output(&options.out_dir, out_dir)
 }
 

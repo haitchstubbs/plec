@@ -324,6 +324,11 @@ async fn a_sidecar_that_exits_early_reports_the_startup_failure() {
             .to_string()
             .contains("[PLEC-SIDECAR-STARTUP] sidecar:")
     );
+    assert!(
+        error
+            .to_string()
+            .contains("sidecar process exited with exit status: 0")
+    );
 }
 
 #[tokio::test]
@@ -357,8 +362,64 @@ async fn a_missing_node_binary_fails_spawn() {
     assert!(
         error
             .to_string()
-            .contains("cannot spawn node application runtime"),
+            .contains("[PLEC-SIDECAR-STARTUP] sidecar: cannot spawn Node process"),
         "{error}"
+    );
+}
+
+#[tokio::test]
+async fn sidecar_protocol_mismatch_identifies_expected_and_received_versions() {
+    let dir = tempfile::tempdir().expect("fixture dir");
+    let script = dir.path().join("wrong-protocol.mjs");
+    std::fs::write(
+        &script,
+        "console.log('➠︎          Plec Ready: ' + JSON.stringify({ protocol: 999, address: process.env.PLEC_RUNTIME_SOCKET })); setInterval(() => {}, 1000);",
+    )
+    .expect("script write");
+    let error = NodeApplicationRuntime::spawn(NodeRuntimeOptions::new(
+        script,
+        Path::new("/unused/bundle.mjs"),
+    ))
+    .await
+    .expect_err("mismatched protocol must fail startup");
+    let diagnostic = error.to_string();
+    assert!(diagnostic.contains("[PLEC-SIDECAR-PROTOCOL] protocol:"));
+    assert!(diagnostic.contains("unsupported sidecar protocol 999"));
+    assert!(diagnostic.contains("expected 3"));
+}
+
+#[tokio::test]
+async fn startup_detail_is_available_in_development_and_redacted_in_production() {
+    let dir = tempfile::tempdir().expect("fixture dir");
+    let bundle = dir.path().join("app.mjs");
+    std::fs::write(
+        &bundle,
+        "throw new Error('PLEC_PRIVATE_DIAGNOSTIC_MARKER');",
+    )
+    .expect("bundle write");
+
+    let mut development = NodeRuntimeOptions::new(runtime_script(), &bundle);
+    development.development = true;
+    let detail = NodeApplicationRuntime::spawn(development)
+        .await
+        .expect_err("application import must fail")
+        .to_string();
+    assert!(detail.contains("[PLEC-SIDECAR-STARTUP] sidecar:"));
+    assert!(detail.contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER"));
+
+    let production =
+        NodeApplicationRuntime::spawn(NodeRuntimeOptions::new(runtime_script(), &bundle))
+            .await
+            .expect_err("application import must fail");
+    assert!(
+        production
+            .to_string()
+            .contains("[PLEC-SIDECAR-STARTUP] sidecar:")
+    );
+    assert!(
+        !production
+            .to_string()
+            .contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER")
     );
 }
 
@@ -426,6 +487,12 @@ async fn a_sidecar_that_dies_mid_request_fails_the_dispatch() {
         error
             .to_string()
             .contains("application runtime unavailable"),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("[PLEC-SIDECAR-REQUEST] sidecar:"),
         "{error}"
     );
 }

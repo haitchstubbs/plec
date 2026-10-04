@@ -555,7 +555,16 @@ async function boundedResponseJson(
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-export async function startPlecRouter(
+export function startPlecRouter(
+  options: PlecRouterMountOptions,
+): Promise<PlecRouterController> {
+  return startPlecRouterInner(options).catch((error) => {
+    emitBrowserFailure(options, error);
+    throw error;
+  });
+}
+
+async function startPlecRouterInner(
   options: PlecRouterMountOptions,
 ): Promise<PlecRouterController> {
   markPlecTiming('plec:mount-start');
@@ -746,16 +755,11 @@ export async function startPlecRouter(
         const detail =
           error instanceof Error ? error.message : String(error);
         emitPlecDiagnostic(options, {
-          code: 'PLEC-BROWSER-GRAPH-LOAD',
-          phase: 'artifact',
-          message: `Failed to load Plec graph ${graphId}`,
-          graphId,
-          ...(options.development ? { detail } : {}),
-          suggestion:
-            'Check the graph artifact request and rebuild the application if it is missing or stale.',
+          ...plecRuntimeDiagnostic(error, graphId),
+          detail: options.development ? detail : undefined,
         });
         console.error(
-          `[PLEC-BROWSER-GRAPH-LOAD] artifact: Failed to load Plec graph ${graphId}`,
+          `[PLEC-ARTIFACT-LOAD] artifact: Failed to load Plec graph ${graphId}`,
         );
       });
   };
@@ -915,7 +919,7 @@ function emitAdoptionDiagnostic(
   options.onAdoptionDiagnostic?.(diagnostic);
   if (diagnostic.outcome === 'fallback')
     emitPlecDiagnostic(options, {
-      code: diagnostic.mismatchCodes[0] ?? 'PLEC-SSR-ADOPTION-FALLBACK',
+      code: 'PLEC-SSR-ADOPTION',
       phase: 'adoption',
       message:
         'SSR output could not be adopted; Plec mounted the route normally.',
@@ -930,6 +934,69 @@ function emitAdoptionDiagnostic(
     window.dispatchEvent(
       new CustomEvent('plec:adoption', { detail: diagnostic }),
     );
+}
+
+export function plecRuntimeDiagnostic(
+  error: unknown,
+  graphId?: string,
+): PlecDevelopmentDiagnostic {
+  const detail = error instanceof Error ? error.message : String(error);
+  const provider = detail.match(
+    /(?:unknown host component|host component mount is not callable):\s*([^\s]+)/,
+  )?.[1];
+  if (provider || /host component registry/i.test(detail))
+    return {
+      code: 'PLEC-PROVIDER-RESOLUTION',
+      phase: 'provider',
+      message: provider
+        ? `Host provider component ${provider} could not be mounted.`
+        : 'Host provider registry could not resolve a component.',
+      suggestion: provider
+        ? 'Check the provider registration and confirm its component exports a callable mount lifecycle.'
+        : 'Install a provider registry and confirm that it implements resolve(provider, component).',
+      ...(graphId ? { graphId } : {}),
+    };
+  if (/protocol|version mismatch|incompatible/i.test(detail))
+    return {
+      code: 'PLEC-PROTOCOL-COMPATIBILITY',
+      phase: 'protocol',
+      message: 'Plec browser/runtime protocol validation failed.',
+      suggestion:
+        'Rebuild and serve the browser artifacts and runtime from the same Plec build.',
+      ...(graphId ? { graphId } : {}),
+    };
+  if (/Failed to load|artifact|manifest|graph/i.test(detail))
+    return {
+      code: 'PLEC-ARTIFACT-LOAD',
+      phase: 'artifact',
+      message: graphId
+        ? `Failed to load or validate Plec graph ${graphId}.`
+        : 'Failed to load or validate a Plec browser artifact.',
+      suggestion:
+        'Check the artifact request and rebuild the application if it is missing or stale.',
+      ...(graphId ? { graphId } : {}),
+    };
+  return {
+    code: 'PLEC-BROWSER-RUNTIME',
+    phase: 'browser-runtime',
+    message: 'Plec WASM runtime rejected an application operation.',
+    suggestion:
+      'Inspect the compiled graph and host inputs involved in this mount or update.',
+    ...(graphId ? { graphId } : {}),
+  };
+}
+
+function emitBrowserFailure(
+  options: PlecRouterMountOptions,
+  error: unknown,
+  graphId?: string,
+): void {
+  const diagnostic = plecRuntimeDiagnostic(error, graphId);
+  const detail = error instanceof Error ? error.message : String(error);
+  emitPlecDiagnostic(options, {
+    ...diagnostic,
+    ...(options.development ? { detail } : {}),
+  });
 }
 
 /** Adapt a host collection into the runtime's stable keyed-delta protocol. */

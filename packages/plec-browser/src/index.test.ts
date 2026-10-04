@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   boundedResponseBytes,
   emitPlecDiagnostic,
+  plecRuntimeDiagnostic,
   markPlecTiming,
   adaptLiveCollection,
   registerPlecProviders,
@@ -150,6 +151,46 @@ describe('ssr route chain gate', () => {
 });
 
 describe('compiled browser adapter', () => {
+  it('classifies a runtime provider-resolution failure with actionable identity', () => {
+    const diagnostic = plecRuntimeDiagnostic(
+      new Error('unknown host component: lucide/Missing'),
+      'routes/home',
+    );
+    expect(diagnostic).toMatchObject({
+      code: 'PLEC-PROVIDER-RESOLUTION',
+      phase: 'provider',
+      message: expect.stringContaining('lucide/Missing'),
+      graphId: 'routes/home',
+      suggestion: expect.stringContaining('provider registration'),
+    });
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal('window', { dispatchEvent });
+    emitPlecDiagnostic({}, diagnostic);
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'plec:diagnostic',
+        detail: expect.objectContaining({
+          code: 'PLEC-PROVIDER-RESOLUTION',
+        }),
+      }),
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it('classifies a missing host provider registry as a provider failure', () => {
+    expect(
+      plecRuntimeDiagnostic(
+        new Error('host component registry is not installed'),
+      ),
+    ).toMatchObject({
+      code: 'PLEC-PROVIDER-RESOLUTION',
+      phase: 'provider',
+      suggestion: expect.stringContaining(
+        'Install a provider registry',
+      ),
+    });
+  });
+
   it('surfaces structured browser diagnostics through the callback and DOM event', () => {
     const onDiagnostic = vi.fn();
     vi.stubGlobal('window', { dispatchEvent: vi.fn() });

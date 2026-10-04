@@ -114,7 +114,7 @@ impl plec_server::ApplicationRuntime for EchoActionRuntime {
         Box::pin(async move {
             if request.id == "sa_fail" {
                 return Err(plec_server::ServerError::Other(
-                    "TOP_SECRET_ACTION_FAILURE".into(),
+                    "PLEC_PRIVATE_DIAGNOSTIC_MARKER".into(),
                 ));
             }
             if request.id != "sa_echo" {
@@ -191,7 +191,7 @@ async fn reserved_server_action_endpoint_dispatches_only_post_and_redacts_failur
     assert_eq!(failure.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = text_of(failure).await;
     assert!(body.contains("server action failed"));
-    assert!(!body.contains("TOP_SECRET_ACTION_FAILURE"));
+    assert!(!body.contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER"));
 }
 
 async fn get_html(options: &PlecServerOptions, uri: &str) -> String {
@@ -1820,7 +1820,10 @@ async fn falls_back_to_the_public_shell_when_the_artifact_is_unreadable() {
         response
             .headers()
             .get("x-plec-ssr-fallback")
-            .is_some_and(|value| !value.is_empty())
+            .is_some_and(|value| value
+                .to_str()
+                .unwrap()
+                .starts_with("[PLEC-SSR-RENDER] ssr:"))
     );
     assert!(text_of(response).await.contains("shell"));
 }
