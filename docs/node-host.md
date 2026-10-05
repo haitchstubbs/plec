@@ -121,7 +121,7 @@ host-provider SSR boundary ownership
 
 Do not reimplement any of these semantics in TypeScript.
 
-## 1.3 `/api/*` remains JavaScript-owned
+## 1.3 `/api` and `/api/*` remain JavaScript-owned
 
 The generated application bundle already owns:
 
@@ -152,6 +152,20 @@ Node
 ```
 
 for ordinary `/api/*` traffic.
+
+The API path predicate must include the exact `/api` path as well as its
+descendants:
+
+```ts
+function isApiPath(pathname: string): boolean {
+  return pathname === '/api' || pathname.startsWith('/api/');
+}
+```
+
+This matches the generated matcher in
+`crates/plec-build/src/modules/server.rs::matchRoute`, which recognizes both
+`/api` and `/api/...`. It intentionally corrects the current Rust dispatcher's
+`/api/`-only check. Add explicit coverage for `/api`, `/api/`, and `/api/foo`.
 
 This permits `ApplicationRuntime::dispatch()` to become unnecessary in the Node-host architecture.
 
@@ -205,11 +219,15 @@ cache-control behavior
 
 The current `ServeDir` implementation remains the parity reference.
 
-## 1.7 The N-API boundary is streaming
+## 1.7 The N-API boundary supports streaming; bounded API bodies are an exception
 
-Do not introduce a permanent buffer-all bridge.
+Do not introduce a permanent buffer-all bridge. Native request/response bodies
+and static assets use streams. The existing API body ceiling is deliberately
+different: API handlers must not run until the complete body has passed the
+current 1 MiB limit, so Node will read API bodies into a bounded buffer before
+constructing the Web `Request`.
 
-Request:
+Native action request:
 
 ```text id="eq075z"
 IncomingMessage
@@ -221,7 +239,14 @@ ReadableStream<Uint8Array>
 napi-rs
  ↓
 Rust pull-based stream
+  ↓
+incremental limit check, then bounded buffer for JSON decoding
 ```
+
+This is the streaming request path used to prove the native bridge. Document
+requests do not need an inbound body stream. API bodies are fully pre-read up
+to the limit before application dispatch, preserving the current
+reject-before-handler security contract.
 
 Response:
 
@@ -280,9 +305,16 @@ Do not rely on JavaScript garbage collection to break Rust↔JS ownership cycles
 
 ---
 
-# 2. New repository structure
+# 2. Proposed repository structure
 
-Introduce exactly two new implementation units.
+The proposed implementation has two new Rust crates and one Node package. The
+crate boundary is a dependency requirement; the exact name and number of
+internal semantic crates are not architectural requirements. Prefer
+`plec-server-engine` if it cleanly owns the shared execution implementation;
+otherwise extract the minimum necessary existing modules while keeping the
+same dependency direction: neither the Node bindings nor the semantic engine
+may depend on Axum host machinery, and both hosts must call the same semantic
+implementation.
 
 ## Rust semantic engine
 
@@ -414,23 +446,23 @@ packages/plec/src/server-context.ts
 Specifically:
 
 ```ts id="akjabt"
-RequestContext
-ApiRouteHandler
-ApiMiddleware
-AppRequestHandler
-action()
-requestContext()
-withRequestContext()
+RequestContext;
+ApiRouteHandler;
+ApiMiddleware;
+AppRequestHandler;
+action();
+requestContext();
+withRequestContext();
 ```
 
 The generated application bundle contract should also remain conceptually unchanged:
 
 ```ts id="ch3stj"
-handleRequest(request, context)
+handleRequest(request, context);
 
-invokeAction(id, args, context)
+invokeAction(id, args, context);
 
-hasAction(id)
+hasAction(id);
 ```
 
 The architecture changes around these APIs; they should not change simply because the host changed.
@@ -542,7 +574,7 @@ rather than dynamically importing it per request.
 
 ---
 
-# 6. Extract `plec-server-engine`
+# 6. Establish the host-independent server execution boundary
 
 Do this before moving production traffic.
 
@@ -722,6 +754,13 @@ Reading `public/index.html` is host/filesystem behavior rather than compiled Ple
 
 Both the Axum and Node hosts must receive parity tests for this policy.
 
+Preserve the current response behavior exactly: if `public/index.html` is
+available, return its bytes with status 200, `content-type: text/html;
+charset=utf-8`, and `cache-control: no-cache`; in development also return
+`x-plec-ssr-fallback` with the diagnostic. If the shell cannot be read, return
+the generic 500 JSON response. Keep detailed errors out of production
+responses.
+
 ---
 
 # 7. Refactor the application runtime capability
@@ -816,6 +855,33 @@ Naming can follow current Plec conventions, but the key constraint is:
 
 > No Axum `Response<Body>` inside action semantics.
 
+The Node adapter supplies method, URL, ordered headers, and the inbound body
+stream. Rust incrementally enforces the body ceiling, buffers only after the
+limit has been enforced, decodes the JSON arguments, and performs action
+validation. The host maps the resulting semantic outcome to the HTTP response.
+
+### Public action HTTP response contract
+
+Do not expose the private sidecar's `{ "ok": true, "value": ... }` envelope.
+Preserve the current public action endpoint behavior:
+
+| Outcome                       | Status and JSON body                                        |
+| ----------------------------- | ----------------------------------------------------------- |
+| Success                       | `200`; serialize the returned `RuntimeValue` directly       |
+| Non-POST                      | `405`; `{ "error": "method not allowed" }`                  |
+| Origin mismatch               | `403`; `{ "error": "same-origin action POST required" }`    |
+| Invalid action ID             | `404`; `{ "error": "unknown server action" }`               |
+| Body exceeds limit            | `413`; `{ "error": "server action request exceeds limit" }` |
+| Invalid JSON arguments        | `400`; `{ "error": "invalid server action arguments" }`     |
+| Argument count/value limit    | `400`; preserve the current corresponding message           |
+| Unknown/stale registry action | `404`; `{ "error": "unknown or stale server action" }`      |
+| Invalid/oversized result      | `500`; preserve the current result-limit message            |
+| Action throws/rejects         | `500`; `{ "error": "server action failed" }`                |
+
+Preserve current JSON content type and `cache-control: no-store` headers.
+The bounded-body helper reports a semantic body-limit failure to the adapter;
+it does not make the adapter the authority for the byte ceiling.
+
 ---
 
 # 9. Introduce host-neutral bounded request streams
@@ -855,9 +921,11 @@ before extending:
 stop polling after failure
 ```
 
-Use this for action bodies.
+Use this for action bodies. On success it returns a bounded `Vec<u8>` for the
+existing JSON `RuntimeValue` decoder. The limit is checked incrementally before
+each append, and polling stops immediately on overflow.
 
-Do not buffer an untrusted N-API request completely before invoking this logic.
+Do not buffer an untrusted N-API request before invoking this logic.
 
 ---
 
@@ -971,15 +1039,17 @@ Node should invoke the semantic operation, not orchestrate the Rust execution gr
 
 Do not attempt to expose JavaScript's `Request` class directly to Rust.
 
-Use a generated DTO:
+Use generated metadata DTOs, but pass Web Streams as dedicated N-API arguments
+rather than assuming they can be fields of a `#[napi(object)]`:
 
 ```text id="yembjm"
 NativeRequest
 ├── method
 ├── url
 ├── raw ordered headers
-├── optional ReadableStream<Uint8Array>
-└── cancellation/abort integration
+└── other request metadata
+
+handleAction(metadata, bodyStream, cancellation)
 ```
 
 Headers should use ordered pairs rather than:
@@ -1004,11 +1074,14 @@ pub struct NativeRequest {
     pub method: String,
     pub url: String,
     pub headers: Vec<HeaderEntry>,
-    pub body: Option<ReadableStream<...>>,
 }
 ```
 
-Exact napi-rs stream types should follow the library API rather than inventing wrappers.
+Use the napi-rs Web Stream type as a separate `handleAction` argument (optional
+when the host request has no body). The document operation has no meaningful
+inbound body today. Do not assume a stream can be embedded in an N-API object on
+either input or output: prove the exact return shape in the binding spike,
+using a napi-rs stream return or a small JS-thread wrapper if necessary.
 
 ---
 
@@ -1017,10 +1090,11 @@ Exact napi-rs stream types should follow the library API rather than inventing w
 Likewise return:
 
 ```text id="ku446n"
-NativeResponse
+NativeResponse metadata
 ├── status
-├── ordered raw headers
-└── ReadableStream<Uint8Array>
+└── ordered raw headers
+
+response body stream (separate stream value/return)
 ```
 
 Do not force all native responses through a JS `Response` before writing to Node `ServerResponse`.
@@ -1037,7 +1111,12 @@ and:
 node:http adapter → raw ServerResponse
 ```
 
-The low-level Node adapter may preserve ordered header pairs more accurately than the Web `Headers` abstraction.
+The low-level Node adapter must preserve ordered header pairs wherever the
+current host does. A Web `Request` has already normalized some repeated header
+representations; `PlecHandler.fetch(Request)` guarantees Web-standard header
+semantics, while the first-party `node:http` adapter should retain raw Node
+headers through its internal path where required. Do not claim that
+`fetch(Request)` can reconstruct raw headers it never received.
 
 `Set-Cookie` requires explicit regression tests.
 
@@ -1243,6 +1322,22 @@ Document this explicitly as the 0.1 cancellation contract.
 
 Do not pretend arbitrary JS can be safely pre-empted.
 
+## Cancellation bridge
+
+The Node adapter creates an `AbortController` for each incoming request and
+aborts it when the client disconnects. The binding must connect that
+cancellation to the matching Rust `CancellationToken` without a global request
+ID protocol.
+
+First verify whether the selected napi-rs v3 API can directly accept and
+observe an `AbortSignal` for an asynchronous native operation. If it can,
+prefer that. If it cannot, expose one per-operation cancellation handle (for
+example, an operation object with `result` and `cancel()`); do not add a
+process-global request registry. In either case, test whether dropping the
+napi-rs Web Stream reader cancels the JavaScript source or only releases its
+lock. Explicitly call the source's cancel operation if reader drop is
+insufficient.
+
 ---
 
 # 19. Native request lifecycle
@@ -1360,19 +1455,42 @@ Implement in:
 packages/plec-node/src/http.ts
 ```
 
-Request conversion:
+The `node:http` adapter starts from Node's request and preserves raw header
+pairs until route dispatch. It does not construct one universal Web `Request`
+before deciding whether the body belongs to Node or Rust:
 
 ```text id="5gadhz"
 IncomingMessage
  ↓
 absolute request URL
  ↓
-Headers / raw header pairs
+ordered raw header pairs
  ↓
-Readable.toWeb(incoming)
- ↓
-Web Request
+shared route classifier
 ```
+
+Ingress is path-specific:
+
+```text
+API request:
+  bounded pre-read (at most MAX_REQUEST_BODY_BYTES)
+  → Web Request with the validated bounded body
+  → invoke app.mjs only after successful read
+
+Server action:
+  ordered metadata + Readable.toWeb(incoming)
+  → N-API stream argument
+  → Rust incrementally checks the limit and then buffers only the bounded JSON
+
+Document/static request:
+  do not read an unused request body before routing
+```
+
+For API requests, construct the Web `Request` only after the bounded pre-read.
+For action requests, pass ordered metadata and the Web stream directly to
+N-API. `PlecHandler.fetch(Request)` accepts an already-constructed Web Request;
+it uses the same classifier and body-limit rules but cannot recover raw header
+details normalized before the call.
 
 Do not call:
 
@@ -1380,7 +1498,8 @@ Do not call:
 Buffer.concat(...)
 ```
 
-for general request bodies.
+for general request bodies. Bounded API buffering is the explicit 0.1
+exception; action streams and any future uncapped body path remain streaming.
 
 Client abort:
 
@@ -1401,28 +1520,65 @@ Implement one obvious dispatch function.
 Conceptually:
 
 ```ts id="iujlf1"
-async function dispatch(request: Request): Promise<Response> {
-  const pathname = new URL(request.url).pathname;
+async function dispatchNode(
+  incoming: IncomingMessage,
+  outgoing: ServerResponse,
+): Promise<void> {
+  const pathname = requestPathname(incoming);
 
-  if (pathname.startsWith('/api/')) {
-    return dispatchApi(request);
+  if (pathname === '/api' || pathname.startsWith('/api/')) {
+    const request = await makeBoundedApiRequest(incoming);
+    return sendWebResponse(outgoing, await dispatchApi(request));
   }
 
   if (pathname.startsWith('/_plec/actions/')) {
-    return native.handleAction(...);
+    const body = Readable.toWeb(incoming);
+    const response = await native.handleAction(
+      actionRequestMetadata(incoming),
+      body,
+      cancellationFor(incoming, outgoing),
+    );
+    return sendNativeResponse(outgoing, response);
   }
 
-  if (isStaticPath(pathname)) {
-    return serveStatic(...);
+  if (isDocumentRequest(pathname)) {
+    return sendNativeResponse(
+      outgoing,
+      await native.handleDocument(documentRequestMetadata(incoming)),
+    );
   }
 
-  return native.handleDocument(...);
+  return serveStatic(incoming, outgoing);
 }
 ```
 
-Exact asset/document classification must reproduce current Plec semantics.
+`PlecHandler.fetch(request)` is a second adapter over the same classifier. It
+returns a Web `Response`; the `node:http` adapter writes directly to
+`ServerResponse` so it can preserve raw headers and avoid unnecessary
+normalization.
 
-Do not use "try document, then asset" or "try filesystem first" unless that is proven equivalent to `http.rs`.
+`isDocumentRequest` must port the existing Rust predicate in
+`plec-server::http::is_document_request`:
+
+```rust
+pathname == "/" || std::path::Path::new(pathname).extension().is_none()
+```
+
+Do not replace it with filesystem-existence probing or a superficially similar
+string test. The existing Rust predicate and its behavior on each supported
+platform are the authority. Add parity fixtures for `/foo.`, `/.well-known`,
+`/foo.bar/baz`, encoded dots, and trailing slashes before replacing it.
+
+The complete ordering is:
+
+```text
+/api or /api/...             → generated app.mjs
+/_plec/actions/...           → Rust action semantics
+document-classified path     → Rust document semantics
+otherwise                    → Node static assets
+```
+
+Do not use "try document, then asset" or "try filesystem first".
 
 ---
 
@@ -1434,6 +1590,8 @@ Flow:
 
 ```text id="rpdkc4"
 IncomingMessage
+ ↓
+bounded pre-read for non-GET/HEAD
  ↓
 Web Request
  ↓
@@ -1462,20 +1620,42 @@ Preserve the current redaction behavior.
 ## API body ceiling
 
 The current Rust host bounds all non-GET/HEAD bodies before application dispatch.
+For 0.1, preserve that security contract even though API handlers execute
+directly in Node. An arbitrary handler may perform side effects before it reads
+the request body, so a streaming transform that discovers overflow only while
+the handler consumes the body is not equivalent.
 
-Direct Node APIs therefore need an equivalent streaming limit.
+Direct Node APIs therefore use a bounded pre-read for every non-GET/HEAD
+request, matching the current native host:
 
-Implement a Node transform/reader that enforces:
-
-```text id="ke4brz"
-MAX_REQUEST_BODY_BYTES
+```text
+IncomingMessage
+  ↓ incremental Node reader
+reject immediately if declared Content-Length exceeds the limit
+  ↓ otherwise read chunks, checking before every append
+reject and stop reading as soon as accumulated bytes exceed the limit
+  ↓ only after EOF and successful validation
+construct Web Request with the bounded body
+  ↓
+app.handleRequest(request, context)
 ```
 
-without pre-buffering the request.
+The only buffering here is the deliberately capped API body, currently
+`MAX_REQUEST_BODY_BYTES` (1 MiB). The API handler must not run before the
+bounded read succeeds. Do not use `Buffer.concat` on an unbounded body.
 
-Do not weaken the current resource-safety contract by bypassing Rust.
+The body-limit value must have one source of truth or a generated build-time
+value. Rust owns the shared limit definition; Node enforces the same value
+before API dispatch. Actions instead pass a ReadableStream through N-API and
+Rust enforces the limit incrementally before its bounded JSON buffer.
 
-The constant should have one source of truth or a generated build-time value; do not hand-maintain unrelated numeric copies.
+Test that oversized API requests do not invoke application middleware or
+handlers, including chunked requests with missing or false `Content-Length`.
+After detecting overflow, stop retaining/reading body bytes and prevent reuse
+of a connection with an unread request body (for example, return 413 with
+connection-close behavior). Do not drain an unbounded remainder into memory.
+The Node HTTP tests must verify this for API pre-reads and streamed action
+bodies.
 
 ---
 
@@ -1517,6 +1697,15 @@ duplicate headers
 empty query values
 ```
 
+For 0.1 preserve the current Rust-visible context contract, including its
+current forwarded-protocol behavior: use the first valid `x-forwarded-proto`
+value (`http` or `https`) when present, otherwise `http`, and build the origin
+using `Host`. This is a compatibility rule, not an endorsement of trusting
+forwarded headers from arbitrary clients. Document the deployment assumption
+that the public edge/proxy controls those headers. A configurable trusted-proxy
+policy is a separate hardening decision and must not be silently introduced
+inside this migration.
+
 If necessary, move shared fixtures into repository testdata rather than sharing implementation.
 
 Do not make Node call Rust merely to construct API `RequestContext`.
@@ -1547,7 +1736,7 @@ Prefer an established, narrowly scoped Node static-serving primitive if it match
 Do not implement naive:
 
 ```ts id="fy4wno"
-join(publicDir, pathname)
+join(publicDir, pathname);
 ```
 
 serving.
@@ -1577,6 +1766,12 @@ new Response(nativeBodyStream, {
 })
 ```
 
+SSR currently constructs the complete HTML document as a `String`; the native
+response stream may therefore contain that document as one chunk. This
+migration establishes streaming transport and support for large/future stream
+responses; it does not claim incremental SSR generation. Action JSON is also a
+bounded semantic value serialized as a finite response.
+
 For direct `node:http` serving, prefer:
 
 ```text id="gk8a5y"
@@ -1588,6 +1783,11 @@ ServerResponse
 ```
 
 so Node backpressure controls Web Stream demand.
+
+Define response-stream failure behavior: before headers are sent, the host may
+return the generic redacted 500 response; after headers/body streaming begins,
+destroy the response and log the internal error without attempting a second
+HTTP response. Test both cases, along with slow-consumer backpressure.
 
 Do not implement manual loops around:
 
@@ -1702,33 +1902,36 @@ Node production host
 native Rust addon
 ```
 
-Because the current `plec` binary is Rust-owned, explicitly decide how it launches the Node host.
-
-Recommended for 0.1:
+For 0.1, the production `plec serve` command invoked from the npm package must
+start the Node host directly. The Rust CLI must not remain the parent process
+of the public HTTP server.
 
 ```text id="1b1oj1"
 plec serve
  ↓
-exec/spawn Node once as the public application process
+Node @plec/node host
 ```
 
-This is different from the current sidecar:
+The npm `plec` shim should route `serve` to Node. Rust CLI functionality for
+build/compiler operations may remain Rust-owned. Do not leave a Rust launcher
+process supervising production serving; this avoids ambiguous signal
+forwarding, exit-code propagation, and shutdown ownership. If a platform
+constraint later requires a launcher, treat it as a separate design decision
+with explicit process/signal tests.
+
+The production lifecycle is:
 
 - Node is the application host;
-- Rust CLI performs launcher/tooling responsibility only;
-- there is no Rust HTTP server process remaining alongside it.
+- Node owns signal handling, the listener, active-request draining, native
+  application close, and process exit;
+- the Axum host remains an independent migration/parity path until removed.
 
-Alternative:
-
-The npm `plec` shim may eventually invoke the Node host directly for `serve`.
-
-Do not keep:
-
-```text id="dqg60i"
-Rust HTTP process + Node HTTP process
-```
-
-as the final architecture.
+`PlecHandler.close()` stops native admission, cancels and drains native work;
+it does not own an embedding caller's HTTP server. `serve()` first stops
+accepting new connections, drains or closes active HTTP responses according
+to its documented policy, then calls `PlecHandler.close()`. Repeated close is
+idempotent. Do not call `process.exit()` from the library; let Node exit after
+the server and native resources have closed.
 
 ---
 
@@ -1807,11 +2010,14 @@ multi-chunk request reaches Rust incrementally
 body ceiling rejects before remainder is consumed
 Rust response stream is demand-driven
 native stream error rejects/aborts response
+slow response consumer applies backpressure
 Promise callback resolves
 Promise callback rejects
 invalid callback return is controlled error
 close during callback is safe
 callback invocation after close is refused
+concurrent document requests do not deadlock
+callback can re-enter native API asynchronously without deadlock
 ```
 
 ## Layer C — Node host tests
@@ -1823,8 +2029,10 @@ API direct dispatch
 API middleware
 API 404
 API error redaction
-streaming API body limit
+bounded API body pre-read before handler invocation
+API body overflow with missing/false Content-Length
 static asset parity
+large static asset streams without crossing N-API
 client disconnect
 HEAD
 Set-Cookie
@@ -1865,6 +2073,27 @@ Existing browser acceptance/E2E tests must run against the Node host before cuto
 
 Identity-sensitive SSR adoption is a release gate.
 
+## Layer F — repository integration
+
+Physical extraction and package additions must update and validate:
+
+```text
+Cargo workspace members and Cargo.lock
+Rust dependency/license checks
+CI cache keys and native/unit jobs
+Turbo package graph and Node package scripts
+generated napi declarations and a stale-generation check
+build output/manifest fixtures and contract tests
+plec workspace context/trace/marker/contract source references
+fullstack build, acceptance, and E2E host selection
+package files whitelist and native loader contents
+```
+
+In particular, update source-path references in
+`crates/plec-cli/src/dev/context.rs`, `trace.rs`, `markers.rs`, and
+`contract.rs` when semantic modules move. Run the relevant Plec workspace
+contract/tooling checks after the move, not only Rust and browser tests.
+
 ---
 
 # 32. Required failure tests
@@ -1874,17 +2103,22 @@ Explicitly test:
 ```text id="c5vcm5"
 client disconnect during request stream
 client disconnect during loader fetch
+client disconnect during response streaming
 close() while document execution is active
 close() while invokeAction Promise is pending
 close() while renderHost Promise is pending
+serve shutdown stops admission, drains HTTP work, then closes PlecHandler
 action Promise rejects
 action Promise never resolves
 host-provider Promise rejects
 host-provider returns oversized markup
 body exceeds Content-Length limit immediately
 body lies about Content-Length and exceeds streamed limit
+oversized API body does not invoke middleware or handler
 native stream emits error
 Node stops consuming native stream
+response stream fails before headers are sent
+response stream fails after headers are sent
 double close()
 request after close()
 ```
@@ -1960,12 +2194,14 @@ before the Node host becomes default.
 
 Execute in this order.
 
-## Milestone 1 — Extract semantic engine
+## Milestone 1 — Establish the shared semantic boundary
 
-Create:
+Create a host-independent execution boundary (provisionally
+`plec-server-engine`) if that is the cleanest dependency structure. The name
+and crate count may change; the dependency invariant may not.
 
 ```text id="3n5ix4"
-plec-server-engine
+host-independent server execution boundary
 ```
 
 Move:
@@ -1988,10 +2224,10 @@ Acceptance:
 ```text id="soj0h5"
 all existing server tests green
 no externally observable server behavior changed
-plec-server-engine does not depend on Axum/Tower/NAPI
+the shared semantic execution target does not depend on Axum/Tower/NAPI
 ```
 
-## Milestone 2 — Native binding skeleton
+## Milestone 2 — Native class, callbacks, and close lifecycle
 
 Create:
 
@@ -2003,42 +2239,42 @@ Implement:
 
 ```text id="zw2e2l"
 PlecApplication.load()
-PlecApplication.handleDocument()
 PlecApplication.close()
 generated native declarations
+PlecCallbackManager
+Promise-aware action/provider callback plumbing
 ```
 
-No actions/providers yet.
+Milestone 2 tests the callback abstraction with controlled fixtures; it does
+not yet connect production action or provider behavior. Those integrations are
+covered by their later milestones.
 
 Acceptance:
 
 ```text id="cd8xno"
-real compiled document renders through Node → NAPI → engine
-request body is not pre-buffered by bridge
-native result returns through ReadableStream
-```
-
-## Milestone 3 — Callback infrastructure
-
-Implement:
-
-```text id="sc5unx"
-JsCallback abstraction
-MaybeAsync callback support
-PlecCallbackManager
-closed-state protection
-Promise error handling
-```
-
-Acceptance:
-
-```text id="oa1qlz"
 Promise resolve/reject works
 callback return mismatch is safe
 callbacks release on close
 request-after-close fails predictably
 no TSFN ownership leak
 ```
+
+## Milestone 3 — Node document path
+
+Implement `handleDocument()` and connect the Node adapter to the native
+semantic engine. SSR still produces a complete `String`; return it through the
+native response stream without claiming incremental SSR.
+
+Acceptance:
+
+```text
+real compiled document renders through Node → N-API → Rust
+native response is exposed as a Web ReadableStream
+headers/status and fallback-shell behavior match Axum
+```
+
+No request-body streaming criterion belongs to this milestone; documents do
+not consume a meaningful inbound body today.
 
 ## Milestone 4 — Host-provider SSR
 
@@ -2060,7 +2296,7 @@ inert fallback behavior preserved
 size limits preserved
 ```
 
-## Milestone 5 — Server actions
+## Milestone 5 — Server actions and native request streaming
 
 Expose:
 
@@ -2088,9 +2324,15 @@ result limits
 error redaction
 ALS isolation
 concurrent actions
+multi-chunk action body reaches Rust incrementally
+body ceiling rejects before the remainder is consumed
 ```
 
 all preserve current behavior.
+
+This is the first production path that proves Node Web Stream → napi-rs → Rust
+incremental request consumption. Rust applies the authoritative limit before
+bounded buffering and JSON decoding.
 
 ## Milestone 6 — Direct Node APIs
 
@@ -2102,13 +2344,17 @@ Route:
 
 directly to `app.mjs`.
 
-Implement streaming body ceiling and canonical Node `RequestContext`.
+Implement bounded pre-read before handler invocation and canonical Node
+`RequestContext`. API bodies up to the existing 1 MiB ceiling are buffered;
+this preserves the current reject-before-application-dispatch contract. Do not
+apply this API exception to the Rust action-body N-API stream.
 
 Acceptance:
 
 ```text id="pkv373"
 API routing/middleware parity
-body limits
+`/api`, `/api/`, and `/api/foo` routing
+bounded body rejected before middleware/handler invocation
 fallback 404
 error redaction
 context parity
@@ -2135,6 +2381,11 @@ TSFN release
 
 Acceptance includes all shutdown/failure tests.
 
+The spike must settle the concrete AbortSignal-to-native-token mechanism and
+whether dropping the napi-rs stream reader cancels its JS source. Prefer direct
+napi-rs AbortSignal support if the selected v3 API provides it; otherwise use
+one per-operation cancellation handle, never a global request-ID registry.
+
 ## Milestone 9 — Packaging
 
 Ship native packages with `@napi-rs/cli`.
@@ -2145,7 +2396,8 @@ Add platform CI.
 
 Run complete acceptance/E2E suite against Node.
 
-Change production `plec serve`/generated startup to Node host.
+Change the npm `plec serve` command to start the Node host directly; do not
+retain a Rust parent process for production serving.
 
 Keep Axum host temporarily available only for parity/reference if useful.
 
@@ -2325,7 +2577,9 @@ Application APIs execute directly in Node.
 
 Host-provider SSR uses direct Promise-aware native callbacks.
 
-Request and response bodies cross the native boundary as streams.
+Server-action request bodies cross N-API as streams and native response bodies
+use the stream interface. Node API bodies retain the bounded pre-read before
+handler invocation; current SSR may emit its completed HTML as one stream chunk.
 
 Client disconnects cancel native request work.
 
@@ -2352,6 +2606,6 @@ The old Node sidecar implementation is removed.
 
 Update repository architecture documentation to state:
 
-> **Node owns Plec's production HTTP transport, process lifecycle, static asset transport, and arbitrary application JavaScript execution. Rust owns compiled Plec server semantics, including document routing, route-loader execution, SSR, snapshots, server-action validation, and native runtime limits. The two runtimes communicate in-process through a typed napi-rs boundary using Web Streams for body transport and explicitly scoped Promise-aware callbacks for the small number of operations requiring application JavaScript.**
+> **Node owns Plec's production HTTP transport, process lifecycle, static asset transport, and arbitrary application JavaScript execution. Rust owns compiled Plec server semantics, including document routing, route-loader execution, SSR, snapshots, server-action validation, and native runtime limits. The two runtimes communicate in-process through a typed napi-rs boundary: action request bodies and native responses use Web Streams, while bounded Node API request bodies are pre-read before handler invocation; explicitly scoped Promise-aware callbacks handle the small number of operations requiring application JavaScript.**
 
 That should replace the current invariant that the public socket is owned by Rust.
