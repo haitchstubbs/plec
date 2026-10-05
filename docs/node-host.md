@@ -503,6 +503,13 @@ export interface ServeOptions extends PlecNodeOptions {
 export function serve(options: ServeOptions): Promise<void>;
 ```
 
+`serve()` binds to `127.0.0.1` by default. Resolve the port as
+`options.port`, then `PORT`, then `3000`; reject on bind failure without
+retrying another port. Reject invalid/out-of-range port values; port `0` is
+unsupported in 0.1. Resolve `serve()` only after a successful bind, and log the
+bound URL. This default avoids accidentally exposing a development host on
+every network interface.
+
 `createPlecHandler()` is the architectural API.
 
 `serve()` is an adapter/convenience.
@@ -643,6 +650,24 @@ plec-server::artifact
 to the engine.
 
 Artifact byte-size validation remains Rust-owned.
+
+At `PlecApplication.load()`, canonicalize the artifact path, read it once under
+`MAX_ARTIFACT_JSON_BYTES`, parse and validate it, retain the parsed artifact /
+graphs in application state, and close the file. Do not reopen artifacts per
+request. Load manifest metadata once as well. `app.mjs` and provider modules are
+imported once and cached. A development rebuild/reload must construct and swap
+to a new application instance (or use an explicit snapshot-reload contract); it
+must not silently reread files during an in-flight request. Static payloads
+remain open-per-request.
+
+Treat loaded state as an immutable `ApplicationSnapshot` owned by
+`PlecApplication`, containing the parsed artifact, manifest, resolved roots,
+server metadata, and provider metadata. `plec-server.json`, referenced
+artifacts, declared `server/app.mjs`, declared provider manifests/modules, and
+`publicRoot` must exist and pass containment checks at startup; missing required
+inputs fail `createPlecHandler()`. Static asset files remain request-scoped and
+may be absent (404). Reload creates and swaps a new application snapshot; it
+does not mutate the active snapshot.
 
 Separate:
 
@@ -1343,6 +1368,60 @@ Document this explicitly as the 0.1 cancellation contract.
 
 Do not pretend arbitrary JS can be safely pre-empted.
 
+### Cancellation ownership and callback capacity
+
+Distinguish three concepts:
+
+```text
+transport cancellation: client disconnect or Request.signal abort
+native cancellation: stop loader work, native waits, response production, and
+                     Rust's wait for a callback
+JavaScript cancellation: best-effort only; arbitrary application Promises are
+                         not forcibly terminated
+```
+
+A cancelled API handler, action callback, or provider callback may continue in
+JavaScript. Plec ignores its eventual result, does not write it to a closed
+response, and does not retain request-scoped native state for it. Callback
+arguments crossing into JS are detached values, never references to native
+request state. After cancellation, no Rust request-scoped state may be owned
+exclusively by an unresolved JS Promise.
+
+The API handler's request permit and any API body-buffer reservation remain
+held until its Promise settles, even after the client disconnects; cancellation
+detaches transport/response ownership, not the still-running JS work or memory
+it retains. Its eventual result is ignored. This keeps active-request and
+aggregate-memory bounds meaningful for cancelled handlers.
+
+`CallbackPermit` capacity bounds actual outstanding JS callback Promises, not
+only Rust waiters. Acquire before invoking JS and release only when the Promise
+settles, including after Rust has detached due to cancellation. Cancellation
+therefore stops native waiting but does not free capacity for JS work that is
+still running. If all permits remain occupied by unresolved callbacks, reject
+new callback-bearing work with 503 before invoking the callback; never admit
+unbounded detached JS work. `close()` does not wait indefinitely for detached
+Promises. It releases registration handles and ensures invocation-specific JS
+work no longer retains `PlecApplication` or native request state.
+
+Track JS work independently for capacity and shutdown. API handlers, action
+callbacks, and provider callbacks retain the relevant request/body/callback
+capacity permits until their Promises settle, even if native or transport
+ownership has detached. `close()` cancels native work and waits for the defined
+native drain/grace boundary, but never waits indefinitely for arbitrary JS
+Promises; after detachment, those Promises must not retain request-scoped native
+state or keep `PlecApplication` alive. A callback admitted before the
+Open-to-Closing transition may finish or detach safely; one not yet admitted is
+rejected with `PLEC_APPLICATION_CLOSED`. If TSFN scheduling fails before JS
+starts, release its `CallbackPermit` immediately. Invocation-specific callback
+handles remain valid until the admitted invocation finishes or detaches.
+
+The binding feasibility gate must prove the callback thread and re-entry
+contract: Rust schedules the callback onto Node's JS thread; the callback may
+call another exported async Plec native method without blocking that thread;
+the original Rust operation resumes when the Promise settles. Also test close
+racing with callback admission/scheduling and verify there is no state where a
+callback is scheduled but its lifetime owner has already been released.
+
 ## Cancellation bridge
 
 The Node adapter creates an `AbortController` for each incoming request and
@@ -1477,20 +1556,35 @@ packages/plec-node/src/http.ts
 ```
 
 The `node:http` adapter starts from Node's request and preserves raw header
-pairs until route dispatch. It parses the request target against a fixed base
-with Node's URL parser, rejects malformed targets, and classifies using the
-resulting `URL.pathname`. It never string-slices query/fragment text or
-percent-decodes paths for route classification: `%2F`, `%5C`, and `%2E` remain
-encoded at this layer. `/_plec/actions/` must be a literal pathname prefix; the
-remaining action identifier must be nonempty, contain no slash, and match only
+pairs until route dispatch. For routing, it uses the validated encoded path
+from the raw request target, not WHATWG `URL.pathname`: WHATWG parsing can
+normalize dot segments and backslashes before Plec sees them. The path rule is
+shared with Rust as a string-level semantic contract:
+
+```text
+CanonicalPlecPath:
+  validated UTF-8 request path, excluding query
+  percent escapes preserved; no percent-decoding
+  no dot-segment or slash normalization
+```
+
+Split origin-form request targets into raw path and query without interpreting
+fragment text; fragments are not valid in an HTTP request target. Validate the
+request-target form and path syntax before classification. Use structured URL
+parsing only for authority/origin and query semantics, never to derive the
+route path. For `/_plec/actions/`, require a literal path prefix; the remaining
+action identifier must be nonempty, contain no slash, and match only
 `[A-Za-z0-9_-]`. Do not percent-decode an encoded identifier into a valid ID.
-It does not construct one universal Web `Request`
-before deciding whether the body belongs to Node or Rust:
+The parser/adapter contract must explicitly cover origin-form, absolute-form,
+encoded dot segments, encoded slash/backslash, literal backslash, repeated
+slash, malformed percent escapes, and malformed targets. The adapter does not
+construct one universal Web `Request` before deciding whether the body belongs
+to Node or Rust:
 
 ```text id="5gadhz"
 IncomingMessage
  ↓
-absolute request URL
+validated raw request target
  ↓
 ordered raw header pairs
  ↓
@@ -1521,10 +1615,12 @@ application code. If unread bytes prevent safe keep-alive reuse, close the
 connection rather than draining an unbounded remainder.
 For action requests, pass ordered metadata and the Web stream directly to
 N-API. `PlecHandler.fetch(Request)` accepts an already-constructed Web Request;
-it uses the same body contract: ignore GET/HEAD bodies; for other methods
-consume and bound the body before API dispatch, returning 413 without invoking
-middleware or handlers on overflow. It cannot recover raw header details
-normalized before the call.
+it uses the same body contract for bytes it consumes: ignore GET/HEAD bodies;
+for other API methods consume and bound the body before dispatch, returning 413
+without invoking middleware or handlers on overflow. This limit does not bound
+memory allocated before `fetch()` is called: if the caller buffered a large
+body to construct the Request, Plec cannot retroactively constrain that
+allocation. It cannot recover raw header details normalized before the call.
 
 Do not call:
 
@@ -1547,6 +1643,68 @@ That signal must ultimately cancel the corresponding native request.
 
 ## Ingress framing, deadlines, and admission
 
+### Host ingress and ownership matrix
+
+This matrix is normative for the 0.1 host boundary:
+
+| Request path | Header source | Body handling | Plec admission | Deadline | Cancellation | Execution/response owner |
+| --- | --- | --- | --- | --- | --- | --- |
+| `/api`, `/api/*` through `serve()` | Node `rawHeaders` until Web `Request` construction | GET/HEAD ignored; other methods bounded pre-read | request + weighted API pre-read budget | Node header and body deadlines | disconnect aborts host wait; arbitrary handler JS is not preempted | Node application code |
+| `/_plec/actions/*` through `serve()` | ordered Node raw header pairs passed to Rust | streamed to Rust; Rust enforces and buffers only within the action limit | request + native-operation + callback permits | Node header/body deadlines | disconnect → Rust token; JS action is not forcibly stopped | Rust semantics with Node callback |
+| Document through `serve()` | Node `rawHeaders` | no request body consumed | request + native-operation permits | Node header deadline | disconnect → Rust token and response-stream cancellation | Rust |
+| Static through `serve()` | Node `rawHeaders` | no request body consumed | request permit | Node header deadline | disconnect destroys file/response stream | Node |
+| API/action/document through `fetch(Request)` | Web-normalized `Headers` | Plec bounds bytes it consumes; caller owns prior allocations and raw framing | handler request, native, callback, and weighted pre-read permits | no transport/header deadline; caller owns these | `Request.signal` → corresponding Plec cancellation where available | route-specific as above |
+
+`PlecHandler.fetch(Request)` is a semantic host adapter, not an HTTP transport
+implementation. It handles API, action, and document routes, but not static
+files. It guarantees Plec route classification, limits on bytes it consumes,
+handler/native/callback admission, aggregate API pre-read budgeting, action
+validation, semantic execution, `close()` rejection, and Web-standard response
+semantics. It cannot guarantee raw duplicate-header inspection, HTTP framing
+validation, header-arrival or transport body deadlines, socket reuse/close
+policy, or TCP disconnect detection beyond `Request.signal`; those belong to
+the embedding host. The body limit does not cover memory allocated before the
+call. Document this division in the public API documentation.
+
+### Admission permit lifecycle
+
+Use independently scoped permits with this normative lifecycle:
+
+| Permit | Acquire | Release | Survives cancellation? |
+| --- | --- | --- | --- |
+| `RequestPermit` | after route classification, before body allocation or dispatch | Plec request lifecycle ends | API: until handler Promise settles; native: until native work completes or detaches |
+| `ApiPrereadPermit(bytes)` | before retaining body bytes | bounded body is no longer reachable by handler, or request fails | yes, while handler retains body |
+| `NativeOperationPermit` | before Rust execution | native operation completes or detaches | no after cancellation/detach |
+| `CallbackPermit` | before scheduling JS callback | JS Promise settles; release immediately if scheduling fails before JS starts | yes, until actual Promise settlement |
+| `StaticRequestPermit` | before opening a file | response stream closes, errors, or is canceled | no after stream lifecycle ends |
+
+Acquire `RequestPermit` immediately after route classification and before body
+allocation, application middleware, native calls, or static-file open. Hold it
+until the Plec-owned request lifecycle ends, including completion, error,
+cancellation, or response-stream close/error/cancel. `serve()` owns socket-level
+shutdown and may additionally track transport cleanup.
+
+For API pre-reads, reserve
+`min(validated Content-Length, MAX_REQUEST_BODY_BYTES)` before reading when a
+valid length is available. For absent/chunked or untrusted lengths, acquire
+additional weighted bytes before retaining each chunk; append only after the
+reservation succeeds. Reject over-limit bodies before middleware/handler
+invocation. Keep the reservation while the bounded body remains reachable by the
+application handler, then release it when the handler completes or the request
+fails. On disconnect, detach the response but retain the reservation until the
+handler Promise settles. Release all reservations and permits in
+`finally`/scope-guard paths for timeout, overflow, parse failure, close, handler
+settlement, and stream error.
+The aggregate byte budget must account for retained body buffers, not merely
+bytes currently being read. Capacity tracking and shutdown tracking are
+separate: a detached JS Promise continues to hold its capacity permit until
+settlement, but does not have to block `close()` indefinitely.
+
+Admission saturation returns 503 before middleware, Rust execution, callback
+invocation, body allocation, or static-file open. If unread request bytes remain,
+close the connection rather than draining an unbounded remainder. Limits are
+per host process.
+
 Canonical header handling for the raw Node adapter:
 
 | Header              | Rule                                                                                                             |
@@ -1561,11 +1719,10 @@ Canonical header handling for the raw Node adapter:
 
 The Node HTTP parser is the sole authority for HTTP/1 framing. Requests rejected
 by Node's parser must not reach the route classifier. Do not reconstruct framing
-from application-visible headers. At the raw-socket test boundary, verify that
-conflicting `Content-Length` values, `Transfer-Encoding` combined with
-`Content-Length`, malformed chunk framing, and invalid header syntax are
-rejected or normalized by Node before dispatch, with no application callback
-invoked. Pin this behavior to the supported Node versions.
+from application-visible headers or add Plec-specific HTTP framing validation.
+Keep focused raw-socket regression coverage for representative ambiguous
+framing cases on supported Node versions; parser behavior itself is a Node
+platform contract.
 
 For accepted requests, preserve raw ordered header pairs where the
 `node:http` path requires them. Define explicit handling for repeated
@@ -1574,6 +1731,17 @@ security-sensitive headers (`Host`, `Origin`, `Content-Length`,
 an accidental object conversion or comma-join. Web `Request` construction may
 normalize headers, and that normalization is part of the `fetch(Request)`
 contract rather than a source from which raw headers can be recovered.
+
+The Node path passes ordered `(name, value)` pairs derived from `rawHeaders` to
+the semantic boundary and validates them before constructing Rust
+`HeaderMap`/Web `Headers`. Never feed a comma-joined or object-converted value to
+action-origin validation. `Host` must have exactly one accepted authority;
+action `Origin` exactly one valid value; `Cookie` follows Node's accepted
+combined semantics before RequestContext parsing; `Set-Cookie` response values
+remain separate; forwarded-protocol evaluation uses raw values only when
+`trustProxy` is enabled. Node's HTTP parser alone decides message framing;
+application-visible `Content-Length` and `Transfer-Encoding` are not used to
+reconstruct it.
 
 Per-request byte ceilings do not bound aggregate resource use. Both
 `createPlecHandler()` and `serve()` must enforce bounded admission for active
@@ -1587,7 +1755,7 @@ The initial 0.1 defaults are:
 
 ```text
 MAX_ACTIVE_REQUESTS = 256
-MAX_ACTIVE_APPLICATION_CALLBACKS = 64
+MAX_OUTSTANDING_APPLICATION_CALLBACKS = 64
 MAX_AGGREGATE_API_PREREAD_BYTES = 32 MiB
 HEADER_TIMEOUT = 10 seconds
 BODY_TIMEOUT = 30 seconds
@@ -1602,14 +1770,14 @@ per host process. Header/body deadlines address ingress abuse; they do not
 impose a blanket timeout on valid loader or action execution. The initial
 defaults may remain internal rather than expanding the public API.
 
-Define finite header-read, body-read, and request-operation deadlines (or an
-equivalent minimum-rate policy) for network-hosted requests. Apply the body
-deadline to API pre-reads and streamed action bodies. On timeout or disconnect,
-stop retaining/reading bytes, cancel the matching operation, and close the
-connection when unread request bytes make reuse unsafe. The embedding API must
-document that it owns its transport-level header/body deadlines and admission
-limits; `PlecHandler` still bounds admitted native work and rejects after
-`close()`.
+Apply finite header-read and body-read deadlines (or an equivalent minimum-rate
+policy) in `serve()` to API pre-reads and streamed action bodies. On timeout or
+disconnect, stop retaining/reading bytes, cancel the matching Plec operation,
+and close the connection when unread request bytes make reuse unsafe. There is
+no request-operation timeout by default: valid loaders/actions may take longer
+than ingress deadlines. Callback permits continue to bound unresolved JS work.
+The embedding API owns transport-level header/body deadlines and socket policy;
+`PlecHandler` still bounds admitted Plec work and rejects after `close()`.
 
 ---
 
@@ -1624,7 +1792,7 @@ async function dispatchNode(
   incoming: IncomingMessage,
   outgoing: ServerResponse,
 ): Promise<void> {
-  const pathname = requestPathname(incoming);
+  const pathname = canonicalPlecPath(incoming.url);
 
   if (pathname === '/api' || pathname.startsWith('/api/')) {
     const request = await makeBoundedApiRequest(incoming);
@@ -1687,6 +1855,29 @@ otherwise                    → Node static assets
 
 Do not use "try document, then asset" or "try filesystem first".
 
+Route normalization is one shared semantic rule: `canonicalPlecPath` extracts
+the validated encoded path from the raw request target; it does not use
+WHATWG-normalized `URL.pathname`, decode percent escapes, or normalize dot
+segments, separators, or repeated slashes. Rust route matching receives that
+same path representation. Thus `/foo%2Fbar` cannot be classified as one path
+and later matched as `/foo/bar`. Shared fixtures cover origin-form and
+absolute-form targets, encoded dot/separator/backslash, literal backslash,
+repeated slash, query handling, malformed percent escapes, and malformed
+targets. Classification and matching must agree; any mismatch is a release
+blocker. The Node HTTP parser remains the authority for HTTP message framing;
+Plec does not reimplement framing validation.
+
+Method behavior is explicit per route class. APIs retain the GET/HEAD ignored
+body rule and bounded pre-read for all other methods. Actions accept POST only;
+reject other methods with 405 before body processing, and close the connection
+if unread bytes make reuse unsafe. Documents and static requests are GET/HEAD
+only, with other methods returning 405 and the same unread-body connection
+policy, subject to a parity check against current Axum/ServeDir behavior before
+this contract is frozen. HEAD responses never emit body bytes. Malformed targets
+are rejected before route dispatch; invalid/duplicate Host is a client error,
+and action Origin failures retain the action endpoint's documented 403
+semantics. Add exact status/body/connection expectations to host tests.
+
 ---
 
 # 23. API request path
@@ -1723,6 +1914,19 @@ return generic 500
 ```
 
 Preserve the current redaction behavior.
+
+API/Web responses use the same response state machine as native responses:
+
+```text
+NotStarted → HeadersSent → Completed
+     └──────────────→ Aborted
+```
+
+An API handler throw or invalid response before headers are sent becomes the
+generic redacted 500. If a response body fails before headers are sent, return
+that same 500; after headers are sent, destroy the response/stream and log the
+internal error without attempting a second response. Apply this consistently
+to `fetch(Request)` and the raw `ServerResponse` adapter.
 
 ## API body ceiling
 
@@ -1821,7 +2025,24 @@ origin must match canonical scheme/host/port exactly. Add parity fixtures for
 both settings, repeated/malformed values, and default/non-default ports. A
 trusted proxy must overwrite/sanitize forwarded headers.
 
+Origin comparison is structural, not textual. Parse both request origin and
+supplied Origin as URLs; compare `(scheme, hostname, effectivePort)`, normalizing
+`http:80` and `https:443` to their scheme defaults. Parse IPv6 authorities
+structurally, never by splitting on `:`. Reject `Origin: null`, multiple or
+malformed Origin values, userinfo, and schemes other than HTTP/HTTPS. Use the
+same helper/rule in Axum and Node during migration, with fixtures for IPv6,
+default ports, explicit ports, malformed authorities, and userinfo.
+
 If necessary, move shared fixtures into repository testdata rather than sharing implementation.
+
+Use one `canonicalRequestAuthority()` rule for actual transport scheme, raw
+Host, raw `x-forwarded-proto`, and `trustProxy`; its result `(scheme, hostname,
+effectivePort, origin)` feeds RequestContext URL construction, action Origin
+validation, redirect bases, and loader URL bases. With `trustProxy=false`, use
+the actual transport scheme and ignore forwarded protocol. With it enabled, use
+the first valid forwarded HTTP(S) token, otherwise the actual scheme; the
+trusted proxy must sanitize forwarded headers. For embedded `fetch(Request)`,
+derive scheme and authority from `request.url`, since there is no socket.
 
 Do not make Node call Rust merely to construct API `RequestContext`.
 
@@ -1855,6 +2076,13 @@ established MIME database or explicit mappings with
 `application/octet-stream` fallback. Prefer Brotli over gzip when acceptable
 and available, otherwise identity; emit `Vary: Accept-Encoding` whenever
 representation negotiation applies. Preserve the current single-range behavior.
+
+Create the parity fixture table before selecting or implementing the Node file
+server. Include valid single, unsatisfiable, multiple, and malformed Range
+headers; `Accept-Encoding` values for Brotli/gzip, `q=0`, weighted qualities,
+wildcards, and identity; HEAD; conditional/304 behavior if present; directory,
+dotfile, missing-file, and precompressed-sidecar cases. Match measured current
+`ServeDir` behavior rather than a library's defaults.
 
 Do not implement naive:
 
@@ -1927,6 +2155,16 @@ Define response-stream failure behavior: before headers are sent, the host may
 return the generic redacted 500 response; after headers/body streaming begins,
 destroy the response and log the internal error without attempting a second
 HTTP response. Test both cases, along with slow-consumer backpressure.
+
+Before writing a response, remove or reject hop-by-hop headers:
+`Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`,
+`Trailer`, `Transfer-Encoding`, and `Upgrade`. Enforce body legality: HEAD,
+1xx, 204, and 304 responses emit no body bytes. Preserve `Content-Length` only
+when it is known and correct; remove stale lengths when converting to an
+unknown-length stream. For a known finite body such as current SSR HTML, the
+adapter may retain or generate the exact length. Preserve multiple `Set-Cookie`
+values separately. Cover these rules in both Web `Response` and raw
+`ServerResponse` adapter tests.
 
 Do not implement manual loops around:
 
@@ -2065,16 +2303,19 @@ The production lifecycle is:
   application close, and process exit;
 - the Axum host remains an independent migration/parity path until removed.
 
-`PlecHandler.close()` stops native admission, cancels and drains native work;
-all concurrent close calls await one shared Open → Closing → Closed transition.
+`PlecHandler.close()` stops admission, cancels and drains native work; all
+concurrent close calls await one shared Open → Closing → Closed transition.
 An in-flight callback retains a safe cloned handle for its invocation until its
 native wait completes or is detached by cancellation. Releasing the manager
 prevents new calls and does not invalidate an active bridge call. JS callback
 closures receive serialized callback arguments, not request-scoped native
 state; after cancellation Rust drops its waiter, so late Promise settlement
 cannot resume native request state. `close()` does not close embedding HTTP
-sockets, abort arbitrary user API handlers, or cancel external static streams;
-embedding servers own those resources.
+sockets, forcibly abort arbitrary user API handlers, or cancel external static
+streams; embedding servers own those resources. It does not wait indefinitely
+for detached JS promises. Those promises may settle after the handler is closed,
+but retain capacity permits until settlement and must not retain native request
+state or `PlecApplication`.
 
 `serve()` shutdown order is: stop listener admission; stop new Plec dispatch;
 abort/close ingress bodies still being read; allow active responses up to a
@@ -2188,7 +2429,7 @@ selected napi-rs feature/version set is recorded and reproducible
 Test:
 
 ```text id="lgqyw3"
-API direct dispatch
+API direct dispatch (API/action/document only; static serving belongs to `serve()`)
 API middleware
 API 404
 API error redaction
@@ -2202,14 +2443,19 @@ Set-Cookie
 duplicate headers
 ranges
 precompressed assets
-raw-socket framing rejection for conflicting Content-Length
-Transfer-Encoding plus Content-Length
-malformed chunk framing and invalid headers
+focused raw-socket regression coverage that representative ambiguous framing
+is rejected by Node before Plec dispatch
 duplicate Host/Origin/Content-Length/Transfer-Encoding behavior
 fetch(Request) normalized-header contract versus node:http raw-header contract
 bounded request admission and overload response
 concurrent API pre-reads stay within aggregate memory budget
+cancelled API handler retains request/body permits until its Promise settles
+cancelled callback retains callback permit until its Promise settles
+callback saturation returns 503 without invoking another callback
 slow API/action body timeout and connection handling
+raw request-target validation and shared encoded-path classifier/matcher parity
+action/document/static method behavior and unread-body connection policy
+response hop-by-hop headers and body legality for HEAD/1xx/204/304
 ```
 
 ## Layer D — dual-host parity
@@ -2281,11 +2527,16 @@ close() while renderHost Promise is pending
 serve shutdown stops admission, drains HTTP work, then closes PlecHandler
 admission limit reached without starting application/native callbacks
 concurrent bounded API reads respect configured aggregate budget
+cancelled API handler retains request/body permits until its Promise settles
+cancelled callback retains callback permit until its Promise settles
+callback saturation returns 503 without invoking another callback
 header/body/request deadline expires and releases resources
 slow upload cannot hold a pre-read/native slot indefinitely
-Node parser rejects ambiguous/malformed HTTP framing before dispatch
+Node parser rejects representative ambiguous HTTP framing before dispatch
 proxy-derived origin is used only when trustProxy is enabled
 multiple and malformed x-forwarded-proto values follow explicit policy
+structural action-Origin comparison covers IPv6, default ports, null, userinfo,
+and malformed values
 manifest/artifact/app/provider/static paths reject traversal and symlink escape
 filesystem containment rejects traversal and symlink escapes under the 0.1 trusted-deployment-tree model
 action Promise rejects
@@ -2380,14 +2631,26 @@ Execute in this order.
 
 ## Milestone 0 — Validate N-API feasibility and host contracts
 
-Before the semantic extraction locks in native API assumptions, run the
-section 10.1 binding feasibility gate and settle the contracts that affect both
-adapters: supported Node versions and napi-rs features; cancellation and stream
-semantics; HTTP framing behavior; aggregate admission/deadline policy; trusted
-proxy deployment boundary; filesystem containment/symlink policy; and the
-cross-platform document-path rule. Add raw-socket and filesystem fixtures to
-the test plan. Do not proceed to freeze native DTOs or expose the Node host as a
-production option until this gate passes.
+Before the semantic extraction locks in native API assumptions, settle only
+these four implementation contracts:
+
+1. Define and fixture-test the validated raw request-target and shared
+   `CanonicalPlecPath` algorithm.
+2. Freeze the permit acquisition/release table and distinguish capacity
+   tracking from shutdown tracking.
+3. Freeze `PlecHandler.fetch(Request)` guarantees versus `serve()` transport
+   guarantees, including the limit on bytes consumed (not prior caller
+   allocations) and static-file ownership.
+4. Pass the section 10.1 napi-rs feasibility gate for callback scheduling,
+   Promise re-entry, stream cancellation/backpressure, and close races.
+
+The gate also records the supported Node floor and selected napi-rs version and
+features. HTTP framing remains Node-owned; verify representative parser
+rejections with focused regression coverage rather than designing a Plec
+framing layer. Resolve proxy authority, filesystem containment, and
+platform-specific static parity in their respective implementation milestones.
+Do not freeze native DTOs or expose the Node host as a production option until
+these four contracts and the binding gate pass.
 
 ## Milestone 1 — Establish the shared semantic boundary
 
