@@ -207,6 +207,11 @@ impl NodeApplicationRuntime {
         let ready = match timeout(STARTUP_TIMEOUT, ready_rx).await {
             Ok(Ok(ready)) => ready,
             Ok(Err(_)) => {
+                // The stdout reader closes when the child exits, but the
+                // process monitor may not have published its status yet.
+                // Reap it before formatting the startup diagnostic so an
+                // immediate successful exit is reported consistently.
+                let _ = child.wait().await;
                 return Err(Self::startup_failure(
                     &mut child,
                     &runtime_dir,
