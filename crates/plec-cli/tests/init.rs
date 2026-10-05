@@ -29,6 +29,7 @@ fn release_cli_scaffolds_application() {
     for file in [
         "package.json",
         "plec.toml",
+        "src/app.tsx",
         "src/router.tsx",
         "src/routes/index.tsx",
         "src/routes/home.tsx",

@@ -8,11 +8,12 @@ use axum::{
 use serde_json::json;
 
 use crate::{
+    DocumentMetadata, PlecServerOptions, ServerError, ServerState,
     artifact::{self, Manifest, Route},
     assets, loader,
     request::RequestContext,
     runtime::HostRenderRequest,
-    ssr, DocumentMetadata, PlecServerOptions, ServerError, ServerState,
+    ssr,
 };
 
 pub(crate) struct RouteMatch<'a> {
@@ -71,22 +72,6 @@ async fn dispatch_inner(
     let mut context =
         RequestContext::from_parts(request.method().clone(), request.uri(), request.headers())?;
 
-    if context.pathname == "/__plec/dev/events" {
-        if !state.options.development || std::env::var_os("PLEC_DEV_STATE").is_none() {
-            return Ok(json_response(
-                StatusCode::NOT_FOUND,
-                &json!({"error":"not found"}),
-            ));
-        }
-        if request.method() != Method::GET {
-            return Ok(json_response(
-                StatusCode::METHOD_NOT_ALLOWED,
-                &json!({"error":"method not allowed"}),
-            ));
-        }
-        return Ok(dev_events_response());
-    }
-
     if context.pathname.starts_with("/api/") {
         return handle_api(state, request, context).await;
     }
@@ -100,87 +85,6 @@ async fn dispatch_inner(
     }
 
     Ok(assets::serve(state, request).await)
-}
-
-#[derive(serde::Deserialize, serde::Serialize, Clone, PartialEq, Eq)]
-struct DevGeneration {
-    session: String,
-    generation: u64,
-}
-
-fn read_dev_generation() -> Option<DevGeneration> {
-    let path = std::env::var_os("PLEC_DEV_STATE")?;
-    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
-}
-
-fn dev_events_response() -> Response<Body> {
-    use axum::body::Bytes;
-    use futures_util::stream;
-    use std::convert::Infallible;
-    let initial = read_dev_generation();
-    let events = stream::unfold(
-        (initial, 0u8, false),
-        |(mut previous, mut heartbeat, mut first)| async move {
-            if !first {
-                first = true;
-                let data = previous
-                    .as_ref()
-                    .and_then(|value| serde_json::to_string(value).ok())
-                    .unwrap_or_else(|| "{}".to_owned());
-                return Some((
-                    Ok::<Bytes, Infallible>(Bytes::from(format!("event: ready\ndata: {data}\n\n"))),
-                    (previous, heartbeat, first),
-                ));
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            let current = read_dev_generation();
-            if previous.is_some() && current.is_none() {
-                return None;
-            }
-            let payload = if current.is_some() && current != previous {
-                let old = previous.as_ref();
-                let new = current.as_ref().unwrap().clone();
-                let changed = old.is_some_and(|old| {
-                    old.session == new.session && new.generation > old.generation
-                });
-                previous = current;
-                changed.then(|| {
-                    format!(
-                        "event: reload\ndata: {}\n\n",
-                        serde_json::to_string(&new).unwrap_or_default()
-                    )
-                })
-            } else {
-                None
-            };
-            heartbeat = heartbeat.wrapping_add(1);
-            let text = payload.unwrap_or_else(|| {
-                if heartbeat % 20 == 0 {
-                    ": keep-alive\n\n".to_owned()
-                } else {
-                    "\n".to_owned()
-                }
-            });
-            Some((
-                Ok::<Bytes, Infallible>(Bytes::from(text)),
-                (previous, heartbeat, first),
-            ))
-        },
-    );
-    let mut response = Response::new(Body::from_stream(events));
-    response.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("text/event-stream"),
-    );
-    response.headers_mut().insert(
-        axum::http::header::CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("no-cache"),
-    );
-    response.headers_mut().insert(
-        axum::http::header::CONNECTION,
-        axum::http::HeaderValue::from_static("keep-alive"),
-    );
-    response
 }
 
 async fn handle_server_action(
@@ -723,11 +627,6 @@ fn send_html(
             )
         })
         .unwrap_or_default();
-    let dev_reload = if options.development && std::env::var_os("PLEC_DEV_STATE").is_some() {
-        "<script>(()=>{const e=new EventSource('/__plec/dev/events');let s=null,g=null;const p=x=>{try{const v=JSON.parse(x.data);return typeof v.session==='string'&&Number.isSafeInteger(v.generation)?v:null}catch{return null}};const reload=v=>{s=v.session;g=v.generation;location.reload()};e.addEventListener('ready',x=>{const v=p(x);if(!v)return;if(s===v.session&&v.generation>g)reload(v);else{s=v.session;g=v.generation}});e.addEventListener('reload',x=>{const v=p(x);if(!v)return;if(s===v.session&&v.generation>g)reload(v);else if(s!==v.session){s=v.session;g=v.generation}})})();</script>"
-    } else {
-        ""
-    };
     let bootstrap_script = bootstrap
         .map(|payload| {
             format!("<script id=\"plec-bootstrap\" type=\"application/json\">{payload}</script>")
@@ -745,7 +644,7 @@ fn send_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" \
          content=\"width=device-width, initial-scale=1\"><title>{title}</title>{description_meta}\
          {preloads}{styles}</head><body><div id=\"app\">{body}</div>{bootstrap_script}{script}\
-         {dev_reload}</body></html>",
+         </body></html>",
     );
     let mut response = Response::new(Body::from(html));
     let headers = response.headers_mut();
@@ -771,31 +670,6 @@ fn send_html(
 mod tests {
     use super::*;
     use crate::request::QueryValue;
-    use http_body_util::BodyExt;
-
-    #[tokio::test]
-    async fn development_event_stream_baselines_then_notifies_generation_once() {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let marker = dir.path().join("state.json");
-        std::fs::write(&marker, r#"{"session":"one","generation":2}"#).unwrap();
-        unsafe {
-            std::env::set_var("PLEC_DEV_STATE", &marker);
-        }
-        let response = dev_events_response();
-        let mut body = response.into_body();
-        let ready = body.frame().await.unwrap().unwrap().into_data().unwrap();
-        assert!(String::from_utf8_lossy(&ready).contains("event: ready"));
-        std::fs::write(&marker, r#"{"session":"one","generation":3}"#).unwrap();
-        let event = body.frame().await.unwrap().unwrap().into_data().unwrap();
-        let event = String::from_utf8_lossy(&event);
-        assert!(event.contains("event: reload"));
-        assert!(event.contains(":3"));
-        unsafe {
-            std::env::remove_var("PLEC_DEV_STATE");
-        }
-    }
 
     #[test]
     fn internal_redirect_preserves_https_and_non_default_port() {

@@ -46,6 +46,29 @@ fn run_build(app: &Path, out_dir: &Path, extra_args: &[&str]) -> Output {
         .expect("plec binary should be invocable")
 }
 
+fn run_build_with_defaults(app: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_plec"))
+        .arg("build")
+        .current_dir(app)
+        .output()
+        .expect("plec binary should be invocable")
+}
+
+#[test]
+fn build_defaults_to_src_app_tsx_and_dist() {
+    let app = fixture_project("default-entry", "mini-app");
+    fs::write(
+        app.join("src/app.tsx"),
+        "export { router } from './router';\n",
+    )
+    .unwrap();
+
+    let output = run_build_with_defaults(&app);
+    assert_success(&output);
+    assert!(app.join("dist/plec-server.json").is_file());
+    assert!(app.join("dist/client/route-manifest.json").is_file());
+}
+
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),

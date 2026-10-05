@@ -51,6 +51,11 @@ impl DevelopmentDiagnostic {
     }
 
     pub(crate) fn build(error: BuildError) -> Self {
+        if error.stage == Stage::Compile {
+            if let Some(parse_error) = error.message.find("Failed to parse ") {
+                return Self::compiler_message(error.message[parse_error..].to_owned(), verbose());
+            }
+        }
         let (code, phase) = match error.stage {
             Stage::Configuration => ("PLEC-BUILD-CONFIG", "build"),
             Stage::Compile => ("PLEC-COMPILE-001", "compile"),
@@ -179,6 +184,17 @@ mod tests {
         assert!(concise.contains("src/app.tsx:2:7"));
         assert!(!concise.contains("UnexpectedToken"));
         assert!(verbose.contains("UnexpectedToken"));
+    }
+
+    #[test]
+    fn build_preserves_parse_diagnostic_code_and_source_location() {
+        let error = BuildError::new(
+            Stage::Compile,
+            "compile failed: Failed to parse src/home.tsx: src/home.tsx:4:9: UnexpectedToken",
+        );
+        let diagnostic = DevelopmentDiagnostic::build(error).to_string();
+        assert!(diagnostic.contains("[PLEC-PARSE-001] parse:"));
+        assert!(diagnostic.contains("src/home.tsx:4:9"));
     }
 
     #[test]

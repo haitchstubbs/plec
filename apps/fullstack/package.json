@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bash scripts/dev.sh",
+    "dev": "plec dev",
     "start": "yarn --cwd ../.. rust:deps:check && cargo run --locked --quiet -p plec-cli -- serve dist",
     "prep:assetdir": "mkdir -p dist/public/assets/files",
     "copy:fonts:outfit": "yarn prep:assetdir && cp ../../node_modules/@fontsource-variable/outfit/files/*.woff2 dist/public/assets/files/",
@@ -12,7 +12,7 @@
     "copy:fonts": "yarn copy:fonts:outfit && yarn copy:fonts:raleway",
     "copy:fonts:public": "mkdir -p public/assets/files && cp ../../node_modules/@fontsource-variable/outfit/files/*.woff2 public/assets/files/ && cp ../../node_modules/@fontsource-variable/raleway/files/*.woff2 public/assets/files/",
     "copy:licenses": "mkdir -p dist/public/licenses && cp ../../node_modules/lucide/LICENSE dist/public/licenses/Lucide-LICENSE.txt && cp ../../node_modules/@fontsource-variable/outfit/LICENSE dist/public/licenses/Outfit-OFL-1.1.txt && cp ../../node_modules/@fontsource-variable/raleway/LICENSE dist/public/licenses/Raleway-OFL-1.1.txt",
-    "build:plec": "plec build src/app.tsx --out-dir dist",
+    "build:plec": "plec build",
     "build:css": "tailwindcss -i src/styles.css -o dist/public/assets/styles.css",
     "build:css:public": "mkdir -p public/assets && tailwindcss -i src/styles.css -o public/assets/styles.css",
     "build": "yarn check:no-react && yarn build:plec && yarn copy:fonts && yarn copy:licenses && yarn build:css",
@@ -28,13 +28,16 @@
     "@fontsource-variable/raleway": "^5.3.0",
     "@plec/core": "workspace:*",
     "@plec/lucide": "workspace:*",
+    "@plec/vite": "workspace:*",
     "lucide": "^1.31.0"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.3",
+    "@tailwindcss/vite": "^4.3.3",
     "esbuild": "^0.28.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
+    "vite": "^7.1.7",
     "vitest": "^4.1.11"
   }
 }

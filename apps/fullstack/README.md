@@ -14,14 +14,17 @@ test, and typecheck time.
 
 ```sh
 yarn workspace @plec/core build:runtime             # once: build the WASM runtime
-yarn workspace fullstack dev    # watch, rebuild, and serve
+  yarn workspace fullstack dev    # runs `plec dev` (src/app.tsx -> dist)
 ```
 
-Serves on `PORT` (default `3000`). Source edits trigger a rebuild and a
-full-page browser reload after a successful build. Failed builds keep serving
-the last successful output. Tailwind runs in watch mode and its generated
-stylesheet and the self-hosted fonts are included in dev output. This is not
-HMR: component state is not preserved.
+Serves through Vite on `PORT` (default `3000`), proxying application requests to
+the internal native Plec host. Plec source edits trigger a Rust build and a
+full-page browser reload after a successful replacement is ready. Failed builds
+keep serving the last successful output. Vite handles imported CSS/assets and
+Tailwind development transforms; its client transport is used only for full
+reloads of Plec application changes. Component state is not preserved. The
+production build continues to use its existing Tailwind/font steps until the
+separate production bundling migration.
 
 ## Test
 

@@ -44,8 +44,16 @@ yarn workspace @plec/core build:runtime   # cargo check + wasm-pack into package
 yarn build
 ```
 
-The fullstack build runs `plec build src/app.tsx --out-dir dist`, then stages
-the application's fonts and generated CSS in `dist/public`. The output roots
+The fullstack build runs `plec build` (defaults to `src/app.tsx` and `dist`),
+then stages the application's fonts and generated CSS in `dist/public`. To
+override the entry or output directory, pass a source path or `--out-dir`:
+
+```sh
+plec build src/custom-app.tsx --out-dir build
+plec dev src/custom-app.tsx --out-dir build
+```
+
+The output roots
 separate application ownership from Plec's browser implementation:
 
 ```text
@@ -93,14 +101,14 @@ tracking. It stays outside `dist/public/` and is not required by `plec serve`.
 yarn workspace fullstack dev
 ```
 
-`plec dev` builds into an isolated candidate directory, then serves the last
-successful build while watching application source, configuration, public
-files, and compiled source-asset dependencies. Relevant edits are coalesced
-before rebuilding. A failed build prints the structured Plec diagnostic and
-leaves the last successful application available; fixing the source triggers
-another build automatically. Server-owned changes restart the native host and
-application sidecar when needed. After the replacement is ready, connected
-browsers perform a full-page reload.
+`plec dev` starts Vite on the public development port and proxies application
+requests to an internal native Plec host. Vite owns file watching, CSS/assets,
+and the browser development connection. Plec builds into an isolated candidate
+directory so a failed build prints its structured diagnostic while leaving the
+last successful application available; fixing the source triggers another
+build automatically. Client-only replacements keep the native host running.
+Server-owned changes restart the native host and application sidecar when
+needed. After the replacement is ready, Vite sends one full-page reload.
 
 This is full-page development reload, not HMR: component state is not preserved
 and Plec does not hot-replace modules.

@@ -1,0 +1,22 @@
+{
+  "name": "@plec/vite",
+  "version": "0.1.0",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./dev": "./bin/dev.mjs"
+  },
+  "files": [
+    "src",
+    "bin"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "vite": "^7.1.7"
+  }
+}

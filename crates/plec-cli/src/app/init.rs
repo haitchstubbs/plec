@@ -36,6 +36,11 @@ styles = "/styles.css"
 "#,
     ),
     (
+        "src/app.tsx",
+        r#"export { router } from './router';
+"#,
+    ),
+    (
         "src/router.tsx",
         r#"import { createRouter } from '@plec/core';
 import { Route as rootRoute } from './routes/index';

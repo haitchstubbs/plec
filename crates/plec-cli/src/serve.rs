@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use crate::diagnostic::DevelopmentDiagnostic;
-use plec_server::{manifest::LoadedServerManifest, NodeRuntimeOptions};
+use plec_server::{NodeRuntimeOptions, manifest::LoadedServerManifest};
 
 pub struct ServeOptions {
     /// Build output directory containing `plec-server.json`.
@@ -17,16 +17,9 @@ pub struct ServeOptions {
     pub port: Option<u16>,
     /// Development mode (also enabled unless NODE_ENV=production).
     pub development: bool,
-    pub dev_state: Option<PathBuf>,
 }
 
 pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(path) = &options.dev_state {
-        // The marker is consumed only by the native development host.
-        unsafe {
-            std::env::set_var("PLEC_DEV_STATE", path);
-        }
-    }
     println!("➠          Starting Plec host...");
     let dir = std::path::absolute(&options.dir)?;
     let loaded =
@@ -111,7 +104,7 @@ pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
 
         let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
 

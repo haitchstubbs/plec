@@ -5,7 +5,6 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
-  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -89,8 +88,22 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
   let child: ChildProcess | undefined;
   let output = '';
   try {
+    page.on('console', (message) => {
+      output += `[browser console] ${message.text()}\n`;
+    });
+    page.on('pageerror', (error) => {
+      output += `[browser error] ${error.message}\n`;
+    });
+    page.on('response', (response) => {
+      if (response.status() >= 400)
+        output += `[browser response ${response.status()}] ${response.url()}\n`;
+    });
     mkdirSync(app, { recursive: true });
     cpSync(fixtureSource, path.join(app, 'src'), { recursive: true });
+    writeFileSync(
+      path.join(app, 'src/app.tsx'),
+      "export { router } from './router';\n",
+    );
     symlinkSync(
       path.join(repo, 'node_modules'),
       path.join(app, 'node_modules'),
@@ -98,18 +111,27 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
     );
     writeFileSync(
       path.join(app, 'src/home.tsx'),
-      'export function Home() { return <div>Version A</div>; }\n',
+      "import logo from '../shared.svg'; export function Home() { return <div>Version A<img src={logo} /></div>; }\n",
     );
     writeFileSync(path.join(app, 'src/client.tsx'), 'export {};\n');
-    child = spawn(
-      plecBinary,
-      ['dev', 'src/router.tsx', '--port', String(port)],
-      {
-        cwd: app,
-        env: { ...process.env, NODE_ENV: 'development' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
+    writeFileSync(
+      path.join(app, 'shared.svg'),
+      '<svg><text>external A</text></svg>',
     );
+    writeFileSync(
+      path.join(app, 'src/styles.css'),
+      'body { color: black; }\n',
+    );
+    mkdirSync(path.join(app, 'api'), { recursive: true });
+    writeFileSync(
+      path.join(app, 'api/version.ts'),
+      "export function GET() { return new Response('API A'); }\n",
+    );
+    child = spawn(plecBinary, ['dev', '--port', String(port)], {
+      cwd: app,
+      env: { ...process.env, NODE_ENV: 'development' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     child.stdout?.on(
       'data',
       (chunk: Buffer) => (output += chunk.toString()),
@@ -128,7 +150,9 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
         }
       },
       (html) => html.includes('Version A'),
-    );
+    ).catch((error: Error) => {
+      throw new Error(`${error.message}\nPlec dev output:\n${output}`);
+    });
 
     await page.addInitScript(() => {
       const count = Number(
@@ -138,6 +162,12 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
     });
     await page.goto(origin);
     await expect(page.getByText('Version A')).toBeVisible();
+    expect(
+      await page.locator('script[src="/@vite/client"]').count(),
+    ).toBe(1);
+    const hostPidMatch = output.match(/native host pid (\d+)/);
+    expect(hostPidMatch).not.toBeNull();
+    const originalHostPid = hostPidMatch?.[1];
     expect(
       await page.evaluate(() =>
         sessionStorage.getItem('plec-dev-page-loads'),
@@ -150,7 +180,9 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
     );
     await waitUntil(
       async () => output,
-      (text) => text.includes('build failed'),
+      (text) =>
+        text.includes('[PLEC-PARSE-001]') &&
+        text.includes('serving previous successful build'),
     );
     await expect(page.getByText('Version A')).toBeVisible();
     expect(
@@ -161,11 +193,24 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
 
     writeFileSync(
       path.join(app, 'src/home.tsx'),
-      'export function Home() { return <div>Version B</div>; }\n',
+      "import logo from '../shared.svg'; export function Home() { return <div>Version B<img src={logo} /></div>; }\n",
     );
-    await expect(page.getByText('Version B')).toBeVisible({
-      timeout: 60_000,
-    });
+    await waitUntil(
+      async () => output,
+      (text) => text.includes('client artifacts updated'),
+    );
+    await expect(page.getByText('Version B'))
+      .toBeVisible({
+        timeout: 60_000,
+      })
+      .catch((error: Error) => {
+        throw new Error(
+          `${error.message}\nPlec dev output:\n${output}`,
+        );
+      });
+    expect(output).toContain(
+      `client artifacts updated; native host pid ${originalHostPid}`,
+    );
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -180,24 +225,141 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
       ),
     ).toBe('2');
 
-    const marker = path.join(app, `.plec-dev-state-${child.pid}.json`);
+    writeFileSync(
+      path.join(app, 'src/home.tsx'),
+      "import logo from '../shared.svg'; export function Home() { return <div>Version C intermediate<img src={logo} /></div>; }\n",
+    );
+    writeFileSync(
+      path.join(app, 'src/home.tsx'),
+      "import logo from '../shared.svg'; export function Home() { return <div>Version C final<img src={logo} /></div>; }\n",
+    );
+    await expect(page.getByText('Version C final'))
+      .toBeVisible({ timeout: 60_000 })
+      .catch(async (error: Error) => {
+        throw new Error(
+          `${error.message}\nPlec dev output:\n${output}\nPage:\n${await page.locator('#app').innerText()}`,
+        );
+      });
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          sessionStorage.getItem('plec-dev-page-loads'),
+        ),
+      )
+      .toBe('3');
+    await page.waitForTimeout(500);
+    expect(
+      await page.evaluate(() =>
+        sessionStorage.getItem('plec-dev-page-loads'),
+      ),
+    ).toBe('3');
+
+    const oldAssetUrl = await page
+      .locator('#app img')
+      .getAttribute('src');
+    writeFileSync(
+      path.join(app, 'shared.svg'),
+      '<svg><text>external B</text></svg>',
+    );
+    await expect
+      .poll(async () => page.locator('#app img').getAttribute('src'), {
+        timeout: 60_000,
+      })
+      .not.toBe(oldAssetUrl);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          sessionStorage.getItem('plec-dev-page-loads'),
+        ),
+      )
+      .toBe('4');
+
+    writeFileSync(
+      path.join(app, 'api/version.ts'),
+      "export function GET() { return new Response('API B'); }\n",
+    );
+    await expect
+      .poll(async () => (await fetch(`${origin}/api/version`)).text(), {
+        timeout: 60_000,
+      })
+      .toBe('API B');
+    await expect
+      .poll(() => output.includes('native host restarted (pid'))
+      .toBe(true);
+    const replacementPid = output.match(
+      /native host restarted \(pid (\d+)\)/,
+    )?.[1];
+    expect(replacementPid).toBeTruthy();
+    expect(replacementPid).not.toBe(originalHostPid);
+    const sidecarPid =
+      process.platform === 'linux'
+        ? Number(
+            execFileSync(
+              'ps',
+              ['-o', 'pid=', '--ppid', replacementPid!],
+              {
+                encoding: 'utf8',
+              },
+            )
+              .trim()
+              .split(/\s+/)[0],
+          )
+        : undefined;
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          sessionStorage.getItem('plec-dev-page-loads'),
+        ),
+      )
+      .toBe('5');
+
+    const internalPort = Number(
+      output.match(
+        /Plec host listening on http:\/\/127\.0\.0\.1:(\d+)/,
+      )?.[1],
+    );
+    expect(internalPort).toBeGreaterThan(0);
     await stop(child);
     child = undefined;
-    expect(() => readFileSync(marker)).toThrow();
-    const probe = createServer();
-    await new Promise<void>((resolve, reject) =>
-      probe.listen(port, '127.0.0.1', (error?: Error) =>
-        error ? reject(error) : resolve(),
-      ),
-    );
-    await new Promise<void>((resolve) => probe.close(() => resolve()));
-    expect(
-      (await import('node:fs'))
-        .readdirSync(app)
-        .some((name) => name.startsWith('.plec-dev-')),
-    ).toBe(false);
+    await expect
+      .poll(() => canBind(port), { timeout: 10_000 })
+      .toBe(true);
+    await expect
+      .poll(() => canBind(internalPort), { timeout: 10_000 })
+      .toBe(true);
+    await expect
+      .poll(() => isProcessRunning(Number(replacementPid)))
+      .toBe(false);
+    if (sidecarPid)
+      await expect.poll(() => isProcessRunning(sidecarPid)).toBe(false);
+    await expect
+      .poll(async () =>
+        (await import('node:fs')).readdirSync(
+          path.join(app, '.plec', 'vite-dev'),
+        ),
+      )
+      .toEqual([]);
   } finally {
     if (child) await stop(child);
     rmSync(sessionRoot, { recursive: true, force: true });
   }
 });
+
+function isProcessRunning(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function canBind(port: number) {
+  return new Promise<boolean>((resolve) => {
+    const server = createServer();
+    server.once('error', () => resolve(false));
+    server.listen(port, '127.0.0.1', () => {
+      server.close((error) => resolve(!error));
+    });
+  });
+}

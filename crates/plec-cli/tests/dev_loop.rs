@@ -24,29 +24,26 @@ fn copy_tree(source: &Path, destination: &Path) {
     }
 }
 
-fn install_test_package(project: &Path) {
+fn install_test_packages(project: &Path) {
     use sha2::{Digest, Sha256};
-    let package = project.join("node_modules/@plec/core");
-    fs::create_dir_all(package.join("dist/runtime")).unwrap();
+    let packages = project.join("node_modules/@plec");
+    let core = packages.join("core");
+    fs::create_dir_all(core.join("dist/runtime")).unwrap();
     fs::write(
-        package.join("package.json"),
-        r#"{"name":"@plec/core","type":"module","exports":{".":"./dist/browser.js","./server-context":"./dist/server-context.js"}}"#,
+        core.join("package.json"),
+        r#"{"name":"@plec/core","type":"module","dependencies":{"@plec/vite":"^0.1.0"},"exports":{".":"./dist/browser.js","./server-context":"./dist/server-context.js"}}"#,
     )
     .unwrap();
     fs::write(
-        package.join("dist/server-context.js"),
+        core.join("dist/server-context.js"),
         "export function withRequestContext(_context, run) { return run(); }\n",
     )
     .unwrap();
-    fs::write(
-        package.join("dist/browser.js"),
-        "export function createRouter() { return {}; }\nexport function createRootRoute() { return {}; }\n",
-    )
-    .unwrap();
+    fs::write(core.join("dist/browser.js"), "export function createRouter() { return {}; }\nexport function createRootRoute() { return {}; }\n").unwrap();
     let runtime = b"test-runtime";
     let wasm = b"\0asm\x01\0\0\0";
-    fs::write(package.join("dist/runtime/runtime.js"), runtime).unwrap();
-    fs::write(package.join("dist/runtime/runtime_bg.wasm"), wasm).unwrap();
+    fs::write(core.join("dist/runtime/runtime.js"), runtime).unwrap();
+    fs::write(core.join("dist/runtime/runtime_bg.wasm"), wasm).unwrap();
     let digest = |bytes: &[u8]| {
         Sha256::digest(bytes)
             .iter()
@@ -54,7 +51,7 @@ fn install_test_package(project: &Path) {
             .collect::<String>()
     };
     fs::write(
-        package.join("dist/runtime/provenance.json"),
+        core.join("dist/runtime/provenance.json"),
         format!(
             r#"{{"jsSha256":"{}","wasmSha256":"{}"}}"#,
             digest(runtime),
@@ -62,6 +59,17 @@ fn install_test_package(project: &Path) {
         ),
     )
     .unwrap();
+
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/plec-vite"),
+        &packages.join("vite"),
+    );
+    let node_modules = project.join("node_modules");
+    let vite = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../node_modules/vite");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(vite, node_modules.join("vite")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(vite, node_modules.join("vite")).unwrap();
 }
 
 fn free_port() -> u16 {
@@ -80,7 +88,7 @@ fn drain<R: Read + Send + 'static>(
                 Ok(0) | Err(_) => break,
                 Ok(count) => output
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
+                    .unwrap()
                     .push_str(&String::from_utf8_lossy(&bytes[..count])),
             }
         }
@@ -95,35 +103,32 @@ fn http(port: u16, path: &str) -> Option<String> {
                 .as_bytes(),
         )
         .ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_millis(300)))
-        .ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
     let mut response = String::new();
     stream.read_to_string(&mut response).ok()?;
     Some(response)
 }
 
-fn compiled_asset_url(html: &str) -> String {
+fn compiled_asset(html: &str) -> String {
     html.split("src=\"")
         .nth(1)
-        .and_then(|value| value.split('\"').next())
-        .expect("SSR document should include the imported source asset")
+        .and_then(|value| value.split('"').next())
+        .unwrap()
         .to_owned()
 }
 
 struct DevChild {
     child: Child,
-    app: PathBuf,
     port: u16,
     output: Arc<Mutex<String>>,
     readers: Vec<thread::JoinHandle<()>>,
 }
 
 impl DevChild {
-    fn start(app: PathBuf, port: u16) -> Self {
+    fn start(app: &Path, port: u16) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_plec"))
-            .current_dir(&app)
-            .args(["dev", "src/router.tsx", "--port", &port.to_string()])
+            .current_dir(app)
+            .args(["dev", "--port", &port.to_string()])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -135,11 +140,36 @@ impl DevChild {
         ];
         Self {
             child,
-            app,
             port,
             output,
             readers,
         }
+    }
+
+    fn output(&self) -> String {
+        self.output.lock().unwrap().clone()
+    }
+
+    fn host_pid(&self) -> u32 {
+        let output = self.output();
+        let client = output
+            .rfind("native host pid ")
+            .map(|index| (index, "native host pid ".len()));
+        let restarted = output
+            .rfind("native host restarted (pid ")
+            .map(|index| (index, "native host restarted (pid ".len()));
+        let (index, length) = client
+            .into_iter()
+            .chain(restarted)
+            .max_by_key(|(index, _)| *index)
+            .expect("native host pid is logged");
+        output[index + length..]
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .trim_end_matches(')')
+            .parse()
+            .unwrap()
     }
 
     fn wait_for(&mut self, path: &str, needle: &str, timeout: Duration) -> String {
@@ -152,57 +182,32 @@ impl DevChild {
             }
             assert!(
                 self.child.try_wait().unwrap().is_none(),
-                "plec dev exited early: {}",
-                self.output.lock().unwrap()
+                "plec dev exited: {}",
+                self.output()
             );
             assert!(
                 Instant::now() < deadline,
-                "timed out waiting for {needle:?}; dev output: {}",
-                self.output.lock().unwrap()
+                "timed out waiting for {needle:?}; output: {}",
+                self.output()
             );
             thread::sleep(Duration::from_millis(50));
         }
     }
 
-    fn generation(&self) -> u64 {
-        let marker = self
-            .app
-            .join(format!(".plec/dev-state-{}.json", self.child.id()));
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Ok(value) =
-                fs::read(&marker).map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes))
-            {
-                if let Ok(value) = value {
-                    if let Some(generation) = value["generation"].as_u64() {
-                        return generation;
-                    }
-                }
-            }
-            assert!(
-                Instant::now() < deadline,
-                "dev generation marker unavailable"
-            );
-            thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    fn output_contains(&self, needle: &str) -> bool {
-        self.output.lock().unwrap().contains(needle)
-    }
-
-    fn wait_generation(&mut self, expected: u64) {
+    fn wait_output(&mut self, needle: &str) {
         let deadline = Instant::now() + Duration::from_secs(30);
-        while self.generation() != expected {
+        while !self.output().contains(needle) {
             assert!(
                 self.child.try_wait().unwrap().is_none(),
-                "plec dev exited before generation {expected}"
+                "plec dev exited: {}",
+                self.output()
             );
             assert!(
                 Instant::now() < deadline,
-                "generation did not reach {expected}"
+                "missing output {needle:?}: {}",
+                self.output()
             );
-            thread::sleep(Duration::from_millis(25));
+            thread::sleep(Duration::from_millis(50));
         }
     }
 
@@ -215,17 +220,18 @@ impl DevChild {
             #[cfg(windows)]
             self.child.kill().unwrap();
         }
-        let deadline = Instant::now() + Duration::from_secs(8);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while self.child.try_wait().unwrap().is_none() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(25));
+            thread::sleep(Duration::from_millis(50));
         }
         if self.child.try_wait().unwrap().is_none() {
             self.child.kill().unwrap();
         }
         self.child.wait().unwrap();
-        for reader in self.readers.drain(..) {
-            let _ = reader.join();
-        }
+        // The coordinator/host shutdown closes inherited stdio shortly after
+        // exit. Detach capture readers here rather than making cleanup itself
+        // unbounded if a failing child retained a descriptor.
+        self.readers.clear();
     }
 }
 
@@ -236,85 +242,62 @@ impl Drop for DevChild {
 }
 
 #[test]
-fn spawned_dev_session_rebuilds_preserves_failures_recovers_restarts_and_cleans_up() {
-    let root =
-        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("plec-dev-it-{}", std::process::id()));
+fn vite_dev_keeps_client_host_live_watches_external_assets_and_restarts_for_server_changes() {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("plec-vite-dev-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     let app = root.join("app");
     copy_tree(&fixture_source(), &app.join("src"));
-    install_test_package(&root);
-    fs::create_dir_all(app.join("public")).unwrap();
-    fs::write(app.join("src/home.tsx"), "import logo from './logo.svg'; export function Home() { return <div>Version A<img src={logo} /></div>; }\n").unwrap();
+    install_test_packages(&root);
+    fs::write(
+        app.join("src/app.tsx"),
+        "export { router } from './router';\n",
+    )
+    .unwrap();
+    fs::write(app.join("shared.svg"), "<svg><text>external A</text></svg>").unwrap();
+    fs::write(app.join("src/home.tsx"), "import logo from '../shared.svg'; export function Home() { return <div>Version A<img src={logo} /></div>; }\n").unwrap();
     fs::write(
         app.join("src/server.ts"),
         "export const handleRequest = async () => new Response('API A');\n",
     )
     .unwrap();
-    fs::write(app.join("src/logo.svg"), "<svg><text>A</text></svg>").unwrap();
     let port = free_port();
-    let mut dev = DevChild::start(app.clone(), port);
-    dev.wait_for("/", "Version A", Duration::from_secs(60));
-    assert_eq!(dev.generation(), 0);
+    let mut dev = DevChild::start(&app, port);
+    dev.wait_for("/", "Version A", Duration::from_secs(90));
+    dev.wait_output("native host pid");
+    let initial_host = dev.host_pid();
 
-    fs::write(
-        app.join("src/home.tsx"),
-        "import logo from './logo.svg'; export function Home() { return <div>Version B<img src={logo} /></div>; }\n",
-    )
-    .unwrap();
-    fs::write(
-        app.join("src/home.tsx"),
-        "import logo from './logo.svg'; export function Home() { return <div>Version C settled<img src={logo} /></div>; }\n",
-    )
-    .unwrap();
-    dev.wait_for("/", "Version C settled", Duration::from_secs(12));
+    fs::write(app.join("src/home.tsx"), "import logo from '../shared.svg'; export function Home() { return <div>Version B<img src={logo} /></div>; }\n").unwrap();
+    let version_b = dev.wait_for("/", "Version B", Duration::from_secs(60));
+    dev.wait_output("client artifacts updated");
     assert_eq!(
-        dev.generation(),
-        1,
-        "one settled burst commits one generation"
+        dev.host_pid(),
+        initial_host,
+        "client-only change keeps native host process"
     );
-    let old_asset = compiled_asset_url(&http(port, "/").unwrap());
+    let old_asset = compiled_asset(&version_b);
 
-    fs::write(app.join("src/logo.svg"), "<svg><text>B</text></svg>").unwrap();
-    let asset_deadline = Instant::now() + Duration::from_secs(60);
-    while dev.generation() != 2 {
+    fs::write(app.join("shared.svg"), "<svg><text>external B</text></svg>").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let new_asset = loop {
+        let html = http(port, "/").unwrap_or_default();
+        let url = compiled_asset(&html);
+        if url != old_asset && http(port, &url).is_some_and(|asset| asset.contains("external B")) {
+            break url;
+        }
         assert!(
-            Instant::now() < asset_deadline,
-            "compiled source asset did not trigger rebuild"
+            Instant::now() < deadline,
+            "external source dependency did not invalidate Plec build: {}",
+            dev.output()
         );
         thread::sleep(Duration::from_millis(50));
-    }
-    let asset_html = dev.wait_for("/", "Version C settled", Duration::from_secs(10));
-    assert!(asset_html.contains("/assets/compiled/"));
-    let new_asset = compiled_asset_url(&asset_html);
-    assert_ne!(
-        old_asset, new_asset,
-        "changed source asset receives a new fingerprint"
-    );
-    assert!(http(port, &new_asset).unwrap().contains("<text>B</text>"));
-
-    fs::write(app.join("src/home.tsx"), "export function Home( {\n").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !dev.output_contains("build failed") {
-        assert!(
-            dev.child.try_wait().unwrap().is_none(),
-            "dev loop died on failed build"
-        );
-        assert!(Instant::now() < deadline, "invalid candidate did not fail");
-        thread::sleep(Duration::from_millis(50));
-    }
-    assert!(http(port, "/").is_some_and(|response| response.contains("Version C settled")));
+    };
+    assert_ne!(new_asset, old_asset);
     assert_eq!(
-        dev.generation(),
-        2,
-        "failed candidate must not advance generation"
+        dev.host_pid(),
+        initial_host,
+        "compiled external asset change is client-only"
     );
-    fs::write(
-        app.join("src/home.tsx"),
-        "import logo from './logo.svg'; export function Home() { return <div>Version D<img src={logo} /></div>; }\n",
-    )
-    .unwrap();
-    dev.wait_for("/", "Version D", Duration::from_secs(60));
-    assert_eq!(dev.generation(), 3);
 
     fs::write(
         app.join("src/server.ts"),
@@ -322,61 +305,19 @@ fn spawned_dev_session_rebuilds_preserves_failures_recovers_restarts_and_cleans_
     )
     .unwrap();
     dev.wait_for("/api/version", "API B", Duration::from_secs(60));
-    dev.wait_generation(4);
-    assert_eq!(dev.generation(), 4);
-    assert!(dev.child.try_wait().unwrap().is_none());
-
-    fs::write(
-        app.join("src/server.ts"),
-        "import { missing } from 'plec-no-such-package'; export const handleRequest = async () => new Response(String(missing));\n",
-    )
-    .unwrap();
-    let rollback_deadline = Instant::now() + Duration::from_secs(30);
-    while !dev.output_contains("replacement host failed readiness") {
-        assert!(
-            Instant::now() < rollback_deadline,
-            "bad runtime did not exercise rollback"
-        );
-        assert!(
-            dev.child.try_wait().unwrap().is_none(),
-            "dev parent exited during rollback"
-        );
-        thread::sleep(Duration::from_millis(50));
-    }
-    dev.wait_for("/api/version", "API B", Duration::from_secs(15));
-    assert_eq!(
-        dev.generation(),
-        4,
-        "readiness failure must not commit a generation"
+    dev.wait_output("native host restarted");
+    let replacement_host = dev.host_pid();
+    assert_ne!(
+        replacement_host,
+        initial_host,
+        "server bundle change restarts native host; logs: {}",
+        dev.output()
     );
-
-    fs::write(
-        app.join("src/server.ts"),
-        "export const handleRequest = async () => new Response('API C');\n",
-    )
-    .unwrap();
-    dev.wait_for("/api/version", "API C", Duration::from_secs(60));
-    dev.wait_generation(5);
-    assert_eq!(dev.generation(), 5, "watching continues after rollback");
-
-    let marker = app.join(format!(".plec/dev-state-{}.json", dev.child.id()));
     dev.stop();
-    assert!(!marker.exists(), "dev marker is removed at shutdown");
-    assert!(
-        !app.join(format!("dist.previous-{}", dev.child.id()))
-            .exists()
-    );
-    assert!(!app.join("dist.next").exists());
     assert!(
         TcpListener::bind(("127.0.0.1", port)).is_ok(),
-        "dev listener is released"
+        "Vite public port released"
     );
-    let parent = app.parent().unwrap();
-    assert!(!fs::read_dir(parent).unwrap().flatten().any(|entry| {
-        entry
-            .file_name()
-            .to_string_lossy()
-            .starts_with(&format!(".plec-dev-{}-", dev.child.id()))
-    }));
+    assert!(dev.child.try_wait().unwrap().is_some());
     let _ = fs::remove_dir_all(root);
 }

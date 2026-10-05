@@ -82,26 +82,6 @@ fn dev_options(dir: &Path) -> PlecServerOptions {
     options
 }
 
-#[tokio::test]
-async fn dev_events_endpoint_requires_private_supervisor_state() {
-    unsafe {
-        std::env::remove_var("PLEC_DEV_STATE");
-    }
-    let dir = fixture_dir();
-    let response = create_plec_server(options(dir.path()))
-        .oneshot(get("/__plec/dev/events"))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
-    // `--development` diagnostics alone do not expose reload transport.
-    let response = create_plec_server(dev_options(dir.path()))
-        .oneshot(get("/__plec/dev/events"))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-}
-
 fn get(uri: &str) -> Request<Body> {
     Request::builder()
         .method("GET")
