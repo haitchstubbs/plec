@@ -25,13 +25,14 @@ test('Plec Vite adapter provides Vite client and stylesheet to SSR documents', (
     '<html><head><link rel="stylesheet" href="/_plec/assets/client-a1b2.js"></head><body><script type="module" src="/_plec/assets/client-a1b2.js"></script></body></html>',
   );
   assert.doesNotMatch(pre, /<script type="module" src="\/_plec\//);
-  const html = plecHtmlFinalizer().transformIndexHtml.handler(
-    pre.replace(
-      '</head>',
-      '<script type="module" src="/@vite/client"></script></head>',
-    ),
+  assert.match(pre, /href="\/src\/styles\.css"/);
+  assert.match(
+    pre,
+    /data-plec-client-src="\/_plec\/assets\/client-a1b2\.js"/,
   );
-  assert.match(html, /href="\/src\/styles\.css"/);
+  const html = plecHtmlFinalizer().transformIndexHtml.handler(
+    '<html><head><script type="module" src="/@vite/client"></script></head><body><template data-plec-client-src="/_plec/assets/client-a1b2.js"></template></body></html>',
+  );
   assert.match(html, /src="\/@vite\/client"/);
   assert.match(html, /src="\/_plec\/assets\/client-a1b2\.js"/);
 });
