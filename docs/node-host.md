@@ -973,6 +973,19 @@ serde-json
 
 Do not enable broad features without need.
 
+### Binding feasibility gate
+
+Before committing to the proposed crate/API shape, run a minimal end-to-end
+spike with the intended napi-rs v3 release, selected Tokio/Web Streams/serde
+features, and minimum supported Node version. The spike must prove native class
+loading, Promise-aware callback resolve/reject and re-entry, inbound Web Stream
+consumption/cancellation, outbound stream backpressure/error propagation, and
+native close while a callback is pending. Record the exact napi-rs version,
+enabled features, Node support range, and verified stream/cancellation behavior
+as implementation inputs. This is an architecture gate, not a standalone
+production implementation; do not freeze DTO signatures or lifecycle design
+until it passes.
+
 ## 10.2 Dedicated release profile
 
 Do not build this addon using the current WASM-oriented:
@@ -1511,6 +1524,41 @@ AbortController.abort()
 
 That signal must ultimately cancel the corresponding native request.
 
+## Ingress framing, deadlines, and admission
+
+The Node HTTP parser is the sole authority for HTTP/1 framing. Requests rejected
+by Node's parser must not reach the route classifier. Do not reconstruct framing
+from application-visible headers. At the raw-socket test boundary, verify that
+conflicting `Content-Length` values, `Transfer-Encoding` combined with
+`Content-Length`, malformed chunk framing, and invalid header syntax are
+rejected or normalized by Node before dispatch, with no application callback
+invoked. Pin this behavior to the supported Node versions.
+
+For accepted requests, preserve raw ordered header pairs where the
+`node:http` path requires them. Define explicit handling for repeated
+security-sensitive headers (`Host`, `Origin`, `Content-Length`,
+`Transfer-Encoding`, `Cookie`, and `x-forwarded-proto`); never select a value by
+an accidental object conversion or comma-join. Web `Request` construction may
+normalize headers, and that normalization is part of the `fetch(Request)`
+contract rather than a source from which raw headers can be recovered.
+
+Per-request byte ceilings do not bound aggregate resource use. Both
+`createPlecHandler()` and `serve()` must enforce bounded admission for active
+requests and for body pre-reads/native operations, with configurable or
+documented defaults and an explicit overload response/connection policy. A
+request rejected by admission must not start app middleware, actions, loaders,
+or native callbacks. Bound the aggregate memory implied by concurrent 1 MiB API
+pre-reads; do not rely on the per-body ceiling alone.
+
+Define finite header-read, body-read, and request-operation deadlines (or an
+equivalent minimum-rate policy) for network-hosted requests. Apply the body
+deadline to API pre-reads and streamed action bodies. On timeout or disconnect,
+stop retaining/reading bytes, cancel the matching operation, and close the
+connection when unread request bytes make reuse unsafe. The embedding API must
+document that it owns its transport-level header/body deadlines and admission
+limits; `PlecHandler` still bounds admitted native work and rejects after
+`close()`.
+
 ---
 
 # 22. Top-level Node dispatch
@@ -1555,19 +1603,27 @@ async function dispatchNode(
 `PlecHandler.fetch(request)` is a second adapter over the same classifier. It
 returns a Web `Response`; the `node:http` adapter writes directly to
 `ServerResponse` so it can preserve raw headers and avoid unnecessary
-normalization.
+normalization. The two interfaces share route, body-limit, and semantic
+contracts, but they do not promise identical raw-header behavior: callers of
+`fetch(Request)` receive Web-standard normalized `Headers` semantics, while the
+first-party adapter preserves raw pairs where required. Test these common and
+adapter-specific contracts separately; in particular do not claim duplicate
+header fidelity for `fetch(Request)`.
 
-`isDocumentRequest` must port the existing Rust predicate in
+`isDocumentRequest` must preserve the existing Rust predicate in
 `plec-server::http::is_document_request`:
 
 ```rust
 pathname == "/" || std::path::Path::new(pathname).extension().is_none()
 ```
 
-Do not replace it with filesystem-existence probing or a superficially similar
-string test. The existing Rust predicate and its behavior on each supported
-platform are the authority. Add parity fixtures for `/foo.`, `/.well-known`,
-`/foo.bar/baz`, encoded dots, and trailing slashes before replacing it.
+Do not replace it with filesystem-existence probing. Before porting, decide and
+document whether compatibility means matching Rust's `Path::extension()` on
+each supported platform or defining one platform-independent URL-path rule for
+all hosts. The Node implementation must not accidentally vary with its host OS
+if a single cross-platform contract is chosen. Add shared parity fixtures for
+`/foo.`, `/.well-known`, `/foo.bar/baz`, encoded dots, and trailing slashes,
+and run them on every supported target.
 
 The complete ordering is:
 
@@ -1657,6 +1713,10 @@ connection-close behavior). Do not drain an unbounded remainder into memory.
 The Node HTTP tests must verify this for API pre-reads and streamed action
 bodies.
 
+Apply the ingress body deadline and admission controls from section 21 to this
+pre-read. Timeout, overload, disconnect, and size-limit failure must all occur
+before `app.handleRequest()` and must not invoke middleware or handlers.
+
 ---
 
 # 24. RequestContext parity
@@ -1701,10 +1761,14 @@ For 0.1 preserve the current Rust-visible context contract, including its
 current forwarded-protocol behavior: use the first valid `x-forwarded-proto`
 value (`http` or `https`) when present, otherwise `http`, and build the origin
 using `Host`. This is a compatibility rule, not an endorsement of trusting
-forwarded headers from arbitrary clients. Document the deployment assumption
-that the public edge/proxy controls those headers. A configurable trusted-proxy
-policy is a separate hardening decision and must not be silently introduced
-inside this migration.
+forwarded headers from arbitrary clients. The production deployment contract
+must state that the listener is reachable only through a trusted edge that
+overwrites/sanitizes `Host` and forwarded headers, or that the application
+explicitly disables proxy-derived origin data. Direct public exposure while
+trusting client-provided forwarded headers is unsupported. Specify behavior for
+multiple values and malformed values and cover it in parity fixtures. A
+configurable trusted-proxy policy is a separate hardening decision and must not
+be silently introduced inside this migration.
 
 If necessary, move shared fixtures into repository testdata rather than sharing implementation.
 
@@ -1741,7 +1805,19 @@ join(publicDir, pathname);
 
 serving.
 
-Symlink/path containment must be reviewed explicitly.
+Filesystem containment is a contract for every path loaded beneath the
+application distribution root, not only static assets. Define a single root
+resolution policy for static files (including `/public` and `/_plec` assets),
+the manifest, route artifacts, `server/app.mjs`, and provider modules. The
+default policy must reject traversal and symlink escapes outside the resolved
+root; either reject symlinks entirely or permit only those whose resolved
+targets remain contained. Perform containment checks in a way that cannot be
+bypassed by a check/open race (use descriptor-relative/no-follow APIs where
+available, or document and test the platform-appropriate safe open strategy).
+Do not validate a path lexically and then follow an unchecked symlink. Test
+encoded traversal, separator variants, symlink-to-outside, and replacement/race
+cases on supported platforms. Preserve any deliberate deployment use of
+in-root symlinks explicitly rather than inheriting library defaults.
 
 ---
 
@@ -2018,6 +2094,9 @@ close during callback is safe
 callback invocation after close is refused
 concurrent document requests do not deadlock
 callback can re-enter native API asynchronously without deadlock
+binding feasibility spike passes on minimum supported Node version
+inbound stream reader release/cancel behavior is verified
+selected napi-rs feature/version set is recorded and reproducible
 ```
 
 ## Layer C — Node host tests
@@ -2039,6 +2118,14 @@ Set-Cookie
 duplicate headers
 ranges
 precompressed assets
+raw-socket framing rejection for conflicting Content-Length
+Transfer-Encoding plus Content-Length
+malformed chunk framing and invalid headers
+duplicate Host/Origin/Content-Length/Transfer-Encoding behavior
+fetch(Request) normalized-header contract versus node:http raw-header contract
+bounded request admission and overload response
+concurrent API pre-reads stay within aggregate memory budget
+slow API/action body timeout and connection handling
 ```
 
 ## Layer D — dual-host parity
@@ -2108,6 +2195,15 @@ close() while document execution is active
 close() while invokeAction Promise is pending
 close() while renderHost Promise is pending
 serve shutdown stops admission, drains HTTP work, then closes PlecHandler
+admission limit reached without starting application/native callbacks
+concurrent bounded API reads respect configured aggregate budget
+header/body/request deadline expires and releases resources
+slow upload cannot hold a pre-read/native slot indefinitely
+Node parser rejects ambiguous/malformed HTTP framing before dispatch
+proxy-derived origin is used only under the documented trusted-edge contract
+multiple and malformed x-forwarded-proto values follow explicit policy
+manifest/artifact/app/provider/static paths reject traversal and symlink escape
+filesystem containment cannot be bypassed by path replacement between check/open
 action Promise rejects
 action Promise never resolves
 host-provider Promise rejects
@@ -2170,6 +2266,10 @@ error redaction
 provider allowlisting
 provider output limits
 path traversal protection
+filesystem containment for all distribution-root inputs, including symlink policy
+aggregate admission/memory bounds and ingress deadlines
+trusted-proxy boundary for forwarded headers
+HTTP framing rejection before Plec dispatch
 SSR custom-element policy
 snapshot validation
 ```
@@ -2193,6 +2293,17 @@ before the Node host becomes default.
 # 35. Implementation sequence
 
 Execute in this order.
+
+## Milestone 0 — Validate N-API feasibility and host contracts
+
+Before the semantic extraction locks in native API assumptions, run the
+section 10.1 binding feasibility gate and settle the contracts that affect both
+adapters: supported Node versions and napi-rs features; cancellation and stream
+semantics; HTTP framing behavior; aggregate admission/deadline policy; trusted
+proxy deployment boundary; filesystem containment/symlink policy; and the
+cross-platform document-path rule. Add raw-socket and filesystem fixtures to
+the test plan. Do not proceed to freeze native DTOs or expose the Node host as a
+production option until this gate passes.
 
 ## Milestone 1 — Establish the shared semantic boundary
 
@@ -2358,6 +2469,8 @@ bounded body rejected before middleware/handler invocation
 fallback 404
 error redaction
 context parity
+aggregate pre-read budget and overload policy
+slow-body timeout releases admission and prevents handler invocation
 ```
 
 ## Milestone 7 — Static assets
@@ -2365,6 +2478,8 @@ context parity
 Implement Node static serving.
 
 Acceptance against current ServeDir contract.
+Containment and symlink policy applies equally to manifest, artifact, app entry,
+provider modules, and static assets; escape and path-race tests pass.
 
 ## Milestone 8 — Full lifecycle/cancellation
 
@@ -2380,6 +2495,10 @@ TSFN release
 ```
 
 Acceptance includes all shutdown/failure tests.
+
+The Node host cannot become default until raw HTTP framing, resource admission,
+deadlines, trusted-proxy deployment constraints, and filesystem containment
+tests from Milestone 0 are green on supported targets.
 
 The spike must settle the concrete AbortSignal-to-native-token mechanism and
 whether dropping the napi-rs stream reader cancels its JS source. Prefer direct
