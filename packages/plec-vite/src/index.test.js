@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { execFileSync } from 'node:child_process';
 import {
   mkdtemp,
   mkdir,
@@ -101,34 +102,100 @@ test('production build emits hashed client, CSS, assets, and provider entries', 
 });
 
 test('production build rejects a forbidden browser dependency from Rollup metadata', async () => {
-  const root = await mkdtemp(
-    path.join(os.tmpdir(), 'plec-vite-boundary-'),
+  for (const dependency of ['zod', 'typescript', '@swc/core']) {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), 'plec-vite-boundary-'),
+    );
+    try {
+      const dependencyDir = path.join(root, 'node_modules', dependency);
+      await mkdir(dependencyDir, { recursive: true });
+      await writeFile(
+        path.join(dependencyDir, 'package.json'),
+        JSON.stringify({
+          name: dependency,
+          type: 'module',
+          exports: './index.js',
+        }),
+      );
+      await writeFile(
+        path.join(dependencyDir, 'index.js'),
+        'export const serverOnly = true;',
+      );
+      await writeFile(
+        path.join(root, 'client.js'),
+        `import { serverOnly } from '${dependency}'; console.log(serverOnly);`,
+      );
+      await assert.rejects(
+        buildClient({
+          root,
+          entry: 'client.js',
+          outDir: path.join(root, 'dist'),
+        }),
+        (error) =>
+          String(error).includes('[PLEC-DEPENDENCY-VALIDATION]') &&
+          String(error).includes(dependency),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('published packages contain the Vite production adapter and dependency chain', async () => {
+  const outputDir = await mkdtemp(
+    path.join(os.tmpdir(), 'plec-package-artifacts-'),
   );
   try {
-    await mkdir(path.join(root, 'node_modules/zod'), {
-      recursive: true,
-    });
-    await writeFile(
-      path.join(root, 'node_modules/zod/package.json'),
-      '{"name":"zod","type":"module","exports":"./index.js"}',
-    );
-    await writeFile(
-      path.join(root, 'node_modules/zod/index.js'),
-      'export const serverOnly = true;',
-    );
-    await writeFile(
-      path.join(root, 'client.js'),
-      "import { serverOnly } from 'zod'; console.log(serverOnly);",
-    );
-    await assert.rejects(
-      buildClient({
-        root,
-        entry: 'client.js',
-        outDir: path.join(root, 'dist'),
-      }),
-      /PLEC-DEPENDENCY-VALIDATION.*zod/s,
-    );
+    const packages = [
+      {
+        name: '@plec/core',
+        directory: path.resolve(import.meta.dirname, '../../plec'),
+        requiredFile: 'scripts/vite-build.mjs',
+        dependency: '@plec/vite',
+      },
+      {
+        name: '@plec/vite',
+        directory: path.resolve(import.meta.dirname, '..'),
+        requiredFile: 'src/build.js',
+        dependency: 'vite',
+      },
+    ];
+    for (const expected of packages) {
+      const output = execFileSync(
+        'npm',
+        [
+          'pack',
+          '--json',
+          '--ignore-scripts',
+          '--pack-destination',
+          outputDir,
+        ],
+        { cwd: expected.directory, encoding: 'utf8' },
+      );
+      const [packed] = JSON.parse(output);
+      assert(
+        packed.files.some(
+          (file) => file.path === expected.requiredFile,
+        ),
+        `${expected.name} archive must include ${expected.requiredFile}`,
+      );
+      const packedPackageJson = JSON.parse(
+        execFileSync(
+          'tar',
+          [
+            '-xOf',
+            path.join(outputDir, packed.filename),
+            'package/package.json',
+          ],
+          { encoding: 'utf8' },
+        ),
+      );
+      assert(
+        packedPackageJson.dependencies?.[expected.dependency],
+        `${expected.name} must declare ${expected.dependency}`,
+      );
+    }
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(outputDir, { recursive: true, force: true });
   }
 });

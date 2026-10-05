@@ -60,6 +60,7 @@ impl DevelopmentDiagnostic {
             Stage::Configuration => ("PLEC-BUILD-CONFIG", "build"),
             Stage::Compile => ("PLEC-COMPILE-001", "compile"),
             Stage::ApiRoutes => ("PLEC-DISCOVERY-ROUTES", "discovery"),
+            Stage::DependencyValidation => ("PLEC-BUILD-FAILURE", "dependency validation"),
             _ => ("PLEC-BUILD-FAILURE", "build"),
         };
         let detail = verbose()
@@ -195,6 +196,16 @@ mod tests {
         let diagnostic = DevelopmentDiagnostic::build(error).to_string();
         assert!(diagnostic.contains("[PLEC-PARSE-001] parse:"));
         assert!(diagnostic.contains("src/home.tsx:4:9"));
+    }
+
+    #[test]
+    fn dependency_validation_keeps_its_build_phase_in_the_cli_diagnostic() {
+        let error = BuildError::new(
+            Stage::DependencyValidation,
+            "Vite production build failed: forbidden browser dependency",
+        );
+        let diagnostic = DevelopmentDiagnostic::build(error).to_string();
+        assert!(diagnostic.contains("[PLEC-BUILD-FAILURE] dependency validation:"));
     }
 
     #[test]

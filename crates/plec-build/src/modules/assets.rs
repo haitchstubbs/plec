@@ -73,6 +73,55 @@ pub fn brotli(client_path: &Path) -> Result<(), BuildError> {
     })
 }
 
+/// Brotli-compress every Vite-emitted JavaScript and CSS asset below its
+/// output assets directory. Other Vite assets (images and fonts) are served
+/// uncompressed; their presence does not imply a `.br` sibling.
+pub fn brotli_vite_assets(assets_dir: &Path) -> Result<(), BuildError> {
+    fn collect(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), BuildError> {
+        for entry in fs::read_dir(directory).map_err(|error| {
+            BuildError::with_source(
+                Stage::Brotli,
+                format!(
+                    "failed to read Vite assets directory {}",
+                    directory.display()
+                ),
+                error,
+            )
+        })? {
+            let entry = entry.map_err(|error| {
+                BuildError::with_source(Stage::Brotli, "failed to read Vite asset entry", error)
+            })?;
+            let path = entry.path();
+            let file_type = entry.file_type().map_err(|error| {
+                BuildError::with_source(
+                    Stage::Brotli,
+                    format!("failed to inspect Vite asset {}", path.display()),
+                    error,
+                )
+            })?;
+            if file_type.is_dir() {
+                collect(&path, files)?;
+            } else if file_type.is_file()
+                && matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("js" | "css")
+                )
+            {
+                files.push(path);
+            }
+        }
+        Ok(())
+    }
+
+    let mut files = Vec::new();
+    collect(assets_dir, &mut files)?;
+    files.sort();
+    for file in files {
+        brotli(&file)?;
+    }
+    Ok(())
+}
+
 /// Copy application-owned `public/` files into the build public directory.
 /// Application files may not claim paths reserved for framework output.
 pub fn copy_public(app_dir: &Path, public_dir: &Path) -> Result<(), BuildError> {
@@ -155,4 +204,43 @@ fn is_framework_owned_public_path(path: &Path) -> bool {
     reserved_files.contains(&path.as_str())
         || path == "assets/compiled"
         || path.starts_with("assets/compiled/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn brotli_compresses_vite_javascript_and_css_but_not_other_assets() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let assets = dir.path().join("assets");
+        let chunks = assets.join("chunks");
+        fs::create_dir_all(&chunks).expect("asset directory");
+        let javascript = chunks.join("shared.js");
+        let stylesheet = assets.join("client.css");
+        let image = assets.join("logo.png");
+        let font = assets.join("font.woff2");
+        fs::write(&javascript, b"export const shared = true;").expect("JS asset");
+        fs::write(&stylesheet, b"body { color: red; }").expect("CSS asset");
+        fs::write(&image, b"png").expect("image asset");
+        fs::write(&font, b"font").expect("font asset");
+
+        brotli_vite_assets(&assets).expect("compress Vite text assets");
+
+        for original in [&javascript, &stylesheet] {
+            let sidecar = original.with_file_name(format!(
+                "{}.br",
+                original.file_name().unwrap().to_string_lossy()
+            ));
+            let compressed = fs::read(sidecar).expect("Brotli sidecar");
+            let mut decoded = Vec::new();
+            brotli::Decompressor::new(compressed.as_slice(), 4096)
+                .read_to_end(&mut decoded)
+                .expect("decompress sidecar");
+            assert_eq!(decoded, fs::read(original).expect("original asset"));
+        }
+        assert!(!image.with_file_name("logo.png.br").exists());
+        assert!(!font.with_file_name("font.woff2.br").exists());
+    }
 }

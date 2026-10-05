@@ -1906,9 +1906,16 @@ async fn serves_client_artifacts_only_in_reserved_namespace() {
     std::fs::write(client.join("graphs/home.json"), "graph").unwrap();
     std::fs::write(client.join("runtime.js"), "runtime").unwrap();
     std::fs::write(client.join("runtime.js.br"), b"br-runtime").unwrap();
-    std::fs::write(dir.path().join("plec-server.json"), "private-metadata").unwrap();
+    std::fs::create_dir_all(client.join("assets/chunks")).unwrap();
+    std::fs::write(client.join("assets/chunks/shared.js"), "shared-js").unwrap();
+    std::fs::write(client.join("assets/client.css"), "client-css").unwrap();
+    std::fs::write(client.join("assets/logo.png"), "image").unwrap();
+    std::fs::write(client.join("assets/font.woff2"), "font").unwrap();
+    std::fs::write(client.join("assets/provider.js"), "provider").unwrap();
+    std::fs::create_dir_all(&server).unwrap();
     std::fs::write(server.join("app.mjs"), "private-server").unwrap();
     std::fs::write(server.join("route-artifact.json"), "private-artifact").unwrap();
+    std::fs::write(dir.path().join("plec-server.json"), "private-metadata").unwrap();
     let mut options = options(&public);
     options.client_dir = client;
     let router = create_plec_server(options);
@@ -1918,6 +1925,11 @@ async fn serves_client_artifacts_only_in_reserved_namespace() {
         ("/assets/app.css", "app-css"),
         ("/_plec/graphs/home.json", "graph"),
         ("/_plec/runtime.js", "runtime"),
+        ("/_plec/assets/chunks/shared.js", "shared-js"),
+        ("/_plec/assets/client.css", "client-css"),
+        ("/_plec/assets/logo.png", "image"),
+        ("/_plec/assets/font.woff2", "font"),
+        ("/_plec/assets/provider.js", "provider"),
     ] {
         let response = router.clone().oneshot(get(url)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK, "{url}");
@@ -1942,6 +1954,8 @@ async fn serves_client_artifacts_only_in_reserved_namespace() {
         "/server/route-artifact.json",
         "/plec-server.json",
         "/_plec/route-artifact.json",
+        "/_plec/server/app.mjs",
+        "/_plec/server/route-artifact.json",
         "/../server/app.mjs",
         "/%2e%2e/server/app.mjs",
         "/assets/../../server/app.mjs",

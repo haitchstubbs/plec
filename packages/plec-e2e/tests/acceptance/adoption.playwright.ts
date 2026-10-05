@@ -82,7 +82,7 @@ test('home adoption keeps DOM and actions', async ({ browser }) => {
       'SSR ownership comments must survive adoption',
     ).toBeGreaterThan(0);
     expect(
-      dom.requestText.startsWith('Requested'),
+      dom.requestText.startsWith('Serving'),
       `server request text must survive: "${dom.requestText}"`,
     ).toBe(true);
 

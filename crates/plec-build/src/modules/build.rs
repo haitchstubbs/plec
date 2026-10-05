@@ -338,9 +338,7 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
         &revision,
         &vite_result.providers,
     )?;
-    for path in &revision_paths {
-        assets::brotli(path)?;
-    }
+    assets::brotli_vite_assets(&client_dir.join("assets"))?;
 
     // The native host imports this application bundle through its Node
     // sidecar; the manifest records the path.

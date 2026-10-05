@@ -18,7 +18,7 @@ test('desktop sidebar collapses and restores', async ({ browser }) => {
     await waitForMount(page);
     await expect(
       page.getByRole('heading', {
-        name: 'TSX enters as source. Plec owns the resulting DOM.',
+        name: 'TSX in. A living app out.',
       }),
     ).toBeVisible();
     expect(
@@ -40,6 +40,16 @@ test('desktop sidebar collapses and restores', async ({ browser }) => {
     await expect(
       page.locator('[data-collapsed]').first(),
     ).toHaveAttribute('data-collapsed', 'true');
+    await expect
+      .poll(async () => {
+        const firstLink = await page
+          .getByRole('navigation', { name: 'Primary navigation' })
+          .getByRole('link')
+          .first()
+          .boundingBox();
+        return firstLink?.width;
+      })
+      .toBe(36);
     const collapsedLinks = await page
       .getByRole('navigation', { name: 'Primary navigation' })
       .getByRole('link')

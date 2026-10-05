@@ -12,7 +12,11 @@ test('host icons adopt through stable boundaries and never resize', async ({
   ).toBeGreaterThan(0);
   expect(html).toMatch(/data-plec-host="lucide:[^"]+"><svg /);
 
+  const providerResponse = page.waitForResponse((response) =>
+    /\/_plec\/assets\/plec_provider_[^/]+\.js$/.test(response.url()),
+  );
   await page.goto('/', { waitUntil: 'domcontentloaded' });
+  expect((await providerResponse).status()).toBe(200);
   const boundaries = page.locator('[data-plec-host^="lucide:"]');
   const boundaryCount = await boundaries.count();
   expect(boundaryCount).toBeGreaterThan(0);

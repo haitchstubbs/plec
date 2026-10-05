@@ -13,9 +13,28 @@ test('client navigation to a loader route renders the loader data', async ({
   const page = await context.newPage();
   const done = watch(page);
   let loaderResponses = 0;
-  page.on('response', (response) => {
+  const loaderTraffic: string[] = [];
+  page.on('request', (request) => {
+    const url = new URL(request.url());
     if (
-      new URL(response.url()).pathname === '/api/notes' &&
+      url.pathname === '/api/notes' ||
+      url.pathname.startsWith('/_plec/actions/')
+    ) {
+      loaderTraffic.push(`request ${request.method()} ${url.pathname}`);
+    }
+  });
+  page.on('response', (response) => {
+    const url = new URL(response.url());
+    if (
+      url.pathname === '/api/notes' ||
+      url.pathname.startsWith('/_plec/actions/')
+    ) {
+      loaderTraffic.push(
+        `response ${response.status()} ${response.request().method()} ${url.pathname}`,
+      );
+    }
+    if (
+      url.pathname === '/api/notes' &&
       response.request().method() === 'GET' &&
       response.ok()
     ) {
@@ -30,7 +49,9 @@ test('client navigation to a loader route renders the loader data', async ({
     });
 
     await page.getByRole('link', { name: 'Notes' }).click();
-    const headline = page.getByRole('heading', { name: /server/i });
+    const headline = page.getByRole('heading', {
+      name: 'Notes transferred from the server',
+    });
     await headline.waitFor({ timeout: 10_000 });
 
     expect(
@@ -42,9 +63,12 @@ test('client navigation to a loader route renders the loader data', async ({
 
     expect(
       loaderResponses,
-      'the client loader must fetch /api/notes on fresh navigation',
+      `the client loader must fetch /api/notes; saw: ${loaderTraffic.join('; ')}`,
     ).toBeGreaterThan(0);
     await expect(headline).toBeVisible();
+    await expect(headline).toHaveText(
+      'Notes transferred from the server',
+    );
     await expect(
       page.getByText('Could not load notes.', { exact: true }),
     ).toBeHidden();

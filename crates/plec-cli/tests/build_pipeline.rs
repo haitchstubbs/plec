@@ -94,7 +94,7 @@ fn files_below(directory: &Path, files: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn server_action_implementation_is_absent_from_every_public_output() {
+fn server_action_implementation_is_absent_from_public_and_client_outputs() {
     const SECRET: &str = "PLEC_SERVER_ACTION_SECRET_7D3F";
     let app = fixture_project("server-action-secret", "server-action-app");
     let out_dir = output_dir("server-action-secret");
@@ -144,19 +144,20 @@ fn server_action_implementation_is_absent_from_every_public_output() {
         "generated registry IDs must match public IR: {ids:?}"
     );
 
-    let public_dir = out_dir.join("public");
-    let mut public_files = Vec::new();
-    files_below(&public_dir, &mut public_files);
-    assert!(!public_files.is_empty());
-    for path in public_files {
-        let bytes = fs::read(&path).expect("public artifact should be readable");
-        assert!(
-            !bytes
-                .windows(SECRET.len())
-                .any(|window| window == SECRET.as_bytes()),
-            "server implementation leaked into {}",
-            path.display(),
-        );
+    for output_dir in [out_dir.join("public"), out_dir.join("client")] {
+        let mut files = Vec::new();
+        files_below(&output_dir, &mut files);
+        assert!(!files.is_empty());
+        for path in files {
+            let bytes = fs::read(&path).expect("browser artifact should be readable");
+            assert!(
+                !bytes
+                    .windows(SECRET.len())
+                    .any(|window| window == SECRET.as_bytes()),
+                "server implementation leaked into {}",
+                path.display(),
+            );
+        }
     }
 }
 
@@ -227,6 +228,30 @@ fn builds_expected_output_structure() {
         decompressed, client,
         "brotli sidecar should round-trip the client artifact"
     );
+    let mut vite_assets = Vec::new();
+    files_below(&out_dir.join("client/assets"), &mut vite_assets);
+    let text_assets = vite_assets
+        .iter()
+        .filter(|path| {
+            matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("js" | "css")
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(!text_assets.is_empty(), "Vite emitted JS/CSS assets");
+    for asset in text_assets {
+        assert!(
+            asset
+                .with_file_name(format!(
+                    "{}.br",
+                    asset.file_name().unwrap().to_string_lossy()
+                ))
+                .is_file(),
+            "every emitted Vite JS/CSS asset is Brotli-compressed: {}",
+            asset.display()
+        );
+    }
 
     // Document shell points at the content-hashed Vite entry.
     let index = read(out_dir.join("public/index.html"));
@@ -236,6 +261,26 @@ fn builds_expected_output_structure() {
     let client_url = client_entry_url(&out_dir);
     assert!(index.contains(&client_url));
     assert!(!index.contains("/_plec/assets/client.js?v="));
+    assert!(!client_url.contains('?'));
+    let server_manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("plec-server.json")).unwrap()).unwrap();
+    assert!(
+        server_manifest["clientStyles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|url| !url.as_str().unwrap().contains('?'))
+    );
+    let provider_manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("client/host-providers.json")).unwrap())
+            .unwrap();
+    assert!(
+        provider_manifest["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|provider| !provider["module"].as_str().unwrap().contains('?'))
+    );
     assert!(!index.contains("client.meta.json"));
     assert!(!out_dir.join("public/runtime").exists());
     assert!(!out_dir.join("public/graphs").exists());
@@ -575,6 +620,10 @@ fn forbidden_browser_dependency_fails_the_build() {
     assert!(
         stderr.contains("node_modules/zod"),
         "failure must include import path information: {stderr}"
+    );
+    assert!(
+        stderr.contains("dependency validation"),
+        "Vite dependency validation must retain its build stage: {stderr}"
     );
 }
 
