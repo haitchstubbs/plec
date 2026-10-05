@@ -10,7 +10,11 @@ import yawPlusEightPitchFive from '../assets/duck/duck-yaw-8-pitch-5.png';
 
 export function DuckHead() {
   return (
-    <div id="plec-duck-head" className="duck-head h-12 w-12 aspect-square" aria-hidden="true">
+    <div
+      id="plec-duck-head"
+      className="duck-head h-12 w-12 aspect-square"
+      aria-hidden="true"
+    >
       <img
         className="duck-head-sprite"
         src={yawMinusEightPitchMinusFive}

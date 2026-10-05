@@ -607,16 +607,22 @@ fn send_html(
             )
         })
         .collect();
-    let styles = options
-        .styles_href
-        .as_deref()
+    let mut styles = options
+        .client_styles
+        .iter()
         .map(|href| {
             format!(
                 "<link rel=\"stylesheet\" href=\"{}\">",
                 ssr::escape_attribute(href)
             )
         })
-        .unwrap_or_default();
+        .collect::<String>();
+    if let Some(href) = options.styles_href.as_deref() {
+        styles.push_str(&format!(
+            "<link rel=\"stylesheet\" href=\"{}\">",
+            ssr::escape_attribute(href)
+        ));
+    }
     let script = options
         .client_script
         .as_deref()

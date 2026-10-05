@@ -219,7 +219,9 @@ test('todo create, complete, rename, and delete stay targeted', async ({
     ).toBeVisible();
     await row.locator('input[type="checkbox"]').click();
     await expect(
-      page.getByRole('checkbox', { name: 'Mark Acceptance todo complete' }),
+      page.getByRole('checkbox', {
+        name: 'Mark Acceptance todo complete',
+      }),
     ).toBeVisible();
     await row.locator('button', { hasText: 'Edit' }).click();
     const rename = row.locator('input:not([type="checkbox"])');

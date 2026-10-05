@@ -19,7 +19,11 @@ export function SidebarNavigation({
       className="flex w-full flex-col gap-1 p-2"
       aria-label="Primary navigation"
     >
-      <SidebarNavLink href="/" Icon={House} onCloseMobile={onCloseMobile}>
+      <SidebarNavLink
+        href="/"
+        Icon={House}
+        onCloseMobile={onCloseMobile}
+      >
         Home
       </SidebarNavLink>
       <SidebarNavLink

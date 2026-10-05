@@ -269,9 +269,7 @@ function TodoRow({
         type="checkbox"
         checked={todo.completed}
         onChange={(event: Event) =>
-          onToggle(
-            (event.target as HTMLInputElement).checked,
-          )
+          onToggle((event.target as HTMLInputElement).checked)
         }
         disabled={pending}
         aria-label={`Mark ${todo.title} ${todo.completed ? 'open' : 'complete'}`}

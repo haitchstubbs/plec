@@ -1,17 +1,115 @@
 use super::api_routes;
 use super::artifacts;
 use super::assets;
-use super::bundle::bundle;
 use super::clean;
 use super::document;
 use super::host;
 use super::server;
-use super::validate;
 
+use serde::Deserialize;
 use std::{
     collections::BTreeMap,
+    io::Write,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
 };
+
+#[derive(Debug, Deserialize)]
+struct ViteClientResult {
+    entry: String,
+    styles: Vec<String>,
+    providers: BTreeMap<String, String>,
+}
+
+fn run_vite_client(
+    app_dir: &Path,
+    entry: &Path,
+    out_dir: &Path,
+    providers: &BTreeMap<String, std::collections::BTreeSet<String>>,
+    adapters: &BTreeMap<String, String>,
+    optimize: bool,
+) -> Result<ViteClientResult, BuildError> {
+    let providers = providers
+        .iter()
+        .map(|(id, components)| {
+            let adapter = adapters.get(id).ok_or_else(|| {
+                BuildError::new(
+                    Stage::BrowserBundle,
+                    format!("host provider {id:?} has no configured browser adapter"),
+                )
+            })?;
+            Ok((
+                id.clone(),
+                serde_json::json!({ "adapter": adapter, "components": components }),
+            ))
+        })
+        .collect::<Result<serde_json::Map<_, _>, BuildError>>()?;
+    let request = serde_json::json!({
+        "root": app_dir,
+        "entry": entry,
+        "outDir": out_dir,
+        "providers": providers,
+        "optimize": optimize,
+    });
+    let script = "import '@plec/core/vite-build';";
+    let mut child = Command::new("node")
+        .arg("--input-type=module")
+        .arg("-e")
+        .arg(script)
+        .current_dir(app_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            BuildError::with_source(
+                Stage::BrowserBundle,
+                "failed to start @plec/vite production adapter",
+                error,
+            )
+        })?;
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(request.to_string().as_bytes())
+        .map_err(|error| {
+            BuildError::with_source(
+                Stage::BrowserBundle,
+                "failed to send Vite build configuration",
+                error,
+            )
+        })?;
+    let output = child.wait_with_output().map_err(|error| {
+        BuildError::with_source(
+            Stage::BrowserBundle,
+            "failed waiting for Vite production build",
+            error,
+        )
+    })?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let (stage, detail) = if let Some(detail) = detail
+            .split_once("[PLEC-DEPENDENCY-VALIDATION]")
+            .map(|(_, detail)| detail.trim())
+        {
+            (Stage::DependencyValidation, detail)
+        } else {
+            (Stage::BrowserBundle, detail.trim())
+        };
+        return Err(BuildError::new(
+            stage,
+            format!("Vite production build failed: {detail}"),
+        ));
+    }
+    serde_json::from_slice(&output.stdout).map_err(|error| {
+        BuildError::with_source(
+            Stage::BrowserBundle,
+            "Vite adapter returned an invalid Plec build result",
+            error,
+        )
+    })
+}
 
 /// Configuration for the shared application build pipeline.
 #[derive(Debug, Clone)]
@@ -48,7 +146,8 @@ pub enum RuntimeSource {
 #[derive(Debug, Clone)]
 pub struct BuildResult {
     pub out_dir: PathBuf,
-    /// Truncated SHA-256 revision of the emitted browser client.
+    /// Plec build identity for the provider manifest. Vite's content-hashed
+    /// URLs own browser cache busting; this is not appended to asset URLs.
     pub revision: String,
 }
 
@@ -134,8 +233,8 @@ impl std::error::Error for BuildError {
 /// Run the full shared Plec application build pipeline:
 ///
 /// ```text
-/// clean -> compile artifacts -> browser bundle -> dependency validation
-///       -> revision -> brotli -> server bundle -> document
+/// clean -> compile Plec artifacts -> Vite browser build and graph validation
+///       -> revision -> brotli -> server bundle -> manifests -> document
 /// ```
 ///
 /// This is the single entry point both CLI variants call. Host wiring
@@ -181,7 +280,6 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
 
     let repo_root = find_repo_root(&app_dir);
     let public_dir = out_dir.join("public");
-    let assets_dir = public_dir.join("assets");
     let client_dir = out_dir.join("client");
     let client_entry = resolve_entry(&options.client_entry, &app_dir);
     let host_config = host::resolve_host_config(&app_dir, &options)?;
@@ -189,7 +287,7 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
     let api_routes =
         api_routes::discover(&app_dir).map_err(|error| BuildError::new(Stage::ApiRoutes, error))?;
 
-    clean::prepare(&out_dir, &assets_dir)?;
+    clean::prepare(&out_dir, &public_dir.join("assets"))?;
     assets::copy_public(&app_dir, &public_dir)?;
 
     let artifacts = artifacts::emit(
@@ -211,42 +309,38 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
         .filter(|(provider, _)| host_config.host_adapters.contains_key(provider))
         .collect::<BTreeMap<_, _>>();
 
-    super::bundle::bundle_host_providers(
+    let vite_result = run_vite_client(
+        &app_dir,
+        &client_entry,
+        &client_dir,
         &automatic_providers,
         &host_config.host_adapters,
-        &app_dir,
-        &client_dir.join("assets"),
         options.optimize,
     )?;
-
-    let client_path = client_dir.join("assets/client.js");
-    let metafile_path = out_dir.join("client.meta.json");
-
-    bundle(
-        &client_entry,
-        &app_dir,
-        &client_path,
-        &metafile_path,
-        options.optimize,
-    )?;
-
-    validate::browser_dependencies(&metafile_path)?;
-
-    let mut revision_paths = vec![client_path.clone()];
-    revision_paths.extend(automatic_providers.keys().map(|provider| {
-        client_dir
-            .join("assets")
-            .join("providers")
-            .join(format!("{}.js", super::id::sanitize(provider)))
-    }));
+    let mut revision_paths = vec![client_dir.join(vite_result.entry.trim_start_matches("/_plec/"))];
+    revision_paths.extend(
+        vite_result
+            .styles
+            .iter()
+            .map(|url| client_dir.join(url.trim_start_matches("/_plec/"))),
+    );
+    revision_paths.extend(
+        vite_result
+            .providers
+            .values()
+            .map(|url| client_dir.join(url.trim_start_matches("/_plec/"))),
+    );
     let revision = assets::revision(&revision_paths)?;
     host::emit_provider_manifest(
         &client_dir,
         &automatic_providers,
         &host_config.host_ssr_providers,
         &revision,
+        &vite_result.providers,
     )?;
-    assets::brotli(&client_path)?;
+    for path in &revision_paths {
+        assets::brotli(path)?;
+    }
 
     // The native host imports this application bundle through its Node
     // sidecar; the manifest records the path.
@@ -275,9 +369,24 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
             server_entry.display(),
         );
     }
-    host::emit_server_manifest(&out_dir, &host_config, has_node_runtime)?;
+    host::emit_server_manifest(
+        &out_dir,
+        &host_config,
+        has_node_runtime,
+        &vite_result.entry,
+        &vite_result.styles,
+    )?;
 
-    document::write_index(&public_dir, &host_config.title, &revision)?;
+    let mut document_styles = vite_result.styles.clone();
+    if let Some(styles_href) = &host_config.styles_href {
+        document_styles.push(styles_href.clone());
+    }
+    document::write_index(
+        &public_dir,
+        &host_config.title,
+        &vite_result.entry,
+        &document_styles,
+    )?;
 
     Ok(BuildResult { out_dir, revision })
 }

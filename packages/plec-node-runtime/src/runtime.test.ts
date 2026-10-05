@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -77,6 +77,39 @@ function request(
 }
 
 describe('sidecar supervision', () => {
+  it('rejects SSR provider modules outside the emitted client asset root', async () => {
+    const dir = await mkdtemp(
+      path.join(tmpdir(), 'plec-provider-path-'),
+    );
+    const bundle = path.join(dir, 'app.mjs');
+    const manifest = path.join(dir, 'client/host-providers.json');
+    await mkdir(path.dirname(manifest), { recursive: true });
+    await writeFile(bundle, 'export function handleRequest() {}');
+    await writeFile(
+      manifest,
+      JSON.stringify({
+        version: 2,
+        revision: 'test',
+        providers: [
+          {
+            id: 'icons',
+            module: '/_plec/assets/../../server/private.mjs',
+            components: ['Icon'],
+            ssr: true,
+          },
+        ],
+      }),
+    );
+    await expect(
+      start({
+        socket: 'tcp:127.0.0.1:0',
+        bundle,
+        token: TOKEN,
+        providerManifest: manifest,
+      }),
+    ).rejects.toThrow('invalid host provider module for icons');
+  });
+
   it('invokes only registered generated server actions over the authenticated protocol', async () => {
     const origin = await startRuntime(`
       export async function handleRequest() {}

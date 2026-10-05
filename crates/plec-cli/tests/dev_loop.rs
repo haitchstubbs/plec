@@ -29,9 +29,15 @@ fn install_test_packages(project: &Path) {
     let packages = project.join("node_modules/@plec");
     let core = packages.join("core");
     fs::create_dir_all(core.join("dist/runtime")).unwrap();
+    fs::create_dir_all(core.join("scripts")).unwrap();
     fs::write(
         core.join("package.json"),
-        r#"{"name":"@plec/core","type":"module","dependencies":{"@plec/vite":"^0.1.0"},"exports":{".":"./dist/browser.js","./server-context":"./dist/server-context.js"}}"#,
+        r#"{"name":"@plec/core","type":"module","dependencies":{"@plec/vite":"^0.1.0"},"exports":{".":"./dist/browser.js","./server-context":"./dist/server-context.js","./vite-build":"./scripts/vite-build.mjs"}}"#,
+    )
+    .unwrap();
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/plec/scripts/vite-build.mjs"),
+        core.join("scripts/vite-build.mjs"),
     )
     .unwrap();
     fs::write(

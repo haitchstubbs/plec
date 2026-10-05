@@ -2,10 +2,22 @@ import { expect, test } from '@playwright/test';
 import { waitForMount } from '../support/helpers';
 
 test('home renders through SSR and mounts', async ({ page }) => {
+  const viteClientResponse = page.waitForResponse((response) =>
+    /\/_plec\/assets\/client-[^/]+\.js$/.test(response.url()),
+  );
+  const viteStylesResponse = page.waitForResponse((response) =>
+    /\/_plec\/assets\/client-[^/]+\.css$/.test(response.url()),
+  );
+  const viteFontResponse = page.waitForResponse((response) =>
+    /\/_plec\/assets\/[^/]+\.woff2$/.test(response.url()),
+  );
   const compiledAssetResponse = page.waitForResponse((response) =>
     response.url().includes('/assets/compiled/'),
   );
   await page.goto('/', { waitUntil: 'domcontentloaded' });
+  expect((await viteClientResponse).status()).toBe(200);
+  expect((await viteStylesResponse).status()).toBe(200);
+  expect((await viteFontResponse).status()).toBe(200);
   expect((await compiledAssetResponse).status()).toBe(200);
   const logo = page.locator('#compiled-asset-logo');
   const ssrLogoUrl = await logo.getAttribute('src');
@@ -15,7 +27,7 @@ test('home renders through SSR and mounts', async ({ page }) => {
   await expect(logo).toHaveJSProperty('complete', true);
   await expect(
     page.getByRole('heading', {
-      name: 'TSX enters as source. Plec owns the resulting DOM.',
+      name: 'TSX in. A living app out.',
     }),
   ).toBeVisible();
   await expect(

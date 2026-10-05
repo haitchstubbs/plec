@@ -19,7 +19,23 @@ pub struct ServeOptions {
     pub development: bool,
 }
 
+// Constant to store plec ascii art
+const PLEC_ASCII_ART: &str = r#"
+╔════════════════════════════════╗
+║          ███████╗              ║
+║          ██╔══██╗              ║
+║          ██████╔╝ L E C        ║
+║          ██╔═══╝               ║
+║          ██║                   ║
+║          ╚═╝                   ║
+║                                ║
+║             P L E C            ║
+║     ── semantic runtime ──     ║
+╚════════════════════════════════╝
+"#;
+
 pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
+    println!("{PLEC_ASCII_ART}");
     println!("➠          Starting Plec host...");
     let dir = std::path::absolute(&options.dir)?;
     let loaded =

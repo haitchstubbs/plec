@@ -618,6 +618,7 @@ fn options(runtime: NodeApplicationRuntime) -> PlecServerOptions {
         client_dir: PathBuf::from("nonexistent-client"),
         artifact_path: PathBuf::from("nonexistent-artifact.json"),
         client_script: None,
+        client_styles: Vec::new(),
         styles_href: None,
         preloads: Vec::new(),
         custom_elements: Vec::new(),

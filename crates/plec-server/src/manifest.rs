@@ -28,6 +28,8 @@ pub struct ServerManifest {
     #[serde(default)]
     pub client_script: Option<String>,
     #[serde(default)]
+    pub client_styles: Vec<String>,
+    #[serde(default)]
     pub styles_href: Option<String>,
     #[serde(default)]
     pub preloads: Vec<String>,
@@ -139,6 +141,7 @@ impl LoadedServerManifest {
             client_dir: self.client_dir(),
             artifact_path: self.artifact_path(),
             client_script: self.manifest.client_script.clone(),
+            client_styles: self.manifest.client_styles.clone(),
             styles_href: self.manifest.styles_href.clone(),
             preloads: self.manifest.preloads.clone(),
             custom_elements: self.manifest.custom_elements.clone(),

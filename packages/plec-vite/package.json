@@ -7,7 +7,8 @@
   },
   "exports": {
     ".": "./src/index.js",
-    "./dev": "./bin/dev.mjs"
+    "./dev": "./bin/dev.mjs",
+    "./build": "./src/build.js"
   },
   "files": [
     "src",

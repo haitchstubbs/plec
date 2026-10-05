@@ -67,6 +67,7 @@ fn options(dir: &Path) -> PlecServerOptions {
         client_dir: dir.to_path_buf(),
         artifact_path: dir.join("route-artifact.json"),
         client_script: None,
+        client_styles: Vec::new(),
         styles_href: None,
         preloads: Vec::new(),
         custom_elements: Vec::new(),
@@ -373,6 +374,7 @@ async fn emits_font_preload_links_before_the_stylesheet() {
     write_artifact(dir.path(), &artifact);
     let mut options = options(dir.path());
     options.styles_href = Some("/assets/styles.css".to_owned());
+    options.client_styles = vec!["/_plec/assets/client-a1b2.css".to_owned()];
     options.preloads = vec!["/assets/files/outfit-latin-wght-normal.woff2".to_owned()];
     let html = get_html(&options, "/").await;
     assert!(
@@ -383,6 +385,7 @@ async fn emits_font_preload_links_before_the_stylesheet() {
         "{html}"
     );
     assert!(html.find("rel=\"preload\"").unwrap() < html.find("rel=\"stylesheet\"").unwrap());
+    assert!(html.contains("href=\"/_plec/assets/client-a1b2.css\""));
 }
 
 #[tokio::test]

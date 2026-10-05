@@ -6,14 +6,13 @@ import { installPlecPerformance } from './performance';
 import { installDevelopmentMemoryHud } from '@plec/core/client/effects/development-memory-hud';
 import { createRuntimeStressFeed } from './stress-feed';
 import { installDuckTracking } from './duck-tracking';
+import './styles.css';
 
 installPlecPerformance();
 await registerPlecProviders();
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('The Plec application root is missing.');
-const revision = new URL(import.meta.url).searchParams.get('v') ?? '';
-const assetUrl = (path: string) =>
-  revision ? `${path}?v=${revision}` : path;
+const assetUrl = (path: string) => path;
 const disposeMemoryHud = installDevelopmentMemoryHud(assetUrl);
 
 // The browser only retrieves immutable artifacts. The runtime owns matching,

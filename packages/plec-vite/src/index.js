@@ -201,7 +201,7 @@ export function plec(options) {
                 '<link rel="stylesheet" href="/src/styles.css"></head>',
               );
         return styled.replace(
-          /<script\s+type="module"\s+src="([^\"]*\/_plec\/assets\/client\.js[^\"]*)"><\/script>/i,
+          /<script\s+type="module"\s+src="([^\"]*\/_plec\/assets\/client-[^\"]+\.js[^\"]*)"><\/script>/i,
           '<template data-plec-client-src="$1"></template>',
         );
       },

@@ -111,7 +111,7 @@ async function loadPlecProviders() {
   const loaded = await Promise.all(
     manifest.providers.map(
       async (entry): Promise<[string, PlecHostProvider]> => {
-        const moduleUrl = providerModuleUrl(entry, manifest.revision);
+        const moduleUrl = providerModuleUrl(entry);
         const module = await import(/* @vite-ignore */ moduleUrl.href);
         if (typeof module.default !== 'function')
           throw new Error(
@@ -162,14 +162,12 @@ function isHostProviderManifest(
 
 function providerModuleUrl(
   entry: HostProviderManifest['providers'][number],
-  revision: string,
 ): URL {
   const url = new URL(entry.module, window.location.origin);
   if (
     url.origin !== window.location.origin ||
-    !url.pathname.startsWith('/_plec/assets/providers/') ||
-    url.searchParams.get('v') !== revision ||
-    url.searchParams.size !== 1 ||
+    !url.pathname.startsWith('/_plec/assets/') ||
+    url.search ||
     url.hash
   )
     throw new Error(`Invalid host provider module URL for ${entry.id}`);

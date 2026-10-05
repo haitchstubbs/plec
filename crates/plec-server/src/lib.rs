@@ -60,6 +60,7 @@ pub struct PlecServerOptions {
     pub artifact_path: PathBuf,
 
     pub client_script: Option<String>,
+    pub client_styles: Vec<String>,
     pub styles_href: Option<String>,
     /// Font URLs (same origin, under `public_dir`) emitted as `<link
     /// rel="preload" as="font">` before the stylesheet so variable-font woff2
