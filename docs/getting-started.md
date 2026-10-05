@@ -44,9 +44,11 @@ yarn workspace @plec/core build:runtime   # cargo check + wasm-pack into package
 yarn build
 ```
 
-The fullstack build runs `plec build` (defaults to `src/app.tsx` and `dist`),
-then stages the application's fonts and generated CSS in `dist/public`. To
-override the entry or output directory, pass a source path or `--out-dir`:
+The fullstack build runs `plec build` (defaults to `src/app.tsx` and `dist`).
+Plec owns the framework build and deployment contract; the first-party Vite
+adapter owns generic browser bundling and development orchestration. Vite
+handles modules and assets; Plec handles application semantics. To override
+the entry or output directory, pass a source path or `--out-dir`:
 
 ```sh
 plec build src/custom-app.tsx --out-dir build
@@ -57,9 +59,10 @@ The output roots
 separate application ownership from Plec's browser implementation:
 
 ```text
-dist/public/  application public/static content, served at /
-dist/client/  Plec-generated browser artifacts, served at /_plec/
-dist/server/  private server/application-runtime output
+dist/public/         public static files, served at /
+dist/client/         browser assets, served at /_plec/
+dist/server/         private server/application-runtime output
+dist/plec-server.json  native host deployment manifest
 ```
 
 `/_plec/` is a reserved framework URL prefix; deployment hosts should expose
@@ -67,9 +70,12 @@ dist/server/  private server/application-runtime output
 For ordinary
 application-owned static files, put them under the app's `public/` directory;
 `plec build` copies them to the same relative path under `dist/public/` and
-removes old output on each build. Plec bootstrap/runtime resources are under
-`/_plec/`; app assets keep their ordinary paths. Source asset imports are
-handled separately by #49.
+removes old output on each build. The complete `dist/` output is relocatable
+and consumed by `plec serve dist`; production serving does not require Vite,
+Vite preview, a development server, or application source files. `server/` is
+private to the host; `client/` and `public/` are browser-visible. Plec
+bootstrap/runtime resources are under `/_plec/`; app assets keep their
+ordinary paths.
 
 Use `public/` when an asset has an intentionally stable, manually addressed
 URL—for example `public/favicon.svg` is served as `/favicon.svg`. Use a source
@@ -109,9 +115,18 @@ last successful application available; fixing the source triggers another
 build automatically. Client-only replacements keep the native host running.
 Server-owned changes restart the native host and application sidecar when
 needed. After the replacement is ready, Vite sends one full-page reload.
+Vite HMR is not Plec semantic HMR. A successful Plec source change recompiles
+and triggers a full-page reload; application state is not preserved and Plec
+does not hot-replace semantic modules.
 
-This is full-page development reload, not HMR: component state is not preserved
-and Plec does not hot-replace modules.
+For the default path, no `vite.config.*` is needed. If an app supplies one,
+Vite loads it normally and composes its generic plugins/settings with the
+first-party Plec adapter. The adapter keeps ownership of Plec's required
+entries, output layout, semantic artifact integration, and dependency checks;
+use `plec.toml` for Plec-specific settings rather than duplicating them in
+Vite configuration. The generated app includes `esbuild` as a build-time
+dependency for its server bundle; the browser graph is bundled by Vite through
+the `@plec/core` → `@plec/vite` dependency chain.
 
 ## Rebuilding the WASM runtime
 

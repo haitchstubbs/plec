@@ -206,3 +206,12 @@ All adoption failures are structured strings, surfaced as mismatch codes in `ple
 | E2E           | `packages/plec-e2e/tests/acceptance/adoption.playwright.ts`          | Happy-path adoption suites                        |
 | E2E           | `packages/plec-e2e/tests/acceptance/adoption-mismatch.playwright.ts` | Mismatch matrix + divergence diagnostic           |
 | Runtime tests | `crates/plec-runtime/tests/typed_events.rs`                          | wasm-bindgen adoption/snapshot contract suite     |
+
+## Build and bundling ownership
+
+Plec owns the framework build and deployment contract; the first-party Vite
+adapter owns generic browser bundling and development orchestration. This does
+not transfer semantic authority to JavaScript: Vite handles modules/assets,
+while Plec's Rust compiler and runtime own application semantics. Vite HMR is
+not Plec semantic HMR; successful Plec source recompilation requests a
+full-page reload in v0.1.
