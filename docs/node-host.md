@@ -479,6 +479,7 @@ Target:
 export interface PlecNodeOptions {
   dir: string;
   development?: boolean;
+  trustProxy?: boolean;
 }
 
 export interface PlecHandler {
@@ -505,6 +506,13 @@ export function serve(options: ServeOptions): Promise<void>;
 `createPlecHandler()` is the architectural API.
 
 `serve()` is an adapter/convenience.
+
+`trustProxy` defaults to `false`. When false, ignore `x-forwarded-proto` and
+derive the scheme from the actual transport. When true, use only the first
+`x-forwarded-proto` token after trimming whitespace, and accept only `http` or
+`https`; missing or malformed values fall back to the transport scheme. This
+option is an explicit trust decision for deployments behind a proxy that
+sanitizes forwarded headers.
 
 This permits both:
 
@@ -1469,7 +1477,14 @@ packages/plec-node/src/http.ts
 ```
 
 The `node:http` adapter starts from Node's request and preserves raw header
-pairs until route dispatch. It does not construct one universal Web `Request`
+pairs until route dispatch. It parses the request target against a fixed base
+with Node's URL parser, rejects malformed targets, and classifies using the
+resulting `URL.pathname`. It never string-slices query/fragment text or
+percent-decodes paths for route classification: `%2F`, `%5C`, and `%2E` remain
+encoded at this layer. `/_plec/actions/` must be a literal pathname prefix; the
+remaining action identifier must be nonempty, contain no slash, and match only
+`[A-Za-z0-9_-]`. Do not percent-decode an encoded identifier into a valid ID.
+It does not construct one universal Web `Request`
 before deciding whether the body belongs to Node or Rust:
 
 ```text id="5gadhz"
@@ -1486,7 +1501,8 @@ Ingress is path-specific:
 
 ```text
 API request:
-  bounded pre-read (at most MAX_REQUEST_BODY_BYTES)
+  GET/HEAD: ignore body; never consume it for Plec
+  other methods: bounded pre-read (at most MAX_REQUEST_BODY_BYTES)
   → Web Request with the validated bounded body
   → invoke app.mjs only after successful read
 
@@ -1499,11 +1515,16 @@ Document/static request:
   do not read an unused request body before routing
 ```
 
-For API requests, construct the Web `Request` only after the bounded pre-read.
+For API requests other than GET/HEAD, construct the Web `Request` only after
+the bounded pre-read. GET/HEAD bodies are ignored and never exposed to
+application code. If unread bytes prevent safe keep-alive reuse, close the
+connection rather than draining an unbounded remainder.
 For action requests, pass ordered metadata and the Web stream directly to
 N-API. `PlecHandler.fetch(Request)` accepts an already-constructed Web Request;
-it uses the same classifier and body-limit rules but cannot recover raw header
-details normalized before the call.
+it uses the same body contract: ignore GET/HEAD bodies; for other methods
+consume and bound the body before API dispatch, returning 413 without invoking
+middleware or handlers on overflow. It cannot recover raw header details
+normalized before the call.
 
 Do not call:
 
@@ -1525,6 +1546,18 @@ AbortController.abort()
 That signal must ultimately cancel the corresponding native request.
 
 ## Ingress framing, deadlines, and admission
+
+Canonical header handling for the raw Node adapter:
+
+| Header              | Rule                                                                                                             |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `Host`              | Require exactly one accepted authority; reject duplicates or malformed values.                                   |
+| `Origin`            | Action requests require exactly one valid value; reject missing, duplicate, or malformed values.                 |
+| `Cookie`            | Preserve Node's accepted combined semantics; test repeated Cookie lines against the context parser.              |
+| `Set-Cookie`        | Emit each value separately; never comma-join.                                                                    |
+| `x-forwarded-proto` | Ignore unless `trustProxy` is true; then use the first trimmed `http`/`https` token, otherwise transport scheme. |
+| `Content-Length`    | Trust Node parser acceptance; never reconstruct message framing.                                                 |
+| `Transfer-Encoding` | Node parser is the sole authority.                                                                               |
 
 The Node HTTP parser is the sole authority for HTTP/1 framing. Requests rejected
 by Node's parser must not reach the route classifier. Do not reconstruct framing
@@ -1549,6 +1582,25 @@ documented defaults and an explicit overload response/connection policy. A
 request rejected by admission must not start app middleware, actions, loaders,
 or native callbacks. Bound the aggregate memory implied by concurrent 1 MiB API
 pre-reads; do not rely on the per-body ceiling alone.
+
+The initial 0.1 defaults are:
+
+```text
+MAX_ACTIVE_REQUESTS = 256
+MAX_ACTIVE_APPLICATION_CALLBACKS = 64
+MAX_AGGREGATE_API_PREREAD_BYTES = 32 MiB
+HEADER_TIMEOUT = 10 seconds
+BODY_TIMEOUT = 30 seconds
+REQUEST_OPERATION_TIMEOUT = none by default
+```
+
+The aggregate API pre-read limit is enforced by a weighted byte semaphore, not
+only a request-count limit. Admission saturation returns `503` before
+middleware, Rust, or body-buffer allocation. If unread request bytes remain,
+close the connection rather than draining an unbounded body. These limits apply
+per host process. Header/body deadlines address ingress abuse; they do not
+impose a blanket timeout on valid loader or action execution. The initial
+defaults may remain internal rather than expanding the public API.
 
 Define finite header-read, body-read, and request-operation deadlines (or an
 equivalent minimum-rate policy) for network-hosted requests. Apply the body
@@ -1610,20 +1662,19 @@ first-party adapter preserves raw pairs where required. Test these common and
 adapter-specific contracts separately; in particular do not claim duplicate
 header fidelity for `fetch(Request)`.
 
-`isDocumentRequest` must preserve the existing Rust predicate in
-`plec-server::http::is_document_request`:
+`isDocumentRequest` must use a platform-independent URL-path rule shared by
+Rust and Node, not OS path utilities. A path is a document request when it is
+`/`, or when its final URL path segment has no extension under Plec's explicit
+URL rule. Define that rule in shared fixtures/helper semantics during
+extraction; do not inherit host-OS differences from Rust `Path::extension()`:
 
 ```rust
-pathname == "/" || std::path::Path::new(pathname).extension().is_none()
+pathname == "/" || final_url_segment_has_no_extension(pathname)
 ```
 
-Do not replace it with filesystem-existence probing. Before porting, decide and
-document whether compatibility means matching Rust's `Path::extension()` on
-each supported platform or defining one platform-independent URL-path rule for
-all hosts. The Node implementation must not accidentally vary with its host OS
-if a single cross-platform contract is chosen. Add shared parity fixtures for
-`/foo.`, `/.well-known`, `/foo.bar/baz`, encoded dots, and trailing slashes,
-and run them on every supported target.
+Do not replace it with filesystem-existence probing. Add shared parity fixtures
+for `/`, `/foo`, `/foo/`, `/foo.bar`, `/foo.`, `/.well-known`,
+`/foo.bar/baz`, `/foo%2Ebar`, and `/foo%2Fbar`.
 
 The complete ordering is:
 
@@ -1647,7 +1698,7 @@ Flow:
 ```text id="rpdkc4"
 IncomingMessage
  ↓
-bounded pre-read for non-GET/HEAD
+GET/HEAD body ignored; otherwise bounded pre-read
  ↓
 Web Request
  ↓
@@ -1681,8 +1732,10 @@ directly in Node. An arbitrary handler may perform side effects before it reads
 the request body, so a streaming transform that discovers overflow only while
 the handler consumes the body is not equivalent.
 
-Direct Node APIs therefore use a bounded pre-read for every non-GET/HEAD
-request, matching the current native host:
+Direct Node APIs use a bounded pre-read for every non-GET/HEAD request, matching
+the current native host. GET and HEAD bodies are ignored, never exposed to
+application code, and not consumed by Plec. If unread bytes make keep-alive
+reuse unsafe, close the connection rather than draining an unbounded remainder.
 
 ```text
 IncomingMessage
@@ -1757,18 +1810,16 @@ duplicate headers
 empty query values
 ```
 
-For 0.1 preserve the current Rust-visible context contract, including its
-current forwarded-protocol behavior: use the first valid `x-forwarded-proto`
-value (`http` or `https`) when present, otherwise `http`, and build the origin
-using `Host`. This is a compatibility rule, not an endorsement of trusting
-forwarded headers from arbitrary clients. The production deployment contract
-must state that the listener is reachable only through a trusted edge that
-overwrites/sanitizes `Host` and forwarded headers, or that the application
-explicitly disables proxy-derived origin data. Direct public exposure while
-trusting client-provided forwarded headers is unsupported. Specify behavior for
-multiple values and malformed values and cover it in parity fixtures. A
-configurable trusted-proxy policy is a separate hardening decision and must not
-be silently introduced inside this migration.
+For 0.1, `trustProxy` defaults to false and controls forwarded-protocol use.
+When false, ignore `x-forwarded-proto` and derive scheme from the actual
+transport. When true, use the first token only after trimming whitespace;
+accept only `http` or `https`, otherwise fall back to transport scheme. The
+authority comes from exactly one accepted `Host` value; reject missing,
+duplicate, or malformed Host values. Action requests require exactly one
+well-formed `Origin`; missing or repeated Origin is rejected, and the single
+origin must match canonical scheme/host/port exactly. Add parity fixtures for
+both settings, repeated/malformed values, and default/non-default ports. A
+trusted proxy must overwrite/sanitize forwarded headers.
 
 If necessary, move shared fixtures into repository testdata rather than sharing implementation.
 
@@ -1795,7 +1846,15 @@ malformed/unsafe paths
 cache-control
 ```
 
-Prefer an established, narrowly scoped Node static-serving primitive if it matches the required contract.
+Before implementation, inspect and fixture the current `ServeDir` behavior for
+dotfiles, directory requests/index lookup, MIME fallback, range edge cases,
+precompressed sidecars, and cache headers. Explicitly present dotfiles may be
+served beneath the root; traversal and special path segments are rejected. Do
+not add implicit directory index lookup unless parity requires it. Use an
+established MIME database or explicit mappings with
+`application/octet-stream` fallback. Prefer Brotli over gzip when acceptable
+and available, otherwise identity; emit `Vary: Accept-Encoding` whenever
+representation negotiation applies. Preserve the current single-range behavior.
 
 Do not implement naive:
 
@@ -1805,19 +1864,23 @@ join(publicDir, pathname);
 
 serving.
 
-Filesystem containment is a contract for every path loaded beneath the
-application distribution root, not only static assets. Define a single root
-resolution policy for static files (including `/public` and `/_plec` assets),
-the manifest, route artifacts, `server/app.mjs`, and provider modules. The
-default policy must reject traversal and symlink escapes outside the resolved
-root; either reject symlinks entirely or permit only those whose resolved
-targets remain contained. Perform containment checks in a way that cannot be
-bypassed by a check/open race (use descriptor-relative/no-follow APIs where
-available, or document and test the platform-appropriate safe open strategy).
-Do not validate a path lexically and then follow an unchecked symlink. Test
-encoded traversal, separator variants, symlink-to-outside, and replacement/race
-cases on supported platforms. Preserve any deliberate deployment use of
-in-root symlinks explicitly rather than inheriting library defaults.
+Filesystem threat model for 0.1: remote requests are hostile; the deployed
+distribution tree is trusted, immutable application output after startup.
+Resolve and canonicalize `distRoot`, `publicRoot`, manifest, route artifacts,
+`server/app.mjs`, and provider modules at startup; require each target to remain
+under its expected canonical root. For static requests, resolve beneath the
+canonical public root, canonicalize the candidate, verify containment, then
+open it. Symlinks are allowed only when their final target remains inside the
+expected root. Concurrent malicious replacement of deployment files after
+startup is outside the 0.1 remote threat model; this is not a sandbox against a
+hostile local filesystem. Test encoded traversal, separator variants, and
+symlink-to-outside. If hostile-local-filesystem race resistance becomes a
+requirement, use a platform-specific native descriptor-relative helper rather
+than claiming portable TypeScript checks eliminate check/open races.
+
+`server/app.mjs` and provider modules are trusted build output and execute
+arbitrary server-side JavaScript when imported. Containment limits which files
+are loaded; it does not sandbox their execution.
 
 ---
 
@@ -2003,11 +2066,24 @@ The production lifecycle is:
 - the Axum host remains an independent migration/parity path until removed.
 
 `PlecHandler.close()` stops native admission, cancels and drains native work;
-it does not own an embedding caller's HTTP server. `serve()` first stops
-accepting new connections, drains or closes active HTTP responses according
-to its documented policy, then calls `PlecHandler.close()`. Repeated close is
-idempotent. Do not call `process.exit()` from the library; let Node exit after
-the server and native resources have closed.
+all concurrent close calls await one shared Open → Closing → Closed transition.
+An in-flight callback retains a safe cloned handle for its invocation until its
+native wait completes or is detached by cancellation. Releasing the manager
+prevents new calls and does not invalidate an active bridge call. JS callback
+closures receive serialized callback arguments, not request-scoped native
+state; after cancellation Rust drops its waiter, so late Promise settlement
+cannot resume native request state. `close()` does not close embedding HTTP
+sockets, abort arbitrary user API handlers, or cancel external static streams;
+embedding servers own those resources.
+
+`serve()` shutdown order is: stop listener admission; stop new Plec dispatch;
+abort/close ingress bodies still being read; allow active responses up to a
+finite 5-second shutdown grace; destroy remaining sockets/streams; await
+`PlecHandler.close()`; then return. A client disconnect after response start
+cancels the request token and native response stream, stops the pipeline, and
+does not attempt a second response. Repeated close is idempotent. Do not call
+`process.exit()` from the library; let Node exit after server and native
+resources have closed.
 
 ---
 
@@ -2016,6 +2092,14 @@ the server and native resources have closed.
 Use `@napi-rs/cli`.
 
 Do not invent the native package loader.
+
+The initial supported runtime floor is Node.js 22. Native packages use the
+Node-API ABI supported by the selected napi-rs release. CI must test the minimum
+supported Node 22 minor, the latest Node 22 release, and any newer LTS/current
+line the package claims to support. Unsupported platform/architecture/libc
+combinations must fail with a clear module-load error naming the detected
+platform, architecture, libc where relevant, and supported package targets.
+There is no source-build fallback unless separately specified and tested.
 
 Target package model:
 
@@ -2200,10 +2284,10 @@ concurrent bounded API reads respect configured aggregate budget
 header/body/request deadline expires and releases resources
 slow upload cannot hold a pre-read/native slot indefinitely
 Node parser rejects ambiguous/malformed HTTP framing before dispatch
-proxy-derived origin is used only under the documented trusted-edge contract
+proxy-derived origin is used only when trustProxy is enabled
 multiple and malformed x-forwarded-proto values follow explicit policy
 manifest/artifact/app/provider/static paths reject traversal and symlink escape
-filesystem containment cannot be bypassed by path replacement between check/open
+filesystem containment rejects traversal and symlink escapes under the 0.1 trusted-deployment-tree model
 action Promise rejects
 action Promise never resolves
 host-provider Promise rejects
@@ -2455,8 +2539,9 @@ Route:
 
 directly to `app.mjs`.
 
-Implement bounded pre-read before handler invocation and canonical Node
-`RequestContext`. API bodies up to the existing 1 MiB ceiling are buffered;
+Ignore GET/HEAD bodies; bounded-pre-read all other methods before handler
+invocation and build canonical Node `RequestContext`. API bodies up to the
+existing 1 MiB ceiling are buffered;
 this preserves the current reject-before-application-dispatch contract. Do not
 apply this API exception to the Rust action-body N-API stream.
 
@@ -2465,6 +2550,7 @@ Acceptance:
 ```text id="pkv373"
 API routing/middleware parity
 `/api`, `/api/`, and `/api/foo` routing
+GET/HEAD bodies ignored and never exposed to application code
 bounded body rejected before middleware/handler invocation
 fallback 404
 error redaction
