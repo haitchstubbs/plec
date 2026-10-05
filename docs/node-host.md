@@ -1647,13 +1647,13 @@ That signal must ultimately cancel the corresponding native request.
 
 This matrix is normative for the 0.1 host boundary:
 
-| Request path | Header source | Body handling | Plec admission | Deadline | Cancellation | Execution/response owner |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api`, `/api/*` through `serve()` | Node `rawHeaders` until Web `Request` construction | GET/HEAD ignored; other methods bounded pre-read | request + weighted API pre-read budget | Node header and body deadlines | disconnect aborts host wait; arbitrary handler JS is not preempted | Node application code |
-| `/_plec/actions/*` through `serve()` | ordered Node raw header pairs passed to Rust | streamed to Rust; Rust enforces and buffers only within the action limit | request + native-operation + callback permits | Node header/body deadlines | disconnect → Rust token; JS action is not forcibly stopped | Rust semantics with Node callback |
-| Document through `serve()` | Node `rawHeaders` | no request body consumed | request + native-operation permits | Node header deadline | disconnect → Rust token and response-stream cancellation | Rust |
-| Static through `serve()` | Node `rawHeaders` | no request body consumed | request permit | Node header deadline | disconnect destroys file/response stream | Node |
-| API/action/document through `fetch(Request)` | Web-normalized `Headers` | Plec bounds bytes it consumes; caller owns prior allocations and raw framing | handler request, native, callback, and weighted pre-read permits | no transport/header deadline; caller owns these | `Request.signal` → corresponding Plec cancellation where available | route-specific as above |
+| Request path                                 | Header source                                      | Body handling                                                                | Plec admission                                                   | Deadline                                        | Cancellation                                                       | Execution/response owner          |
+| -------------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------ | --------------------------------- |
+| `/api`, `/api/*` through `serve()`           | Node `rawHeaders` until Web `Request` construction | GET/HEAD ignored; other methods bounded pre-read                             | request + weighted API pre-read budget                           | Node header and body deadlines                  | disconnect aborts host wait; arbitrary handler JS is not preempted | Node application code             |
+| `/_plec/actions/*` through `serve()`         | ordered Node raw header pairs passed to Rust       | streamed to Rust; Rust enforces and buffers only within the action limit     | request + native-operation + callback permits                    | Node header/body deadlines                      | disconnect → Rust token; JS action is not forcibly stopped         | Rust semantics with Node callback |
+| Document through `serve()`                   | Node `rawHeaders`                                  | no request body consumed                                                     | request + native-operation permits                               | Node header deadline                            | disconnect → Rust token and response-stream cancellation           | Rust                              |
+| Static through `serve()`                     | Node `rawHeaders`                                  | no request body consumed                                                     | request permit                                                   | Node header deadline                            | disconnect destroys file/response stream                           | Node                              |
+| API/action/document through `fetch(Request)` | Web-normalized `Headers`                           | Plec bounds bytes it consumes; caller owns prior allocations and raw framing | handler request, native, callback, and weighted pre-read permits | no transport/header deadline; caller owns these | `Request.signal` → corresponding Plec cancellation where available | route-specific as above           |
 
 `PlecHandler.fetch(Request)` is a semantic host adapter, not an HTTP transport
 implementation. It handles API, action, and document routes, but not static
@@ -1670,13 +1670,13 @@ call. Document this division in the public API documentation.
 
 Use independently scoped permits with this normative lifecycle:
 
-| Permit | Acquire | Release | Survives cancellation? |
-| --- | --- | --- | --- |
-| `RequestPermit` | after route classification, before body allocation or dispatch | Plec request lifecycle ends | API: until handler Promise settles; native: until native work completes or detaches |
-| `ApiPrereadPermit(bytes)` | before retaining body bytes | bounded body is no longer reachable by handler, or request fails | yes, while handler retains body |
-| `NativeOperationPermit` | before Rust execution | native operation completes or detaches | no after cancellation/detach |
-| `CallbackPermit` | before scheduling JS callback | JS Promise settles; release immediately if scheduling fails before JS starts | yes, until actual Promise settlement |
-| `StaticRequestPermit` | before opening a file | response stream closes, errors, or is canceled | no after stream lifecycle ends |
+| Permit                    | Acquire                                                        | Release                                                                      | Survives cancellation?                                                              |
+| ------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `RequestPermit`           | after route classification, before body allocation or dispatch | Plec request lifecycle ends                                                  | API: until handler Promise settles; native: until native work completes or detaches |
+| `ApiPrereadPermit(bytes)` | before retaining body bytes                                    | bounded body is no longer reachable by handler, or request fails             | yes, while handler retains body                                                     |
+| `NativeOperationPermit`   | before Rust execution                                          | native operation completes or detaches                                       | no after cancellation/detach                                                        |
+| `CallbackPermit`          | before scheduling JS callback                                  | JS Promise settles; release immediately if scheduling fails before JS starts | yes, until actual Promise settlement                                                |
+| `StaticRequestPermit`     | before opening a file                                          | response stream closes, errors, or is canceled                               | no after stream lifecycle ends                                                      |
 
 Acquire `RequestPermit` immediately after route classification and before body
 allocation, application middleware, native calls, or static-file open. Hold it
