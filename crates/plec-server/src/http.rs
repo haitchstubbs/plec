@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::collections::HashMap;
 
 use axum::{
@@ -7,26 +8,57 @@ use axum::{
 };
 use serde_json::json;
 
+#[cfg(test)]
 use crate::{
-    artifact::{self, Manifest, Route},
-    assets, loader,
-    request::RequestContext,
+    artifact::{self, Manifest},
+    loader,
     runtime::HostRenderRequest,
-    ssr, DocumentMetadata, PlecServerOptions, ServerError, ServerState,
+    ssr, DocumentMetadata, PlecServerOptions,
 };
+use crate::{assets, request::RequestContext, ServerError, ServerState};
 
-pub(crate) struct RouteMatch<'a> {
-    pub route: &'a Route,
-    pub params: HashMap<String, String>,
+struct HostCapabilities<'a>(&'a dyn crate::ApplicationRuntime);
+
+impl plec_server_engine::runtime::ApplicationCapabilities for HostCapabilities<'_> {
+    fn render_host<'a>(
+        &'a self,
+        request: plec_server_engine::runtime::HostRenderRequest,
+    ) -> plec_server_engine::runtime::HostRenderFuture<'a> {
+        Box::pin(async move {
+            self.0
+                .render_host(crate::runtime::HostRenderRequest {
+                    provider: request.provider,
+                    component: request.component,
+                    props: request.props,
+                })
+                .await
+        })
+    }
 }
 
-pub(crate) struct RouteExecution<'a> {
-    pub route_match: RouteMatch<'a>,
-    pub loader: Option<plec_ir::SsrLoaderOutcome>,
-    /// The instance rendered its not-found boundary (a loader in its subtree
-    /// produced a not-found outcome and this route owns the boundary).
-    pub not_found: bool,
+/// Axum-specific bounded body adapter. The semantic engine owns the byte
+/// ceiling; this host owns conversion from Axum's body type.
+pub(crate) async fn read_bounded_body(
+    headers: &axum::http::HeaderMap,
+    body: Body,
+) -> Result<Vec<u8>, ServerError> {
+    use plec_ir::limits::MAX_REQUEST_BODY_BYTES;
+    if headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|declared| declared > MAX_REQUEST_BODY_BYTES as u64)
+    {
+        return Err(ServerError::RequestBodyTooLarge);
+    }
+    axum::body::to_bytes(body, MAX_REQUEST_BODY_BYTES)
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|_| ServerError::RequestBodyTooLarge)
 }
+
+#[cfg(test)]
+pub(crate) use plec_server_engine::http::{RouteExecution, RouteMatch};
 
 pub(crate) async fn dispatch(
     State(state): State<ServerState>,
@@ -55,7 +87,7 @@ async fn dispatch_inner(
     let request = if parts.method == Method::GET || parts.method == Method::HEAD {
         Request::from_parts(parts, body)
     } else {
-        let bytes = match crate::request::read_bounded_body(&parts.headers, body).await {
+        let bytes = match read_bounded_body(&parts.headers, body).await {
             Ok(bytes) => bytes,
             // Oversized or malformed request bodies fail before any app
             // dispatch.
@@ -121,7 +153,7 @@ async fn handle_server_action(
         return Ok(fail(StatusCode::NOT_FOUND, "unknown server action"));
     };
     let (parts, body) = request.into_parts();
-    let bytes = match crate::request::read_bounded_body(&parts.headers, body).await {
+    let bytes = match read_bounded_body(&parts.headers, body).await {
         Ok(bytes) => bytes,
         Err(_) => {
             return Ok(fail(
@@ -259,6 +291,56 @@ async fn render_document_inner(
     state: &ServerState,
     context: &mut RequestContext,
 ) -> Result<Response<Body>, ServerError> {
+    let options = plec_server_engine::DocumentOptions {
+        artifact_path: state.options.artifact_path.clone(),
+        client_script: state.options.client_script.clone(),
+        client_styles: state.options.client_styles.clone(),
+        styles_href: state.options.styles_href.clone(),
+        preloads: state.options.preloads.clone(),
+        custom_elements: state.options.custom_elements.clone(),
+        document: state.options.document.clone(),
+        development: state.options.development,
+    };
+    let artifact = plec_server_engine::document::load_artifact(&options.artifact_path).await?;
+    let capabilities = state
+        .options
+        .application_runtime
+        .as_deref()
+        .map(HostCapabilities);
+    let outcome = plec_server_engine::document::execute_document(
+        &options,
+        &artifact,
+        context,
+        &state.http,
+        capabilities.as_ref().map(|capabilities| {
+            capabilities as &dyn plec_server_engine::runtime::ApplicationCapabilities
+        }),
+    )
+    .await?;
+    let (status, headers, body) = match outcome {
+        plec_server_engine::DocumentOutcome::Rendered {
+            status,
+            headers,
+            html,
+        } => (status, headers, html),
+        plec_server_engine::DocumentOutcome::Redirect {
+            status, headers, ..
+        } => (status, headers, String::new()),
+        plec_server_engine::DocumentOutcome::NotFound { headers, html } => (404, headers, html),
+    };
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() =
+        StatusCode::from_u16(status).map_err(|error| ServerError::message(error.to_string()))?;
+    *response.headers_mut() = headers;
+    Ok(response)
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+async fn render_document_inner_legacy(
+    state: &ServerState,
+    context: &mut RequestContext,
+) -> Result<Response<Body>, ServerError> {
     let bundle = artifact::read_bounded(&state.options.artifact_path).await?;
     // Loader redirects answer 307 so the browser URL, the re-requested
     // document, and the snapshot location stay one consistent destination.
@@ -345,6 +427,8 @@ async fn render_document_inner(
 
 /// One 307 hop to a loader redirect destination. Documents are GET requests,
 /// so 307 preserves semantics while keeping the browser URL authoritative.
+#[cfg(test)]
+#[allow(dead_code)]
 fn redirect_response(location: &str) -> Result<Response<Body>, ServerError> {
     let mut response = Response::new(Body::empty());
     *response.status_mut() = StatusCode::TEMPORARY_REDIRECT;
@@ -360,6 +444,8 @@ fn redirect_response(location: &str) -> Result<Response<Body>, ServerError> {
     Ok(response)
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 enum LoaderDocumentOutcome {
     Render,
     Redirect(String),
@@ -369,6 +455,7 @@ enum LoaderDocumentOutcome {
 /// Applies a validated redirect target to the request context so the next hop
 /// matches, seeds loaders, and snapshots against the destination URL. Returns
 /// the canonical destination path (the 307 `Location` value).
+#[cfg(test)]
 fn apply_redirect_location(
     context: &mut RequestContext,
     location: &str,
@@ -410,6 +497,8 @@ fn apply_redirect_location(
 /// somewhere in `executions` (the chain executed up to the origin). The owner
 /// is the deepest matched route declaring `notFoundComponent`, else the root
 /// boundary. The chain truncates at the owner: descendants never commit.
+#[cfg(test)]
+#[allow(dead_code)]
 fn resolve_not_found_boundary(
     bundle: &artifact::Manifest,
     executions: &mut Vec<RouteExecution<'_>>,
@@ -432,6 +521,8 @@ fn resolve_not_found_boundary(
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 async fn render_not_found_document(
     state: &ServerState,
     context: &mut RequestContext,
@@ -452,6 +543,8 @@ async fn render_not_found_document(
     Ok(Response::from_parts(parts, body))
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 async fn render_executions(
     state: &ServerState,
     context: &mut RequestContext,
@@ -511,6 +604,8 @@ async fn render_executions(
 /// whole document. Replacements run in reverse marker order so one trusted
 /// provider fragment cannot contain a later placeholder that is accidentally
 /// substituted as another provider's result.
+#[cfg(test)]
+#[allow(dead_code)]
 async fn resolve_host_renders(
     body: &str,
     renders: &[ssr::HostRender],
@@ -544,6 +639,8 @@ async fn resolve_host_renders(
 /// manifest's `$param` segments against the request path, preferring static
 /// segments and treating a catch-all as a fallback, never a competing match
 /// for the index route.
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn match_route<'a>(
     manifest: &'a Manifest,
     pathname: &str,
@@ -582,6 +679,8 @@ pub(crate) fn json_response(status: StatusCode, value: &serde_json::Value) -> Re
     response
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn send_html(
     options: &PlecServerOptions,
     metadata: &DocumentMetadata,

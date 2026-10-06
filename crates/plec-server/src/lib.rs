@@ -5,47 +5,24 @@
 //! renderer concerns, so the native server cannot drift from the runtime the
 //! way the TypeScript host it replaces did.
 
-pub mod artifact;
+pub use plec_server_engine::artifact;
 pub mod assets;
 pub mod http;
-pub mod loader;
+pub use plec_server_engine::loader;
 pub mod manifest;
-pub mod request;
+pub use plec_server_engine::request;
 pub mod runtime;
-pub mod ssr;
+pub use plec_server_engine::ssr;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use axum::Router;
-use serde::Deserialize;
 
 pub use runtime::{
     ApplicationRuntime, NodeApplicationRuntime, NodeRuntimeOptions, ServerActionRequest,
 };
 
-#[derive(Debug, thiserror::Error)]
-pub enum ServerError {
-    #[error("request body exceeds byte limit")]
-    RequestBodyTooLarge,
-    #[error("application artifact exceeds byte limit")]
-    ArtifactTooLarge,
-    #[error("unknown or stale server action")]
-    UnknownServerAction,
-    #[error("{0}")]
-    Other(String),
-}
-
-impl ServerError {
-    pub(crate) fn message(message: impl Into<String>) -> Self {
-        Self::Other(message.into())
-    }
-}
-
-impl From<std::io::Error> for ServerError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Other(error.to_string())
-    }
-}
+pub use plec_server_engine::{DocumentMetadata, ServerError};
 
 /// The application-runtime boundary: the production implementation is a
 /// Node sidecar ([`NodeApplicationRuntime`]); tests and embedders can wire
@@ -78,12 +55,6 @@ pub struct PlecServerOptions {
     pub application_runtime: Option<Arc<dyn ApplicationRuntime>>,
 
     pub development: bool,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct DocumentMetadata {
-    pub title: Option<String>,
-    pub description: Option<String>,
 }
 
 #[derive(Clone)]

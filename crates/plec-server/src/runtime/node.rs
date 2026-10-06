@@ -27,7 +27,7 @@ use super::{
 };
 use crate::{
     ApplicationRuntime, PlecServerOptions, ServerError,
-    request::{RequestContext, read_bounded_body},
+    request::RequestContext,
     runtime::{
         ApplicationDispatch, HostRenderDispatch, HostRenderRequest, ServerActionDispatch,
         ServerActionRequest,
@@ -390,7 +390,7 @@ impl ApplicationRuntime for NodeApplicationRuntime {
             // re-enforced here so the internal boundary never forwards
             // unbounded bytes regardless of the caller.
             let (parts, body) = request.into_parts();
-            let bytes = read_bounded_body(&parts.headers, body).await?;
+            let bytes = crate::http::read_bounded_body(&parts.headers, body).await?;
             let request = InternalRequest {
                 method: parts.method,
                 uri: parts.uri,

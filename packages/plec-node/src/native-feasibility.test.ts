@@ -5,7 +5,7 @@ const native = createRequire(import.meta.url)(
   new URL('../native/index.linux-x64-gnu.node', import.meta.url)
     .pathname,
 ) as {
-  PlecApplication: new (
+  FeasibilityApplication: new (
     callback: (value: string) => Promise<string>,
   ) => {
     invoke(value: string): Promise<string>;
@@ -23,8 +23,8 @@ const native = createRequire(import.meta.url)(
 
 describe('napi-rs feasibility gate (Node 22)', () => {
   it('loads the native class and supports Promise callback re-entry, rejection, and close', async () => {
-    let application!: InstanceType<typeof native.PlecApplication>;
-    application = new native.PlecApplication(async (value) => {
+    let application!: InstanceType<typeof native.FeasibilityApplication>;
+    application = new native.FeasibilityApplication(async (value) => {
       if (value === 'outer')
         return `outer:${await application.invoke('inner')}`;
       if (value === 'reject')

@@ -1,9 +1,8 @@
+//! HTTP-independent Plec request context and encoded path semantics.
+
 use std::collections::HashMap;
 
-use axum::{
-    body::Body,
-    http::{header, HeaderMap, Method, Uri},
-};
+use http::{header, HeaderMap, Method, Uri};
 
 use crate::ServerError;
 
@@ -15,7 +14,7 @@ pub(crate) struct CanonicalRequestTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RouteClass {
+pub enum RouteClass {
     Api,
     Action,
     Document,
@@ -119,7 +118,7 @@ fn valid_request_authority(authority: &str) -> bool {
     }
 }
 
-pub(crate) fn classify_plec_path(path: &str) -> RouteClass {
+pub fn classify_plec_path(path: &str) -> RouteClass {
     if path == "/api" || path.starts_with("/api/") {
         return RouteClass::Api;
     }
@@ -154,11 +153,7 @@ pub enum QueryValue {
 }
 
 impl RequestContext {
-    pub(crate) fn from_parts(
-        method: Method,
-        uri: &Uri,
-        headers: &HeaderMap,
-    ) -> Result<Self, ServerError> {
+    pub fn from_parts(method: Method, uri: &Uri, headers: &HeaderMap) -> Result<Self, ServerError> {
         let host = headers
             .get(header::HOST)
             .and_then(|value| value.to_str().ok())
@@ -196,28 +191,6 @@ impl RequestContext {
     }
 }
 
-/// Reads and bounds an inbound body before any application dispatch. The
-/// declared `content-length` fails fast exactly like the streaming check in
-/// the TS host; the buffered ceiling catches lying or absent declarations.
-pub(crate) async fn read_bounded_body(
-    headers: &HeaderMap,
-    body: Body,
-) -> Result<Vec<u8>, ServerError> {
-    use plec_ir::limits::MAX_REQUEST_BODY_BYTES;
-    if let Some(declared) = headers
-        .get(header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-    {
-        if declared > MAX_REQUEST_BODY_BYTES as u64 {
-            return Err(ServerError::RequestBodyTooLarge);
-        }
-    }
-    let bytes = axum::body::to_bytes(body, MAX_REQUEST_BODY_BYTES)
-        .await
-        .map_err(|_| ServerError::RequestBodyTooLarge)?;
-    Ok(bytes.to_vec())
-}
 fn parse_cookies(header: &str) -> Result<HashMap<String, String>, ServerError> {
     let mut cookies = HashMap::new();
     for part in header.split(';') {
@@ -231,7 +204,7 @@ fn parse_cookies(header: &str) -> Result<HashMap<String, String>, ServerError> {
     Ok(cookies)
 }
 
-pub(crate) fn parse_query(query: &str) -> Result<HashMap<String, QueryValue>, ServerError> {
+pub fn parse_query(query: &str) -> Result<HashMap<String, QueryValue>, ServerError> {
     let mut values: Vec<(String, Vec<String>)> = Vec::new();
     for pair in query.split('&') {
         if pair.is_empty() {

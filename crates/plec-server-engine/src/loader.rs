@@ -1,4 +1,4 @@
-//! Server route-loader host for shared typed action execution.
+//! Host-independent route-loader execution for compiled applications.
 
 use plec_action::{
     charge_response_bytes, resume, start, ActionError, ActionHost, ActionOutcome, Run,
@@ -128,14 +128,14 @@ impl ActionHost for LoaderHost<'_> {
 
 /// One executed route loader. The snapshot sees only its terminal action
 /// outcome: `responseJson` remains an internal capability envelope.
-pub(crate) enum LoaderExecution {
+pub enum LoaderExecution {
     None,
     Snapshot(SsrLoaderOutcome),
     Redirect { location: String, replace: bool },
     NotFound,
 }
 
-pub(crate) async fn execute_route_loader(
+pub async fn execute_route_loader(
     bundle: &ArtifactBundle,
     route: &Route,
     context: &RequestContext,
@@ -444,6 +444,6 @@ fn loader_failure_record(kind: &str, message: &str, url: Option<&str>) -> Runtim
     RuntimeValue::Record(record)
 }
 
-pub(crate) fn snapshot_value_to_json(value: &plec_ir::SsrSnapshotValue) -> JsonValue {
+pub fn snapshot_value_to_json(value: &plec_ir::SsrSnapshotValue) -> JsonValue {
     RuntimeValue::from_ssr_snapshot(value).into_json_value()
 }

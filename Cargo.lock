@@ -1985,9 +1985,14 @@ version = "0.1.0"
 dependencies = [
  "futures-executor",
  "futures-util",
+ "http",
  "napi",
  "napi-build",
  "napi-derive",
+ "plec-server-engine",
+ "reqwest",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -2083,9 +2088,29 @@ dependencies = [
  "axum",
  "futures-util",
  "getrandom 0.4.3",
+ "http",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "plec-ir",
+ "plec-schema",
+ "plec-server-engine",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tower-http",
+]
+
+[[package]]
+name = "plec-server-engine"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "http",
  "indexmap",
  "plec-action",
  "plec-eval",
@@ -2097,8 +2122,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
- "tower",
- "tower-http",
 ]
 
 [[package]]
@@ -3031,6 +3054,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

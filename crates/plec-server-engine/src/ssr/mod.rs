@@ -1,7 +1,7 @@
-//! SSR execution and bootstrap snapshot construction.
+//! Host-independent SSR execution and bootstrap snapshot construction.
 
-pub(crate) mod render;
-pub(crate) mod snapshot;
+pub mod render;
+pub mod snapshot;
 
 use std::collections::BTreeMap;
 
@@ -14,8 +14,9 @@ use crate::{
     request::RequestContext,
 };
 
-pub(crate) use render::{escape_attribute, escape_html, evaluate, Scope};
-pub(crate) use snapshot::bootstrap_payload;
+pub use render::{escape_attribute, escape_html};
+pub(crate) use render::{evaluate, Scope};
+pub use snapshot::bootstrap_payload;
 
 /// Server-only boundary enforcement during one document render. Request
 /// cookies can never satisfy `validate_public_export` (not explicitly public,
@@ -79,18 +80,18 @@ impl RenderState {
 /// One completed document render: markup, the structural ownership records
 /// the snapshot embeds, the route child graph it rendered, and the gated
 /// host loads observed.
-pub(crate) struct RenderedApplication {
+pub struct RenderedApplication {
     pub body: String,
-    pub branches: BTreeMap<String, BTreeMap<usize, SsrSelectedBranch>>,
-    pub loops: BTreeMap<String, BTreeMap<usize, Vec<String>>>,
-    pub nested: BTreeMap<String, NestedRecord>,
-    pub child_graphs: Vec<ChildGraph>,
+    pub(crate) branches: BTreeMap<String, BTreeMap<usize, SsrSelectedBranch>>,
+    pub(crate) loops: BTreeMap<String, BTreeMap<usize, Vec<String>>>,
+    pub(crate) nested: BTreeMap<String, NestedRecord>,
+    pub(crate) child_graphs: Vec<ChildGraph>,
     pub gating: Vec<String>,
     pub host_renders: Vec<HostRender>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct HostRender {
+pub struct HostRender {
     pub placeholder: String,
     pub provider: String,
     pub component: String,
@@ -114,7 +115,7 @@ pub(crate) struct RouteRender<'a> {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum RenderError {
+pub enum RenderError {
     #[error("root graph missing")]
     RootGraphMissing,
     #[error("route graph missing for {0}")]
@@ -166,7 +167,7 @@ impl From<RenderError> for crate::ServerError {
 /// SSR consumes exactly the executable component graph. It renders every
 /// matched route graph through its declared parent outlet and records the
 /// structural ownership the bootstrap snapshot transfers.
-pub(crate) fn render_application(
+pub fn render_application(
     bundle: &ArtifactBundle,
     routes: &[RouteExecution<'_>],
     request: &RequestContext,
@@ -256,7 +257,10 @@ fn build_route_tree<'a>(
     };
     let route = execution.route_match.route;
     let graph_id = if execution.not_found {
-        route.not_found_graph_id.as_deref().unwrap_or(&route.graph_id)
+        route
+            .not_found_graph_id
+            .as_deref()
+            .unwrap_or(&route.graph_id)
     } else {
         match execution.loader.as_ref().map(|loader| &loader.state) {
             Some(plec_ir::SsrLoaderState::Rejected { .. }) => {

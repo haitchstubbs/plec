@@ -1,6 +1,6 @@
 //! SSR execution over the executable component graph. It deliberately has no
 //! JSX/VDOM path: every rendered fact comes from the compiled artifact, and
-//! expression semantics come from `plec-eval`; the server supplies only the
+//! expression semantics come from `plec-eval`; the host supplies only the
 //! request-scoped values needed to instantiate the graph the browser resumes.
 
 use std::{
@@ -1018,7 +1018,7 @@ fn canonical_key(value: &Value) -> String {
 mod shared_evaluator_tests {
     use super::*;
     use crate::request::RequestContext;
-    use axum::http::{HeaderMap, Method};
+    use http::{HeaderMap, Method};
     use plec_schema::typed::TypedApplication;
 
     fn request() -> RequestContext {
@@ -1093,13 +1093,13 @@ mod shared_evaluator_tests {
     }
 }
 
-pub(crate) fn escape_html(value: &str) -> String {
+pub fn escape_html(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
 
-pub(crate) fn escape_attribute(value: &str) -> String {
+pub fn escape_attribute(value: &str) -> String {
     escape_html(value).replace('"', "&quot;")
 }

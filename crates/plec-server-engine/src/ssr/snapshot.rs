@@ -23,7 +23,7 @@ const BOOTSTRAP_WRAPPER_VERSION: u32 = SSR_SNAPSHOT_VERSION;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct BootstrapPayload {
+pub struct BootstrapPayload {
     version: u32,
     snapshot: PlecSsrSnapshot,
 }
@@ -31,7 +31,7 @@ pub(crate) struct BootstrapPayload {
 /// The payload to embed in the document, or `None` when no route matched:
 /// without a matched route there is nothing to resume, so no bootstrap is
 /// emitted and the browser mounts fresh.
-pub(crate) fn bootstrap_payload(
+pub fn bootstrap_payload(
     bundle: &ArtifactBundle,
     routes: &[RouteExecution<'_>],
     context: &RequestContext,

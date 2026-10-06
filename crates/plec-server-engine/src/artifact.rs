@@ -1,4 +1,4 @@
-//! Deserialization mirror of the compiled route artifact.
+//! Deserialization mirror of the compiled route artifact, shared by hosts.
 //!
 //! `plec-ir` owns the canonical artifact schema, but its graph types are
 //! serialize-only (`&'static str` fields cannot derive `Deserialize` without
@@ -74,7 +74,7 @@ fn default_pending_mode() -> String {
 }
 
 impl Manifest {
-    pub(crate) fn routing_manifest(&self) -> plec_schema::routing::RouteManifest {
+    pub fn routing_manifest(&self) -> plec_schema::routing::RouteManifest {
         plec_schema::routing::RouteManifest {
             version: None,
             root_graph_id: self.root_graph_id.clone(),

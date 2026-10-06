@@ -17,6 +17,7 @@ members = [
   "crates/plec-dom",
   "crates/plec-build",
   "crates/plec-server",
+  "crates/plec-server-engine",
   "crates/plec-query-core",
   "crates/plec-query-node",
   "crates/plec-node-bindings",
@@ -34,6 +35,11 @@ opt-level = "z"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
+
+[profile.node-release]
+inherits = "release"
+opt-level = 3
+panic = "unwind"
 
 [workspace.dependencies]
 swc_common = "26.0.0"
@@ -92,6 +98,7 @@ wasm-bindgen-test = "=0.3.78"
 js-sys = "=0.3.105"
 axum = "0.8.9"
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 tower = "0.5"
 # 0.6 is the first series against http 1.x, which axum 0.8 requires.
 tower-http = { version = "0.6", features = ["fs"] }
