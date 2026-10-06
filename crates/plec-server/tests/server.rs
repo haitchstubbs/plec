@@ -183,6 +183,18 @@ async fn reserved_server_action_endpoint_dispatches_only_post_and_redacts_failur
         router.clone().oneshot(cross_origin).await.unwrap().status(),
         StatusCode::FORBIDDEN
     );
+    let oversized = Request::builder()
+        .method("POST")
+        .uri("/_plec/actions/sa_echo")
+        .header("origin", "http://localhost")
+        .body(Body::from(vec![b'x'; plec_ir::limits::MAX_REQUEST_BODY_BYTES + 1]))
+        .unwrap();
+    let oversized = router.clone().oneshot(oversized).await.unwrap();
+    assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        serde_json::from_str::<Value>(&text_of(oversized).await).unwrap(),
+        json!({"error":"server action request exceeds limit"})
+    );
     let failure = Request::builder()
         .method("POST")
         .uri("/_plec/actions/sa_fail")

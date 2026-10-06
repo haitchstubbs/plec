@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+bytes = "1"
 http = "1"
 tokio.workspace = true
 serde.workspace = true

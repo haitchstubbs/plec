@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+pub mod action;
 pub mod artifact;
 pub mod document;
 pub mod loader;
@@ -19,6 +20,8 @@ pub enum ServerError {
     ArtifactTooLarge,
     #[error("unknown or stale server action")]
     UnknownServerAction,
+    #[error("application callback capacity is exhausted")]
+    CallbackCapacity,
     #[error("{0}")]
     Other(String),
 }
@@ -92,6 +95,21 @@ pub mod runtime {
         fn render_host<'a>(&'a self, _request: HostRenderRequest) -> HostRenderFuture<'a> {
             Box::pin(async { Ok(None) })
         }
+    }
+
+    pub type ActionFuture<'a> = std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<plec_schema::RuntimeValue, crate::ServerError>>
+                + Send
+                + 'a,
+        >,
+    >;
+
+    pub trait ActionCapabilities: Send + Sync {
+        fn invoke_action<'a>(
+            &'a self,
+            request: crate::action::ServerActionRequest,
+        ) -> ActionFuture<'a>;
     }
 }
 

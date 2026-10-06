@@ -24,6 +24,7 @@ futures-executor.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 http = "1"
+bytes = "1"
 reqwest = { workspace = true, features = ["stream"] }
 serde_json.workspace = true
 plec-server-engine = { path = "../plec-server-engine", version = "0.1.0" }

@@ -1,5 +1,6 @@
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { classifyPlecPath, canonicalRequestTarget } from './request-target.js';
 import { loadApplication, type NativeApplicationOptions, type PlecApplication } from './native.js';
 import { loadSsrProviders } from './providers.js';
@@ -25,6 +26,12 @@ interface ServerManifest {
   preloads?: string[];
   customElements?: string[];
   document?: { title?: string; description?: string };
+  server?: { entry?: string };
+}
+
+interface GeneratedApplication {
+  hasAction(id: string): boolean;
+  invokeAction(id: string, args: unknown[], context: unknown): Promise<unknown>;
 }
 
 export async function createPlecHandler(options: PlecNodeOptions): Promise<PlecHandler> {
@@ -35,8 +42,19 @@ export async function createPlecHandler(options: PlecNodeOptions): Promise<PlecH
   const publicRoot = await realpath(path.resolve(dir, manifest.publicDir ?? 'public'));
   const providerManifestPath = path.resolve(dir, manifest.clientDir ?? 'client', 'host-providers.json');
   const artifactPath = await realpath(path.resolve(dir, manifest.artifact ?? 'server/route-artifact.json'));
+  if (typeof manifest.server?.entry !== 'string' || manifest.server.entry.length === 0) {
+    throw new Error('Plec server entry is missing');
+  }
+  const appEntry = await realpath(path.resolve(dir, manifest.server.entry));
   if (!inside(dir, publicRoot) || !inside(dir, artifactPath)) {
     throw new Error('Plec manifest path escapes the distribution directory');
+  }
+  if (!inside(dir, appEntry)) {
+    throw new Error('Plec server entry escapes the distribution directory');
+  }
+  const generated = await import(pathToFileURL(appEntry).href) as GeneratedApplication;
+  if (typeof generated.hasAction !== 'function' || typeof generated.invokeAction !== 'function') {
+    throw new Error('generated server application has no action registry');
   }
   const nativeOptions: NativeApplicationOptions = {
     artifactPath,
@@ -50,7 +68,15 @@ export async function createPlecHandler(options: PlecNodeOptions): Promise<PlecH
     development: options.development ?? false,
   };
   const renderHost = await loadSsrProviders(dir, providerManifestPath);
-  const application: PlecApplication = await loadApplication(nativeOptions, renderHost);
+  const invokeAction = async (payload: string): Promise<string> => {
+    const { id, arguments: args, context } = JSON.parse(payload) as {
+      id: string; arguments: unknown[]; context: unknown;
+    };
+    if (!generated?.hasAction(id)) return JSON.stringify({ found: false });
+    const value = await generated.invokeAction(id, args, context);
+    return JSON.stringify({ found: true, value: value ?? null });
+  };
+  const application: PlecApplication = await loadApplication(nativeOptions, renderHost, invokeAction);
   let closed = false;
 
   return {
@@ -62,7 +88,51 @@ export async function createPlecHandler(options: PlecNodeOptions): Promise<PlecH
       } catch {
         return new Response('Bad Request', { status: 400 });
       }
-      if (classifyPlecPath(pathname) !== 'document') {
+      const routeClass = classifyPlecPath(pathname);
+      if (routeClass === 'action') {
+        const id = pathname.slice('/_plec/actions/'.length);
+        if (!id || !/^[A-Za-z0-9_-]+$/u.test(id)) {
+          return actionError(404, 'unknown server action');
+        }
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+        const body = request.body
+          ? new ReadableStream<Uint8Array>({
+              start() { reader = request.body!.getReader(); },
+              async pull(controller) {
+                try {
+                  const result = await reader!.read();
+                  if (result.done) controller.close();
+                  else controller.enqueue(result.value);
+                } catch (error) {
+                  controller.error(error);
+                }
+              },
+              async cancel(reason) { await reader?.cancel(reason); },
+            }, { highWaterMark: 0 })
+          : new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+        const headers: { name: string; value: string }[] = [];
+        request.headers.forEach((value, name) => {
+          if (name !== 'host' && name !== 'x-forwarded-proto') headers.push({ name, value });
+        });
+        const requestUrl = new URL(request.url);
+        headers.push({ name: 'host', value: requestUrl.host });
+        const forwarded = options.trustProxy
+          ? request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
+          : undefined;
+        const scheme = forwarded === 'http' || forwarded === 'https'
+          ? forwarded
+          : requestUrl.protocol.slice(0, -1);
+        headers.push({ name: 'x-forwarded-proto', value: scheme });
+        const response = await application.handleAction(
+          { method: request.method, url: request.url, headers },
+          body,
+          async () => { await reader?.cancel('native action stream stopped'); },
+        );
+        const responseHeaders = new Headers();
+        for (const entry of response.headers) responseHeaders.append(entry.name, entry.value);
+        return new Response(response.body(), { status: response.status, headers: responseHeaders });
+      }
+      if (routeClass !== 'document') {
         return new Response(JSON.stringify({ error: 'not found' }), {
           status: 404,
           headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
@@ -119,6 +189,13 @@ export async function createPlecHandler(options: PlecNodeOptions): Promise<PlecH
       await application.close();
     },
   };
+}
+
+function actionError(status: number, message: string): Response {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+  });
 }
 
 function inside(root: string, candidate: string): boolean {

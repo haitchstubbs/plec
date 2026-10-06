@@ -25,7 +25,9 @@ describe('@plec/node document path', () => {
     await writeFile(path.join(dir, 'plec-server.json'), JSON.stringify({
       publicDir: 'public',
       artifact: 'server/route-artifact.json',
+      server: { entry: 'server/app.mjs' },
     }));
+    await writeFile(path.join(dir, 'server/app.mjs'), generatedApp());
     await writeFile(path.join(dir, 'server/route-artifact.json'), JSON.stringify({
       manifest: {
         revision: 'node-document-test',
@@ -67,7 +69,9 @@ describe('@plec/node document path', () => {
       publicDir: 'public',
       clientDir: 'client',
       artifact: 'server/route-artifact.json',
+      server: { entry: 'server/app.mjs' },
     }));
+    await writeFile(path.join(dir, 'server/app.mjs'), generatedApp());
     await writeFile(path.join(dir, 'client/host-providers.json'), JSON.stringify({
       version: 2,
       revision: 'provider-test',
@@ -165,4 +169,8 @@ function graph(id: string, tag: string, text: string, withOutlet: boolean) {
       routeOutlets: withOutlet ? [{ id: 'main', node: 0 }] : [],
     }],
   };
+}
+
+function generatedApp(): string {
+  return 'export function hasAction() { return false; } export async function invokeAction() { throw new Error("unknown action"); }';
 }

@@ -36,6 +36,31 @@ impl plec_server_engine::runtime::ApplicationCapabilities for HostCapabilities<'
     }
 }
 
+struct ActionHostCapabilities<'a>(&'a dyn crate::ApplicationRuntime);
+
+impl plec_server_engine::runtime::ActionCapabilities for ActionHostCapabilities<'_> {
+    fn invoke_action<'a>(
+        &'a self,
+        request: plec_server_engine::action::ServerActionRequest,
+    ) -> plec_server_engine::runtime::ActionFuture<'a> {
+        Box::pin(async move {
+            self.0
+                .invoke_action(crate::runtime::ServerActionRequest {
+                    id: request.id,
+                    arguments: request.arguments,
+                    context: request.context,
+                })
+                .await
+                .map_err(|error| match error {
+                    ServerError::UnknownServerAction => {
+                        plec_server_engine::ServerError::UnknownServerAction
+                    }
+                    other => plec_server_engine::ServerError::message(other.to_string()),
+                })
+        })
+    }
+}
+
 /// Axum-specific bounded body adapter. The semantic engine owns the byte
 /// ceiling; this host owns conversion from Axum's body type.
 pub(crate) async fn read_bounded_body(
@@ -81,6 +106,10 @@ async fn dispatch_inner(
     request: Request<Body>,
 ) -> Result<Response<Body>, ServerError> {
     let (parts, body) = request.into_parts();
+    let context = RequestContext::from_parts(parts.method.clone(), &parts.uri, &parts.headers)?;
+    if crate::request::classify_plec_path(&context.pathname) == crate::request::RouteClass::Action {
+        return handle_server_action(state, Request::from_parts(parts, body), context).await;
+    }
     // Inbound request bytes are untrusted: every non-GET/HEAD body is read
     // under the documented ceiling before any application dispatch, so
     // oversized or malformed bodies fail before app handlers or SSR run.
@@ -100,8 +129,7 @@ async fn dispatch_inner(
         };
         Request::from_parts(parts, Body::from(bytes))
     };
-    let mut context =
-        RequestContext::from_parts(request.method().clone(), request.uri(), request.headers())?;
+    let mut context = context;
 
     match crate::request::classify_plec_path(&context.pathname) {
         crate::request::RouteClass::Api => return handle_api(state, request, context).await,
@@ -122,108 +150,33 @@ async fn handle_server_action(
     request: Request<Body>,
     context: RequestContext,
 ) -> Result<Response<Body>, ServerError> {
-    let fail = |status, message: &str| json_response(status, &json!({"error": message}));
-    if request.method() != Method::POST {
-        return Ok(fail(StatusCode::METHOD_NOT_ALLOWED, "method not allowed"));
-    }
-    // Credential-bearing action POSTs are same-origin only. Browsers send
-    // Origin for fetch POST; compare its authority against the request host.
-    let origin = context
-        .headers
-        .get(axum::http::header::ORIGIN)
-        .and_then(|v| v.to_str().ok());
-    let expected = context.url.split('/').take(3).collect::<Vec<_>>().join("/");
-    if origin != Some(expected.as_str()) {
-        return Ok(fail(
-            StatusCode::FORBIDDEN,
-            "same-origin action POST required",
+    let Some(runtime) = state.options.application_runtime.as_deref() else {
+        return Ok(json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &json!({"error":"server actions unavailable"}),
         ));
-    }
-    let Some(id) = context
-        .pathname
-        .strip_prefix("/_plec/actions/")
-        .filter(|id| {
-            !id.is_empty()
-                && !id.contains('/')
-                && id
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        })
-    else {
-        return Ok(fail(StatusCode::NOT_FOUND, "unknown server action"));
     };
     let (parts, body) = request.into_parts();
-    let bytes = match read_bounded_body(&parts.headers, body).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return Ok(fail(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "server action request exceeds limit",
-            ));
-        }
-    };
-    let arguments: Vec<plec_schema::RuntimeValue> = match serde_json::from_slice(&bytes) {
-        Ok(arguments) => arguments,
-        Err(_) => {
-            return Ok(fail(
-                StatusCode::BAD_REQUEST,
-                "invalid server action arguments",
-            ));
-        }
-    };
-    if arguments.len() > plec_ir::limits::MAX_COMPONENT_COLLECTION_LEN {
-        return Ok(fail(
-            StatusCode::BAD_REQUEST,
-            "server action argument count exceeds limit",
-        ));
+    let content_length = parts
+        .headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    let capabilities = ActionHostCapabilities(runtime);
+    let outcome = plec_server_engine::action::execute_action(
+        context,
+        content_length,
+        body.into_data_stream(),
+        &capabilities,
+    )
+    .await;
+    if matches!(outcome, plec_server_engine::action::ActionOutcome::Failed) {
+        eprintln!("[PLEC-SERVER-ACTION] action: invocation failed");
     }
-    if arguments
-        .iter()
-        .any(|argument| argument.check_limits().is_err())
-    {
-        return Ok(fail(
-            StatusCode::BAD_REQUEST,
-            "server action arguments exceed value limits",
-        ));
-    }
-    let Some(runtime) = state.options.application_runtime.as_deref() else {
-        return Ok(fail(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "server actions unavailable",
-        ));
-    };
-    match runtime
-        .invoke_action(crate::runtime::ServerActionRequest {
-            id: id.to_owned(),
-            arguments,
-            context,
-        })
-        .await
-    {
-        Ok(value) => {
-            if value.check_limits().is_err() {
-                return Ok(fail(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "server action result exceeds value limits",
-                ));
-            }
-            let value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
-            Ok(json_response(StatusCode::OK, &value))
-        }
-        Err(error) => {
-            if matches!(error, ServerError::UnknownServerAction) {
-                return Ok(fail(
-                    StatusCode::NOT_FOUND,
-                    "unknown or stale server action",
-                ));
-            }
-            eprintln!("[PLEC-SERVER-ACTION] action: invocation failed: {error}");
-            Ok(fail(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "server action failed",
-            ))
-        }
-    }
+    Ok(json_response(
+        StatusCode::from_u16(outcome.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        &outcome.body(),
+    ))
 }
 
 async fn handle_api(

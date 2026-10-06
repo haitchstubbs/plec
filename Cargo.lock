@@ -1983,6 +1983,7 @@ dependencies = [
 name = "plec-node-bindings"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "futures-executor",
  "futures-util",
  "http",
@@ -2110,6 +2111,7 @@ dependencies = [
 name = "plec-server-engine"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "futures-util",
  "http",
  "indexmap",

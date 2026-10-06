@@ -32,13 +32,24 @@ export interface NativeDocumentResponse {
   body(): ReadableStream<Uint8Array>;
 }
 
+export interface NativeActionResponse {
+  readonly status: number;
+  readonly headers: NativeHeader[];
+  body(): ReadableStream<Uint8Array>;
+}
+
 export interface PlecApplication {
   handleDocument(request: NativeRequest): Promise<NativeDocumentResponse>;
+  handleAction(
+    request: NativeRequest,
+    body: ReadableStream<Uint8Array>,
+    cancelBody: (reason: string) => Promise<void>,
+  ): Promise<NativeActionResponse>;
   close(): Promise<void>;
 }
 
 interface NativeModule {
-  createCallbacks(renderHost: HostRenderCallback): NativeCallbacks;
+  createCallbacks(renderHost: HostRenderCallback, invokeAction: (payload: string) => Promise<string>): NativeCallbacks;
 }
 
 interface NativeCallbacks {
@@ -65,7 +76,8 @@ const native = require(fileURLToPath(new URL(`../native/${nativeFilename()}`, im
 export async function loadApplication(
   options: NativeApplicationOptions,
   renderHost: HostRenderCallback,
+  invokeAction: (payload: string) => Promise<string>,
 ): Promise<PlecApplication> {
-  const callbacks = native.createCallbacks(renderHost);
+  const callbacks = native.createCallbacks(renderHost, invokeAction);
   return callbacks.loadApplication(options);
 }
