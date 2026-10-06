@@ -2,6 +2,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { classifyPlecPath, canonicalRequestTarget } from './request-target.js';
 import { loadApplication, type NativeApplicationOptions, type PlecApplication } from './native.js';
+import { loadSsrProviders } from './providers.js';
 
 export interface PlecNodeOptions {
   dir: string;
@@ -16,6 +17,7 @@ export interface PlecHandler {
 
 interface ServerManifest {
   publicDir?: string;
+  clientDir?: string;
   artifact?: string;
   clientScript?: string;
   clientStyles?: string[];
@@ -31,6 +33,7 @@ export async function createPlecHandler(options: PlecNodeOptions): Promise<PlecH
   if (!inside(dir, manifestPath)) throw new Error('Plec manifest escapes the distribution directory');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as ServerManifest;
   const publicRoot = await realpath(path.resolve(dir, manifest.publicDir ?? 'public'));
+  const providerManifestPath = path.resolve(dir, manifest.clientDir ?? 'client', 'host-providers.json');
   const artifactPath = await realpath(path.resolve(dir, manifest.artifact ?? 'server/route-artifact.json'));
   if (!inside(dir, publicRoot) || !inside(dir, artifactPath)) {
     throw new Error('Plec manifest path escapes the distribution directory');
@@ -46,7 +49,8 @@ export async function createPlecHandler(options: PlecNodeOptions): Promise<PlecH
     description: manifest.document?.description,
     development: options.development ?? false,
   };
-  const application: PlecApplication = await loadApplication(nativeOptions);
+  const renderHost = await loadSsrProviders(dir, providerManifestPath);
+  const application: PlecApplication = await loadApplication(nativeOptions, renderHost);
   let closed = false;
 
   return {

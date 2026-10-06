@@ -1,6 +1,6 @@
 mod application;
 
-pub use application::{load_application, PlecApplication};
+pub use application::{create_callbacks, NativeCallbacks, PlecApplication};
 
 #[cfg(feature = "feasibility-gate")]
 mod feasibility;

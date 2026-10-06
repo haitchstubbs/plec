@@ -1991,6 +1991,7 @@ dependencies = [
  "napi-derive",
  "plec-server-engine",
  "reqwest",
+ "serde_json",
  "tokio",
  "tokio-util",
 ]

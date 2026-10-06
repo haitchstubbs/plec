@@ -2,10 +2,12 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::stream;
 use napi::{
-    bindgen_prelude::{BufferSlice, ReadableStream},
-    Env,
+    bindgen_prelude::{BufferSlice, Function, Promise, ReadableStream},
+    threadsafe_function::ThreadsafeFunction,
+    Env, Status,
 };
 use napi_derive::napi;
+use plec_server_engine::runtime::{ApplicationCapabilities, HostRenderFuture, HostRenderRequest};
 use plec_server_engine::{
     artifact::ArtifactBundle, request::RequestContext, DocumentMetadata, DocumentOptions,
 };
@@ -40,10 +42,63 @@ pub struct NativeRequest {
     pub headers: Vec<NativeHeader>,
 }
 
+type HostRenderCallback = ThreadsafeFunction<String, Promise<String>, String, Status, false>;
+
+struct CallbackManager {
+    render_host: Arc<HostRenderCallback>,
+}
+
+#[napi]
+pub struct NativeCallbacks {
+    inner: Mutex<Option<CallbackManager>>,
+}
+
+#[napi]
+pub fn create_callbacks(
+    render_host: Function<'_, String, Promise<String>>,
+) -> napi::Result<NativeCallbacks> {
+    let callback = render_host
+        .build_threadsafe_function()
+        .callee_handled::<false>()
+        .build()?;
+    Ok(NativeCallbacks {
+        inner: Mutex::new(Some(CallbackManager {
+            render_host: Arc::new(callback),
+        })),
+    })
+}
+
+impl ApplicationCapabilities for CallbackManager {
+    fn render_host<'a>(&'a self, request: HostRenderRequest) -> HostRenderFuture<'a> {
+        Box::pin(async move {
+            let value = serde_json::json!({
+                "provider": request.provider,
+                "component": request.component,
+                "props": request.props,
+            });
+            let promise = self
+                .render_host
+                .call_async_catch(value.to_string())
+                .await
+                .map_err(|error| plec_server_engine::ServerError::message(error.to_string()))?;
+            let html = promise
+                .await
+                .map_err(|error| plec_server_engine::ServerError::message(error.to_string()))?;
+            if html.len() > 1024 * 1024 {
+                return Err(plec_server_engine::ServerError::message(
+                    "host render exceeds limit",
+                ));
+            }
+            Ok(Some(html))
+        })
+    }
+}
+
 struct Snapshot {
     options: DocumentOptions,
     artifact: ArtifactBundle,
     client: reqwest::Client,
+    callbacks: CallbackManager,
 }
 
 struct Lifecycle {
@@ -65,40 +120,53 @@ pub struct PlecApplication {
 }
 
 #[napi]
-pub async fn load_application(options: NativeApplicationOptions) -> napi::Result<PlecApplication> {
-    let path = std::fs::canonicalize(&options.artifact_path).map_err(binding_error)?;
-    let artifact = plec_server_engine::document::load_artifact(&path)
-        .await
-        .map_err(binding_error)?;
-    let snapshot = Snapshot {
-        options: DocumentOptions {
-            artifact_path: path,
-            client_script: options.client_script,
-            client_styles: options.client_styles.unwrap_or_default(),
-            styles_href: options.styles_href,
-            preloads: options.preloads.unwrap_or_default(),
-            custom_elements: options.custom_elements.unwrap_or_default(),
-            document: DocumentMetadata {
-                title: options.title,
-                description: options.description,
+impl NativeCallbacks {
+    #[napi]
+    pub async fn load_application(
+        &self,
+        options: NativeApplicationOptions,
+    ) -> napi::Result<PlecApplication> {
+        let callbacks = self
+            .inner
+            .lock()
+            .map_err(|_| napi::Error::from_reason("callback manager poisoned"))?
+            .take()
+            .ok_or_else(|| napi::Error::from_reason("callback manager already consumed"))?;
+        let path = std::fs::canonicalize(&options.artifact_path).map_err(binding_error)?;
+        let artifact = plec_server_engine::document::load_artifact(&path)
+            .await
+            .map_err(binding_error)?;
+        let snapshot = Snapshot {
+            options: DocumentOptions {
+                artifact_path: path,
+                client_script: options.client_script,
+                client_styles: options.client_styles.unwrap_or_default(),
+                styles_href: options.styles_href,
+                preloads: options.preloads.unwrap_or_default(),
+                custom_elements: options.custom_elements.unwrap_or_default(),
+                document: DocumentMetadata {
+                    title: options.title,
+                    description: options.description,
+                },
+                development: options.development.unwrap_or(false),
             },
-            development: options.development.unwrap_or(false),
-        },
-        artifact,
-        client: reqwest::Client::new(),
-    };
-    Ok(PlecApplication {
-        inner: Arc::new(Inner {
-            lifecycle: Mutex::new(Lifecycle {
-                closing: false,
-                closed: false,
-                active: 0,
-                snapshot: Some(Arc::new(snapshot)),
+            artifact,
+            client: reqwest::Client::new(),
+            callbacks,
+        };
+        Ok(PlecApplication {
+            inner: Arc::new(Inner {
+                lifecycle: Mutex::new(Lifecycle {
+                    closing: false,
+                    closed: false,
+                    active: 0,
+                    snapshot: Some(Arc::new(snapshot)),
+                }),
+                drained: Notify::new(),
+                cancellation: CancellationToken::new(),
             }),
-            drained: Notify::new(),
-            cancellation: CancellationToken::new(),
-        }),
-    })
+        })
+    }
 }
 
 #[napi]
@@ -257,7 +325,7 @@ async fn execute(
         &snapshot.artifact,
         &mut context,
         &snapshot.client,
-        None,
+        Some(&snapshot.callbacks),
     )
     .await
     .map_err(binding_error)?;

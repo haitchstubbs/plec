@@ -24,6 +24,8 @@ export interface NativeApplicationOptions {
   development?: boolean;
 }
 
+export type HostRenderCallback = (requestJson: string) => Promise<string>;
+
 export interface NativeDocumentResponse {
   readonly status: number;
   readonly headers: NativeHeader[];
@@ -36,6 +38,10 @@ export interface PlecApplication {
 }
 
 interface NativeModule {
+  createCallbacks(renderHost: HostRenderCallback): NativeCallbacks;
+}
+
+interface NativeCallbacks {
   loadApplication(options: NativeApplicationOptions): Promise<PlecApplication>;
 }
 
@@ -56,4 +62,10 @@ function nativeFilename(): string {
 const require = createRequire(import.meta.url);
 const native = require(fileURLToPath(new URL(`../native/${nativeFilename()}`, import.meta.url))) as NativeModule;
 
-export const loadApplication = native.loadApplication;
+export async function loadApplication(
+  options: NativeApplicationOptions,
+  renderHost: HostRenderCallback,
+): Promise<PlecApplication> {
+  const callbacks = native.createCallbacks(renderHost);
+  return callbacks.loadApplication(options);
+}
