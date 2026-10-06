@@ -209,12 +209,19 @@ test('todo create, complete, rename, and delete stay targeted', async ({
     const rowKey = await page
       .locator('li')
       .filter({ hasText: 'Acceptance todo' })
+      .last()
       .getAttribute('data-runtime-row-key');
     let row = page.locator(`[data-runtime-row-key="${rowKey}"]`);
     await row.locator('input').click();
     // The row renders `Mark {title} open` once completed.
     await expect(
       page.getByRole('checkbox', { name: 'Mark Acceptance todo open' }),
+    ).toBeVisible();
+    await row.locator('input[type="checkbox"]').click();
+    await expect(
+      page.getByRole('checkbox', {
+        name: 'Mark Acceptance todo complete',
+      }),
     ).toBeVisible();
     await row.locator('button', { hasText: 'Edit' }).click();
     const rename = row.locator('input:not([type="checkbox"])');

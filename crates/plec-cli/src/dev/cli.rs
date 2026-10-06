@@ -2,11 +2,11 @@ use crate::dev;
 
 use clap::{Parser, Subcommand};
 use plec_build::{
-    build, modules::host::resolve_custom_elements, modules::host::resolve_host_imports,
-    BuildOptions, RuntimeSource,
+    BuildOptions, RuntimeSource, build, modules::host::resolve_custom_elements,
+    modules::host::resolve_host_imports,
 };
 use plec_compiler::{
-    compile_with_options, load_with_options, lower_route_manifest, lower_routes, CompilerOptions,
+    CompilerOptions, compile_with_options, load_with_options, lower_route_manifest, lower_routes,
 };
 use plec_inspect::Inspector;
 use std::path::PathBuf;
@@ -35,7 +35,8 @@ enum Command {
 
     /// Compile a routed Plec application into deployable artifacts.
     Build {
-        /// Route source entry (e.g. src/router.tsx).
+        /// Application source entry.
+        #[arg(default_value = "src/app.tsx")]
         source: PathBuf,
 
         /// Build output root; Plec artifacts are emitted under `public/`.
@@ -64,7 +65,8 @@ enum Command {
 
     /// Build and serve an application, rebuilding when source files change.
     Dev {
-        #[arg(default_value = "src/router.tsx")]
+        /// Application source entry.
+        #[arg(default_value = "src/app.tsx")]
         source: PathBuf,
         #[arg(short, long, default_value = "dist")]
         out_dir: PathBuf,
@@ -155,7 +157,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 styles_href: None,
                 preloads: Vec::new(),
                 runtime_source: runtime_source.into(),
-            })?;
+            })
+            .map_err(crate::diagnostic::DevelopmentDiagnostic::build)?;
             println!(
                 "Plec build complete (revision {}) in {}",
                 result.revision,

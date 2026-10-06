@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Config } from '@playwright/test';
 
@@ -26,7 +27,12 @@ export const baseURL = `http://127.0.0.1:${e2ePort}`;
 
 // The native Axum host owns the public listener and spawns the Node sidecar
 // for application-owned `/api/*` handlers.
-const startCommand = 'yarn workspace fullstack exec plec serve dist';
+const movedDist = process.env.PLEC_E2E_DIST;
+const quoteShell = (value: string) =>
+  `'${value.replaceAll("'", "'\\''")}'`;
+const startCommand = movedDist
+  ? `plec serve ${quoteShell(movedDist)}`
+  : 'yarn workspace fullstack exec plec serve dist';
 
 // Playwright owns the fullstack server: turbo builds it, webServer starts
 // the native host, waits for HTTP readiness, and kills the process group
@@ -36,6 +42,7 @@ const startCommand = 'yarn workspace fullstack exec plec serve dist';
 export const webServer = {
   command: startCommand,
   url: baseURL,
+  ...(movedDist ? { cwd: path.dirname(movedDist) } : {}),
   env: {
     PORT: String(e2ePort),
     PLEC_ACCEPTANCE_CONTROL: '1',

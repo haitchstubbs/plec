@@ -5,7 +5,8 @@
 
 use std::path::PathBuf;
 
-use plec_server::{manifest::LoadedServerManifest, NodeRuntimeOptions};
+use crate::diagnostic::DevelopmentDiagnostic;
+use plec_server::{NodeRuntimeOptions, manifest::LoadedServerManifest};
 
 pub struct ServeOptions {
     /// Build output directory containing `plec-server.json`.
@@ -18,10 +19,27 @@ pub struct ServeOptions {
     pub development: bool,
 }
 
+// Constant to store plec ascii art
+const PLEC_ASCII_ART: &str = r#"
+╔════════════════════════════════╗
+║          ███████╗              ║
+║          ██╔══██╗              ║
+║          ██████╔╝ L E C        ║
+║          ██╔═══╝               ║
+║          ██║                   ║
+║          ╚═╝                   ║
+║                                ║
+║             P L E C            ║
+║     ── semantic runtime ──     ║
+╚════════════════════════════════╝
+"#;
+
 pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
+    println!("{PLEC_ASCII_ART}");
     println!("➠          Starting Plec host...");
     let dir = std::path::absolute(&options.dir)?;
-    let loaded = LoadedServerManifest::load(&dir)?;
+    let loaded =
+        LoadedServerManifest::load(&dir).map_err(DevelopmentDiagnostic::server_manifest)?;
 
     let port = options
         .port
@@ -41,9 +59,11 @@ pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
         (Some(entry), Some(script)) => {
             let spawned = std::thread::spawn(move || {
                 tokio::runtime::Runtime::new()?.block_on(
-                    plec_server::NodeApplicationRuntime::spawn(NodeRuntimeOptions::new(
-                        script, entry,
-                    )),
+                    plec_server::NodeApplicationRuntime::spawn({
+                        let mut options = NodeRuntimeOptions::new(script, entry);
+                        options.development = development;
+                        options
+                    }),
                 )
             });
             let runtime = Some(spawned.join().map_err(|_| -> Box<dyn std::error::Error> {
@@ -100,7 +120,7 @@ pub fn serve(options: ServeOptions) -> Result<(), Box<dyn std::error::Error>> {
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
 
         let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
 
@@ -115,9 +135,14 @@ async fn shutdown_signal() {
 
     #[cfg(windows)]
     {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl-C handler");
+        let mut ctrl_break =
+            tokio::signal::windows::ctrl_break().expect("failed to install Ctrl-Break handler");
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                result.expect("failed to install Ctrl-C handler");
+            }
+            _ = ctrl_break.recv() => {}
+        }
     }
 
     println!("\u{270B}\u{FE0E}          Shutting down");

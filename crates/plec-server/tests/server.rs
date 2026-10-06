@@ -64,8 +64,10 @@ fn write_artifact(dir: &Path, artifact: &Value) {
 fn options(dir: &Path) -> PlecServerOptions {
     PlecServerOptions {
         public_dir: dir.to_path_buf(),
+        client_dir: dir.to_path_buf(),
         artifact_path: dir.join("route-artifact.json"),
         client_script: None,
+        client_styles: Vec::new(),
         styles_href: None,
         preloads: Vec::new(),
         custom_elements: Vec::new(),
@@ -114,7 +116,7 @@ impl plec_server::ApplicationRuntime for EchoActionRuntime {
         Box::pin(async move {
             if request.id == "sa_fail" {
                 return Err(plec_server::ServerError::Other(
-                    "TOP_SECRET_ACTION_FAILURE".into(),
+                    "PLEC_PRIVATE_DIAGNOSTIC_MARKER".into(),
                 ));
             }
             if request.id != "sa_echo" {
@@ -191,7 +193,7 @@ async fn reserved_server_action_endpoint_dispatches_only_post_and_redacts_failur
     assert_eq!(failure.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = text_of(failure).await;
     assert!(body.contains("server action failed"));
-    assert!(!body.contains("TOP_SECRET_ACTION_FAILURE"));
+    assert!(!body.contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER"));
 }
 
 async fn get_html(options: &PlecServerOptions, uri: &str) -> String {
@@ -372,6 +374,7 @@ async fn emits_font_preload_links_before_the_stylesheet() {
     write_artifact(dir.path(), &artifact);
     let mut options = options(dir.path());
     options.styles_href = Some("/assets/styles.css".to_owned());
+    options.client_styles = vec!["/_plec/assets/client-a1b2.css".to_owned()];
     options.preloads = vec!["/assets/files/outfit-latin-wght-normal.woff2".to_owned()];
     let html = get_html(&options, "/").await;
     assert!(
@@ -382,6 +385,7 @@ async fn emits_font_preload_links_before_the_stylesheet() {
         "{html}"
     );
     assert!(html.find("rel=\"preload\"").unwrap() < html.find("rel=\"stylesheet\"").unwrap());
+    assert!(html.contains("href=\"/_plec/assets/client-a1b2.css\""));
 }
 
 #[tokio::test]
@@ -1820,7 +1824,10 @@ async fn falls_back_to_the_public_shell_when_the_artifact_is_unreadable() {
         response
             .headers()
             .get("x-plec-ssr-fallback")
-            .is_some_and(|value| !value.is_empty())
+            .is_some_and(|value| value
+                .to_str()
+                .unwrap()
+                .starts_with("[PLEC-SSR-RENDER] ssr:"))
     );
     assert!(text_of(response).await.contains("shell"));
 }
@@ -1883,6 +1890,83 @@ async fn serves_static_assets_with_precompressed_sidecars() {
     let missing = router.oneshot(get("/missing.css")).await.expect("response");
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     assert!(text_of(missing).await.contains("asset not found"));
+}
+
+#[tokio::test]
+async fn serves_client_artifacts_only_in_reserved_namespace() {
+    let dir = fixture_dir();
+    let public = dir.path().join("public");
+    let client = dir.path().join("client");
+    let server = dir.path().join("server");
+    std::fs::create_dir_all(public.join("assets")).unwrap();
+    std::fs::create_dir_all(client.join("graphs")).unwrap();
+    std::fs::create_dir_all(&server).unwrap();
+    std::fs::write(public.join("index.html"), "shell").unwrap();
+    std::fs::write(public.join("assets/app.css"), "app-css").unwrap();
+    std::fs::write(client.join("graphs/home.json"), "graph").unwrap();
+    std::fs::write(client.join("runtime.js"), "runtime").unwrap();
+    std::fs::write(client.join("runtime.js.br"), b"br-runtime").unwrap();
+    std::fs::create_dir_all(client.join("assets/chunks")).unwrap();
+    std::fs::write(client.join("assets/chunks/shared.js"), "shared-js").unwrap();
+    std::fs::write(client.join("assets/client.css"), "client-css").unwrap();
+    std::fs::write(client.join("assets/logo.png"), "image").unwrap();
+    std::fs::write(client.join("assets/font.woff2"), "font").unwrap();
+    std::fs::write(client.join("assets/provider.js"), "provider").unwrap();
+    std::fs::create_dir_all(&server).unwrap();
+    std::fs::write(server.join("app.mjs"), "private-server").unwrap();
+    std::fs::write(server.join("route-artifact.json"), "private-artifact").unwrap();
+    std::fs::write(dir.path().join("plec-server.json"), "private-metadata").unwrap();
+    let mut options = options(&public);
+    options.client_dir = client;
+    let router = create_plec_server(options);
+
+    for (url, expected) in [
+        ("/index.html", "shell"),
+        ("/assets/app.css", "app-css"),
+        ("/_plec/graphs/home.json", "graph"),
+        ("/_plec/runtime.js", "runtime"),
+        ("/_plec/assets/chunks/shared.js", "shared-js"),
+        ("/_plec/assets/client.css", "client-css"),
+        ("/_plec/assets/logo.png", "image"),
+        ("/_plec/assets/font.woff2", "font"),
+        ("/_plec/assets/provider.js", "provider"),
+    ] {
+        let response = router.clone().oneshot(get(url)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{url}");
+        assert_eq!(text_of(response).await, expected, "{url}");
+    }
+    let compressed = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/_plec/runtime.js")
+                .header("accept-encoding", "br")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(compressed.status(), StatusCode::OK);
+    assert_eq!(compressed.headers()["content-encoding"], "br");
+    assert_eq!(text_of(compressed).await, "br-runtime");
+    for url in [
+        "/server/app.mjs",
+        "/server/route-artifact.json",
+        "/plec-server.json",
+        "/_plec/route-artifact.json",
+        "/_plec/server/app.mjs",
+        "/_plec/server/route-artifact.json",
+        "/../server/app.mjs",
+        "/%2e%2e/server/app.mjs",
+        "/assets/../../server/app.mjs",
+        "/assets/%2e%2e/%2e%2e/server/app.mjs",
+        "/_plec/../server/app.mjs",
+        "/_plec/%2e%2e/server/app.mjs",
+        "/_plec/missing.json",
+    ] {
+        let response = router.clone().oneshot(get(url)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{url}");
+    }
 }
 
 #[tokio::test]
@@ -2045,16 +2129,17 @@ async fn unknown_node_ops_render_as_nothing_like_the_typescript_host() {
 /// cargo test -p plec-server --test server -- --ignored real_application
 /// ```
 #[tokio::test]
-#[ignore = "requires apps/fullstack/dist/public; build the application first"]
+#[ignore = "requires apps/fullstack/dist; build the application first"]
 async fn real_application_artifact_renders_and_validates() {
-    const PUBLIC: &str = "../../apps/fullstack/dist/public";
-    let dir = Path::new(PUBLIC);
-    let artifact_path = dir.join("route-artifact.json");
+    const DIST: &str = "../../apps/fullstack/dist";
+    let dir = Path::new(DIST);
+    let artifact_path = dir.join("server/route-artifact.json");
     if !artifact_path.exists() {
         panic!("missing {}", artifact_path.display());
     }
-    let mut options = options(dir);
-    options.client_script = Some("/assets/client.js".to_owned());
+    let mut options = options(&dir.join("public"));
+    options.client_dir = dir.join("client");
+    options.client_script = Some("/_plec/assets/client.js".to_owned());
     options.styles_href = Some("/assets/styles.css".to_owned());
     let artifact_json: Value =
         serde_json::from_str(&std::fs::read_to_string(&artifact_path).expect("artifact read"))

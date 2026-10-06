@@ -98,8 +98,8 @@ reqwest = { version = "0.12", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = [
   "std",
 ] }
-thiserror = "1"
-indexmap = "1"
+thiserror = "2"
+indexmap = "2"
 # Internal Rust→Node sidecar HTTP client (hyper 1.x over a private socket).
 hyper = { version = "1", default-features = false, features = [
   "client",

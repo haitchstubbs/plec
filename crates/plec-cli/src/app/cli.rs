@@ -1,10 +1,11 @@
+use crate::diagnostic::DevelopmentDiagnostic;
 use clap::{Parser, Subcommand};
 use plec_build::{
-    build, modules::host::resolve_custom_elements, modules::host::resolve_host_imports,
-    BuildOptions, RuntimeSource,
+    BuildOptions, RuntimeSource, build, modules::host::resolve_custom_elements,
+    modules::host::resolve_host_imports,
 };
 use plec_compiler::{
-    compile_with_options, load_with_options, lower_route_manifest, lower_routes, CompilerOptions,
+    CompilerOptions, compile_with_options, load_with_options, lower_route_manifest, lower_routes,
 };
 use plec_inspect::Inspector;
 use pollster::block_on;
@@ -33,8 +34,8 @@ enum Command {
 
     /// Compile a routed Plec application into deployable artifacts.
     Build {
-        /// Route source entry (e.g. src/router.tsx).
-        #[arg(default_value = "src/router.tsx")]
+        /// Application source entry.
+        #[arg(default_value = "src/app.tsx")]
         source: PathBuf,
 
         /// Build output root; Plec artifacts are emitted under `public/`.
@@ -75,7 +76,8 @@ enum Command {
 
     /// Build and serve an application, rebuilding when source files change.
     Dev {
-        #[arg(default_value = "src/router.tsx")]
+        /// Application source entry.
+        #[arg(default_value = "src/app.tsx")]
         source: PathBuf,
         #[arg(short, long, default_value = "dist")]
         out_dir: PathBuf,
@@ -131,7 +133,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Command::Inspect { source, query } => {
             let options = compiler_options_for_source(&source)?;
-            let application = compile_with_options(&source, &options)?;
+            let application =
+                compile_with_options(&source, &options).map_err(DevelopmentDiagnostic::compiler)?;
             let inspector = Inspector::new(&application);
             let result = block_on(inspector.query(&query));
             for error in &result.errors {
@@ -142,14 +145,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
         Command::Raw { source } => {
             let options = compiler_options_for_source(&source)?;
-            let application = compile_with_options(&source, &options)?;
+            let application =
+                compile_with_options(&source, &options).map_err(DevelopmentDiagnostic::compiler)?;
             println!("{}", serde_json::to_string_pretty(&application)?);
         }
 
         Command::Routes { source } => {
             let options = compiler_options_for_source(&source)?;
-            let (modules, semantic_graph) = load_with_options(&source, &options)?;
-            let routes = lower_routes(&modules, &semantic_graph)?;
+            let (modules, semantic_graph) =
+                load_with_options(&source, &options).map_err(DevelopmentDiagnostic::compiler)?;
+            let routes =
+                lower_routes(&modules, &semantic_graph).map_err(DevelopmentDiagnostic::compiler)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&lower_route_manifest(&routes))?
@@ -181,7 +187,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 runtime_source: runtime_source.into(),
             };
 
-            let result = build(options)?;
+            let result = build(options).map_err(DevelopmentDiagnostic::build)?;
 
             println!(
                 "Plec build complete (revision {}) in {}",
@@ -246,7 +252,10 @@ fn compiler_options_for_source(
         .and_then(std::path::Path::parent)
         .unwrap_or_else(|| std::path::Path::new("."));
     Ok(CompilerOptions {
-        host_imports: resolve_host_imports(app_dir)?.into_iter().collect(),
-        custom_elements: resolve_custom_elements(app_dir)?,
+        host_imports: resolve_host_imports(app_dir)
+            .map_err(DevelopmentDiagnostic::build)?
+            .into_iter()
+            .collect(),
+        custom_elements: resolve_custom_elements(app_dir).map_err(DevelopmentDiagnostic::build)?,
     })
 }

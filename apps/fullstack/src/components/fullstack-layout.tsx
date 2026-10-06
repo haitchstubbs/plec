@@ -49,7 +49,7 @@ export function FullstackLayout() {
               : 'Not found';
 
   return (
-    <div className="min-h-svh md:[&_.plec-sidebar-inset]:ml-[17rem] md:has-[[data-collapsed=true]]:[&_.plec-sidebar-inset]:ml-16">
+    <div className="dark bg-background text-foreground min-h-svh md:[&_.plec-sidebar-inset]:ml-[17rem] md:has-[[data-collapsed=true]]:[&_.plec-sidebar-inset]:ml-16">
       <AppSidebar
         collapsed={collapsed}
         mobileOpen={mobileOpen}

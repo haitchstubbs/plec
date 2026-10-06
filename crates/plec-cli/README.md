@@ -293,7 +293,7 @@ failure — query the capture instead.
 
 The runtime flows through a pipeline — source crate → wasm-pack →
 `packages/plec/dist/runtime` → staged copy in
-`apps/fullstack/dist/public/runtime` — and sessions keep tripping over
+`apps/fullstack/dist/client/runtime` — and sessions keep tripping over
 "am I testing source, package dist, or staged dist?". Two staleness shapes
 are checked:
 

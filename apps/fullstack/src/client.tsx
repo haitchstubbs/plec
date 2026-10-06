@@ -5,14 +5,14 @@ import {
 import { installPlecPerformance } from './performance';
 import { installDevelopmentMemoryHud } from '@plec/core/client/effects/development-memory-hud';
 import { createRuntimeStressFeed } from './stress-feed';
+import { installDuckTracking } from './duck-tracking';
+import './styles.css';
 
 installPlecPerformance();
 await registerPlecProviders();
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('The Plec application root is missing.');
-const revision = new URL(import.meta.url).searchParams.get('v') ?? '';
-const assetUrl = (path: string) =>
-  revision ? `${path}?v=${revision}` : path;
+const assetUrl = (path: string) => path;
 const disposeMemoryHud = installDevelopmentMemoryHud(assetUrl);
 
 // The browser only retrieves immutable artifacts. The runtime owns matching,
@@ -23,10 +23,10 @@ const origin = window.location.origin;
 const stressFeed = createRuntimeStressFeed();
 const app = await startPlecRouter({
   root,
-  manifestUrl: assetUrl('/route-manifest.json'),
+  manifestUrl: assetUrl('/_plec/route-manifest.json'),
   graphUrl: (graphId) =>
     assetUrl(
-      `/graphs/${graphId.replace(/[\/\\]/g, '--').replace('#', '--')}.json`,
+      `/_plec/graphs/${graphId.replace(/[\/\\]/g, '--').replace('#', '--')}.json`,
     ),
   cookiePolicy: {
     sidebar_state: { operations: ['getSync', 'set'] },
@@ -42,10 +42,12 @@ const app = await startPlecRouter({
   inputs: stressFeed.inputs,
   onQueryUpdate: stressFeed.recordRuntimeUpdate,
 });
+const disposeDuckTracking = installDuckTracking(root);
 stressFeed.start();
 window.addEventListener(
   'pagehide',
   () => {
+    disposeDuckTracking();
     stressFeed.stop();
     app.dispose();
   },

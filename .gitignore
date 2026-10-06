@@ -14,6 +14,11 @@ node_modules/
 # Build outputs
 dist/
 build/
+.plec/
+# Compatibility guard for markers from already-running pre-Vite CLI sessions.
+.plec-dev-state-*.json
+apps/fullstack/public/assets/styles.css
+apps/fullstack/public/assets/files/
 !crates/plec-cli/src/com/build
 coverage/
 

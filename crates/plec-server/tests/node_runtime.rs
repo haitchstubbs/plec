@@ -10,8 +10,9 @@ use axum::{
     http::{Request, StatusCode},
 };
 use plec_server::{
-    create_plec_server, request::RequestContext, runtime::NodeRuntimeOptions, ApplicationRuntime,
-    DocumentMetadata, NodeApplicationRuntime, PlecServerOptions, ServerError,
+    ApplicationRuntime, DocumentMetadata, NodeApplicationRuntime, PlecServerOptions,
+    ServerActionRequest, ServerError, create_plec_server, request::RequestContext,
+    runtime::NodeRuntimeOptions,
 };
 use tower::ServiceExt;
 
@@ -66,12 +67,12 @@ async fn spawn_runtime(bundle_source: &str) -> (NodeApplicationRuntime, tempfile
     let dir = tempfile::tempdir().expect("fixture dir");
     let out_dir = dir.path().join("dist");
     let server_dir = out_dir.join("server");
-    let public_dir = out_dir.join("public");
+    let client_dir = out_dir.join("client");
     std::fs::create_dir_all(&server_dir).expect("server fixture dir");
-    std::fs::create_dir_all(&public_dir).expect("public fixture dir");
+    std::fs::create_dir_all(&client_dir).expect("client fixture dir");
     std::fs::write(server_dir.join("app.mjs"), bundle_source).expect("bundle write");
     std::fs::write(
-        public_dir.join("host-providers.json"),
+        client_dir.join("host-providers.json"),
         r#"{"version":2,"revision":"test","providers":[]}"#,
     )
     .expect("provider manifest write");
@@ -186,7 +187,7 @@ async fn uncaught_api_handler_failure_is_redacted_http_500_and_runtime_survives(
         r#"
         export async function handleRequest(request) {
           if (new URL(request.url).pathname === '/api/fail') {
-            throw new Error('secret-token /srv/private/handler.ts');
+            throw new Error('PLEC_PRIVATE_DIAGNOSTIC_MARKER');
           }
           return new Response('alive');
         }
@@ -199,14 +200,106 @@ async fn uncaught_api_handler_failure_is_redacted_http_500_and_runtime_survives(
         .expect("failed application response");
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body, r#"{"error":"Internal Server Error"}"#);
-    assert!(!body.contains("secret-token"));
-    assert!(!body.contains("/srv/private"));
+    assert!(!body.contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER"));
 
     let (status, body) = dispatch(&runtime, "GET", "/api/ok", None)
         .await
         .expect("sidecar remains available");
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "alive");
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn public_api_http_boundary_redacts_a_private_sidecar_exception() {
+    let (runtime, _dir) = spawn_runtime(
+        r#"
+        export async function handleRequest() {
+          throw new Error('PLEC_PRIVATE_DIAGNOSTIC_MARKER');
+        }
+      "#,
+    )
+    .await;
+    let router = create_plec_server(options(runtime.clone()));
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/private")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("public API response");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert_eq!(body, r#"{"error":"Internal Server Error"}"#);
+    assert!(!body.contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER"));
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn thrown_server_action_has_an_action_diagnostic_but_public_response_is_redacted() {
+    let (runtime, _dir) = spawn_runtime(
+        r#"
+        export async function handleRequest() { return new Response('alive'); }
+        export function hasAction(id) { return id === 'sa_private'; }
+        export async function invokeAction() {
+          throw new Error('PLEC_PRIVATE_DIAGNOSTIC_MARKER');
+        }
+      "#,
+    )
+    .await;
+
+    let internal = runtime
+        .invoke_action(ServerActionRequest {
+            id: "sa_private".into(),
+            arguments: Vec::new(),
+            context: test_context("POST", "/_plec/actions/sa_private"),
+        })
+        .await
+        .expect_err("application action exception must fail internally");
+    assert!(
+        internal
+            .to_string()
+            .contains("[PLEC-SERVER-ACTION] action:")
+    );
+    assert!(!internal.to_string().contains("PLEC-SIDECAR-PROTOCOL"));
+    assert!(
+        !internal
+            .to_string()
+            .contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER")
+    );
+
+    let router = create_plec_server(options(runtime.clone()));
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/_plec/actions/sa_private")
+                .header("origin", "http://localhost")
+                .header("content-type", "application/json")
+                .body(Body::from("[]"))
+                .unwrap(),
+        )
+        .await
+        .expect("public action response");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert_eq!(body, r#"{"error":"server action failed"}"#);
+    assert!(!body.contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER"));
     runtime.shutdown().await;
 }
 
@@ -269,17 +362,21 @@ async fn oversized_bodies_fail_closed_before_reaching_the_sidecar() {
 async fn a_bundle_without_handle_request_fails_startup_precisely() {
     let dir = tempfile::tempdir().expect("fixture dir");
     std::fs::write(dir.path().join("app.mjs"), "export const wrong = 1;").expect("bundle write");
-    let error = NodeApplicationRuntime::spawn(NodeRuntimeOptions::new(
-        runtime_script(),
-        dir.path().join("app.mjs"),
-    ))
-    .await
-    .expect_err("spawn must fail");
+    let mut options = NodeRuntimeOptions::new(runtime_script(), dir.path().join("app.mjs"));
+    options.development = true;
+    let error = NodeApplicationRuntime::spawn(options)
+        .await
+        .expect_err("spawn must fail");
     assert!(
         error
             .to_string()
             .contains("server entry does not export handleRequest(request, context)"),
         "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("[PLEC-SIDECAR-STARTUP] sidecar:")
     );
 }
 
@@ -287,12 +384,11 @@ async fn a_bundle_without_handle_request_fails_startup_precisely() {
 async fn a_bundle_that_fails_to_import_fails_startup_with_the_reason() {
     let dir = tempfile::tempdir().expect("fixture dir");
     std::fs::write(dir.path().join("app.mjs"), "import 'missing-module';").expect("bundle write");
-    let error = NodeApplicationRuntime::spawn(NodeRuntimeOptions::new(
-        runtime_script(),
-        dir.path().join("app.mjs"),
-    ))
-    .await
-    .expect_err("spawn must fail");
+    let mut options = NodeRuntimeOptions::new(runtime_script(), dir.path().join("app.mjs"));
+    options.development = true;
+    let error = NodeApplicationRuntime::spawn(options)
+        .await
+        .expect_err("spawn must fail");
     assert!(
         error.to_string().contains("server bundle failed to import"),
         "{error}"
@@ -315,6 +411,16 @@ async fn a_sidecar_that_exits_early_reports_the_startup_failure() {
             .to_string()
             .contains("sidecar exited before reporting readiness"),
         "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("[PLEC-SIDECAR-STARTUP] sidecar:")
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("sidecar process exited with exit status: 0")
     );
 }
 
@@ -342,14 +448,71 @@ async fn a_missing_node_binary_fails_spawn() {
         node: "/nonexistent/node-binary".into(),
         script: "/nonexistent/plec-runtime.mjs".into(),
         bundle: "/nonexistent/bundle.mjs".into(),
+        development: false,
     })
     .await
     .expect_err("spawn must fail");
     assert!(
         error
             .to_string()
-            .contains("cannot spawn node application runtime"),
+            .contains("[PLEC-SIDECAR-STARTUP] sidecar: cannot spawn Node process"),
         "{error}"
+    );
+}
+
+#[tokio::test]
+async fn sidecar_protocol_mismatch_identifies_expected_and_received_versions() {
+    let dir = tempfile::tempdir().expect("fixture dir");
+    let script = dir.path().join("wrong-protocol.mjs");
+    std::fs::write(
+        &script,
+        "console.log('➠︎          Plec Ready: ' + JSON.stringify({ protocol: 999, address: process.env.PLEC_RUNTIME_SOCKET })); setInterval(() => {}, 1000);",
+    )
+    .expect("script write");
+    let error = NodeApplicationRuntime::spawn(NodeRuntimeOptions::new(
+        script,
+        Path::new("/unused/bundle.mjs"),
+    ))
+    .await
+    .expect_err("mismatched protocol must fail startup");
+    let diagnostic = error.to_string();
+    assert!(diagnostic.contains("[PLEC-SIDECAR-PROTOCOL] protocol:"));
+    assert!(diagnostic.contains("unsupported sidecar protocol 999"));
+    assert!(diagnostic.contains("expected 3"));
+}
+
+#[tokio::test]
+async fn startup_detail_is_available_in_development_and_redacted_in_production() {
+    let dir = tempfile::tempdir().expect("fixture dir");
+    let bundle = dir.path().join("app.mjs");
+    std::fs::write(
+        &bundle,
+        "throw new Error('PLEC_PRIVATE_DIAGNOSTIC_MARKER');",
+    )
+    .expect("bundle write");
+
+    let mut development = NodeRuntimeOptions::new(runtime_script(), &bundle);
+    development.development = true;
+    let detail = NodeApplicationRuntime::spawn(development)
+        .await
+        .expect_err("application import must fail")
+        .to_string();
+    assert!(detail.contains("[PLEC-SIDECAR-STARTUP] sidecar:"));
+    assert!(detail.contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER"));
+
+    let production =
+        NodeApplicationRuntime::spawn(NodeRuntimeOptions::new(runtime_script(), &bundle))
+            .await
+            .expect_err("application import must fail");
+    assert!(
+        production
+            .to_string()
+            .contains("[PLEC-SIDECAR-STARTUP] sidecar:")
+    );
+    assert!(
+        !production
+            .to_string()
+            .contains("PLEC_PRIVATE_DIAGNOSTIC_MARKER")
     );
 }
 
@@ -419,6 +582,12 @@ async fn a_sidecar_that_dies_mid_request_fails_the_dispatch() {
             .contains("application runtime unavailable"),
         "{error}"
     );
+    assert!(
+        error
+            .to_string()
+            .contains("[PLEC-SIDECAR-REQUEST] sidecar:"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -446,8 +615,10 @@ async fn shutdown_cleans_up_and_dispatch_fails_fast_afterwards() {
 fn options(runtime: NodeApplicationRuntime) -> PlecServerOptions {
     PlecServerOptions {
         public_dir: PathBuf::from("nonexistent-public"),
+        client_dir: PathBuf::from("nonexistent-client"),
         artifact_path: PathBuf::from("nonexistent-artifact.json"),
         client_script: None,
+        client_styles: Vec::new(),
         styles_href: None,
         preloads: Vec::new(),
         custom_elements: Vec::new(),

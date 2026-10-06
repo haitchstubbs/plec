@@ -19,12 +19,16 @@
   "files": [
     "dist",
     "bin",
+    "scripts/vite-build.mjs",
     "README.md"
   ],
   "publishConfig": {
     "access": "public"
   },
   "homepage": "https://github.com/haitchstubbs/plec#readme",
+  "dependencies": {
+    "@plec/vite": "^0.1.0"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -49,6 +53,9 @@
     "./browser": {
       "types": "./dist/browser.d.ts",
       "import": "./dist/browser.js"
+    },
+    "./vite-build": {
+      "import": "./scripts/vite-build.mjs"
     }
   },
   "scripts": {

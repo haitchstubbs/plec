@@ -1,5 +1,41 @@
 @import '@plec/ui/globals.css';
 
+.duck-head {
+  display: none;
+  width: clamp(11rem, 26vw, 18rem);
+  aspect-ratio: 1;
+  perspective: 900px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.duck-head-sprite {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  pointer-events: none;
+  backface-visibility: hidden;
+  transform-style: preserve-3d;
+}
+
+.duck-head-sprite[data-duck-yaw='0'][data-duck-pitch='0'] {
+  opacity: 1;
+}
+
+@media (min-width: 40rem) {
+  .duck-head {
+    display: block;
+  }
+
+  .home-intro {
+    max-width: calc(100% - 20rem);
+  }
+}
+
 .plec-development-memory-toggle {
   position: fixed;
   right: 1rem;

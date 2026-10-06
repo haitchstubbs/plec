@@ -90,7 +90,7 @@ export function registerPlecProviders(): Promise<void> {
 async function loadPlecProviders() {
   const revision = new URL(import.meta.url).searchParams.get('v');
   const manifestUrl = new URL(
-    '/host-providers.json',
+    '/_plec/host-providers.json',
     window.location.origin,
   );
   if (revision) manifestUrl.searchParams.set('v', revision);
@@ -111,7 +111,7 @@ async function loadPlecProviders() {
   const loaded = await Promise.all(
     manifest.providers.map(
       async (entry): Promise<[string, PlecHostProvider]> => {
-        const moduleUrl = providerModuleUrl(entry, manifest.revision);
+        const moduleUrl = providerModuleUrl(entry);
         const module = await import(/* @vite-ignore */ moduleUrl.href);
         if (typeof module.default !== 'function')
           throw new Error(
@@ -162,14 +162,12 @@ function isHostProviderManifest(
 
 function providerModuleUrl(
   entry: HostProviderManifest['providers'][number],
-  revision: string,
 ): URL {
   const url = new URL(entry.module, window.location.origin);
   if (
     url.origin !== window.location.origin ||
-    !url.pathname.startsWith('/assets/providers/') ||
-    url.searchParams.get('v') !== revision ||
-    url.searchParams.size !== 1 ||
+    !url.pathname.startsWith('/_plec/assets/') ||
+    url.search ||
     url.hash
   )
     throw new Error(`Invalid host provider module URL for ${entry.id}`);
@@ -331,8 +329,8 @@ interface WasmRuntimeModule {
   default(input?: unknown): Promise<unknown>;
   PlecRuntime: new () => WasmRuntimeInstance;
 }
-const DEFAULT_RUNTIME_JS_URL = '/runtime/runtime.js';
-const DEFAULT_RUNTIME_WASM_URL = '/runtime/runtime_bg.wasm';
+const DEFAULT_RUNTIME_JS_URL = '/_plec/runtime/runtime.js';
+const DEFAULT_RUNTIME_WASM_URL = '/_plec/runtime/runtime_bg.wasm';
 
 export interface PlecRouterMountOptions {
   root: Element;
@@ -381,6 +379,38 @@ export interface PlecRouterMountOptions {
   /** Development/test visibility for SSR adoption decisions. Production hosts
    * may omit this and transparently take the normal mount path. */
   onAdoptionDiagnostic?: (diagnostic: PlecAdoptionDiagnostic) => void;
+  /** Optional structured visibility into actionable browser boundary failures. */
+  onDiagnostic?: (diagnostic: PlecDevelopmentDiagnostic) => void;
+  /** Enables detailed diagnostic causes; keep false for production hosts. */
+  development?: boolean;
+}
+export interface PlecDevelopmentDiagnostic {
+  code: string;
+  phase:
+    | 'artifact'
+    | 'browser-runtime'
+    | 'adoption'
+    | 'provider'
+    | 'protocol';
+  message: string;
+  detail?: string;
+  suggestion?: string;
+  graphId?: string;
+}
+
+/** Reports safe, browser-local context through a callback and a DOM event. */
+export function emitPlecDiagnostic(
+  options: Pick<PlecRouterMountOptions, 'onDiagnostic'>,
+  diagnostic: PlecDevelopmentDiagnostic,
+): void {
+  options.onDiagnostic?.(diagnostic);
+  if (
+    typeof window !== 'undefined' &&
+    typeof CustomEvent !== 'undefined'
+  )
+    window.dispatchEvent(
+      new CustomEvent('plec:diagnostic', { detail: diagnostic }),
+    );
 }
 export interface PlecFetchPolicyGrant {
   /** Exact serialized origin the grant applies to (`https://api.example.com`). */
@@ -420,6 +450,7 @@ export function wireRoutedInputs(
   runtime: RoutedInputRuntime,
   inputs: Record<string, CompiledInputProducer<any>>,
   onQueryUpdate?: (update: CompiledQueryUpdate) => void,
+  onRuntimeError?: (error: unknown) => void,
 ): { hydrate(): void; dispose(): void } {
   const hydrate = () => {
     for (const [inputId, producer] of Object.entries(inputs)) {
@@ -436,7 +467,13 @@ export function wireRoutedInputs(
       isDeltaInput(producer)
         ? [
             producer.subscribeDeltas((deltas) =>
-              publishDeltas(runtime, deltas, onQueryUpdate),
+              publishDeltas(
+                runtime,
+                deltas,
+                onQueryUpdate,
+                0,
+                onRuntimeError,
+              ),
             ),
           ]
         : [],
@@ -523,7 +560,16 @@ async function boundedResponseJson(
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-export async function startPlecRouter(
+export function startPlecRouter(
+  options: PlecRouterMountOptions,
+): Promise<PlecRouterController> {
+  return startPlecRouterInner(options).catch((error) => {
+    emitBrowserFailure(options, error);
+    throw error;
+  });
+}
+
+async function startPlecRouterInner(
   options: PlecRouterMountOptions,
 ): Promise<PlecRouterController> {
   markPlecTiming('plec:mount-start');
@@ -531,7 +577,7 @@ export async function startPlecRouter(
   const manifestResponse = await fetch(
     options.applicationUrl ??
       options.manifestUrl ??
-      '/route-manifest.json',
+      '/_plec/route-manifest.json',
   );
   if (!manifestResponse.ok)
     throw new Error(
@@ -547,7 +593,8 @@ export async function startPlecRouter(
     : undefined;
   const manifest = (compiled?.manifest ??
     artifact) as PlecRouteManifest;
-  const graphUrl = options.graphUrl ?? ((id) => `/graphs/${id}.json`);
+  const graphUrl =
+    options.graphUrl ?? ((id) => `/_plec/graphs/${id}.json`);
   const runtimeModule = await loadRuntimeModule(
     options.runtimeJsUrl ?? DEFAULT_RUNTIME_JS_URL,
   );
@@ -697,6 +744,7 @@ export async function startPlecRouter(
     runtime,
     routedInputs,
     options.onQueryUpdate,
+    (error) => emitBrowserFailure(options, error),
   );
   const onGraphNeeded = (event: Event) => {
     const graphId = (event as CustomEvent<{ graphId?: string }>).detail
@@ -710,9 +758,17 @@ export async function startPlecRouter(
         );
         routedInputBridge.hydrate();
       })
-      .catch((error) =>
-        console.error(`Failed to load Plec graph ${graphId}`, error),
-      );
+      .catch((error) => {
+        const diagnostic = plecRuntimeDiagnostic(
+          error,
+          graphId,
+          options.development === true,
+        );
+        emitPlecDiagnostic(options, diagnostic);
+        console.error(
+          `[${diagnostic.code}] ${diagnostic.phase}: ${diagnostic.message}`,
+        );
+      });
   };
   window.addEventListener('plec:graph-needed', onGraphNeeded);
   if (!adopted) runtime.start(options.root, manifest);
@@ -723,7 +779,12 @@ export async function startPlecRouter(
     hydrationQueued = true;
     queueMicrotask(() => {
       hydrationQueued = false;
-      routedInputBridge.hydrate();
+      try {
+        routedInputBridge.hydrate();
+      } catch (error) {
+        emitBrowserFailure(options, error);
+        throw error;
+      }
     });
   };
   const onRouteClick = (event: Event) => {
@@ -868,10 +929,98 @@ function emitAdoptionDiagnostic(
   diagnostic: PlecAdoptionDiagnostic,
 ) {
   options.onAdoptionDiagnostic?.(diagnostic);
+  if (diagnostic.outcome === 'fallback')
+    emitPlecDiagnostic(options, {
+      code: 'PLEC-SSR-ADOPTION',
+      phase: 'adoption',
+      message:
+        'SSR output could not be adopted; Plec mounted the route normally.',
+      ...(options.development
+        ? { detail: diagnostic.mismatchCodes.join(', ') }
+        : {}),
+      suggestion:
+        'Check that the server and browser artifacts come from the same build.',
+      ...(diagnostic.routeId ? { graphId: diagnostic.routeId } : {}),
+    });
   if (typeof window !== 'undefined')
     window.dispatchEvent(
       new CustomEvent('plec:adoption', { detail: diagnostic }),
     );
+}
+
+export function plecRuntimeDiagnostic(
+  error: unknown,
+  graphId?: string,
+  development = false,
+): PlecDevelopmentDiagnostic {
+  const detail = error instanceof Error ? error.message : String(error);
+  const diagnostic = classifyRuntimeDiagnostic(detail, graphId);
+  return development ? { ...diagnostic, detail } : diagnostic;
+}
+
+function classifyRuntimeDiagnostic(
+  detail: string,
+  graphId?: string,
+): PlecDevelopmentDiagnostic {
+  const provider = detail.match(
+    /(?:unknown host component|host component mount is not callable):\s*([^\s]+)/,
+  )?.[1];
+  if (provider || /host component registry/i.test(detail))
+    return {
+      code: 'PLEC-PROVIDER-RESOLUTION',
+      phase: 'provider',
+      message: provider
+        ? `Host provider component ${provider} could not be mounted.`
+        : 'Host provider registry could not resolve a component.',
+      suggestion: provider
+        ? 'Check the provider registration and confirm its component exports a callable mount lifecycle.'
+        : 'Install a provider registry and confirm that it implements resolve(provider, component).',
+      ...(graphId ? { graphId } : {}),
+    };
+  // The WASM facade exposes failures as JsValue strings, not a typed JS
+  // exception. Keep this adapter narrow and pin the known error vocabulary.
+  if (
+    /protocol|incompatible/i.test(detail) ||
+    /(?:mismatch|unsupported).{0,24}version/i.test(detail)
+  )
+    return {
+      code: 'PLEC-PROTOCOL-COMPATIBILITY',
+      phase: 'protocol',
+      message: 'Plec browser/runtime protocol validation failed.',
+      suggestion:
+        'Rebuild and serve the browser artifacts and runtime from the same Plec build.',
+      ...(graphId ? { graphId } : {}),
+    };
+  if (/Failed to load|artifact|manifest|graph/i.test(detail))
+    return {
+      code: 'PLEC-ARTIFACT-LOAD',
+      phase: 'artifact',
+      message: graphId
+        ? `Failed to load or validate Plec graph ${graphId}.`
+        : 'Failed to load or validate a Plec browser artifact.',
+      suggestion:
+        'Check the artifact request and rebuild the application if it is missing or stale.',
+      ...(graphId ? { graphId } : {}),
+    };
+  return {
+    code: 'PLEC-BROWSER-RUNTIME',
+    phase: 'browser-runtime',
+    message: 'Plec WASM runtime rejected an application operation.',
+    suggestion:
+      'Inspect the compiled graph and host inputs involved in this mount or update.',
+    ...(graphId ? { graphId } : {}),
+  };
+}
+
+function emitBrowserFailure(
+  options: PlecRouterMountOptions,
+  error: unknown,
+  graphId?: string,
+): void {
+  emitPlecDiagnostic(
+    options,
+    plecRuntimeDiagnostic(error, graphId, options.development === true),
+  );
 }
 
 /** Adapt a host collection into the runtime's stable keyed-delta protocol. */
@@ -906,6 +1055,7 @@ function publishDeltas(
   deltas: RuntimeDelta[],
   onQueryUpdate?: (update: CompiledQueryUpdate) => void,
   reconciliationMs = 0,
+  onRuntimeError?: (error: unknown) => void,
 ): CompiledQueryUpdate {
   const adapterStart = performance.now();
   const total: CompiledQueryUpdate = {
@@ -922,7 +1072,14 @@ function publishDeltas(
     domNodesMoved: 0,
     wasmDomUs: 0,
   };
-  if (deltas.length > 0) addMetrics(total, applyBatch(runtime, deltas));
+  if (deltas.length > 0) {
+    try {
+      addMetrics(total, applyBatch(runtime, deltas));
+    } catch (error) {
+      onRuntimeError?.(error);
+      throw error;
+    }
+  }
   total.adapterMs = performance.now() - adapterStart;
   onQueryUpdate?.(total);
   return total;

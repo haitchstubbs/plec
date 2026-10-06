@@ -12,7 +12,9 @@ pub struct ServerActionImport {
 }
 
 /// Generate and bundle the application server entry. Routes run before the
-/// optional application-owned fallback handler.
+/// optional application-owned fallback handler. Package dependencies are
+/// included so `server/app.mjs` remains usable after the deployment is moved
+/// away from the source tree and its `node_modules` directory.
 pub fn bundle(
     app_dir: &Path,
     fallback_entry: Option<&Path>,
@@ -32,7 +34,6 @@ pub fn bundle(
         "--legal-comments=none".into(),
         "--platform=node".into(),
         "--target=node20".into(),
-        "--packages=external".into(),
         "--loader:.ts=ts".into(),
         format!(
             "--sourcefile={}",

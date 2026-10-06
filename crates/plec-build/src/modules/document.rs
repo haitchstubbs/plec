@@ -11,13 +11,28 @@ use super::build::{BuildError, Stage};
 /// This intentionally stays a plain static shell; it may later merge into
 /// SSR document rendering, so nothing here assumes `index.html` is the final
 /// document architecture.
-pub fn write_index(public_dir: &Path, title: &str, revision: &str) -> Result<(), BuildError> {
+pub fn write_index(
+    public_dir: &Path,
+    title: &str,
+    client_script: &str,
+    styles: &[String],
+) -> Result<(), BuildError> {
     let index_path = public_dir.join("index.html");
 
     // Application metadata is untrusted input (`plec.toml` or a CLI flag);
     // the title lands in an HTML text context, so it must not be able to
     // close the element or inject markup.
     let title = escape_html(title);
+    let styles = styles
+        .iter()
+        .map(|href| {
+            format!(
+                "<link rel=\"stylesheet\" href=\"{}\">",
+                escape_attribute(href)
+            )
+        })
+        .collect::<String>();
+    let client_script = escape_attribute(client_script);
 
     let document = format!(
         r#"<!doctype html>
@@ -26,16 +41,13 @@ pub fn write_index(public_dir: &Path, title: &str, revision: &str) -> Result<(),
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title}</title>
-  <link
-    rel="stylesheet"
-    href="/assets/styles.css?v={revision}"
-  >
+  {styles}
 </head>
 <body>
   <div id="app" aria-live="polite"></div>
   <script
     type="module"
-    src="/assets/client.js?v={revision}"
+    src="{client_script}"
   ></script>
 </body>
 </html>
@@ -61,13 +73,23 @@ fn escape_html(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+fn escape_attribute(value: &str) -> String {
+    escape_html(value).replace('"', "&quot;")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn write_index_to(title: &str) -> String {
         let dir = tempfile::tempdir().expect("dir");
-        write_index(dir.path(), title, "rev0123456789").expect("document write");
+        write_index(
+            dir.path(),
+            title,
+            "/_plec/assets/client-abc.js",
+            &["/_plec/assets/client-abc.css".into()],
+        )
+        .expect("document write");
         std::fs::read_to_string(dir.path().join("index.html")).expect("document read")
     }
 
@@ -84,5 +106,20 @@ mod tests {
     fn plain_title_passes_through_unchanged() {
         let index = write_index_to("Plec & friends <3");
         assert!(index.contains("<title>Plec &amp; friends &lt;3</title>"));
+    }
+
+    #[test]
+    fn asset_urls_are_escaped_for_html_attributes() {
+        let dir = tempfile::tempdir().expect("dir");
+        write_index(
+            dir.path(),
+            "Plec",
+            "/_plec/assets/client.js\" onerror=\"bad()",
+            &["/styles.css\" onerror=\"bad()".into()],
+        )
+        .expect("document write");
+        let index = std::fs::read_to_string(dir.path().join("index.html")).expect("document read");
+        assert!(!index.contains("onerror=\"bad()"));
+        assert!(index.contains("&quot; onerror=&quot;bad()"));
     }
 }

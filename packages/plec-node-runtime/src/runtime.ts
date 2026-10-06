@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { readFile, realpath } from 'node:fs/promises';
+import { isAbsolute, relative, resolve } from 'node:path';
 import {
   createServer,
   type IncomingMessage,
@@ -97,18 +97,61 @@ async function loadSsrProviders(
   ) as unknown;
   if (!isHostProviderManifest(parsed))
     throw new BundleError('invalid host provider manifest');
-  const publicDir = resolve(manifestPath, '..');
+  const clientDir = resolve(manifestPath, '..');
   const providers = new Map<string, PlecHostProvider>();
   for (const entry of parsed.providers) {
     if (!entry.ssr) continue;
-    const url = new URL(entry.module, 'http://plec.internal');
-    const modulePath = resolve(publicDir, `.${url.pathname}`);
-    const providerDir = resolve(publicDir, 'assets/providers');
-    if (!modulePath.startsWith(`${providerDir}/`))
+    const baseUrl = new URL('http://plec.internal');
+    const url = new URL(entry.module, baseUrl);
+    if (
+      url.origin !== baseUrl.origin ||
+      url.search ||
+      url.hash ||
+      !url.pathname.startsWith('/_plec/')
+    )
       throw new BundleError(
         `invalid host provider module for ${entry.id}`,
       );
-    const imported = await import(pathToFileURL(modulePath).href);
+    let assetPath: string;
+    try {
+      assetPath = decodeURIComponent(
+        url.pathname.slice('/_plec/'.length),
+      );
+    } catch {
+      throw new BundleError(
+        `invalid host provider module for ${entry.id}`,
+      );
+    }
+    const modulePath = resolve(clientDir, assetPath);
+    const assetDir = resolve(clientDir, 'assets');
+    const withinAssets = relative(assetDir, modulePath);
+    if (
+      !assetPath.startsWith('assets/') ||
+      isAbsolute(withinAssets) ||
+      withinAssets === '..' ||
+      withinAssets.startsWith(
+        `..${process.platform === 'win32' ? '\\' : '/'}`,
+      )
+    )
+      throw new BundleError(
+        `invalid host provider module for ${entry.id}`,
+      );
+    const [realAssetDir, realModulePath] = await Promise.all([
+      realpath(assetDir),
+      realpath(modulePath),
+    ]);
+    const realRelative = relative(realAssetDir, realModulePath);
+    if (
+      isAbsolute(realRelative) ||
+      realRelative === '..' ||
+      realRelative.startsWith(
+        `..${process.platform === 'win32' ? '\\' : '/'}`,
+      )
+    )
+      throw new BundleError(
+        `invalid host provider module for ${entry.id}`,
+      );
+    const imported = await import(pathToFileURL(realModulePath).href);
     if (typeof imported.default !== 'function')
       throw new BundleError(
         `host provider ${entry.id} has no default factory`,

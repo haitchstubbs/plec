@@ -192,19 +192,26 @@ dist/
   plec-server.json
 
   public/
+    index.html
+    assets/
+
+  client/
     route-manifest.json
-    route-artifact.json
     graphs/
     host-providers.json
     runtime/
     assets/
 
   server/
+    route-artifact.json
     app.mjs
     runtime.mjs
 ```
 
-The exact files are implementation details of the build contract and may evolve as Plec develops.
+`public/` contains application-owned public content, `client/` contains
+Plec-generated browser artifacts served under the reserved `/_plec/` prefix,
+and `server/` contains private server-side artifacts. Exact generated filenames
+are implementation details of the build contract and may evolve as Plec develops.
 
 ## SSR and adoption
 

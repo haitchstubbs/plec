@@ -258,11 +258,10 @@ test('binding divergence is allowed, recomputed, and reported', async ({
     '/',
     (html) => {
       // Tamper the server-rendered value of the location binding inside
-      // #ssr-request. The paragraph's children are marker+text pairs: the
-      // static "Requested" text (never re-evaluated), then the pathname
-      // binding, then the search binding. The pathname binding is the
-      // second marker; tampering its value must make the snapshot-backed
-      // recompute diverge and be reported.
+      // #ssr-request. The paragraph's children include the static "Serving"
+      // text followed by a span containing the pathname and search bindings.
+      // The pathname binding is the second marker; tampering its value must
+      // make the snapshot-backed recompute diverge and be reported.
       const idAt = html.indexOf('id="ssr-request"');
       if (idAt < 0) return html;
       const firstMarker = html.indexOf('<!--plec:text:', idAt);
@@ -294,7 +293,7 @@ test('binding divergence is allowed, recomputed, and reported', async ({
     // Recompute-consequences win: the tampered server value is replaced by
     // the client-evaluated one in place.
     expect(await page.locator('#ssr-request').textContent()).toBe(
-      'Requested/',
+      'Serving /',
     );
   } finally {
     await context.close();
@@ -331,7 +330,7 @@ test('whitespace injected between a text marker and its value merges into the cl
       `text divergences: ${JSON.stringify(adoption)}`,
     ).toBeGreaterThanOrEqual(1);
     expect(await page.locator('#ssr-request').textContent()).toBe(
-      'Requested/',
+      'Serving /',
     );
   } finally {
     await context.close();
@@ -341,9 +340,9 @@ test('whitespace injected between a text marker and its value merges into the cl
 test('an empty server text value adopts through marker synthesis', async ({
   browser,
 }) => {
-  // The search binding renders '' at '/': the server serializes the marker
-  // followed by the empty-comment sentinel, and adoption synthesizes the
-  // text node between the two so the binding owns a sink from the start.
+  // The search binding renders '' at '/'. It is nested in the pathname span;
+  // the server emits the marker and empty-comment sentinel, and adoption
+  // synthesizes the text node so the binding owns a sink from the start.
   const { context, page, adoption } = await interceptedPage(
     browser,
     '/',
@@ -353,8 +352,8 @@ test('an empty server text value adopts through marker synthesis', async ({
     expect(adoption.outcome, JSON.stringify(adoption)).toBe('adopted');
     expect(adoption.mismatchCodes).toEqual([]);
     const afterMarker = await page.evaluate(() => {
-      const paragraph = document.querySelector('#ssr-request')!;
-      const children = Array.from(paragraph.childNodes);
+      const parent = document.querySelector('#ssr-request span')!;
+      const children = Array.from(parent.childNodes);
       let lastMarker = -1;
       children.forEach((node, index) => {
         if (

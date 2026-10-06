@@ -1,6 +1,7 @@
 mod app;
 mod dev;
 mod dev_loop;
+mod diagnostic;
 pub mod serve;
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {

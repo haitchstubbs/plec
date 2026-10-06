@@ -2,10 +2,10 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-const publicDir = path.resolve(
+const clientDir = path.resolve(
   import.meta.dirname,
   '../../../..',
-  'apps/fullstack/dist/public',
+  'apps/fullstack/dist/client',
 );
 
 interface RouteManifestEntry {
@@ -21,7 +21,7 @@ test('compiled route artifacts are typed graphs', async () => {
     rootGraphId: string;
     routes: RouteManifestEntry[];
   } = JSON.parse(
-    await readFile(path.join(publicDir, 'route-manifest.json'), 'utf8'),
+    await readFile(path.join(clientDir, 'route-manifest.json'), 'utf8'),
   );
   const todos = manifest.routes.find((route) => route.path === 'todos');
   const stress = manifest.routes.find(
@@ -48,7 +48,7 @@ test('compiled route artifacts are typed graphs', async () => {
     const graphFile = id.replace(/[\/\\]/g, '--').replace('#', '--');
     const graph = JSON.parse(
       await readFile(
-        path.join(publicDir, 'graphs', `${graphFile}.json`),
+        path.join(clientDir, 'graphs', `${graphFile}.json`),
         'utf8',
       ),
     );
@@ -60,7 +60,7 @@ test('compiled route artifacts are typed graphs', async () => {
     .replace('#', '--');
   const stressGraph = JSON.parse(
     await readFile(
-      path.join(publicDir, 'graphs', `${stressGraphFile}.json`),
+      path.join(clientDir, 'graphs', `${stressGraphFile}.json`),
       'utf8',
     ),
   );

@@ -1,0 +1,68 @@
+{
+  "name": "plec-js",
+  "version": "0.1.0",
+  "description": "A full-stack web framework built around a compiled semantic application graph.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "plec": "./bin/plec.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/haitchstubbs/plec.git",
+    "directory": "apps/plec-js"
+  },
+  "bugs": {
+    "url": "https://github.com/haitchstubbs/plec/issues"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/haitchstubbs/plec#readme",
+  "dependencies": {
+    "@plec/core": "workspace:*",
+    "@plec/vite": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.4",
+    "typescript": "^7.0.2"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./jsx-runtime": {
+      "types": "./dist/jsx-runtime.d.ts",
+      "import": "./dist/jsx-runtime.js"
+    },
+    "./client/effects/development-memory-hud": {
+      "types": "./dist/client/effects/development-memory-hud.d.ts",
+      "import": "./dist/client/effects/development-memory-hud.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./server-context": {
+      "types": "./dist/server-context.d.ts",
+      "import": "./dist/server-context.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
+    }
+  },
+  "scripts": {
+    "build": "node -e \"process.exit(0)\"",
+    "test": "node -e \"process.exit(0)\"",
+    "clean:runtime": "cargo clean --manifest-path ../../crates/plec-runtime/Cargo.toml",
+    "typecheck": "yarn --cwd ../.. exec tsc -p apps/plec-js/tsconfig.json --noEmit"
+  }
+}

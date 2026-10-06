@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   boundedResponseBytes,
+  emitPlecDiagnostic,
+  plecRuntimeDiagnostic,
   markPlecTiming,
   adaptLiveCollection,
   registerPlecProviders,
+  startPlecRouter,
   validateSsrRouteChain,
   wireRoutedInputs,
   type LiveCollectionChange,
@@ -149,6 +152,238 @@ describe('ssr route chain gate', () => {
 });
 
 describe('compiled browser adapter', () => {
+  it('classifies a runtime provider-resolution failure with actionable identity', () => {
+    const error = new Error('unknown host component: lucide/Missing');
+    const diagnostic = plecRuntimeDiagnostic(error, 'routes/home');
+    expect(diagnostic).toMatchObject({
+      code: 'PLEC-PROVIDER-RESOLUTION',
+      phase: 'provider',
+      message: expect.stringContaining('lucide/Missing'),
+      graphId: 'routes/home',
+      suggestion: expect.stringContaining('provider registration'),
+    });
+    expect(diagnostic).not.toHaveProperty('detail');
+    expect(
+      plecRuntimeDiagnostic(error, 'routes/home', true).detail,
+    ).toBe(error.message);
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal('window', { dispatchEvent });
+    emitPlecDiagnostic({}, diagnostic);
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'plec:diagnostic',
+        detail: expect.objectContaining({
+          code: 'PLEC-PROVIDER-RESOLUTION',
+        }),
+      }),
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it('classifies a missing host provider registry as a provider failure', () => {
+    expect(
+      plecRuntimeDiagnostic(
+        new Error('host component registry is not installed'),
+      ),
+    ).toMatchObject({
+      code: 'PLEC-PROVIDER-RESOLUTION',
+      phase: 'provider',
+      suggestion: expect.stringContaining(
+        'Install a provider registry',
+      ),
+    });
+  });
+
+  it('classifies known protocol failures but leaves generic errors as runtime failures', () => {
+    expect(
+      plecRuntimeDiagnostic(new Error('mismatch:ssr-snapshot-version')),
+    ).toMatchObject({
+      code: 'PLEC-PROTOCOL-COMPATIBILITY',
+      phase: 'protocol',
+    });
+    expect(
+      plecRuntimeDiagnostic(new Error('application operation failed')),
+    ).toMatchObject({
+      code: 'PLEC-BROWSER-RUNTIME',
+      phase: 'browser-runtime',
+    });
+  });
+
+  it('reports a failed WASM mount once and preserves the original rejection', async () => {
+    const failure = new Error('unknown host component: lucide/Missing');
+    const dispatchEvent = vi.fn();
+    const onDiagnostic = vi.fn();
+    vi.stubGlobal('document', { querySelector: () => null });
+    vi.stubGlobal('window', {
+      location: { pathname: '/', search: '', hash: '' },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent,
+    });
+    const runtimeModule = `
+      export default async function() {}
+      export class PlecRuntime {
+        set_cookie_policy() {}
+        set_fetch_policy() {}
+        set_host_registry() {}
+        set_host_inputs() {}
+        register_graph() {}
+        start() { throw new Error('unknown host component: lucide/Missing'); }
+        dispose() {}
+      }
+    `;
+    const RuntimeURL = class extends URL {};
+    Object.assign(RuntimeURL, {
+      createObjectURL: () =>
+        `data:text/javascript;charset=utf-8,${encodeURIComponent(runtimeModule)}`,
+      revokeObjectURL: vi.fn(),
+    });
+    vi.stubGlobal('URL', RuntimeURL);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/_plec/route-manifest.json')
+          return Response.json({ rootGraphId: 'root', routes: [] });
+        if (url === '/_plec/graphs/root.json') return Response.json({});
+        return new Response(runtimeModule);
+      }),
+    );
+    const root = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      contains: vi.fn(() => false),
+    } as unknown as Element;
+
+    await expect(
+      startPlecRouter({ root, onDiagnostic }),
+    ).rejects.toThrow(failure.message);
+    expect(onDiagnostic).toHaveBeenCalledTimes(1);
+    expect(onDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'PLEC-PROVIDER-RESOLUTION',
+        phase: 'provider',
+      }),
+    );
+    expect(onDiagnostic.mock.calls[0]?.[0]).not.toHaveProperty(
+      'detail',
+    );
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps adoption fallback reporting separate from common diagnostics', async () => {
+    const dispatchEvent = vi.fn();
+    const onDiagnostic = vi.fn();
+    const onAdoptionDiagnostic = vi.fn();
+    const bootstrap = {
+      version: 2,
+      snapshot: {
+        revision: 'revision-1',
+        routes: [{ routeId: 'home', params: {}, phase: 'active' }],
+      },
+    };
+    vi.stubGlobal('document', {
+      querySelector: () => ({ textContent: JSON.stringify(bootstrap) }),
+    });
+    vi.stubGlobal('window', {
+      location: { pathname: '/', search: '', hash: '' },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent,
+    });
+    const runtimeModule = `
+      export default async function() {}
+      export class PlecRuntime {
+        set_cookie_policy() {}
+        set_fetch_policy() {}
+        set_host_registry() {}
+        set_host_inputs() {}
+        register_graph() {}
+        start_adopt_snapshot() { throw new Error('mismatch:ssr-snapshot-version'); }
+        abandon_adoption() {}
+        start() {}
+        dispose() {}
+      }
+    `;
+    const RuntimeURL = class extends URL {};
+    Object.assign(RuntimeURL, {
+      createObjectURL: () =>
+        `data:text/javascript;charset=utf-8,${encodeURIComponent(runtimeModule)}`,
+      revokeObjectURL: vi.fn(),
+    });
+    vi.stubGlobal('URL', RuntimeURL);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/_plec/route-manifest.json')
+          return Response.json({
+            rootGraphId: 'root',
+            revision: 'revision-1',
+            routes: [{ id: 'home', graphId: 'root' }],
+          });
+        if (url === '/_plec/graphs/root.json') return Response.json({});
+        return new Response(runtimeModule);
+      }),
+    );
+    const root = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      contains: vi.fn(() => false),
+    } as unknown as Element;
+
+    const controller = await startPlecRouter({
+      root,
+      development: true,
+      onDiagnostic,
+      onAdoptionDiagnostic,
+    });
+    expect(onAdoptionDiagnostic).toHaveBeenCalledTimes(1);
+    expect(onAdoptionDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: 'fallback',
+        mismatchCodes: ['mismatch:ssr-snapshot-version'],
+      }),
+    );
+    expect(onDiagnostic).toHaveBeenCalledTimes(1);
+    expect(onDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'PLEC-SSR-ADOPTION',
+        phase: 'adoption',
+        detail: 'mismatch:ssr-snapshot-version',
+      }),
+    );
+    expect(dispatchEvent).toHaveBeenCalledTimes(2);
+    expect(
+      dispatchEvent.mock.calls.map(([event]) => event.type),
+    ).toEqual(['plec:diagnostic', 'plec:adoption']);
+    controller.dispose();
+    vi.unstubAllGlobals();
+  });
+
+  it('surfaces structured browser diagnostics through the callback and DOM event', () => {
+    const onDiagnostic = vi.fn();
+    vi.stubGlobal('window', { dispatchEvent: vi.fn() });
+    emitPlecDiagnostic(
+      { onDiagnostic },
+      {
+        code: 'PLEC-ARTIFACT-LOAD',
+        phase: 'artifact',
+        message: 'Failed to load graph home',
+        detail: 'private transport detail',
+      },
+    );
+    expect(onDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'PLEC-ARTIFACT-LOAD',
+        phase: 'artifact',
+      }),
+    );
+    expect((window.dispatchEvent as any).mock.calls[0][0].type).toBe(
+      'plec:diagnostic',
+    );
+    vi.unstubAllGlobals();
+  });
+
   it('rejects provider modules outside the build-owned asset boundary', async () => {
     vi.stubGlobal('window', {
       location: { origin: 'http://plec.test' },

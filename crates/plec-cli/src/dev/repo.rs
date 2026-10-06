@@ -50,7 +50,7 @@ impl Repo {
     /// Runtime artifacts staged into the fullstack application build
     /// (the plec-build pipeline emits them under the document root).
     pub fn staged_runtime_dir(&self) -> PathBuf {
-        self.root.join("apps/fullstack/dist/public/runtime")
+        self.root.join("apps/fullstack/dist/client/runtime")
     }
 
     /// Default application source used by graph-level commands: the

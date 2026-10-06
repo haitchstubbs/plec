@@ -77,6 +77,57 @@ sidecar detail is part of the production 500 payload. Development SSR fallback
 diagnostics are available only on the server response header and do not alter
 the browser bootstrap payload.
 
+## Development diagnostics
+
+Development-facing boundary diagnostics use a stable `PLEC-*` code, owning
+phase, concise message, and optional source/location, detail, and suggestion.
+The adapter preserves authoritative domain errors; it does not turn them into
+application state. Compiler parse failures print `[PLEC-PARSE-001] parse:`
+with the module and line/column retained from the parser's source map. Other
+compiler failures use `[PLEC-COMPILE-001] compile:`. Build failures map their
+existing build stage into a `[PLEC-BUILD-*]` or
+`[PLEC-DISCOVERY-ROUTES] discovery:` diagnostic. Configuration failures
+identify the config/build phase and suggest checking `plec.toml`.
+
+The CLI defaults to concise output. Set `PLEC_DIAGNOSTICS=verbose` to include
+the original compiler diagnostic text or safe build error cause where
+available. Compiler parse/compile codes use numeric subcodes; boundary codes
+use stable domain/class names under the same `PLEC-*` prefix. Native server/operator logs
+identify request, SSR, or action boundaries and retain operational error
+context; the public HTTP body remains bounded/redacted. Ordinary application
+`console.log` / `console.error` output from the Node sidecar continues to be
+forwarded in both development and production. Sidecar startup, request, and
+protocol failures use `PLEC-SIDECAR-*` codes; protocol mismatch output includes
+expected and received versions. Captured sidecar output is appended to an
+internal startup diagnostic only in development mode (`plec serve
+--development`, or a non-production `NODE_ENV`); public HTTP/action output
+never receives it. A thrown application action is classified as
+`PLEC-SERVER-ACTION`, not as a protocol failure. Host-provider rendering uses
+`PLEC-PROVIDER-RENDER`; server manifest loading uses
+`PLEC-SERVER-MANIFEST`.
+
+The browser adapter publishes actionable boundary failures to the optional
+`onDiagnostic` callback and as a `plec:diagnostic` `CustomEvent`. Existing
+adoption outcome reporting remains available through `onAdoptionDiagnostic`
+and `plec:adoption`; a fallback also produces a concise common diagnostic.
+Set `development: true` in `PlecRouterMountOptions` to include safe local
+failure detail. Browser codes include `PLEC-ARTIFACT-LOAD`,
+`PLEC-SSR-ADOPTION`, `PLEC-PROVIDER-RESOLUTION`,
+`PLEC-PROTOCOL-COMPATIBILITY`, and `PLEC-BROWSER-RUNTIME`. Production browser
+diagnostic objects omit local detail. The `phase` identifies whether to
+inspect artifact loading, WASM runtime validation, SSR adoption, provider
+resolution, or protocol compatibility. These diagnostics are developer
+output; loader, action, and mutation public failure contracts remain their
+existing typed or redacted contracts. Server-only source/stack detail is not
+copied into public HTTP bodies or browser bootstrap state.
+
+These are four separate output surfaces: application-visible failures follow
+the existing public contracts; development diagnostics add Plec codes and
+phases; server/operator logs retain process-level application logs; browser
+diagnostics are delivered only through the callback/events described above.
+Production redaction applies at the HTTP/browser boundary and to diagnostic
+enrichment, not to ordinary operator logging.
+
 ## Compatibility
 
 - `redirect()` and `notFound()` remain distinct framework routing outcomes.

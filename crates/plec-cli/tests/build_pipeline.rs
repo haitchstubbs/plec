@@ -46,6 +46,29 @@ fn run_build(app: &Path, out_dir: &Path, extra_args: &[&str]) -> Output {
         .expect("plec binary should be invocable")
 }
 
+fn run_build_with_defaults(app: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_plec"))
+        .arg("build")
+        .current_dir(app)
+        .output()
+        .expect("plec binary should be invocable")
+}
+
+#[test]
+fn build_defaults_to_src_app_tsx_and_dist() {
+    let app = fixture_project("default-entry", "mini-app");
+    fs::write(
+        app.join("src/app.tsx"),
+        "export { router } from './router';\n",
+    )
+    .unwrap();
+
+    let output = run_build_with_defaults(&app);
+    assert_success(&output);
+    assert!(app.join("dist/plec-server.json").is_file());
+    assert!(app.join("dist/client/route-manifest.json").is_file());
+}
+
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),
@@ -71,7 +94,7 @@ fn files_below(directory: &Path, files: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn server_action_implementation_is_absent_from_every_public_output() {
+fn server_action_implementation_is_absent_from_public_and_client_outputs() {
     const SECRET: &str = "PLEC_SERVER_ACTION_SECRET_7D3F";
     let app = fixture_project("server-action-secret", "server-action-app");
     let out_dir = output_dir("server-action-secret");
@@ -82,7 +105,7 @@ fn server_action_implementation_is_absent_from_every_public_output() {
     assert!(server_bundle.contains(SECRET));
     assert!(server_bundle.contains("invokeAction"));
     let route_artifact: serde_json::Value =
-        serde_json::from_slice(&fs::read(out_dir.join("public/route-artifact.json")).unwrap())
+        serde_json::from_slice(&fs::read(out_dir.join("server/route-artifact.json")).unwrap())
             .expect("route artifact JSON");
     fn action_ids(value: &serde_json::Value, output: &mut Vec<String>) {
         match value {
@@ -121,19 +144,20 @@ fn server_action_implementation_is_absent_from_every_public_output() {
         "generated registry IDs must match public IR: {ids:?}"
     );
 
-    let public_dir = out_dir.join("public");
-    let mut public_files = Vec::new();
-    files_below(&public_dir, &mut public_files);
-    assert!(!public_files.is_empty());
-    for path in public_files {
-        let bytes = fs::read(&path).expect("public artifact should be readable");
-        assert!(
-            !bytes
-                .windows(SECRET.len())
-                .any(|window| window == SECRET.as_bytes()),
-            "server implementation leaked into {}",
-            path.display(),
-        );
+    for output_dir in [out_dir.join("public"), out_dir.join("client")] {
+        let mut files = Vec::new();
+        files_below(&output_dir, &mut files);
+        assert!(!files.is_empty());
+        for path in files {
+            let bytes = fs::read(&path).expect("browser artifact should be readable");
+            assert!(
+                !bytes
+                    .windows(SECRET.len())
+                    .any(|window| window == SECRET.as_bytes()),
+                "server implementation leaked into {}",
+                path.display(),
+            );
+        }
     }
 }
 
@@ -149,14 +173,11 @@ fn builds_expected_output_structure() {
     for artifact in [
         "server/app.mjs",
         "plec-server.json",
-        "client.meta.json",
         "public/index.html",
-        "public/assets/client.js",
-        "public/assets/client.js.br",
-        "public/route-manifest.json",
-        "public/route-artifact.json",
-        "public/runtime/runtime.js",
-        "public/runtime/runtime_bg.wasm",
+        "client/route-manifest.json",
+        "server/route-artifact.json",
+        "client/runtime/runtime.js",
+        "client/runtime/runtime_bg.wasm",
     ] {
         assert!(
             out_dir.join(artifact).is_file(),
@@ -170,7 +191,7 @@ fn builds_expected_output_structure() {
     );
 
     // Plec compiler route graphs.
-    let graphs_dir = out_dir.join("public/graphs");
+    let graphs_dir = out_dir.join("client/graphs");
     let graphs = fs::read_dir(&graphs_dir)
         .expect("graphs directory should exist")
         .collect::<Result<Vec<_>, _>>()
@@ -183,9 +204,21 @@ fn builds_expected_output_structure() {
         "route graphs should be emitted"
     );
 
-    // Brotli sidecar must decompress back to the client artifact.
-    let client = fs::read(out_dir.join("public/assets/client.js")).expect("client.js");
-    let compressed = fs::read(out_dir.join("public/assets/client.js.br")).expect("client.js.br");
+    // Vite's emitted browser entry is hashed and retains Plec's Brotli sidecar.
+    let client_path = client_entry_path(&out_dir);
+    assert!(
+        client_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("client-")
+    );
+    let client = fs::read(&client_path).expect("hashed client entry");
+    let compressed = fs::read(client_path.with_file_name(format!(
+        "{}.br",
+        client_path.file_name().unwrap().to_string_lossy()
+    )))
+    .expect("client Brotli sidecar");
 
     let mut decompressed = Vec::new();
     let mut reader = brotli::Decompressor::new(compressed.as_slice(), 4096);
@@ -195,17 +228,68 @@ fn builds_expected_output_structure() {
         decompressed, client,
         "brotli sidecar should round-trip the client artifact"
     );
+    let mut vite_assets = Vec::new();
+    files_below(&out_dir.join("client/assets"), &mut vite_assets);
+    let text_assets = vite_assets
+        .iter()
+        .filter(|path| {
+            matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("js" | "css")
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(!text_assets.is_empty(), "Vite emitted JS/CSS assets");
+    for asset in text_assets {
+        assert!(
+            asset
+                .with_file_name(format!(
+                    "{}.br",
+                    asset.file_name().unwrap().to_string_lossy()
+                ))
+                .is_file(),
+            "every emitted Vite JS/CSS asset is Brotli-compressed: {}",
+            asset.display()
+        );
+    }
 
-    // Document shell: title option plus revisioned client script.
+    // Document shell points at the content-hashed Vite entry.
     let index = read(out_dir.join("public/index.html"));
     assert!(index.contains("<title>Mini App</title>"));
     assert!(index.contains(r#"<div id="app" aria-live="polite"></div>"#));
 
-    let revision = client_revision(&client);
-    assert!(index.contains(&format!("/assets/client.js?v={revision}")));
-    assert!(index.contains(&format!("/assets/styles.css?v={revision}")));
+    let client_url = client_entry_url(&out_dir);
+    assert!(index.contains(&client_url));
+    assert!(!index.contains("/_plec/assets/client.js?v="));
+    assert!(!client_url.contains('?'));
+    let server_manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("plec-server.json")).unwrap()).unwrap();
+    assert!(
+        server_manifest["clientStyles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|url| !url.as_str().unwrap().contains('?'))
+    );
+    let provider_manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("client/host-providers.json")).unwrap())
+            .unwrap();
+    assert!(
+        provider_manifest["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|provider| !provider["module"].as_str().unwrap().contains('?'))
+    );
+    assert!(!index.contains("client.meta.json"));
+    assert!(!out_dir.join("public/runtime").exists());
+    assert!(!out_dir.join("public/graphs").exists());
+    assert!(out_dir.join("public").is_dir());
+    assert!(out_dir.join("client").is_dir());
+    assert!(out_dir.join("server").is_dir());
 
     // The revision is also reported on stdout.
+    let revision = emitted_revision(&out_dir);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains(&format!("revision {revision}")));
 }
@@ -237,8 +321,9 @@ fn revision_derives_from_emitted_client_artifact() {
     );
 
     let index = read(second_dir.join("public/index.html"));
-    assert!(index.contains(&format!("/assets/client.js?v={second}")));
-    assert!(!index.contains(&format!("/assets/client.js?v={first}")));
+    assert_ne!(first, second);
+    assert!(index.contains(&client_entry_url(&second_dir)));
+    assert!(!index.contains("/_plec/assets/client.js?v="));
 }
 
 #[test]
@@ -284,30 +369,8 @@ fn copies_public_assets_nested_and_removes_deleted_assets() {
 }
 
 #[test]
-fn public_assets_cannot_shadow_framework_output() {
-    let out_dir = output_dir("public-collision");
+fn public_assets_cannot_shadow_compiled_asset_output() {
     let app = fixture_project("public-collision", "mini-app");
-    fs::create_dir_all(app.join("public/assets")).unwrap();
-    fs::write(app.join("public/assets/client.js"), "application").unwrap();
-
-    let output = run_build(&app, &out_dir, &[]);
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
-
-    fs::remove_file(app.join("public/assets/client.js")).unwrap();
-    fs::create_dir_all(app.join("public/runtime")).unwrap();
-    fs::write(app.join("public/runtime/runtime.js"), "application").unwrap();
-    let output = run_build(&app, &output_dir("public-runtime-collision"), &[]);
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
-
-    fs::remove_dir_all(app.join("public/runtime")).unwrap();
-    fs::write(app.join("public/host-providers.json"), "application").unwrap();
-    let output = run_build(&app, &output_dir("public-provider-manifest-collision"), &[]);
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("conflicts with Plec-owned output"));
-
-    fs::remove_file(app.join("public/host-providers.json")).unwrap();
     fs::create_dir_all(app.join("public/assets/compiled")).unwrap();
     fs::write(app.join("public/assets/compiled/foo.svg"), "application").unwrap();
     let output = run_build(&app, &output_dir("public-compiled-asset-collision"), &[]);
@@ -377,7 +440,7 @@ fn compiled_asset_imports_are_fingerprinted_deduplicated_and_cleaned() {
         "byte-identical sources should share emitted output"
     );
     assert!(out_dir.join("public/favicon.svg").is_file());
-    let route_artifact = read(out_dir.join("public/route-artifact.json"));
+    let route_artifact = read(out_dir.join("server/route-artifact.json"));
     assert!(
         route_artifact.contains(url),
         "compiled route artifact must contain the imported URL string"
@@ -558,6 +621,10 @@ fn forbidden_browser_dependency_fails_the_build() {
         stderr.contains("node_modules/zod"),
         "failure must include import path information: {stderr}"
     );
+    assert!(
+        stderr.contains("dependency validation"),
+        "Vite dependency validation must retain its build stage: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -633,17 +700,52 @@ fn install_plec_package(project: &Path, runtime_marker: &str) {
 
     let plec = project.join("node_modules/@plec/core");
     fs::create_dir_all(plec.join("dist/runtime")).expect("plec package dirs should be creatable");
+    fs::create_dir_all(plec.join("scripts")).expect("plec script dir should be creatable");
+    let vite_package = project.join("node_modules/@plec/vite");
+    fs::create_dir_all(vite_package.join("src")).expect("Vite adapter dir should be creatable");
+    fs::copy(
+        workspace_root().join("packages/plec/scripts/vite-build.mjs"),
+        plec.join("scripts/vite-build.mjs"),
+    )
+    .expect("Vite coordinator should be installed with Plec");
+    fs::copy(
+        workspace_root().join("packages/plec-vite/package.json"),
+        vite_package.join("package.json"),
+    )
+    .expect("Vite adapter package metadata should be installed");
+    fs::copy(
+        workspace_root().join("packages/plec-vite/src/build.js"),
+        vite_package.join("src/build.js"),
+    )
+    .expect("Vite adapter should be installed with Plec");
+    let vite_dependency = project.join("node_modules/vite");
+    if !vite_dependency.exists() {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(workspace_root().join("node_modules/vite"), &vite_dependency)
+            .expect("Vite should resolve through the workspace's installed dependency");
+        #[cfg(not(unix))]
+        copy_dir_all(
+            &workspace_root().join("node_modules/vite"),
+            &vite_dependency,
+        );
+    }
     fs::write(
         plec.join("package.json"),
-        r#"{"name":"@plec/core","type":"module","exports":{".":"./dist/browser.js"}}"#,
+        r#"{"name":"@plec/core","type":"module","exports":{".":"./dist/browser.js","./server-context":"./dist/server-context.js","./vite-build":"./scripts/vite-build.mjs"},"dependencies":{"@plec/vite":"0.1.0"}}"#,
     )
     .expect("plec package.json should be writable");
     fs::write(
         plec.join("dist/browser.js"),
         "export function createRouter() { return {}; }\n\
-         export function createRootRoute() { return {}; }\n",
+         export function createRootRoute() { return {}; }\n\
+         export function action(handler) { return handler; }\n",
     )
     .expect("plec browser stub should be writable");
+    fs::write(
+        plec.join("dist/server-context.js"),
+        "export const withRequestContext = (_context, run) => run();\n",
+    )
+    .expect("plec server-context stub should be writable");
     let wasm = b"\0asm\x01\x00\x00\x00";
     fs::write(plec.join("dist/runtime/runtime.js"), runtime_marker)
         .expect("runtime.js stub should be writable");
@@ -673,7 +775,7 @@ fn builds_out_of_repo_app_from_installed_plec_package() {
 
     // The staged runtime must be the installed package's, not some
     // workspace-ancestor copy: no workspace exists above this directory.
-    let staged = read(out_dir.join("public/runtime/runtime.js"));
+    let staged = read(out_dir.join("client/runtime/runtime.js"));
     assert_eq!(
         staged, "installed-package-runtime",
         "runtime assets must stage from node_modules/@plec/core/dist/runtime"
@@ -683,10 +785,9 @@ fn builds_out_of_repo_app_from_installed_plec_package() {
     for artifact in [
         "server/app.mjs",
         "plec-server.json",
-        "client.meta.json",
         "public/index.html",
-        "public/route-manifest.json",
-        "public/runtime/runtime_bg.wasm",
+        "client/route-manifest.json",
+        "client/runtime/runtime_bg.wasm",
     ] {
         assert!(
             out_dir.join(artifact).is_file(),
@@ -723,24 +824,23 @@ fn staging_failure_names_installed_package_resolution_path() {
 }
 
 fn emitted_revision(out_dir: &Path) -> String {
-    let index = read(out_dir.join("public/index.html"));
-    let marker = "/assets/client.js?v=";
-
-    let start = index
-        .find(marker)
-        .expect("index.html should reference the client revision")
-        + marker.len();
-
-    index[start..start + 12].to_string()
+    serde_json::from_str::<serde_json::Value>(&read(out_dir.join("client/host-providers.json")))
+        .expect("provider manifest")["revision"]
+        .as_str()
+        .expect("build identity")
+        .to_owned()
 }
 
-fn client_revision(client: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
+fn client_entry_url(out_dir: &Path) -> String {
+    serde_json::from_str::<serde_json::Value>(&read(out_dir.join("plec-server.json")))
+        .expect("server manifest")["clientScript"]
+        .as_str()
+        .expect("client entry URL")
+        .to_owned()
+}
 
-    let digest = Sha256::digest(client);
-    let hex = digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    hex[..12].to_string()
+fn client_entry_path(out_dir: &Path) -> PathBuf {
+    out_dir
+        .join("client")
+        .join(client_entry_url(out_dir).trim_start_matches("/_plec/"))
 }
