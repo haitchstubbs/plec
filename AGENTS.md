@@ -15,6 +15,15 @@ When instructions conflict, use this order:
 
 Never use a stale plan or issue description to override code/tests that establish the current contract.
 
+## Node version
+
+This workspace pins Node `22.20.0` (`.node-version`, `engines.node` in `package.json`). nvm is installed, but its default alias may point at Node 24 — seeing `v24.x` from `node --version` is an environment mismatch, **not a task failure**.
+
+- Before running `yarn`/`node` tooling, check `node --version`.
+- If it is not `22.20.0`, fix it and continue: `nvm use` (reads `.nvmrc`) or `nvm use 22.20.0`. nvm is a shell function, so if the switch does not persist across commands, prefix them: `source ~/.nvm/nvm.sh && nvm use && <command>`.
+- Do not abort, downgrade tooling, or report the task as blocked over a version mismatch; switching versions takes seconds.
+- Never change `.node-version` or `engines.node` as a workaround.
+
 ## Core invariants
 
 - `apps/fullstack` is a Plec application and **must remain React-free**.

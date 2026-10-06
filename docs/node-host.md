@@ -1019,6 +1019,31 @@ as implementation inputs. This is an architecture gate, not a standalone
 production implementation; do not freeze DTO signatures or lifecycle design
 until it passes.
 
+### Feasibility gate result
+
+The initial binding gate passes on the repository's Node floor, `22.20.0`, with
+`napi 3.14.0`, `napi-derive 3.6.5`, and `napi-sys 3.4.0`. The binding crate
+enables `napi8`, `tokio_rt`, `web_stream`, and `serde-json`, with napi default
+features disabled. The supported Node floor remains 22.20.0; this gate was run
+on that minimum version on Linux x64 GNU.
+
+The native smoke suite verifies native class load, Promise callback resolve and
+reject, callback re-entry into an async native method, close during a pending
+callback, post-close rejection, multi-chunk inbound stream reads, demand-driven
+outbound stream polling, and outbound stream error propagation. A napi-rs
+`ReadableStream::read()` creates its JS reader synchronously; the resulting
+reader can then be moved into a worker task. Dropping that reader does not call
+the source's `cancel()` hook, so the Node adapter must retain a per-operation
+cancellation bridge and call the underlying source reader's `cancel()` when
+native consumption stops early. The overflow fixture verifies cancellation
+through that explicit bridge and confirms no later source chunks are pulled.
+
+Run the gate with `yarn workspace @plec/node test:native` under Node 22.20.0.
+These are implementation inputs for the actual binding, not permission to omit
+the cancellation bridge or the separately specified lifecycle/admission rules.
+The exercised probe exports are behind the binding crate's
+`feasibility-gate` feature and are not the production N-API surface.
+
 ## 10.2 Dedicated release profile
 
 Do not build this addon using the current WASM-oriented:
@@ -2628,6 +2653,121 @@ before the Node host becomes default.
 # 35. Implementation sequence
 
 Execute in this order.
+
+## Vertical slices
+
+Deliver the migration as end-to-end slices. Each slice should leave a usable,
+testable path through the layers it touches; avoid completing all engine work,
+then all bindings, then all host work as isolated horizontal phases. The
+feasibility and shared-contract work in Slice 0 is a prerequisite, and the
+existing Axum host remains available until parity and cutover are complete.
+
+### Slice 0 — Prove the boundary and freeze host contracts
+
+- Fixture-test canonical raw request-target parsing and shared path
+  classification/matching rules.
+- Freeze admission/permit lifetimes and the `fetch(Request)` versus `serve()`
+  guarantees.
+- Pass the napi-rs feasibility gate for native loading, async callback re-entry,
+  Web Stream backpressure/cancellation, and close races; record Node/napi-rs
+  versions and features.
+- Verify representative HTTP framing rejection remains Node-owned.
+
+**Exit:** these contracts and the binding gate pass before native DTOs or a
+production Node-host option are treated as stable.
+
+### Slice 1 — Shared engine + Node document response
+
+- Extract the host-independent execution boundary and make Axum use it without
+  changing observable behavior.
+- Add the native application lifecycle and the minimum binding needed to load
+  an application and execute a document request.
+- Add the small `@plec/node` handler path needed to send document status,
+  headers, and streamed response bytes; retain SSR's current complete-String
+  generation and fallback-shell behavior.
+
+**Exit:** a compiled document renders through Node → N-API → Rust, with Axum
+parity and explicit close behavior. This slice does not depend on request-body
+streaming.
+
+### Slice 2 — Host-provider SSR callback
+
+- Load and validate provider metadata/modules in `@plec/node`.
+- Connect the engine's host-provider boundary to a scoped, Promise-aware native
+  callback.
+- Preserve allowlisting, containment, output limits, and inert fallback behavior.
+
+**Exit:** provider SSR fixtures match the existing host, including failure and
+oversize cases.
+
+### Slice 3 — Server actions + streamed native request body
+
+- Move action transport/value validation into the shared engine and expose
+  `handleAction` through the binding.
+- Pass action request bodies as Web Streams through N-API; enforce the
+  authoritative body limit incrementally in Rust before bounded JSON decoding.
+- Wire generated `hasAction`/`invokeAction` behavior and map semantic outcomes
+  to the existing public HTTP contract.
+
+**Exit:** action parity covers origin and ID validation, limits, errors,
+concurrency/ALS isolation, callback settlement, and incremental body rejection.
+
+### Slice 4 — Direct Node API dispatch
+
+- Route `/api` and `/api/*` directly to cached `app.mjs` code.
+- Build canonical Node `RequestContext` with shared parity fixtures.
+- Ignore GET/HEAD bodies; for other methods enforce bounded pre-read and
+  aggregate byte admission before middleware or handler invocation.
+- Preserve API response streaming, redaction, overload, timeout, and abort
+  behavior.
+
+**Exit:** API routing/middleware and context behavior match the existing
+contract, including `/api`, `/api/`, and `/api/foo`; oversized or overloaded
+requests never invoke application code.
+
+### Slice 5 — Node static-file serving
+
+- Implement static lookup and streaming under the canonical public root.
+- Match measured `ServeDir` behavior for containment, MIME types, compression,
+  HEAD, ranges, caching, dotfiles, and missing/unsafe paths.
+
+**Exit:** the static parity fixture table passes, including symlink escape and
+encoded traversal cases; static payloads never cross N-API.
+
+### Slice 6 — Complete lifecycle and transport integration
+
+- Complete request cancellation, admission permits, deadlines, response-stream
+  state handling, and deterministic `close()`/`serve()` shutdown ordering.
+- Complete raw-header and request-target handling in the `node:http` adapter;
+  keep `fetch(Request)` guarantees distinct where Web normalization loses data.
+- Run dual-host parity and browser E2E against the Node host.
+
+**Exit:** required failure/security tests and identity-sensitive SSR adoption
+pass; the Node host is ready to become the default.
+
+### Slice 7 — Ship and cut over
+
+- Build/test supported native platform packages and generated declarations.
+- Route npm `plec serve` directly to the Node host; verify production build output
+  and manifest no longer require the sidecar runtime.
+
+**Exit:** Node is the production process owner on all claimed targets, with the
+full acceptance/E2E suite green. Keep Axum available temporarily as a parity
+reference.
+
+### Slice 8 — Retire the sidecar
+
+- After cutover is green, remove `packages/plec-node-runtime`, private
+  Rust↔Node transport/supervision, and generated `server/runtime.mjs` output.
+- Update architecture/tooling references and rerun repository integration
+  checks.
+
+**Exit:** the production path has no sidecar process or private HTTP protocol,
+and the Definition of Done in section 39 holds.
+
+The slices are vertical delivery units, not permission to weaken the acceptance
+criteria or security invariants in the detailed sections below. The existing
+layer-specific test strategy remains the validation matrix for each slice.
 
 ## Milestone 0 — Validate N-API feasibility and host contracts
 

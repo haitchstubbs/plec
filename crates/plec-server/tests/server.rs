@@ -1974,12 +1974,15 @@ async fn dispatches_api_requests_to_the_application_handler() {
     let dir = fixture_dir();
     let handler: AppRequestHandler = Arc::new(|_request, context| {
         Box::pin(async move {
-            if context.pathname == "/api/todos" {
+            if matches!(context.pathname.as_str(), "/api" | "/api/" | "/api/todos") {
                 Some(
                     Response::builder()
                         .status(StatusCode::OK)
                         .header("content-type", "application/json")
-                        .body(Body::from(format!("{{\"method\":\"{}\"}}", context.method)))
+                        .body(Body::from(format!(
+                            "{{\"method\":\"{}\",\"pathname\":\"{}\"}}",
+                            context.method, context.pathname
+                        )))
                         .unwrap(),
                 )
             } else {
@@ -1991,19 +1994,24 @@ async fn dispatches_api_requests_to_the_application_handler() {
     options.application_runtime = Some(Arc::new(handler));
     let router = create_plec_server(options);
 
-    let todos = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/todos")
-                .body(Body::from("{}"))
-                .unwrap(),
-        )
-        .await
-        .expect("response");
-    assert_eq!(todos.status(), StatusCode::OK);
-    assert_eq!(text_of(todos).await, "{\"method\":\"POST\"}");
+    for pathname in ["/api", "/api/", "/api/todos"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(pathname)
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK, "{pathname}");
+        assert_eq!(
+            text_of(response).await,
+            format!("{{\"method\":\"POST\",\"pathname\":\"{pathname}\"}}")
+        );
+    }
 
     let unknown = router.oneshot(get("/api/none")).await.expect("response");
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);

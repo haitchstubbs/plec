@@ -8,12 +8,11 @@ use axum::{
 use serde_json::json;
 
 use crate::{
-    DocumentMetadata, PlecServerOptions, ServerError, ServerState,
     artifact::{self, Manifest, Route},
     assets, loader,
     request::RequestContext,
     runtime::HostRenderRequest,
-    ssr,
+    ssr, DocumentMetadata, PlecServerOptions, ServerError, ServerState,
 };
 
 pub(crate) struct RouteMatch<'a> {
@@ -72,16 +71,15 @@ async fn dispatch_inner(
     let mut context =
         RequestContext::from_parts(request.method().clone(), request.uri(), request.headers())?;
 
-    if context.pathname.starts_with("/api/") {
-        return handle_api(state, request, context).await;
-    }
-
-    if context.pathname.starts_with("/_plec/actions/") {
-        return handle_server_action(state, request, context).await;
-    }
-
-    if is_document_request(&context.pathname) {
-        return render_document(state, &mut context).await;
+    match crate::request::classify_plec_path(&context.pathname) {
+        crate::request::RouteClass::Api => return handle_api(state, request, context).await,
+        crate::request::RouteClass::Action => {
+            return handle_server_action(state, request, context).await;
+        }
+        crate::request::RouteClass::Document => {
+            return render_document(state, &mut context).await;
+        }
+        crate::request::RouteClass::Static => {}
     }
 
     Ok(assets::serve(state, request).await)
@@ -566,10 +564,6 @@ pub(crate) fn match_route<'a>(
             })
             .collect()
     })
-}
-
-fn is_document_request(pathname: &str) -> bool {
-    pathname == "/" || std::path::Path::new(pathname).extension().is_none()
 }
 
 pub(crate) fn json_response(status: StatusCode, value: &serde_json::Value) -> Response<Body> {

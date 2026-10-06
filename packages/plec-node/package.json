@@ -1,0 +1,18 @@
+{
+  "name": "@plec/node",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./request-target": "./src/request-target.ts"
+  },
+  "scripts": {
+    "build:native": "napi build --platform --no-js --manifest-path ../../crates/plec-node-bindings/Cargo.toml --features feasibility-gate --output-dir native --dts bindings.d.ts",
+    "test": "yarn --cwd ../.. exec vitest run packages/plec-node/src/request-target.test.ts",
+    "test:native": "yarn build:native && yarn --cwd ../.. exec vitest run packages/plec-node/src/native-feasibility.test.ts",
+    "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec-node/tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.7.0"
+  }
+}

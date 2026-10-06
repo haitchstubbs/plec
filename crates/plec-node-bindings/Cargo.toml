@@ -1,0 +1,26 @@
+[package]
+name = "plec-node-bindings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[features]
+feasibility-gate = []
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "=3.14.0", default-features = false, features = [
+  "napi8",
+  "tokio_rt",
+  "web_stream",
+  "serde-json",
+] }
+napi-derive = "3"
+futures-util.workspace = true
+futures-executor.workspace = true
+
+[build-dependencies]
+napi-build = "2"

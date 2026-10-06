@@ -19,6 +19,7 @@ members = [
   "crates/plec-server",
   "crates/plec-query-core",
   "crates/plec-query-node",
+  "crates/plec-node-bindings",
 ]
 
 [workspace.package]
@@ -98,6 +99,7 @@ reqwest = { version = "0.12", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = [
   "std",
 ] }
+futures-executor = "0.3"
 thiserror = "2"
 indexmap = "2"
 # Internal Rust→Node sidecar HTTP client (hyper 1.x over a private socket).

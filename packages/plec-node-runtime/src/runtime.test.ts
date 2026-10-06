@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -77,6 +78,88 @@ function request(
 }
 
 describe('sidecar supervision', () => {
+  it('lets Node reject conflicting HTTP framing before application dispatch', async () => {
+    const key = `plecFramingDispatches${Date.now()}`;
+    (globalThis as Record<string, unknown>)[key] = 0;
+    const origin = await startRuntime(`
+      export function handleRequest() {
+        globalThis[${JSON.stringify(key)}] += 1;
+        return new Response('unexpected');
+      }
+    `);
+    const address = new URL(origin);
+    const response = await new Promise<string>((resolve, reject) => {
+      const socket = connect(Number(address.port), address.hostname);
+      let bytes = '';
+      socket.setTimeout(3000, () => {
+        socket.destroy(
+          new Error('Node did not reject the malformed request'),
+        );
+      });
+      socket.on('connect', () => {
+        socket.write(
+          'POST /api HTTP/1.1\r\n' +
+            `Host: ${address.host}\r\n` +
+            `x-plec-internal-token: ${TOKEN}\r\n` +
+            'Content-Length: 3\r\n' +
+            'Transfer-Encoding: chunked\r\n' +
+            '\r\n' +
+            '0\r\n\r\n',
+        );
+      });
+      socket.on('data', (chunk: Buffer) => {
+        bytes += chunk.toString('latin1');
+      });
+      socket.on('error', reject);
+      socket.on('close', () => resolve(bytes));
+    });
+
+    expect(response).toMatch(/^HTTP\/1\.1 400\b/);
+    expect((globalThis as Record<string, unknown>)[key]).toBe(0);
+    delete (globalThis as Record<string, unknown>)[key];
+  });
+
+  it('rejects conflicting duplicate Content-Length values before dispatch', async () => {
+    const key = `plecDuplicateLengthDispatches${Date.now()}`;
+    (globalThis as Record<string, unknown>)[key] = 0;
+    const origin = await startRuntime(`
+      export function handleRequest() {
+        globalThis[${JSON.stringify(key)}] += 1;
+        return new Response('unexpected');
+      }
+    `);
+    const address = new URL(origin);
+    const response = await new Promise<string>((resolve, reject) => {
+      const socket = connect(Number(address.port), address.hostname);
+      let bytes = '';
+      socket.setTimeout(3000, () => {
+        socket.destroy(
+          new Error('Node did not reject duplicate Content-Length'),
+        );
+      });
+      socket.on('connect', () => {
+        socket.write(
+          'POST /api HTTP/1.1\r\n' +
+            `Host: ${address.host}\r\n` +
+            `x-plec-internal-token: ${TOKEN}\r\n` +
+            'Content-Length: 3\r\n' +
+            'Content-Length: 4\r\n' +
+            '\r\n' +
+            'data',
+        );
+      });
+      socket.on('data', (chunk: Buffer) => {
+        bytes += chunk.toString('latin1');
+      });
+      socket.on('error', reject);
+      socket.on('close', () => resolve(bytes));
+    });
+
+    expect(response).toMatch(/^HTTP\/1\.1 400\b/);
+    expect((globalThis as Record<string, unknown>)[key]).toBe(0);
+    delete (globalThis as Record<string, unknown>)[key];
+  });
+
   it('rejects SSR provider modules outside the emitted client asset root', async () => {
     const dir = await mkdtemp(
       path.join(tmpdir(), 'plec-provider-path-'),

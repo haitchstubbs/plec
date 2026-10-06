@@ -7,6 +7,132 @@ use axum::{
 
 use crate::ServerError;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // Consumed by the incoming raw-target adapter in the Node host.
+pub(crate) struct CanonicalRequestTarget {
+    pub path: String,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RouteClass {
+    Api,
+    Action,
+    Document,
+    Static,
+}
+
+/// Extracts the encoded route path without URL normalization or percent
+/// decoding. This is the Rust counterpart of `@plec/node`'s ingress contract.
+#[allow(dead_code)] // Kept alongside the shared fixtures until Node owns ingress.
+pub(crate) fn canonical_request_target(
+    target: &str,
+) -> Result<CanonicalRequestTarget, ServerError> {
+    if target.is_empty()
+        || target
+            .bytes()
+            .any(|byte| byte <= b' ' || byte == 0x7f || byte == b'#' || byte == b'\\')
+    {
+        return Err(ServerError::message("malformed HTTP request target"));
+    }
+    let bytes = target.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let valid = bytes
+                .get(index + 1..index + 3)
+                .is_some_and(|hex| hex.iter().all(u8::is_ascii_hexdigit));
+            if !valid {
+                return Err(ServerError::message("malformed percent escape"));
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+
+    let path_and_query = if target.starts_with('/') {
+        target.to_owned()
+    } else {
+        let uri = target
+            .parse::<Uri>()
+            .map_err(|_| ServerError::message("malformed absolute request target"))?;
+        let scheme = uri.scheme_str().filter(|scheme| {
+            scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+        });
+        let authority = uri.authority();
+        if scheme.is_none()
+            || authority.is_none_or(|value| {
+                value.host().is_empty() || !valid_request_authority(value.as_str())
+            })
+        {
+            return Err(ServerError::message("unsupported request-target form"));
+        }
+        uri.path_and_query()
+            .map(|value| value.as_str().to_owned())
+            .unwrap_or_else(|| "/".to_owned())
+    };
+    let (path, query) = path_and_query
+        .split_once('?')
+        .map(|(path, query)| (path, query))
+        .unwrap_or((path_and_query.as_str(), ""));
+    let path = if path.is_empty() { "/" } else { path };
+    if !path.starts_with('/') {
+        return Err(ServerError::message("request path must start with slash"));
+    }
+    Ok(CanonicalRequestTarget {
+        path: path.to_owned(),
+        query: query.to_owned(),
+    })
+}
+
+fn valid_request_authority(authority: &str) -> bool {
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    let port = if authority.starts_with('[') {
+        let Some(end) = authority.find(']') else {
+            return false;
+        };
+        if authority[1..end].parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
+        let suffix = &authority[end + 1..];
+        if suffix.is_empty() {
+            None
+        } else if let Some(port) = suffix.strip_prefix(':') {
+            Some(port)
+        } else {
+            return false;
+        }
+    } else if let Some((host, port)) = authority.rsplit_once(':') {
+        if host.is_empty() || host.contains(':') {
+            return false;
+        }
+        Some(port)
+    } else {
+        None
+    };
+    match port {
+        Some(port) => !port.is_empty() && port.parse::<u16>().is_ok(),
+        None => true,
+    }
+}
+
+pub(crate) fn classify_plec_path(path: &str) -> RouteClass {
+    if path == "/api" || path.starts_with("/api/") {
+        return RouteClass::Api;
+    }
+    if path.starts_with("/_plec/actions/") {
+        return RouteClass::Action;
+    }
+    if path == "/" || !path.rsplit('/').next().unwrap_or_default().contains('.') {
+        RouteClass::Document
+    } else {
+        RouteClass::Static
+    }
+}
+
 /// The request context both SSR and `/api/*` handlers observe. Headers stay
 /// typed (`HeaderMap`) because HTTP semantics, including duplicate headers,
 /// are already correct; only the query map converts into Plec values.
@@ -105,9 +231,7 @@ fn parse_cookies(header: &str) -> Result<HashMap<String, String>, ServerError> {
     Ok(cookies)
 }
 
-pub(crate) fn parse_query(
-    query: &str,
-) -> Result<HashMap<String, QueryValue>, ServerError> {
+pub(crate) fn parse_query(query: &str) -> Result<HashMap<String, QueryValue>, ServerError> {
     let mut values: Vec<(String, Vec<String>)> = Vec::new();
     for pair in query.split('&') {
         if pair.is_empty() {
@@ -167,6 +291,78 @@ mod tests {
         assert!(matches!(query.get("empty"), Some(QueryValue::One(value)) if value.is_empty()));
         assert!(parse_query("bad=%").is_err());
         assert!(parse_query("bad=%FF").is_err());
+    }
+
+    #[test]
+    fn canonical_request_targets_match_shared_node_host_fixtures() {
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            target: String,
+            path: Option<String>,
+            query: Option<String>,
+            class: Option<String>,
+            invalid: Option<bool>,
+        }
+
+        let fixtures: Vec<Fixture> = serde_json::from_str(include_str!(
+            "../../../testdata/node-host/request-targets.json"
+        ))
+        .unwrap();
+        for fixture in fixtures {
+            let parsed = canonical_request_target(&fixture.target);
+            if fixture.invalid.unwrap_or(false) {
+                assert!(parsed.is_err(), "accepted {:?}", fixture.target);
+                continue;
+            }
+            let parsed =
+                parsed.unwrap_or_else(|error| panic!("rejected {:?}: {error}", fixture.target));
+            assert_eq!(Some(parsed.path.clone()), fixture.path);
+            assert_eq!(Some(parsed.query), fixture.query.or(Some(String::new())));
+            let class = match classify_plec_path(&parsed.path) {
+                RouteClass::Api => "api",
+                RouteClass::Action => "action",
+                RouteClass::Document => "document",
+                RouteClass::Static => "static",
+            };
+            assert_eq!(
+                Some(class),
+                fixture.class.as_deref(),
+                "{:?}",
+                fixture.target
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_encoded_path_is_matched_without_separator_or_dot_normalization() {
+        let manifest = plec_schema::routing::RouteManifest {
+            version: None,
+            root_graph_id: "root".into(),
+            root_not_found_graph_id: None,
+            routes: ["foo/bar", "foo%2Fbar", "b"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, path)| plec_schema::routing::RouteManifestEntry {
+                    id: format!("route-{index}"),
+                    parent_id: None,
+                    path: path.into(),
+                    graph_id: format!("graph-{index}"),
+                    pending_graph_id: None,
+                    error_graph_id: None,
+                    not_found_graph_id: None,
+                    outlet_id: format!("outlet-{index}"),
+                    loader_action: None,
+                    pending_mode: "replace".into(),
+                })
+                .collect(),
+        };
+
+        let encoded = canonical_request_target("/foo%2Fbar").unwrap();
+        let matched = plec_schema::routing::match_route_chain(&manifest, &encoded.path).unwrap();
+        assert_eq!(matched[0].route.id, "route-1");
+
+        let dotted = canonical_request_target("/a/../b").unwrap();
+        assert!(plec_schema::routing::match_route_chain(&manifest, &dotted.path).is_none());
     }
 }
 

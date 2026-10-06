@@ -2077,6 +2077,14 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@plec/node@workspace:packages/plec-node":
+  version: 0.0.0-use.local
+  resolution: "@plec/node@workspace:packages/plec-node"
+  dependencies:
+    "@napi-rs/cli": "npm:^3.7.0"
+  languageName: unknown
+  linkType: soft
+
 "@plec/query@workspace:packages/plec-query":
   version: 0.0.0-use.local
   resolution: "@plec/query@workspace:packages/plec-query"
