@@ -144,6 +144,7 @@ async function fixture(pendingKey?: string): Promise<string> {
     } }],
   }));
   await writeFile(path.join(dir, 'server/app.mjs'), `
+    export async function handleRequest() { return null; }
     import { AsyncLocalStorage } from 'node:async_hooks';
     const actionContext = new AsyncLocalStorage();
     export function hasAction(id) { return id === 'echo' || id === 'fail' || id === 'pending'; }

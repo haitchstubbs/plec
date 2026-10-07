@@ -49,6 +49,7 @@ export interface PlecApplication {
 }
 
 interface NativeModule {
+  maxRequestBodyBytes(): number;
   createCallbacks(renderHost: HostRenderCallback, invokeAction: (payload: string) => Promise<string>): NativeCallbacks;
 }
 
@@ -72,6 +73,8 @@ function nativeFilename(): string {
 
 const require = createRequire(import.meta.url);
 const native = require(fileURLToPath(new URL(`../native/${nativeFilename()}`, import.meta.url))) as NativeModule;
+
+export const MAX_REQUEST_BODY_BYTES = native.maxRequestBodyBytes();
 
 export async function loadApplication(
   options: NativeApplicationOptions,

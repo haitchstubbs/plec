@@ -307,6 +307,72 @@ mod tests {
     }
 
     #[test]
+    fn request_context_matches_shared_node_host_fixtures() {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Fixture {
+            target: String,
+            host: String,
+            transport_scheme: String,
+            forwarded_proto: String,
+            trust_proxy: bool,
+            cookie: String,
+            expected_url: Option<String>,
+            expected_query: Option<HashMap<String, serde_json::Value>>,
+            expected_cookies: Option<HashMap<String, String>>,
+            invalid: Option<bool>,
+        }
+
+        let fixtures: Vec<Fixture> = serde_json::from_str(include_str!(
+            "../../../testdata/node-host/request-context.json"
+        ))
+        .unwrap();
+        for fixture in fixtures {
+            let uri: Uri = fixture.target.parse().unwrap();
+            let forwarded = if fixture.trust_proxy {
+                fixture
+                    .forwarded_proto
+                    .split(',')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+            } else {
+                &fixture.transport_scheme
+            };
+            let headers = HeaderMap::from_iter([
+                (header::HOST, fixture.host.parse().unwrap()),
+                (header::COOKIE, fixture.cookie.parse().unwrap()),
+                ("x-forwarded-proto".parse().unwrap(), forwarded.parse().unwrap()),
+            ]);
+            let context = RequestContext::from_parts(Method::GET, &uri, &headers);
+            if fixture.invalid.unwrap_or(false) {
+                assert!(context.is_err(), "accepted {:?}", fixture.target);
+                continue;
+            }
+            let context = context.unwrap();
+            assert_eq!(Some(context.url), fixture.expected_url);
+            assert_eq!(
+                Some(context.cookies),
+                fixture.expected_cookies,
+                "cookies for {:?}",
+                fixture.target
+            );
+            let query: HashMap<String, serde_json::Value> = context
+                .query
+                .into_iter()
+                .map(|(key, value)| {
+                    let value = match value {
+                        QueryValue::One(value) => serde_json::Value::String(value),
+                        QueryValue::Many(values) => serde_json::json!(values),
+                    };
+                    (key, value)
+                })
+                .collect();
+            assert_eq!(Some(query), fixture.expected_query);
+        }
+    }
+
+    #[test]
     fn canonical_encoded_path_is_matched_without_separator_or_dot_normalization() {
         let manifest = plec_schema::routing::RouteManifest {
             version: None,

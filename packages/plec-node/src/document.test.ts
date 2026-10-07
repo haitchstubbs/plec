@@ -172,5 +172,5 @@ function graph(id: string, tag: string, text: string, withOutlet: boolean) {
 }
 
 function generatedApp(): string {
-  return 'export function hasAction() { return false; } export async function invokeAction() { throw new Error("unknown action"); }';
+  return 'export async function handleRequest() { return null; } export function hasAction() { return false; } export async function invokeAction() { throw new Error("unknown action"); }';
 }

@@ -1990,6 +1990,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "plec-ir",
  "plec-server-engine",
  "reqwest",
  "serde_json",
