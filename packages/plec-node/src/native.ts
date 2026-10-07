@@ -24,7 +24,9 @@ export interface NativeApplicationOptions {
   development?: boolean;
 }
 
-export type HostRenderCallback = (requestJson: string) => Promise<string>;
+export type HostRenderCallback = (
+  requestJson: string,
+) => Promise<string>;
 
 export interface NativeDocumentResponse {
   readonly status: number;
@@ -39,7 +41,9 @@ export interface NativeActionResponse {
 }
 
 export interface PlecApplication {
-  handleDocument(request: NativeRequest): Promise<NativeDocumentResponse>;
+  handleDocument(
+    request: NativeRequest,
+  ): Promise<NativeDocumentResponse>;
   handleAction(
     request: NativeRequest,
     body: ReadableStream<Uint8Array>,
@@ -50,29 +54,40 @@ export interface PlecApplication {
 
 interface NativeModule {
   maxRequestBodyBytes(): number;
-  createCallbacks(renderHost: HostRenderCallback, invokeAction: (payload: string) => Promise<string>): NativeCallbacks;
+  createCallbacks(
+    renderHost: HostRenderCallback,
+    invokeAction: (payload: string) => Promise<string>,
+  ): NativeCallbacks;
 }
 
 interface NativeCallbacks {
-  loadApplication(options: NativeApplicationOptions): Promise<PlecApplication>;
+  loadApplication(
+    options: NativeApplicationOptions,
+  ): Promise<PlecApplication>;
 }
 
 function nativeFilename(): string {
   const platform = process.platform;
   const arch = process.arch;
   const report = process.report?.getReport() as
-    | { header?: { glibcVersionRuntime?: string } }
-    | undefined;
+    { header?: { glibcVersionRuntime?: string } } | undefined;
   if (
     platform === 'linux' &&
     arch === 'x64' &&
     report?.header?.glibcVersionRuntime
-  ) return 'index.linux-x64-gnu.node';
-  throw new Error(`@plec/node native addon is unavailable for ${platform}-${arch}`);
+  )
+    return 'index.linux-x64-gnu.node';
+  throw new Error(
+    `@plec/node native addon is unavailable for ${platform}-${arch}`,
+  );
 }
 
 const require = createRequire(import.meta.url);
-const native = require(fileURLToPath(new URL(`../native/${nativeFilename()}`, import.meta.url))) as NativeModule;
+const native = require(
+  fileURLToPath(
+    new URL(`../native/${nativeFilename()}`, import.meta.url),
+  ),
+) as NativeModule;
 
 export const MAX_REQUEST_BODY_BYTES = native.maxRequestBodyBytes();
 

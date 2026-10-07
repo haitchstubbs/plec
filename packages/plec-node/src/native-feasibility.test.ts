@@ -23,7 +23,9 @@ const native = createRequire(import.meta.url)(
 
 describe('napi-rs feasibility gate (Node 22)', () => {
   it('loads the native class and supports Promise callback re-entry, rejection, and close', async () => {
-    let application!: InstanceType<typeof native.FeasibilityApplication>;
+    let application!: InstanceType<
+      typeof native.FeasibilityApplication
+    >;
     application = new native.FeasibilityApplication(async (value) => {
       if (value === 'outer')
         return `outer:${await application.invoke('inner')}`;

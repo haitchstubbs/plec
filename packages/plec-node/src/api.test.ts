@@ -8,7 +8,11 @@ import { createPlecHandler } from './index.js';
 const directories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(directories.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    directories
+      .splice(0)
+      .map((dir) => rm(dir, { recursive: true, force: true })),
+  );
 });
 
 describe('@plec/node API path', () => {
@@ -17,9 +21,17 @@ describe('@plec/node API path', () => {
     const handler = await createPlecHandler({ dir, trustProxy: true });
     try {
       for (const pathname of ['/api', '/api/', '/api/foo']) {
-        const response = await handler.fetch(new Request(`http://localhost${pathname}?tag=one&tag=two+words&empty=`, {
-          headers: { cookie: 'session=hello%20world', 'x-forwarded-proto': ' https, http' },
-        }));
+        const response = await handler.fetch(
+          new Request(
+            `http://localhost${pathname}?tag=one&tag=two+words&empty=`,
+            {
+              headers: {
+                cookie: 'session=hello%20world',
+                'x-forwarded-proto': ' https, http',
+              },
+            },
+          ),
+        );
         expect(response.status).toBe(200);
         expect(await response.json()).toEqual({
           url: `https://localhost${pathname}?tag=one&tag=two+words&empty=`,
@@ -37,17 +49,23 @@ describe('@plec/node API path', () => {
   it('matches the shared RequestContext parity fixtures', async () => {
     const dir = await fixture();
     for (const testCase of contextCases) {
-      const handler = await createPlecHandler({ dir, trustProxy: testCase.trustProxy });
+      const handler = await createPlecHandler({
+        dir,
+        trustProxy: testCase.trustProxy,
+      });
       try {
         const url = `${testCase.transportScheme}://${testCase.host}${testCase.target}`;
         const headers = new Headers({
           cookie: testCase.cookie!,
           'x-forwarded-proto': testCase.forwardedProto,
         });
-        for (const entry of testCase.requestHeaders ?? []) headers.append(entry[0]!, entry[1]!);
-        const response = await handler.fetch(new Request(url, {
-          headers,
-        }));
+        for (const entry of testCase.requestHeaders ?? [])
+          headers.append(entry[0]!, entry[1]!);
+        const response = await handler.fetch(
+          new Request(url, {
+            headers,
+          }),
+        );
         if ('invalid' in testCase) {
           expect(response.status).toBe(400);
           continue;
@@ -57,7 +75,10 @@ describe('@plec/node API path', () => {
         expect(context.url).toBe(testCase.expectedUrl);
         expect(context.query).toEqual(testCase.expectedQuery);
         expect(context.cookies).toEqual(testCase.expectedCookies);
-        if ('expectedHeaders' in testCase && testCase.expectedHeaders) expect(context.headers).toMatchObject(testCase.expectedHeaders);
+        if ('expectedHeaders' in testCase && testCase.expectedHeaders)
+          expect(context.headers).toMatchObject(
+            testCase.expectedHeaders,
+          );
       } finally {
         await handler.close();
       }
@@ -69,12 +90,15 @@ describe('@plec/node API path', () => {
     const handler = await createPlecHandler({ dir });
     try {
       for (const method of ['GET', 'HEAD']) {
-        const response = await handler.fetch(new Request('http://localhost/api/body', {
-          method,
-        }));
+        const response = await handler.fetch(
+          new Request('http://localhost/api/body', {
+            method,
+          }),
+        );
         expect(response.status).toBe(200);
         if (method === 'HEAD') expect(response.body).toBeNull();
-        else expect(await response.json()).toMatchObject({ body: null });
+        else
+          expect(await response.json()).toMatchObject({ body: null });
       }
     } finally {
       await handler.close();
@@ -86,7 +110,10 @@ describe('@plec/node API path', () => {
     const handler = await createPlecHandler({ dir });
     try {
       let calls = 0;
-      (globalThis as Record<string, unknown>).plecApiTestCounter = () => { calls += 1; };
+      (globalThis as Record<string, unknown>).plecApiTestCounter =
+        () => {
+          calls += 1;
+        };
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new Uint8Array(1024 * 1024));
@@ -94,11 +121,17 @@ describe('@plec/node API path', () => {
           controller.enqueue(new Uint8Array([2]));
         },
       });
-      const response = await handler.fetch(new Request('http://localhost/api/body', {
-        method: 'POST', body, duplex: 'half',
-      } as RequestInit & { duplex: 'half' }));
+      const response = await handler.fetch(
+        new Request('http://localhost/api/body', {
+          method: 'POST',
+          body,
+          duplex: 'half',
+        } as RequestInit & { duplex: 'half' }),
+      );
       expect(response.status).toBe(413);
-      expect(await response.json()).toEqual({ error: 'request body exceeds byte limit' });
+      expect(await response.json()).toEqual({
+        error: 'request body exceeds byte limit',
+      });
       expect(calls).toBe(0);
     } finally {
       delete (globalThis as Record<string, unknown>).plecApiTestCounter;
@@ -111,27 +144,50 @@ describe('@plec/node API path', () => {
     const handler = await createPlecHandler({ dir });
     let release!: () => void;
     let dispatched = 0;
-    (globalThis as Record<string, unknown>).plecApiTestGate = new Promise<void>((resolve) => { release = resolve; });
-    (globalThis as Record<string, unknown>).plecApiTestCounter = () => { dispatched += 1; };
+    (globalThis as Record<string, unknown>).plecApiTestGate =
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    (globalThis as Record<string, unknown>).plecApiTestCounter = () => {
+      dispatched += 1;
+    };
     try {
-      const requests = Array.from({ length: 32 }, () => handler.fetch(new Request('http://localhost/api/hold', {
-        method: 'POST',
-        body: new Uint8Array(1024 * 1024),
-        duplex: 'half',
-      } as RequestInit & { duplex: 'half' })));
-      for (let attempt = 0; attempt < 100 && dispatched < 32; attempt += 1) {
+      const requests = Array.from({ length: 32 }, () =>
+        handler.fetch(
+          new Request('http://localhost/api/hold', {
+            method: 'POST',
+            body: new Uint8Array(1024 * 1024),
+            duplex: 'half',
+          } as RequestInit & { duplex: 'half' }),
+        ),
+      );
+      for (
+        let attempt = 0;
+        attempt < 100 && dispatched < 32;
+        attempt += 1
+      ) {
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
       expect(dispatched).toBe(32);
-      const overloaded = await handler.fetch(new Request('http://localhost/api/overflow', {
-        method: 'POST', body: new Uint8Array([1]), duplex: 'half',
-      } as RequestInit & { duplex: 'half' }));
+      const overloaded = await handler.fetch(
+        new Request('http://localhost/api/overflow', {
+          method: 'POST',
+          body: new Uint8Array([1]),
+          duplex: 'half',
+        } as RequestInit & { duplex: 'half' }),
+      );
       expect(overloaded.status).toBe(503);
       release();
       const responses = await Promise.all(requests);
-      expect(responses.every((response) => response.status === 200)).toBe(true);
-      await Promise.all(responses.map((response) => response.body?.cancel()));
-      const afterRelease = await handler.fetch(new Request('http://localhost/api/ok'));
+      expect(
+        responses.every((response) => response.status === 200),
+      ).toBe(true);
+      await Promise.all(
+        responses.map((response) => response.body?.cancel()),
+      );
+      const afterRelease = await handler.fetch(
+        new Request('http://localhost/api/ok'),
+      );
       expect(afterRelease.status).toBe(200);
       await afterRelease.text();
     } finally {
@@ -147,37 +203,55 @@ describe('@plec/node API path', () => {
     const handler = await createPlecHandler({ dir });
     let release!: () => void;
     let started!: () => void;
-    const entered = new Promise<void>((resolve) => { started = resolve; });
-    (globalThis as Record<string, unknown>).plecApiTestGate = new Promise<void>((resolve) => { release = resolve; });
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    (globalThis as Record<string, unknown>).plecApiTestGate =
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
     let dispatched = 0;
     (globalThis as Record<string, unknown>).plecApiTestStarted = () => {
       dispatched += 1;
       if (dispatched === 32) started();
     };
-    (globalThis as Record<string, unknown>).plecApiTestCounter = () => {};
+    (globalThis as Record<string, unknown>).plecApiTestCounter =
+      () => {};
     const controllers: AbortController[] = [];
     try {
       const requests = Array.from({ length: 32 }, () => {
         const controller = new AbortController();
         controllers.push(controller);
-        return handler.fetch(new Request('http://localhost/api/hold', {
-          method: 'POST',
-          body: new Uint8Array(1024 * 1024),
-          signal: controller.signal,
-          duplex: 'half',
-        } as RequestInit & { duplex: 'half' }));
+        return handler.fetch(
+          new Request('http://localhost/api/hold', {
+            method: 'POST',
+            body: new Uint8Array(1024 * 1024),
+            signal: controller.signal,
+            duplex: 'half',
+          } as RequestInit & { duplex: 'half' }),
+        );
       });
       await entered;
-      controllers[0]!.abort(new DOMException('client disconnected', 'AbortError'));
+      controllers[0]!.abort(
+        new DOMException('client disconnected', 'AbortError'),
+      );
       await expect(requests[0]).rejects.toThrow('client disconnected');
-      const overloaded = await handler.fetch(new Request('http://localhost/api/overflow', {
-        method: 'POST', body: new Uint8Array([1]), duplex: 'half',
-      } as RequestInit & { duplex: 'half' }));
+      const overloaded = await handler.fetch(
+        new Request('http://localhost/api/overflow', {
+          method: 'POST',
+          body: new Uint8Array([1]),
+          duplex: 'half',
+        } as RequestInit & { duplex: 'half' }),
+      );
       expect(overloaded.status).toBe(503);
       release();
       const settled = await Promise.all(requests.slice(1));
-      await Promise.all(settled.map((response) => response.body?.cancel()));
-      const afterRelease = await handler.fetch(new Request('http://localhost/api/ok'));
+      await Promise.all(
+        settled.map((response) => response.body?.cancel()),
+      );
+      const afterRelease = await handler.fetch(
+        new Request('http://localhost/api/ok'),
+      );
       expect(afterRelease.status).toBe(200);
       await afterRelease.text();
     } finally {
@@ -195,17 +269,25 @@ describe('@plec/node API path', () => {
     const dir = await fixture();
     const handler = await createPlecHandler({ dir });
     let dispatched = 0;
-    (globalThis as Record<string, unknown>).plecApiTestCounter = () => { dispatched += 1; };
+    (globalThis as Record<string, unknown>).plecApiTestCounter = () => {
+      dispatched += 1;
+    };
     try {
       const stalled = new ReadableStream<Uint8Array>({ pull() {} });
-      const pending = handler.fetch(new Request('http://localhost/api/timeout', {
-        method: 'POST', body: stalled, duplex: 'half',
-      } as RequestInit & { duplex: 'half' }));
+      const pending = handler.fetch(
+        new Request('http://localhost/api/timeout', {
+          method: 'POST',
+          body: stalled,
+          duplex: 'half',
+        } as RequestInit & { duplex: 'half' }),
+      );
       await vi.advanceTimersByTimeAsync(30_000);
       const response = await pending;
       expect(response.status).toBe(408);
       expect(dispatched).toBe(0);
-      const afterTimeout = await handler.fetch(new Request('http://localhost/api/ok'));
+      const afterTimeout = await handler.fetch(
+        new Request('http://localhost/api/ok'),
+      );
       expect(afterTimeout.status).toBe(200);
       await afterTimeout.text();
     } finally {
@@ -221,20 +303,33 @@ describe('@plec/node API path', () => {
     const controller = new AbortController();
     let canceled = false;
     let dispatched = 0;
-    (globalThis as Record<string, unknown>).plecApiTestCounter = () => { dispatched += 1; };
+    (globalThis as Record<string, unknown>).plecApiTestCounter = () => {
+      dispatched += 1;
+    };
     try {
       const body = new ReadableStream<Uint8Array>({
         pull() {},
-        cancel() { canceled = true; },
+        cancel() {
+          canceled = true;
+        },
       });
-      const pending = handler.fetch(new Request('http://localhost/api/abort', {
-        method: 'POST', body, signal: controller.signal, duplex: 'half',
-      } as RequestInit & { duplex: 'half' }));
-      controller.abort(new DOMException('client disconnected', 'AbortError'));
+      const pending = handler.fetch(
+        new Request('http://localhost/api/abort', {
+          method: 'POST',
+          body,
+          signal: controller.signal,
+          duplex: 'half',
+        } as RequestInit & { duplex: 'half' }),
+      );
+      controller.abort(
+        new DOMException('client disconnected', 'AbortError'),
+      );
       await expect(pending).rejects.toThrow('client disconnected');
       expect(canceled).toBe(true);
       expect(dispatched).toBe(0);
-      const afterAbort = await handler.fetch(new Request('http://localhost/api/ok'));
+      const afterAbort = await handler.fetch(
+        new Request('http://localhost/api/ok'),
+      );
       expect(afterAbort.status).toBe(200);
       await afterAbort.text();
     } finally {
@@ -247,12 +342,20 @@ describe('@plec/node API path', () => {
     const dir = await fixture();
     const handler = await createPlecHandler({ dir });
     try {
-      const missing = await handler.fetch(new Request('http://localhost/api/missing'));
+      const missing = await handler.fetch(
+        new Request('http://localhost/api/missing'),
+      );
       expect(missing.status).toBe(404);
-      expect(await missing.json()).toEqual({ error: 'endpoint not found' });
-      const failed = await handler.fetch(new Request('http://localhost/api/fail'));
+      expect(await missing.json()).toEqual({
+        error: 'endpoint not found',
+      });
+      const failed = await handler.fetch(
+        new Request('http://localhost/api/fail'),
+      );
       expect(failed.status).toBe(500);
-      expect(await failed.json()).toEqual({ error: 'Internal Server Error' });
+      expect(await failed.json()).toEqual({
+        error: 'Internal Server Error',
+      });
     } finally {
       await handler.close();
     }
@@ -265,19 +368,57 @@ async function fixture(): Promise<string> {
   await mkdir(path.join(dir, 'public'));
   await mkdir(path.join(dir, 'server'));
   await mkdir(path.join(dir, 'client/assets'), { recursive: true });
-  await writeFile(path.join(dir, 'plec-server.json'), JSON.stringify({
-    publicDir: 'public', clientDir: 'client', artifact: 'server/route-artifact.json',
-    server: { entry: 'server/app.mjs' },
-  }));
-  await writeFile(path.join(dir, 'client/host-providers.json'), JSON.stringify({ version: 2, revision: 'api-test', providers: [] }));
-  await writeFile(path.join(dir, 'server/route-artifact.json'), JSON.stringify({
-    manifest: { revision: 'api-test', rootGraphId: 'root', routes: [] },
-    graphs: [{ graphId: 'root', graph: {
-      rootComponent: 0,
-      components: [{ id: 'root', rootNode: 0, strings: ['div'], constants: [], nodes: [{ op: 'element', tag: 0, children: [] }], texts: [], bindings: [], propPrograms: [], stateSlots: [], parameters: [], expressions: [], loops: [], routeOutlets: [] }],
-    } }],
-  }));
-  await writeFile(path.join(dir, 'server/app.mjs'), `
+  await writeFile(
+    path.join(dir, 'plec-server.json'),
+    JSON.stringify({
+      publicDir: 'public',
+      clientDir: 'client',
+      artifact: 'server/route-artifact.json',
+      server: { entry: 'server/app.mjs' },
+    }),
+  );
+  await writeFile(
+    path.join(dir, 'client/host-providers.json'),
+    JSON.stringify({ version: 2, revision: 'api-test', providers: [] }),
+  );
+  await writeFile(
+    path.join(dir, 'server/route-artifact.json'),
+    JSON.stringify({
+      manifest: {
+        revision: 'api-test',
+        rootGraphId: 'root',
+        routes: [],
+      },
+      graphs: [
+        {
+          graphId: 'root',
+          graph: {
+            rootComponent: 0,
+            components: [
+              {
+                id: 'root',
+                rootNode: 0,
+                strings: ['div'],
+                constants: [],
+                nodes: [{ op: 'element', tag: 0, children: [] }],
+                texts: [],
+                bindings: [],
+                propPrograms: [],
+                stateSlots: [],
+                parameters: [],
+                expressions: [],
+                loops: [],
+                routeOutlets: [],
+              },
+            ],
+          },
+        },
+      ],
+    }),
+  );
+  await writeFile(
+    path.join(dir, 'server/app.mjs'),
+    `
     export function hasAction() { return false; }
     export async function invokeAction() { throw new Error('unknown action'); }
     export async function handleRequest(request, context) {
@@ -297,6 +438,7 @@ async function fixture(): Promise<string> {
         body: request.method === 'GET' || request.method === 'HEAD' ? null : await request.text(),
       });
     }
-  `);
+  `,
+  );
   return dir;
 }

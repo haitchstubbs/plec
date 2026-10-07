@@ -42,7 +42,9 @@ export async function loadSsrProviders(
     throw error;
   }
   if (!isWithin(distRoot, canonicalManifest)) {
-    throw new Error('host provider manifest escapes the distribution directory');
+    throw new Error(
+      'host provider manifest escapes the distribution directory',
+    );
   }
   const metadata = await stat(canonicalManifest);
   if (metadata.size > MAX_PROVIDER_MANIFEST_BYTES) {
@@ -50,48 +52,78 @@ export async function loadSsrProviders(
   }
   const bytes = await readFile(canonicalManifest);
   const manifest = JSON.parse(bytes.toString('utf8')) as unknown;
-  if (!isProviderManifest(manifest)) throw new Error('invalid host provider manifest');
+  if (!isProviderManifest(manifest))
+    throw new Error('invalid host provider manifest');
 
   const clientRoot = resolve(canonicalManifest, '..');
   const assetsRoot = await realpath(resolve(clientRoot, 'assets'));
-  const providers = new Map<string, { components: Set<string>; registry: Record<string, ProviderComponent> }>();
+  const providers = new Map<
+    string,
+    {
+      components: Set<string>;
+      registry: Record<string, ProviderComponent>;
+    }
+  >();
   for (const entry of manifest.providers) {
     if (!entry.ssr) continue;
     const assetPath = providerAssetPath(entry.id, entry.module);
     const modulePath = resolve(clientRoot, assetPath);
-    if (!isWithin(assetsRoot, modulePath)) throw invalidModule(entry.id);
+    if (!isWithin(assetsRoot, modulePath))
+      throw invalidModule(entry.id);
     let canonicalModule: string;
     try {
       canonicalModule = await realpath(modulePath);
     } catch {
       throw invalidModule(entry.id);
     }
-    if (!isWithin(assetsRoot, canonicalModule)) throw invalidModule(entry.id);
-    const imported = await import(pathToFileURL(canonicalModule).href) as { default?: unknown };
+    if (!isWithin(assetsRoot, canonicalModule))
+      throw invalidModule(entry.id);
+    const imported = (await import(
+      pathToFileURL(canonicalModule).href
+    )) as { default?: unknown };
     if (typeof imported.default !== 'function') {
-      throw new Error(`host provider ${entry.id} has no default factory`);
+      throw new Error(
+        `host provider ${entry.id} has no default factory`,
+      );
     }
     const registry = (imported.default as ProviderFactory)();
-    if (!registry || typeof registry !== 'object' || Array.isArray(registry)) {
-      throw new Error(`host provider ${entry.id} has an invalid default factory`);
+    if (
+      !registry ||
+      typeof registry !== 'object' ||
+      Array.isArray(registry)
+    ) {
+      throw new Error(
+        `host provider ${entry.id} has an invalid default factory`,
+      );
     }
-    providers.set(entry.id, { components: new Set(entry.components), registry });
+    providers.set(entry.id, {
+      components: new Set(entry.components),
+      registry,
+    });
   }
 
   return async (requestJson: string): Promise<string> => {
-    const request = JSON.parse(requestJson) as Partial<RenderHostRequest>;
+    const request = JSON.parse(
+      requestJson,
+    ) as Partial<RenderHostRequest>;
     if (
       typeof request.provider !== 'string' ||
       typeof request.component !== 'string' ||
-      !request.props || typeof request.props !== 'object' || Array.isArray(request.props)
-    ) throw new Error('invalid host render request');
+      !request.props ||
+      typeof request.props !== 'object' ||
+      Array.isArray(request.props)
+    )
+      throw new Error('invalid host render request');
     const provider = providers.get(request.provider);
     const render = provider?.components.has(request.component)
       ? provider.registry[request.component]?.render
       : undefined;
     if (!render) return '';
     const html = await render(request.props);
-    if (typeof html !== 'string' || Buffer.byteLength(html) > MAX_HOST_RENDER_BYTES) {
+    if (
+      typeof html !== 'string' ||
+      Buffer.byteLength(html) > MAX_HOST_RENDER_BYTES
+    ) {
       throw new Error('invalid host render response');
     }
     return html;
@@ -105,33 +137,57 @@ function providerAssetPath(id: string, module: string): string {
   } catch {
     throw invalidModule(id);
   }
-  if (parsed.origin !== 'http://plec.internal' || parsed.search || parsed.hash || !parsed.pathname.startsWith('/_plec/assets/')) {
+  if (
+    parsed.origin !== 'http://plec.internal' ||
+    parsed.search ||
+    parsed.hash ||
+    !parsed.pathname.startsWith('/_plec/assets/')
+  ) {
     throw invalidModule(id);
   }
   let assetPath: string;
   try {
-    assetPath = decodeURIComponent(parsed.pathname.slice('/_plec/'.length));
+    assetPath = decodeURIComponent(
+      parsed.pathname.slice('/_plec/'.length),
+    );
   } catch {
     throw invalidModule(id);
   }
-  if (!assetPath.startsWith('assets/') || assetPath.includes('\\')) throw invalidModule(id);
+  if (!assetPath.startsWith('assets/') || assetPath.includes('\\'))
+    throw invalidModule(id);
   return assetPath;
 }
 
 function isProviderManifest(value: unknown): value is ProviderManifest {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<ProviderManifest>;
-  return candidate.version === 2 && typeof candidate.revision === 'string' &&
-    Array.isArray(candidate.providers) && candidate.providers.every((entry) =>
-      !!entry && typeof entry.id === 'string' && entry.id.length > 0 &&
-      typeof entry.module === 'string' && Array.isArray(entry.components) &&
-      entry.components.every((component) => typeof component === 'string') &&
-      typeof entry.ssr === 'boolean');
+  return (
+    candidate.version === 2 &&
+    typeof candidate.revision === 'string' &&
+    Array.isArray(candidate.providers) &&
+    candidate.providers.every(
+      (entry) =>
+        !!entry &&
+        typeof entry.id === 'string' &&
+        entry.id.length > 0 &&
+        typeof entry.module === 'string' &&
+        Array.isArray(entry.components) &&
+        entry.components.every(
+          (component) => typeof component === 'string',
+        ) &&
+        typeof entry.ssr === 'boolean',
+    )
+  );
 }
 
 function isWithin(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
-  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`));
+  return (
+    rel === '' ||
+    (!isAbsolute(rel) &&
+      rel !== '..' &&
+      !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`))
+  );
 }
 
 function invalidModule(id: string): Error {

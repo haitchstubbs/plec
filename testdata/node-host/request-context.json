@@ -6,10 +6,17 @@
     "forwardedProto": "https, http",
     "trustProxy": true,
     "cookie": "session=hello%20world; theme=dark",
-    "requestHeaders": [["x-repeat", "one"], ["x-repeat", "two"]],
+    "requestHeaders": [
+      ["x-repeat", "one"],
+      ["x-repeat", "two"]
+    ],
     "expectedUrl": "https://app.example.test:8443/api/context?tag=one&tag=two+words&empty=&flag",
     "expectedHeaders": { "x-repeat": "one, two" },
-    "expectedQuery": { "tag": ["one", "two words"], "empty": "", "flag": "" },
+    "expectedQuery": {
+      "tag": ["one", "two words"],
+      "empty": "",
+      "flag": ""
+    },
     "expectedCookies": { "session": "hello world", "theme": "dark" }
   },
   {
@@ -20,7 +27,11 @@
     "trustProxy": false,
     "cookie": "session=hello%20world",
     "expectedUrl": "https://app.example.test/api/context?tag=one&tag=two+words&empty=&flag",
-    "expectedQuery": { "tag": ["one", "two words"], "empty": "", "flag": "" },
+    "expectedQuery": {
+      "tag": ["one", "two words"],
+      "empty": "",
+      "flag": ""
+    },
     "expectedCookies": { "session": "hello world" }
   },
   {
