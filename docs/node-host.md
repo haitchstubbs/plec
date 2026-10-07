@@ -2075,39 +2075,44 @@ Do not make Node call Rust merely to construct API `RequestContext`.
 
 # 25. Static asset host
 
-Implement after document/action parity, not before.
+Implement after document/action parity, not before. Node owns static lookup and
+streams file bytes directly; static payloads never cross N-API.
 
-The Node static host must match current `ServeDir` behavior for:
+Plec's 0.1 static contract is:
 
-```text id="88seip"
-public root containment
-/_plec client assets
-content types
-.br/.gz sidecars
-Accept-Encoding
-HEAD
-ranges
-not found
-malformed/unsafe paths
-cache-control
-```
+- `/...` resolves beneath canonical `publicRoot`; `/_plec/...` resolves beneath
+  the canonical client root. `/_plec` itself and absent files return JSON 404
+  `{ "error": "asset not found" }`.
+- Decode each URL path segment once for filesystem lookup. Reject malformed
+  escapes, decoded separators, dot segments, and candidates whose canonical
+  target escapes the selected root with JSON 400
+  `{ "error": "invalid asset path" }`. Symlinks are allowed only when their
+  canonical target remains within that root. Explicit dotfiles are servable;
+  directories are not implicitly mapped to index files.
+- Only GET and HEAD are supported; other methods return 405 with
+  `Allow: GET, HEAD`. Successful representations use `Cache-Control: no-cache`.
+- MIME types follow Plec's explicit extension table; unknown extensions use
+  `application/octet-stream`. The table covers AVIF, CSS, CSV, GIF, HTML/HTM,
+  ICO, JPEG/JPG, JavaScript/MJS, JSON, MP3, MP4, OTF, PDF, PNG, SVG, TXT, WASM,
+  web manifests, WebP, WOFF/WOFF2, and XML. Content type comes from the original
+  asset path, not a `.br`/`.gz` sidecar.
+- Present in-root `.br` and `.gz` sidecars are eligible representations.
+  Parse `Accept-Encoding` quality values, select the available coding with the
+  highest quality, and prefer Brotli on ties. Explicit coding quality overrides
+  wildcard; identity is acceptable by default unless explicitly excluded. If no
+  available representation is acceptable, return 406. Emit
+  `Vary: Accept-Encoding` when sidecars make negotiation relevant and
+  `Content-Encoding` for a selected sidecar.
+- Support one byte range for identity representations. A satisfiable range
+  returns 206 with `Accept-Ranges` and `Content-Range`; a valid unsatisfiable
+  range returns 416 with `Content-Range: bytes */<size>`. Malformed or multiple
+  ranges are ignored and served as a full 200. Compressed sidecars are served
+  whole rather than applying ranges to encoded bytes.
+- HEAD returns GET's status and representation headers without body bytes.
 
-Before implementation, inspect and fixture the current `ServeDir` behavior for
-dotfiles, directory requests/index lookup, MIME fallback, range edge cases,
-precompressed sidecars, and cache headers. Explicitly present dotfiles may be
-served beneath the root; traversal and special path segments are rejected. Do
-not add implicit directory index lookup unless parity requires it. Use an
-established MIME database or explicit mappings with
-`application/octet-stream` fallback. Prefer Brotli over gzip when acceptable
-and available, otherwise identity; emit `Vary: Accept-Encoding` whenever
-representation negotiation applies. Preserve the current single-range behavior.
-
-Create the parity fixture table before selecting or implementing the Node file
-server. Include valid single, unsatisfiable, multiple, and malformed Range
-headers; `Accept-Encoding` values for Brotli/gzip, `q=0`, weighted qualities,
-wildcards, and identity; HEAD; conditional/304 behavior if present; directory,
-dotfile, missing-file, and precompressed-sidecar cases. Match measured current
-`ServeDir` behavior rather than a library's defaults.
+Tests assert this Plec contract directly. Exhaustive parity with `ServeDir`
+defaults, directory-index behavior, and conditional-request behavior are not
+acceptance criteria.
 
 Do not implement naive:
 
@@ -2728,11 +2733,11 @@ requests never invoke application code.
 ### Slice 5 — Node static-file serving
 
 - Implement static lookup and streaming under the canonical public root.
-- Match measured `ServeDir` behavior for containment, MIME types, compression,
-  HEAD, ranges, caching, dotfiles, and missing/unsafe paths.
+- Implement section 25's explicit Plec static contract for containment, MIME,
+  compression negotiation, HEAD, single ranges, caching, and path errors.
 
-**Exit:** the static parity fixture table passes, including symlink escape and
-encoded traversal cases; static payloads never cross N-API.
+**Exit:** focused section 25 contract tests pass, including symlink escape and
+encoded traversal; static payloads never cross N-API.
 
 ### Slice 6 — Complete lifecycle and transport integration
 
@@ -2966,7 +2971,7 @@ slow-body timeout releases admission and prevents handler invocation
 
 Implement Node static serving.
 
-Acceptance against current ServeDir contract.
+Acceptance against the explicit Plec static contract in section 25.
 Containment and symlink policy applies equally to manifest, artifact, app entry,
 provider modules, and static assets; escape and path-race tests pass.
 

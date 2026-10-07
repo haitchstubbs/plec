@@ -1,4 +1,6 @@
-import { readFile, realpath } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { Readable } from 'node:stream';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { classifyPlecPath, canonicalRequestTarget } from './request-target.js';
@@ -54,6 +56,7 @@ export async function createPlecHandler(options: PlecNodeOptions): Promise<PlecH
   if (!inside(dir, manifestPath)) throw new Error('Plec manifest escapes the distribution directory');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as ServerManifest;
   const publicRoot = await realpath(path.resolve(dir, manifest.publicDir ?? 'public'));
+  const clientRoot = await realpath(path.resolve(dir, manifest.clientDir ?? 'client'));
   const providerManifestPath = path.resolve(dir, manifest.clientDir ?? 'client', 'host-providers.json');
   const artifactPath = await realpath(path.resolve(dir, manifest.artifact ?? 'server/route-artifact.json'));
   if (typeof manifest.server?.entry !== 'string' || manifest.server.entry.length === 0) {
@@ -250,12 +253,7 @@ export async function createPlecHandler(options: PlecNodeOptions): Promise<PlecH
         for (const entry of response.headers) responseHeaders.append(entry.name, entry.value);
         return new Response(response.body(), { status: response.status, headers: responseHeaders });
       }
-      if (routeClass !== 'document') {
-        return new Response(JSON.stringify({ error: 'not found' }), {
-          status: 404,
-          headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
-        });
-      }
+      if (routeClass === 'static') return serveStatic(request, pathname, publicRoot, clientRoot);
       if (request.method !== 'GET' && request.method !== 'HEAD') {
         return new Response(null, { status: 405, headers: { allow: 'GET, HEAD' } });
       }
@@ -307,6 +305,129 @@ export async function createPlecHandler(options: PlecNodeOptions): Promise<PlecH
       await application.close();
     },
   };
+}
+
+async function serveStatic(request: Request, pathname: string, publicRoot: string, clientRoot: string): Promise<Response> {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return new Response(null, { status: 405, headers: { allow: 'GET, HEAD' } });
+  if (pathname === '/_plec') return assetNotFound();
+  const clientAsset = pathname.startsWith('/_plec/');
+  const root = clientAsset ? clientRoot : publicRoot;
+  const relativeEncoded = clientAsset ? pathname.slice('/_plec/'.length) : pathname.slice(1);
+  let segments: string[];
+  try {
+    segments = relativeEncoded.split('/').map((part) => decodeURIComponent(part));
+  } catch { return invalidAssetPath(); }
+  if (segments.some((part) => part === '' || part === '.' || part === '..' || part.includes('/') || part.includes('\\'))) {
+    return invalidAssetPath();
+  }
+  const relative = path.join(...segments);
+  try {
+    const rootReal = await realpath(root);
+    let candidate = await realpath(path.join(rootReal, relative));
+    if (!inside(rootReal, candidate)) return invalidAssetPath();
+    const mediaType = contentType(candidate);
+    const variants: Partial<Record<'br' | 'gzip', string>> = {};
+    for (const [coding, suffix] of [['br', '.br'], ['gzip', '.gz']] as const) {
+      try {
+        const sidecar = await realpath(`${candidate}${suffix}`);
+        if (inside(rootReal, sidecar) && (await stat(sidecar)).isFile()) variants[coding] = sidecar;
+      } catch { /* absent sidecars are not available representations */ }
+    }
+    const qualities = parseAcceptEncoding(request.headers.get('accept-encoding') ?? '');
+    const available: ('br' | 'gzip' | 'identity')[] = ['identity'];
+    if (variants.br) available.push('br');
+    if (variants.gzip) available.push('gzip');
+    const selected = available
+      .filter((coding) => encodingQuality(qualities, coding) > 0)
+      .sort((a, b) => encodingQuality(qualities, b) - encodingQuality(qualities, a)
+        || (a === 'br' ? -1 : b === 'br' ? 1 : a === 'gzip' ? -1 : b === 'gzip' ? 1 : 0))[0];
+    if (!selected) return new Response(null, { status: 406, headers: { vary: 'Accept-Encoding' } });
+    const encoding = selected === 'identity' ? undefined : selected;
+    if (encoding) candidate = variants[encoding]!;
+    const info = await stat(candidate);
+    if (!info.isFile()) return assetNotFound();
+    const headers = new Headers({ 'content-type': mediaType, 'cache-control': 'no-cache' });
+    if (Object.keys(variants).length > 0) headers.set('vary', 'Accept-Encoding');
+    if (encoding) headers.set('content-encoding', encoding);
+    const range = request.headers.get('range');
+    const size = info.size;
+    let start = 0;
+    let end = size - 1;
+    let status = 200;
+    if (range && !encoding) {
+      const parsedRange = parseSingleByteRange(range, size);
+      if (parsedRange?.kind === 'satisfiable') {
+        ({ start, end } = parsedRange);
+          status = 206;
+          headers.set('accept-ranges', 'bytes');
+          headers.set('content-range', `bytes ${start}-${end}/${size}`);
+      } else if (parsedRange?.kind === 'unsatisfiable') {
+        headers.set('accept-ranges', 'bytes');
+        headers.set('content-range', `bytes */${size}`);
+        return new Response(null, { status: 416, headers });
+      }
+    }
+    headers.set('content-length', String(status === 206 ? end - start + 1 : size));
+    if (request.method === 'HEAD') return new Response(null, { status, headers });
+    const stream = createReadStream(candidate, status === 206 ? { start, end } : undefined);
+    return new Response(Readable.toWeb(stream) as ReadableStream<Uint8Array>, { status, headers });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') return assetNotFound();
+    return invalidAssetPath();
+  }
+}
+
+function assetNotFound(): Response { return new Response(JSON.stringify({ error: 'asset not found' }), { status: 404, headers: { 'content-type': 'application/json; charset=utf-8' } }); }
+function invalidAssetPath(): Response { return new Response(JSON.stringify({ error: 'invalid asset path' }), { status: 400, headers: { 'content-type': 'application/json; charset=utf-8' } }); }
+function contentType(file: string): string {
+  const ext = path.extname(file).toLowerCase();
+  return ({
+    '.avif': 'image/avif', '.css': 'text/css; charset=utf-8', '.csv': 'text/csv; charset=utf-8',
+    '.gif': 'image/gif', '.htm': 'text/html; charset=utf-8', '.html': 'text/html; charset=utf-8',
+    '.ico': 'image/x-icon', '.jpeg': 'image/jpeg', '.jpg': 'image/jpeg', '.js': 'text/javascript; charset=utf-8',
+    '.json': 'application/json; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.mp3': 'audio/mpeg',
+    '.mp4': 'video/mp4', '.otf': 'font/otf', '.pdf': 'application/pdf', '.png': 'image/png',
+    '.svg': 'image/svg+xml', '.txt': 'text/plain; charset=utf-8', '.wasm': 'application/wasm',
+    '.webmanifest': 'application/manifest+json', '.webp': 'image/webp', '.woff': 'font/woff', '.woff2': 'font/woff2',
+    '.xml': 'application/xml; charset=utf-8',
+  } as Record<string, string>)[ext] ?? 'application/octet-stream';
+}
+
+type EncodingQualities = Map<string, number>;
+function parseAcceptEncoding(header: string): EncodingQualities {
+  const result: EncodingQualities = new Map();
+  for (const part of header.split(',')) {
+    const [rawToken, ...parameters] = part.trim().toLowerCase().split(';');
+    if (!rawToken || !/^[!#$%&'*+.^_`|~0-9a-z-]+$/u.test(rawToken)) continue;
+    let quality = 1;
+    let valid = true;
+    for (const parameter of parameters) {
+      const match = /^\s*q\s*=\s*(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)\s*$/u.exec(parameter);
+      if (!match) { valid = false; break; }
+      quality = Number(match[1]);
+    }
+    if (valid) result.set(rawToken, quality);
+  }
+  return result;
+}
+
+function encodingQuality(qualities: EncodingQualities, coding: string): number {
+  if (qualities.has(coding)) return qualities.get(coding)!;
+  if (coding === 'identity') return 1;
+  return qualities.get('*') ?? 0;
+}
+
+type ParsedRange = { kind: 'satisfiable'; start: number; end: number } | { kind: 'unsatisfiable' } | undefined;
+function parseSingleByteRange(header: string, size: number): ParsedRange {
+  const match = /^bytes=(\d*)-(\d*)$/iu.exec(header.trim());
+  if (!match || (!match[1] && !match[2])) return undefined;
+  const first = match[1] ? Number(match[1]) : undefined;
+  const last = match[2] ? Number(match[2]) : undefined;
+  if ((first !== undefined && !Number.isSafeInteger(first)) || (last !== undefined && !Number.isSafeInteger(last))) return undefined;
+  if (size === 0 || (first === undefined && last === 0) || (first !== undefined && first >= size) || (first !== undefined && last !== undefined && last < first)) return { kind: 'unsatisfiable' };
+  const start = first ?? Math.max(0, size - last!);
+  const end = first === undefined ? size - 1 : Math.min(last ?? size - 1, size - 1);
+  return { kind: 'satisfiable', start, end };
 }
 
 function actionError(status: number, message: string): Response {
