@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./src/index.ts"
+    },
+    "./icon": {
+      "types": "./dist/icon.d.ts",
+      "default": "./src/Icon.tsx"
     }
   },
   "files": [
@@ -23,9 +27,9 @@
     "experimental"
   ],
   "scripts": {
-    "build": " yarn --cwd . exec tsc -p ./tsconfig.json",
+    "build": "node ../../node_modules/typescript/bin/tsc -p ./tsconfig.json",
     "test": "yarn exec vitest run --passWithNoTests",
-    "typecheck": "yarn --cwd . exec tsc -p ./tsconfig.json --noEmit"
+    "typecheck": "node ../../node_modules/typescript/bin/tsc -p ./tsconfig.json --noEmit"
   },
   "dependencies": {
     "@plec/core": "workspace:*",
