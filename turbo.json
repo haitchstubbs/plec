@@ -35,14 +35,14 @@
       "cache": false,
       "persistent": false,
       "dependsOn": ["fullstack#build"],
-      "env": ["E2E_PORT", "PLEC_BIN"],
+      "env": ["E2E_PORT", "PLEC_BIN", "PLEC_E2E_HOST", "PLEC_E2E_DIST"],
       "outputs": []
     },
     "test:acceptance": {
       "cache": false,
       "persistent": false,
       "dependsOn": ["fullstack#build"],
-      "env": ["E2E_PORT"],
+      "env": ["E2E_PORT", "PLEC_E2E_HOST", "PLEC_E2E_DIST"],
       "outputs": []
     },
     "bench": {

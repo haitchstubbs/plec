@@ -488,7 +488,7 @@ impl NativeActionResponse {
         env: Env,
     ) -> napi::Result<ReadableStream<'static, BufferSlice<'static>>> {
         let bytes = self.body.take().unwrap_or_default().into_bytes();
-        ReadableStream::create_with_stream_bytes(&env, stream::iter(vec![Ok(bytes)]))
+        response_body_stream(&env, bytes)
     }
 }
 
@@ -650,8 +650,22 @@ impl NativeDocumentResponse {
         env: Env,
     ) -> napi::Result<ReadableStream<'static, BufferSlice<'static>>> {
         let bytes = self.html.take().unwrap_or_default().into_bytes();
-        ReadableStream::create_with_stream_bytes(&env, stream::iter(vec![Ok(bytes)]))
+        response_body_stream(&env, bytes)
     }
+}
+
+fn response_body_stream(
+    env: &Env,
+    bytes: Vec<u8>,
+) -> napi::Result<ReadableStream<'static, BufferSlice<'static>>> {
+    // Byte streams reject empty chunks; an empty semantic response is an empty
+    // stream, not a single zero-byte chunk.
+    let chunks: Vec<napi::Result<Vec<u8>>> = if bytes.is_empty() {
+        Vec::new()
+    } else {
+        vec![Ok(bytes)]
+    };
+    ReadableStream::create_with_stream_bytes(env, stream::iter(chunks))
 }
 
 async fn execute(

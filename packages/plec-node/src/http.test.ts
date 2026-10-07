@@ -1,7 +1,10 @@
 import { once } from 'node:events';
 import net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createPlecHttpServer } from './http.js';
+import {
+  createPlecHttpServer,
+  createShutdownCoordinator,
+} from './http.js';
 import type { PlecHandler } from './index.js';
 import type { PlecTransportContext } from './transport.js';
 
@@ -81,6 +84,24 @@ describe('Node HTTP transport boundary', () => {
 
     expect(response).toContain('400');
     expect(dispatched).toBe(false);
+  });
+
+  it('leaves conflicting Content-Length and Transfer-Encoding rejection to Node', async () => {
+    let dispatched = false;
+    const host = createPlecHttpServer(
+      fakeHandler(() => {
+        dispatched = true;
+        return new Response('unexpected');
+      }),
+    );
+    servers.push(host);
+    const response = await malformedRequest(
+      await listen(host.server),
+      'POST /api/framing HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n0\r\n\r\n',
+    );
+
+    expect(dispatched).toBe(false);
+    expect(response).not.toContain('200 OK');
   });
 
   it('ignores API GET bodies and closes the connection when bytes remain unread', async () => {
@@ -257,6 +278,212 @@ describe('Node HTTP transport boundary', () => {
     releaseResponses();
     await Promise.all(closed);
   });
+
+  it('stops Plec admission before closing the listener', async () => {
+    let dispatched = 0;
+    const host = createPlecHttpServer(
+      fakeHandler(() => {
+        dispatched += 1;
+        return new Response('unexpected');
+      }),
+    );
+    servers.push(host);
+    const port = await listen(host.server);
+
+    // Exercise the Plec admission gate while the listener is still open.
+    host.stopAdmission();
+    const response = await rawRequest(
+      port,
+      'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n',
+    );
+
+    expect(response).toContain('503');
+    expect(dispatched).toBe(0);
+  });
+
+  it('drains admitted HTTP work within grace and closes the handler once', async () => {
+    let startDispatch!: () => void;
+    let releaseResponse!: () => void;
+    const dispatchStarted = new Promise<void>((resolve) => {
+      startDispatch = resolve;
+    });
+    const responseGate = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+    let dispatchCompleted = false;
+    let closeCount = 0;
+    const handler = fakeHandler(
+      async () => {
+        startDispatch();
+        await responseGate;
+        dispatchCompleted = true;
+        return new Response('drained');
+      },
+      async () => {
+        closeCount += 1;
+        expect(dispatchCompleted).toBe(true);
+      },
+    );
+    const host = createPlecHttpServer(handler);
+    servers.push(host);
+    const port = await listen(host.server);
+    let stopAdmissionCalled = false;
+    const stopAdmission = host.stopAdmission;
+    host.stopAdmission = () => {
+      stopAdmissionCalled = true;
+      stopAdmission();
+    };
+    const responsePromise = rawRequest(
+      port,
+      'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n',
+    );
+    await dispatchStarted;
+
+    const shutdown = createShutdownCoordinator(host, handler, 1_000);
+    const firstShutdown = shutdown();
+    const repeatedShutdown = shutdown();
+    expect(firstShutdown).toBe(repeatedShutdown);
+    expect(stopAdmissionCalled).toBe(true);
+    expect(closeCount).toBe(0);
+
+    releaseResponse();
+    const response = await responsePromise;
+    await Promise.all([firstShutdown, repeatedShutdown]);
+
+    expect(response).toContain('drained');
+    expect(closeCount).toBe(1);
+  });
+
+  it('force-closes over-grace work, propagates cancellation, and closes once', async () => {
+    let cancellationObserved = false;
+    let bodyCancelled = false;
+    let forceClosed = false;
+    let closeCount = 0;
+    let dispatchCount = 0;
+    const handler = fakeHandler(
+      (transport) => {
+        dispatchCount += 1;
+        let pulls = 0;
+        let releasePull!: () => void;
+        transport.signal.addEventListener(
+          'abort',
+          () => {
+            cancellationObserved = true;
+            releasePull?.();
+          },
+          { once: true },
+        );
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              if (pulls++ === 0) {
+                controller.enqueue(new TextEncoder().encode('first'));
+                return;
+              }
+              return new Promise<void>((resolve) => {
+                releasePull = resolve;
+              });
+            },
+            cancel() {
+              bodyCancelled = true;
+            },
+          }),
+        );
+      },
+      async () => {
+        closeCount += 1;
+      },
+    );
+    const host = createPlecHttpServer(handler);
+    servers.push(host);
+    const closeAllConnections = host.server.closeAllConnections.bind(
+      host.server,
+    );
+    host.server.closeAllConnections = () => {
+      forceClosed = true;
+      closeAllConnections();
+    };
+    const port = await listen(host.server);
+    const response = await fetch(`http://127.0.0.1:${port}/`);
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(
+      'first',
+    );
+
+    const shutdown = createShutdownCoordinator(host, handler, 25);
+    const firstShutdown = shutdown();
+    const repeatedShutdown = shutdown();
+    expect(firstShutdown).toBe(repeatedShutdown);
+    await Promise.all([firstShutdown, repeatedShutdown]);
+
+    expect(cancellationObserved).toBe(true);
+    expect(forceClosed).toBe(true);
+    expect(bodyCancelled).toBe(true);
+    expect(dispatchCount).toBe(1);
+    expect(closeCount).toBe(1);
+    await expect(reader.read()).rejects.toThrow();
+  });
+
+  it('does not wait indefinitely for an uncooperative response stream after force close', async () => {
+    let cancellationObserved = false;
+    let closeCount = 0;
+    let forceClosed = false;
+    const handler = fakeHandler(
+      (transport) => {
+        transport.signal.addEventListener(
+          'abort',
+          () => {
+            cancellationObserved = true;
+          },
+          { once: true },
+        );
+        let pulls = 0;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              if (pulls++ === 0)
+                controller.enqueue(new TextEncoder().encode('first'));
+              else return new Promise<void>(() => undefined);
+            },
+          }),
+        );
+      },
+      async () => {
+        closeCount += 1;
+      },
+    );
+    const host = createPlecHttpServer(handler);
+    servers.push(host);
+    const closeAllConnections = host.server.closeAllConnections.bind(
+      host.server,
+    );
+    host.server.closeAllConnections = () => {
+      forceClosed = true;
+      closeAllConnections();
+    };
+    const port = await listen(host.server);
+    const response = await fetch(`http://127.0.0.1:${port}/`);
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(
+      'first',
+    );
+
+    const shutdown = createShutdownCoordinator(host, handler, 20);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const completed = await Promise.race([
+      shutdown().then(() => true),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), 500);
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+
+    expect(completed).toBe(true);
+    expect(forceClosed).toBe(true);
+    expect(cancellationObserved).toBe(true);
+    expect(closeCount).toBe(1);
+  });
 });
 
 function fakeHandler(
@@ -264,12 +491,13 @@ function fakeHandler(
     transport: PlecTransportContext,
     request: Request,
   ) => Response | Promise<Response>,
+  close: () => Promise<void> = async () => {},
 ): PlecHandler {
   return {
     async fetch() {
       return new Response('fetch should not be used by node:http');
     },
-    async close() {},
+    close,
     async dispatch(request: Request, transport: PlecTransportContext) {
       return dispatch(transport, request);
     },
@@ -306,6 +534,26 @@ async function rawRequest(
       resolve(Buffer.concat(chunks).toString('utf8')),
     );
     socket.on('error', reject);
+  });
+}
+
+async function malformedRequest(
+  port: number,
+  request: string,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1');
+    const chunks: Buffer[] = [];
+    const finish = (): void =>
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    socket.setTimeout(5_000, () => socket.destroy());
+    socket.on('connect', () => socket.write(request));
+    socket.on('data', (chunk: Buffer) => chunks.push(chunk));
+    socket.on('close', finish);
+    socket.on('error', (error) => {
+      if (chunks.length > 0) finish();
+      else reject(error);
+    });
   });
 }
 

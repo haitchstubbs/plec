@@ -24,7 +24,11 @@ const SHUTDOWN_GRACE = 5_000;
 export interface PlecHttpServer {
   server: ReturnType<typeof createServer>;
   stopAdmission(): void;
+  abortActiveRequests(): void;
+  waitForActiveRequests(): Promise<void>;
 }
+
+type ShutdownHandler = Pick<PlecHandler, 'close'>;
 
 export function createPlecHttpServer(
   handler: PlecHandler,
@@ -32,6 +36,9 @@ export function createPlecHttpServer(
 ): PlecHttpServer {
   let activeRequests = 0;
   let accepting = true;
+  let activeRequestsDrained = Promise.resolve();
+  let resolveActiveRequestsDrained: (() => void) | undefined;
+  const activeControllers = new Set<AbortController>();
   const server = createServer((request, response) => {
     void dispatch(
       request,
@@ -45,11 +52,24 @@ export function createPlecHttpServer(
       () => {
         if (!accepting) return false;
         if (activeRequests >= maxActiveRequests) return false;
+        if (activeRequests === 0) {
+          activeRequestsDrained = new Promise<void>((resolve) => {
+            resolveActiveRequestsDrained = resolve;
+          });
+        }
         activeRequests += 1;
         return true;
       },
       () => {
         activeRequests -= 1;
+        if (activeRequests === 0) {
+          resolveActiveRequestsDrained?.();
+          resolveActiveRequestsDrained = undefined;
+        }
+      },
+      (controller) => {
+        activeControllers.add(controller);
+        return () => activeControllers.delete(controller);
       },
     ).catch((error: unknown) => {
       console.error('[PLEC] response dispatch failed', error);
@@ -67,6 +87,63 @@ export function createPlecHttpServer(
     stopAdmission: () => {
       accepting = false;
     },
+    abortActiveRequests: () => {
+      for (const controller of activeControllers)
+        controller.abort(
+          new DOMException(
+            'Server shutdown grace expired',
+            'AbortError',
+          ),
+        );
+    },
+    waitForActiveRequests: () => activeRequestsDrained,
+  };
+}
+
+/** @internal Coordinates HTTP drain and application close for serve() and tests. */
+export function createShutdownCoordinator(
+  hostServer: PlecHttpServer,
+  handler: ShutdownHandler,
+  graceMs = SHUTDOWN_GRACE,
+): () => Promise<void> {
+  let shutdownPromise: Promise<void> | undefined;
+  return () => {
+    if (shutdownPromise) return shutdownPromise;
+    hostServer.stopAdmission();
+    shutdownPromise = (async () => {
+      let graceTimer: ReturnType<typeof setTimeout> | undefined;
+      const listenerClosed = new Promise<void>((resolve, reject) => {
+        hostServer.server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+      const drained = Promise.all([
+        listenerClosed,
+        hostServer.waitForActiveRequests(),
+      ]).then(() => undefined);
+      const grace = new Promise<boolean>((resolve) => {
+        graceTimer = setTimeout(() => resolve(false), graceMs);
+      });
+      try {
+        const drainedWithinGrace = await Promise.race([
+          drained.then(() => true),
+          grace,
+        ]);
+        if (!drainedWithinGrace) {
+          hostServer.server.closeAllConnections();
+          hostServer.abortActiveRequests();
+          // Forced socket closure propagates request cancellation, but arbitrary
+          // JS streams may not settle their pull/cancel promises. Wait for the
+          // transport to close, not detached application work.
+          await listenerClosed;
+        }
+        await handler.close();
+      } finally {
+        if (graceTimer) clearTimeout(graceTimer);
+      }
+    })();
+    return shutdownPromise;
   };
 }
 
@@ -96,30 +173,28 @@ export async function servePlecHandler(
     typeof address === 'object' && address ? address.port : port;
   console.info(`[PLEC] listening on http://${host}:${boundPort}`);
 
+  const shutdown = createShutdownCoordinator(hostServer, handler);
   await new Promise<void>((resolve, reject) => {
-    let shuttingDown: Promise<void> | undefined;
-    const shutdown = (): void => {
-      if (shuttingDown) return;
-      shuttingDown = (async () => {
-        hostServer.stopAdmission();
-        const drained = new Promise<void>((done) =>
-          server.close(() => done()),
-        );
-        let graceTimer: ReturnType<typeof setTimeout> | undefined;
-        const grace = new Promise<void>((done) => {
-          graceTimer = setTimeout(done, SHUTDOWN_GRACE);
-        });
-        await Promise.race([drained, grace]);
-        if (graceTimer) clearTimeout(graceTimer);
-        server.closeAllConnections();
-        await handler.close();
-        process.off('SIGINT', shutdown);
-        process.off('SIGTERM', shutdown);
-        resolve();
-      })().catch(reject);
+    let settled = false;
+    const cleanup = (): void => {
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
     };
-    process.once('SIGINT', shutdown);
-    process.once('SIGTERM', shutdown);
+    const finish = (error?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve();
+    };
+    const onSignal = (): void => {
+      void shutdown().then(
+        () => finish(),
+        (error: unknown) => finish(error),
+      );
+    };
+    process.on('SIGINT', onSignal);
+    process.on('SIGTERM', onSignal);
   });
 }
 
@@ -129,6 +204,7 @@ async function dispatch(
   handler: Awaited<ReturnType<typeof createPlecHandler>>,
   acquire: () => boolean,
   release: () => void,
+  registerController: (controller: AbortController) => () => void,
 ): Promise<void> {
   const target = incoming.url;
   let parsed: ReturnType<typeof canonicalRequestTarget>;
@@ -186,13 +262,14 @@ async function dispatch(
   };
 
   const controller = new AbortController();
+  const unregisterController = registerController(controller);
   const abort = (): void =>
     controller.abort(
       new DOMException('Client disconnected', 'AbortError'),
     );
   incoming.once('aborted', abort);
   outgoing.once('close', () => {
-    if (!outgoing.writableEnded) abort();
+    if (!outgoing.writableFinished) abort();
   });
   try {
     let body: ReadableStream<Uint8Array> | null = null;
@@ -271,12 +348,18 @@ async function dispatch(
         ): Promise<Response>;
       }
     ).dispatch(request, transport);
-    await sendResponse(outgoing, response, incoming.method === 'HEAD');
+    await sendResponse(
+      outgoing,
+      response,
+      incoming.method === 'HEAD',
+      controller.signal,
+    );
   } catch (error) {
     if (controller.signal.aborted) return;
     throw error;
   } finally {
     incoming.off('aborted', abort);
+    unregisterController();
     releaseAdmission();
   }
 }
@@ -285,6 +368,7 @@ async function sendResponse(
   response: ServerResponse,
   result: Response,
   head: boolean,
+  signal: AbortSignal,
 ): Promise<void> {
   response.statusCode = result.status;
   if ([408, 413, 503].includes(result.status))
@@ -322,18 +406,28 @@ async function sendResponse(
   response.removeHeader('content-length');
   const reader = result.body.getReader();
   let disconnected = false;
+  const onAbort = (): void => {
+    disconnected = true;
+    void reader.cancel(signal.reason).catch(() => undefined);
+  };
   const onClose = (): void => {
-    if (response.writableEnded) return;
+    if (response.writableFinished) return;
     disconnected = true;
     void reader.cancel('client disconnected').catch(() => undefined);
   };
+  const cleanup = (): void => {
+    response.off('close', onClose);
+    signal.removeEventListener('abort', onAbort);
+  };
   response.once('close', onClose);
+  if (signal.aborted) onAbort();
+  else signal.addEventListener('abort', onAbort, { once: true });
   let first: ReadableStreamReadResult<Uint8Array>;
   try {
     first = await reader.read();
   } catch (error) {
     await reader.cancel(error).catch(() => undefined);
-    response.off('close', onClose);
+    cleanup();
     if (disconnected) return;
     for (const name of response.getHeaderNames())
       response.removeHeader(name);
@@ -345,11 +439,11 @@ async function sendResponse(
     return;
   }
   if (disconnected) {
-    response.off('close', onClose);
+    cleanup();
     return;
   }
   if (first.done) {
-    response.off('close', onClose);
+    cleanup();
     response.end();
     return;
   }
@@ -372,7 +466,7 @@ async function sendResponse(
   try {
     await pipeline(source, response);
   } finally {
-    response.off('close', onClose);
+    cleanup();
   }
 }
 

@@ -28,11 +28,25 @@ export const baseURL = `http://127.0.0.1:${e2ePort}`;
 // The native Axum host owns the public listener and spawns the Node sidecar
 // for application-owned `/api/*` handlers.
 const movedDist = process.env.PLEC_E2E_DIST;
+const selectedHost = process.env.PLEC_E2E_HOST ?? 'axum';
+if (selectedHost !== 'axum' && selectedHost !== 'node') {
+  throw new Error('PLEC_E2E_HOST must be either "axum" or "node"');
+}
 const quoteShell = (value: string) =>
   `'${value.replaceAll("'", "'\\''")}'`;
-const startCommand = movedDist
-  ? `plec serve ${quoteShell(movedDist)}`
-  : 'yarn workspace fullstack exec plec serve dist';
+const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
+const startCommand =
+  selectedHost === 'node'
+    ? [
+        'yarn workspace @plec/node build:native && node --experimental-transform-types --import',
+        quoteShell(
+          path.join(scriptsDir, 'scripts/node-source-loader.mjs'),
+        ),
+        quoteShell(path.join(scriptsDir, 'scripts/node-host.mjs')),
+      ].join(' ')
+    : movedDist
+      ? `plec serve ${quoteShell(movedDist)}`
+      : 'yarn workspace fullstack exec plec serve dist';
 
 // Playwright owns the fullstack server: turbo builds it, webServer starts
 // the native host, waits for HTTP readiness, and kills the process group
@@ -42,13 +56,18 @@ const startCommand = movedDist
 export const webServer = {
   command: startCommand,
   url: baseURL,
-  ...(movedDist ? { cwd: path.dirname(movedDist) } : {}),
+  ...(selectedHost === 'node'
+    ? { cwd: path.resolve(scriptsDir, '../..') }
+    : movedDist
+      ? { cwd: path.dirname(movedDist) }
+      : {}),
   env: {
     PORT: String(e2ePort),
     PLEC_ACCEPTANCE_CONTROL: '1',
+    ...(movedDist ? { PLEC_E2E_DIST: movedDist } : {}),
   },
   // Intentional: a stale server on the port must fail loudly instead of
   // being silently adopted (that is how orphaned servers went unnoticed).
   reuseExistingServer: false,
-  timeout: 30_000,
+  timeout: selectedHost === 'node' ? 120_000 : 30_000,
 } satisfies NonNullable<Config['webServer']>;

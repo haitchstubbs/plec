@@ -1,6 +1,5 @@
 import { AppSidebar } from './app-sidebar';
 import { ChevronRight, PanelLeft } from 'lucide';
-import { Icon } from '@plec/lucide/icon';
 import {
   useState,
   useListener,
@@ -68,7 +67,7 @@ export function FullstackLayout() {
             aria-label="Toggle sidebar"
             aria-expanded={!collapsed}
           >
-            <Icon icon={PanelLeft} className="size-4" />
+            <PanelLeft className="size-4" />
             <span className="sr-only">Toggle sidebar</span>
           </button>
           <button
@@ -78,7 +77,7 @@ export function FullstackLayout() {
             aria-label="Toggle navigation"
             aria-expanded={mobileOpen}
           >
-            <Icon icon={PanelLeft} className="size-4" />
+            <PanelLeft className="size-4" />
             <span className="sr-only">Toggle navigation</span>
           </button>
           <div className="mr-2 h-4 w-px bg-border" aria-hidden="true" />
@@ -93,7 +92,7 @@ export function FullstackLayout() {
                 </Link>
               </li>
               <li className="hidden md:block" aria-hidden="true">
-                <Icon icon={ChevronRight} className="block size-3.5" />
+                <ChevronRight className="block size-3.5" />
               </li>
               <li
                 aria-current="page"

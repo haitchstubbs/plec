@@ -10,7 +10,7 @@
   "scripts": {
     "build:native": "napi build --platform --no-js --manifest-path ../../crates/plec-node-bindings/Cargo.toml --profile node-release --output-dir native --dts bindings.d.ts",
     "build:native:gate": "napi build --platform --no-js --manifest-path ../../crates/plec-node-bindings/Cargo.toml --profile node-release --features feasibility-gate --output-dir native --dts bindings.d.ts",
-    "test": "yarn --cwd ../.. exec vitest run packages/plec-node/src/request-target.test.ts packages/plec-node/src/document.test.ts packages/plec-node/src/providers.test.ts packages/plec-node/src/actions.test.ts packages/plec-node/src/api.test.ts packages/plec-node/src/http.test.ts",
+    "test": "yarn --cwd ../.. exec vitest run packages/plec-node/src/request-target.test.ts packages/plec-node/src/static.test.ts packages/plec-node/src/document.test.ts packages/plec-node/src/providers.test.ts packages/plec-node/src/actions.test.ts packages/plec-node/src/api.test.ts packages/plec-node/src/http.test.ts",
     "test:native": "yarn build:native:gate && yarn --cwd ../.. exec vitest run packages/plec-node/src/native-feasibility.test.ts",
     "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec-node/tsconfig.json --noEmit"
   },

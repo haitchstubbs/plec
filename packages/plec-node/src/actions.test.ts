@@ -288,6 +288,48 @@ describe('@plec/node action path', () => {
     }
   });
 
+  it('remains safe when request cancellation races application close', async () => {
+    const startedKey = `plecActionCloseRaceStarted${Date.now()}`;
+    const dir = await fixture(startedKey);
+    const handler = await createPlecHandler({ dir });
+    const controller = new AbortController();
+    try {
+      const pending = handler.fetch(
+        actionRequest(
+          'pending',
+          jsonBody('[]'),
+          'http://localhost',
+          undefined,
+          controller.signal,
+        ),
+      );
+      for (
+        let attempt = 0;
+        attempt < 100 &&
+        !(globalThis as Record<string, unknown>)[startedKey];
+        attempt++
+      ) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect((globalThis as Record<string, unknown>)[startedKey]).toBe(
+        1,
+      );
+
+      controller.abort();
+      const firstClose = handler.close();
+      const secondClose = handler.close();
+      await expect(pending).rejects.toThrow(
+        /PLEC_(?:REQUEST_CANCELLED|APPLICATION_CLOSED)/u,
+      );
+      await Promise.all([firstClose, secondClose]);
+      await handler.close();
+    } finally {
+      controller.abort();
+      await handler.close();
+      delete (globalThis as Record<string, unknown>)[startedKey];
+    }
+  });
+
   it('closes native application state when the HTTP listener cannot bind', async () => {
     const dir = await fixture();
     const blocker = createServer();
