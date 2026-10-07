@@ -15,6 +15,7 @@ import {
 } from './native.js';
 import { loadSsrProviders } from './providers.js';
 import { serveStatic } from './static.js';
+import type { PlecTransportContext } from './transport.js';
 
 export interface PlecNodeOptions {
   dir: string;
@@ -158,22 +159,42 @@ export async function createPlecHandler(
     renderHost,
     invokeAction,
   );
+  let closePromise: Promise<void> | undefined;
   let closed = false;
   let activeApiRequests = 0;
   let reservedApiBytes = 0;
 
-  return {
+  const plecHandler: PlecHandler & {
+    /** @internal Raw transport dispatch used by the first-party HTTP host. */
+    dispatch(
+      request: Request,
+      transport: PlecTransportContext,
+    ): Promise<Response>;
+  } = {
     async fetch(request: Request): Promise<Response> {
       if (closed) throw new Error('PLEC_APPLICATION_CLOSED');
-      let pathname: string;
-      let rawQuery: string;
+      let target: ReturnType<typeof canonicalRequestTarget>;
+      let url: URL;
       try {
-        const target = canonicalRequestTarget(request.url);
-        pathname = target.path;
-        rawQuery = target.query;
+        target = canonicalRequestTarget(request.url);
+        url = new URL(request.url);
       } catch {
         return new Response('Bad Request', { status: 400 });
       }
+      return plecHandler.dispatch(request, {
+        pathname: target.path,
+        rawQuery: target.query,
+        scheme: url.protocol === 'https:' ? 'https' : 'http',
+        authority: url.host,
+        signal: request.signal,
+      });
+    },
+    async dispatch(
+      request: Request,
+      transport: PlecTransportContext,
+    ): Promise<Response> {
+      if (closed) throw new Error('PLEC_APPLICATION_CLOSED');
+      const { pathname, rawQuery } = transport;
       const routeClass = classifyPlecPath(pathname);
       if (routeClass === 'api') {
         if (activeApiRequests >= MAX_ACTIVE_REQUESTS)
@@ -258,10 +279,12 @@ export async function createPlecHandler(
             );
           const context = buildApiContext(
             apiRequest,
-            pathname,
-            rawQuery,
+            transport,
             options.trustProxy ?? false,
           );
+          const callbackPermit = application.tryAcquireCallback();
+          if (!callbackPermit)
+            return apiError(503, 'service unavailable');
           let response: Response | null | undefined;
           let handlerPromise: Promise<Response | null | undefined>;
           try {
@@ -269,9 +292,14 @@ export async function createPlecHandler(
               generated.handleRequest(apiRequest, context),
             );
           } catch (error) {
+            callbackPermit.release();
             console.error('[PLEC-API] handler failed', error);
             return apiError(500, 'Internal Server Error');
           }
+          void handlerPromise.then(
+            () => callbackPermit.release(),
+            () => callbackPermit.release(),
+          );
           try {
             response = await waitForApiHandler(
               handlerPromise,
@@ -373,16 +401,13 @@ export async function createPlecHandler(
                 controller.close();
               },
             });
-        const headers: { name: string; value: string }[] = [];
-        request.headers.forEach((value, name) => {
-          if (name !== 'host' && name !== 'x-forwarded-proto')
-            headers.push({ name, value });
-        });
-        const requestUrl = new URL(request.url);
-        headers.push({ name: 'host', value: requestUrl.host });
+        const headers = nativeHeaders(
+          request,
+          transport,
+          options.trustProxy ?? false,
+        );
         const forwarded = options.trustProxy
-          ? request.headers
-              .get('x-forwarded-proto')
+          ? headerValues(transport, request, 'x-forwarded-proto')[0]
               ?.split(',')[0]
               ?.trim()
               .toLowerCase()
@@ -390,15 +415,32 @@ export async function createPlecHandler(
         const scheme =
           forwarded === 'http' || forwarded === 'https'
             ? forwarded
-            : requestUrl.protocol.slice(0, -1);
-        headers.push({ name: 'x-forwarded-proto', value: scheme });
-        const response = await application.handleAction(
-          { method: request.method, url: request.url, headers },
-          body,
-          async () => {
-            await reader?.cancel('native action stream stopped');
-          },
-        );
+            : transport.scheme;
+        setNativeHeader(headers, 'x-forwarded-proto', scheme);
+        const cancellation = application.createCancellation();
+        const cancelNative = (): void => cancellation.cancel();
+        if (transport.signal.aborted) cancelNative();
+        else
+          transport.signal.addEventListener('abort', cancelNative, {
+            once: true,
+          });
+        let response;
+        try {
+          response = await application.handleAction(
+            {
+              method: request.method,
+              url: transportUrl(transport),
+              headers,
+            },
+            body,
+            async () => {
+              await reader?.cancel('native action stream stopped');
+            },
+            cancellation,
+          );
+        } finally {
+          transport.signal.removeEventListener('abort', cancelNative);
+        }
         const responseHeaders = new Headers();
         for (const entry of response.headers)
           responseHeaders.append(entry.name, entry.value);
@@ -415,16 +457,13 @@ export async function createPlecHandler(
           headers: { allow: 'GET, HEAD' },
         });
       }
-      const headers: { name: string; value: string }[] = [];
-      request.headers.forEach((value, name) => {
-        if (name !== 'host' && name !== 'x-forwarded-proto')
-          headers.push({ name, value });
-      });
-      const requestUrl = new URL(request.url);
-      headers.push({ name: 'host', value: requestUrl.host });
+      const headers = nativeHeaders(
+        request,
+        transport,
+        options.trustProxy ?? false,
+      );
       const forwarded = options.trustProxy
-        ? request.headers
-            .get('x-forwarded-proto')
+        ? headerValues(transport, request, 'x-forwarded-proto')[0]
             ?.split(',')[0]
             ?.trim()
             .toLowerCase()
@@ -432,14 +471,24 @@ export async function createPlecHandler(
       const scheme =
         forwarded === 'http' || forwarded === 'https'
           ? forwarded
-          : requestUrl.protocol.slice(0, -1);
-      headers.push({ name: 'x-forwarded-proto', value: scheme });
-      try {
-        const nativeResponse = await application.handleDocument({
-          method: request.method,
-          url: request.url,
-          headers,
+          : transport.scheme;
+      setNativeHeader(headers, 'x-forwarded-proto', scheme);
+      const cancellation = application.createCancellation();
+      const cancelNative = (): void => cancellation.cancel();
+      if (transport.signal.aborted) cancelNative();
+      else
+        transport.signal.addEventListener('abort', cancelNative, {
+          once: true,
         });
+      try {
+        const nativeResponse = await application.handleDocument(
+          {
+            method: request.method,
+            url: transportUrl(transport),
+            headers,
+          },
+          cancellation,
+        );
         const responseHeaders = new Headers();
         for (const entry of nativeResponse.headers)
           responseHeaders.append(entry.name, entry.value);
@@ -454,11 +503,19 @@ export async function createPlecHandler(
           headers: responseHeaders,
         });
       } catch (error) {
+        if (transport.signal.aborted) throw error;
         if (
           error instanceof Error &&
           error.message.includes('PLEC_APPLICATION_CLOSED')
         )
           throw error;
+        if (
+          error instanceof Error &&
+          error.message.includes(
+            'application callback capacity is exhausted',
+          )
+        )
+          return apiError(503, 'service unavailable');
         const diagnostic =
           error instanceof Error ? error.message : String(error);
         try {
@@ -487,14 +544,29 @@ export async function createPlecHandler(
             },
           );
         }
+      } finally {
+        transport.signal.removeEventListener('abort', cancelNative);
       }
     },
     async close(): Promise<void> {
-      if (closed) return;
+      if (closePromise) return closePromise;
       closed = true;
-      await application.close();
+      closePromise = application.close();
+      await closePromise;
     },
   };
+  return plecHandler;
+}
+
+export interface ServeOptions extends PlecNodeOptions {
+  host?: string;
+  port?: number;
+}
+
+/** Start the first-party Node HTTP host. */
+export async function serve(options: ServeOptions): Promise<void> {
+  const { servePlecHandler } = await import('./http.js');
+  return servePlecHandler(options);
 }
 
 function actionError(status: number, message: string): Response {
@@ -627,18 +699,15 @@ async function waitForApiHandler<T>(
 
 function buildApiContext(
   request: Request,
-  pathname: string,
-  rawQuery: string,
+  transport: PlecTransportContext,
   trustProxy: boolean,
 ): ApiRequestContext {
   const headers: Record<string, string> = {};
   request.headers.forEach((value, name) => {
     headers[name] = value;
   });
-  const url = new URL(request.url);
   const forwarded = trustProxy
-    ? request.headers
-        .get('x-forwarded-proto')
+    ? headerValues(transport, request, 'x-forwarded-proto')[0]
         ?.split(',')[0]
         ?.trim()
         .toLowerCase()
@@ -646,8 +715,8 @@ function buildApiContext(
   const scheme =
     forwarded === 'http' || forwarded === 'https'
       ? forwarded
-      : url.protocol.slice(0, -1);
-  url.protocol = `${scheme}:`;
+      : transport.scheme;
+  const url = `${scheme}://${transport.authority}${transport.pathname}${transport.rawQuery ? `?${transport.rawQuery}` : ''}`;
   const cookies: Record<string, string> = {};
   for (const part of (headers.cookie ?? '').split(';')) {
     const index = part.indexOf('=');
@@ -657,7 +726,7 @@ function buildApiContext(
     );
   }
   const query: Record<string, string | string[]> = {};
-  for (const pair of rawQuery.split('&')) {
+  for (const pair of transport.rawQuery.split('&')) {
     if (!pair) continue;
     const index = pair.indexOf('=');
     const key = decodeFormComponent(
@@ -672,8 +741,8 @@ function buildApiContext(
     else query[key] = [existing, value];
   }
   return {
-    url: url.href,
-    pathname,
+    url,
+    pathname: transport.pathname,
     method: request.method,
     headers,
     cookies,
@@ -684,6 +753,80 @@ function buildApiContext(
 
 function decodeFormComponent(value: string): string {
   return decodeURIComponent(value.replaceAll('+', ' '));
+}
+
+function headerValues(
+  transport: PlecTransportContext,
+  request: Request,
+  name: string,
+): string[] {
+  if (transport.rawHeaders) {
+    return transport.rawHeaders
+      .filter(([header]) => header.toLowerCase() === name)
+      .map(([, value]) => value);
+  }
+  const value = request.headers.get(name);
+  return value === null ? [] : [value];
+}
+
+function nativeHeaders(
+  request: Request,
+  transport: PlecTransportContext,
+  trustProxy: boolean,
+): { name: string; value: string }[] {
+  const headers: { name: string; value: string }[] =
+    transport.rawHeaders
+      ? transport.rawHeaders
+          .filter(
+            ([name]) =>
+              name.toLowerCase() !== 'host' &&
+              name.toLowerCase() !== 'x-forwarded-proto' &&
+              name.toLowerCase() !== 'cookie',
+          )
+          .map(([name, value]) => ({ name, value }))
+      : (() => {
+          const entries: { name: string; value: string }[] = [];
+          request.headers.forEach((value, name) => {
+            if (name !== 'host' && name !== 'x-forwarded-proto')
+              entries.push({ name, value });
+          });
+          return entries;
+        })();
+  const cookies = headerValues(transport, request, 'cookie');
+  if (cookies.length > 0)
+    headers.push({ name: 'cookie', value: cookies.join('; ') });
+  headers.push({ name: 'host', value: transport.authority });
+  const forwarded = trustProxy
+    ? headerValues(transport, request, 'x-forwarded-proto')[0]
+        ?.split(',')[0]
+        ?.trim()
+        .toLowerCase()
+    : undefined;
+  headers.push({
+    name: 'x-forwarded-proto',
+    value:
+      forwarded === 'http' || forwarded === 'https'
+        ? forwarded
+        : transport.scheme,
+  });
+  return headers;
+}
+
+function setNativeHeader(
+  headers: { name: string; value: string }[],
+  name: string,
+  value: string,
+): void {
+  const lowerName = name.toLowerCase();
+  for (let index = headers.length - 1; index >= 0; index -= 1) {
+    if (headers[index]!.name.toLowerCase() === lowerName)
+      headers.splice(index, 1);
+  }
+  headers.push({ name, value });
+}
+
+function transportUrl(transport: PlecTransportContext): string {
+  return `${transport.scheme}://${transport.authority}${transport.pathname}${transport.rawQuery ? `?${transport.rawQuery}` : ''}`;
 }
 
 function trackApiResponseBody(

@@ -8,7 +8,9 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { once } from 'node:events';
 import { createPlecHandler } from './index.js';
+import { createPlecHttpServer } from './http.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -70,6 +72,25 @@ describe('@plec/node document path', () => {
 
     const handler = await createPlecHandler({ dir });
     await unlink(path.join(dir, 'server/route-artifact.json'));
+    const host = createPlecHttpServer(handler);
+    host.server.listen(0, '127.0.0.1');
+    await once(host.server, 'listening');
+    const address = host.server.address();
+    if (!address || typeof address === 'string')
+      throw new Error('missing Plec HTTP address');
+    try {
+      const nodeResponse = await fetch(
+        `http://127.0.0.1:${address.port}/`,
+      );
+      expect(nodeResponse.status).toBe(200);
+      expect(await nodeResponse.text()).toContain('from rust');
+    } finally {
+      host.stopAdmission();
+      host.server.closeAllConnections();
+      await new Promise<void>((resolve) =>
+        host.server.close(() => resolve()),
+      );
+    }
     const response = await handler.fetch(
       new Request('http://localhost/'),
     );

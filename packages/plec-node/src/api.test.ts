@@ -264,6 +264,50 @@ describe('@plec/node API path', () => {
     }
   });
 
+  it('rejects API callback saturation before invoking another handler', async () => {
+    const dir = await fixture();
+    const handler = await createPlecHandler({ dir });
+    let release!: () => void;
+    let entered!: () => void;
+    const allEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    (globalThis as Record<string, unknown>).plecApiTestGate =
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    let dispatched = 0;
+    (globalThis as Record<string, unknown>).plecApiTestCounter = () => {
+      dispatched += 1;
+    };
+    (globalThis as Record<string, unknown>).plecApiTestStarted = () => {
+      if (dispatched === 64) entered();
+    };
+    try {
+      const pending = Array.from({ length: 64 }, () =>
+        handler.fetch(new Request('http://localhost/api/hold')),
+      );
+      await allEntered;
+      expect(dispatched).toBe(64);
+      const overload = await handler.fetch(
+        new Request('http://localhost/api/overload'),
+      );
+      expect(overload.status).toBe(503);
+      expect(dispatched).toBe(64);
+      release();
+      const responses = await Promise.all(pending);
+      await Promise.all(
+        responses.map((response) => response.body?.cancel()),
+      );
+    } finally {
+      release();
+      delete (globalThis as Record<string, unknown>).plecApiTestGate;
+      delete (globalThis as Record<string, unknown>).plecApiTestCounter;
+      delete (globalThis as Record<string, unknown>).plecApiTestStarted;
+      await handler.close();
+    }
+  });
+
   it('times out a stalled API pre-read and releases admission without dispatch', async () => {
     vi.useFakeTimers();
     const dir = await fixture();

@@ -2,16 +2,16 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::stream;
 use napi::{
+    Env, Status, Task,
     bindgen_prelude::{AsyncTask, Buffer, BufferSlice, Function, Promise, ReadableStream, Reader},
     threadsafe_function::ThreadsafeFunction,
-    Env, Status, Task,
 };
 use napi_derive::napi;
 use plec_server_engine::runtime::{
     ActionCapabilities, ActionFuture, ApplicationCapabilities, HostRenderFuture, HostRenderRequest,
 };
 use plec_server_engine::{
-    artifact::ArtifactBundle, request::RequestContext, DocumentMetadata, DocumentOptions,
+    DocumentMetadata, DocumentOptions, artifact::ArtifactBundle, request::RequestContext,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -51,7 +51,7 @@ type ActionCallback = ThreadsafeFunction<String, Promise<String>, String, Status
 struct CallbackManager {
     render_host: Arc<HostRenderCallback>,
     invoke_action: Arc<ActionCallback>,
-    action_permits: Arc<tokio::sync::Semaphore>,
+    callback_permits: Arc<tokio::sync::Semaphore>,
     runtime: Option<tokio::runtime::Handle>,
 }
 
@@ -77,7 +77,7 @@ pub fn create_callbacks(
         inner: Mutex::new(Some(CallbackManager {
             render_host: Arc::new(callback),
             invoke_action: Arc::new(action_callback),
-            action_permits: Arc::new(tokio::sync::Semaphore::new(64)),
+            callback_permits: Arc::new(tokio::sync::Semaphore::new(64)),
             runtime: None,
         })),
     })
@@ -86,6 +86,9 @@ pub fn create_callbacks(
 impl ApplicationCapabilities for CallbackManager {
     fn render_host<'a>(&'a self, request: HostRenderRequest) -> HostRenderFuture<'a> {
         Box::pin(async move {
+            let permit = Arc::clone(&self.callback_permits)
+                .try_acquire_owned()
+                .map_err(|_| plec_server_engine::ServerError::CallbackCapacity)?;
             let value = serde_json::json!({
                 "provider": request.provider,
                 "component": request.component,
@@ -96,8 +99,18 @@ impl ApplicationCapabilities for CallbackManager {
                 .call_async_catch(value.to_string())
                 .await
                 .map_err(|error| plec_server_engine::ServerError::message(error.to_string()))?;
-            let html = promise
+            let (settled, result) = tokio::sync::oneshot::channel();
+            self.runtime
+                .as_ref()
+                .expect("runtime initialized during load")
+                .spawn(async move {
+                    let result = promise.await;
+                    drop(permit);
+                    let _ = settled.send(result);
+                });
+            let html = result
                 .await
+                .map_err(|_| plec_server_engine::ServerError::message("host render failed"))?
                 .map_err(|error| plec_server_engine::ServerError::message(error.to_string()))?;
             if html.len() > 1024 * 1024 {
                 return Err(plec_server_engine::ServerError::message(
@@ -115,7 +128,7 @@ impl ActionCapabilities for CallbackManager {
         request: plec_server_engine::action::ServerActionRequest,
     ) -> ActionFuture<'a> {
         Box::pin(async move {
-            let permit = Arc::clone(&self.action_permits)
+            let permit = Arc::clone(&self.callback_permits)
                 .try_acquire_owned()
                 .map_err(|_| plec_server_engine::ServerError::CallbackCapacity)?;
             let context = &request.context;
@@ -209,6 +222,33 @@ pub struct PlecApplication {
 }
 
 #[napi]
+pub struct NativeCancellation {
+    token: CancellationToken,
+    application_close: CancellationToken,
+}
+
+#[napi]
+pub struct NativeCallbackPermit {
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+#[napi]
+impl NativeCallbackPermit {
+    #[napi]
+    pub fn release(&mut self) {
+        self.permit.take();
+    }
+}
+
+#[napi]
+impl NativeCancellation {
+    #[napi]
+    pub fn cancel(&self) {
+        self.token.cancel();
+    }
+}
+
+#[napi]
 impl NativeCallbacks {
     #[napi]
     pub async fn load_application(
@@ -262,10 +302,54 @@ impl NativeCallbacks {
 #[napi]
 impl PlecApplication {
     #[napi]
+    pub fn try_acquire_callback(&self) -> napi::Result<Option<NativeCallbackPermit>> {
+        let lifecycle = self
+            .inner
+            .lifecycle
+            .lock()
+            .map_err(|_| napi::Error::from_reason("application lifecycle poisoned"))?;
+        if lifecycle.closing || lifecycle.closed {
+            return Err(napi::Error::from_reason("PLEC_APPLICATION_CLOSED"));
+        }
+        let snapshot = lifecycle
+            .snapshot
+            .as_ref()
+            .ok_or_else(|| napi::Error::from_reason("PLEC_APPLICATION_CLOSED"))?;
+        Ok(snapshot
+            .callbacks
+            .callback_permits
+            .clone()
+            .try_acquire_owned()
+            .ok()
+            .map(|permit| NativeCallbackPermit {
+                permit: Some(permit),
+            }))
+    }
+
+    #[napi]
+    pub fn create_cancellation(&self) -> napi::Result<NativeCancellation> {
+        let lifecycle = self
+            .inner
+            .lifecycle
+            .lock()
+            .map_err(|_| napi::Error::from_reason("application lifecycle poisoned"))?;
+        if lifecycle.closing || lifecycle.closed {
+            return Err(napi::Error::from_reason("PLEC_APPLICATION_CLOSED"));
+        }
+        Ok(NativeCancellation {
+            token: self.inner.cancellation.child_token(),
+            application_close: self.inner.cancellation.clone(),
+        })
+    }
+
+    #[napi]
     pub async fn handle_document(
         &self,
         request: NativeRequest,
+        request_cancellation: &NativeCancellation,
     ) -> napi::Result<NativeDocumentResponse> {
+        let request_token = request_cancellation.token.clone();
+        let application_close = request_cancellation.application_close.clone();
         let (snapshot, cancellation) = {
             let mut lifecycle = self
                 .inner
@@ -281,13 +365,13 @@ impl PlecApplication {
                 .cloned()
                 .ok_or_else(|| napi::Error::from_reason("PLEC_APPLICATION_CLOSED"))?;
             lifecycle.active += 1;
-            (snapshot, self.inner.cancellation.child_token())
+            (snapshot, request_token)
         };
         let active = ActiveOperation {
             inner: Arc::clone(&self.inner),
         };
         let result = tokio::select! {
-            _ = cancellation.cancelled() => Err(napi::Error::from_reason("PLEC_APPLICATION_CLOSED")),
+            _ = cancellation.cancelled() => Err(napi::Error::from_reason(if application_close.is_cancelled() { "PLEC_APPLICATION_CLOSED" } else { "PLEC_REQUEST_CANCELLED" })),
             result = execute(snapshot, request) => result,
         };
         drop(active);
@@ -300,6 +384,7 @@ impl PlecApplication {
         request: NativeRequest,
         body: ReadableStream<'_, Buffer>,
         cancel_body: Function<'_, String, Promise<()>>,
+        request_cancellation: &NativeCancellation,
     ) -> napi::Result<AsyncTask<ActionTask>> {
         let (snapshot, cancellation) = {
             let mut lifecycle = self
@@ -316,7 +401,7 @@ impl PlecApplication {
                 .cloned()
                 .ok_or_else(|| napi::Error::from_reason("PLEC_APPLICATION_CLOSED"))?;
             lifecycle.active += 1;
-            (snapshot, self.inner.cancellation.child_token())
+            (snapshot, request_cancellation.token.clone())
         };
         let active = ActiveOperation {
             inner: Arc::clone(&self.inner),
@@ -332,6 +417,7 @@ impl PlecApplication {
             reader: Some(reader),
             cancel_body: Arc::new(cancel),
             cancellation,
+            close_cancellation: request_cancellation.application_close.clone(),
             active: Some(active),
         }))
     }
@@ -412,6 +498,7 @@ pub struct ActionTask {
     reader: Option<Reader<Buffer>>,
     cancel_body: Arc<ThreadsafeFunction<String, Promise<()>, String, Status, false>>,
     cancellation: CancellationToken,
+    close_cancellation: CancellationToken,
     active: Option<ActiveOperation>,
 }
 
@@ -422,7 +509,17 @@ impl Task for ActionTask {
     fn compute(&mut self) -> napi::Result<Self::Output> {
         let outcome = futures_executor::block_on(async {
             tokio::select! {
-                _ = self.cancellation.cancelled() => return Err(napi::Error::from_reason("PLEC_APPLICATION_CLOSED")),
+                _ = self.cancellation.cancelled() => {
+                    if let Ok(promise) = self.cancel_body.call_async_catch("action request cancelled".to_owned()).await {
+                        let _ = promise.await;
+                    }
+                    let reason = if self.close_cancellation.is_cancelled() {
+                        "PLEC_APPLICATION_CLOSED"
+                    } else {
+                        "PLEC_REQUEST_CANCELLED"
+                    };
+                    return Err(napi::Error::from_reason(reason));
+                },
                 outcome = execute_action(Arc::clone(&self.snapshot), self.request.clone(), self.reader.take().expect("action task runs once")) => Ok(outcome),
             }
         })?;

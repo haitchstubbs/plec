@@ -1,8 +1,11 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createPlecHandler } from './index.js';
+import { createPlecHttpServer, servePlecHandler } from './http.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -39,6 +42,50 @@ describe('@plec/node action path', () => {
         requestCase: null,
       });
     } finally {
+      await handler.close();
+    }
+  });
+
+  it('routes a streamed action from node:http through native validation and callback execution', async () => {
+    const dir = await fixture();
+    const handler = await createPlecHandler({ dir });
+    const host = createPlecHttpServer(handler);
+    host.server.listen(0, '127.0.0.1');
+    await once(host.server, 'listening');
+    const address = host.server.address();
+    if (!address || typeof address === 'string')
+      throw new Error('missing Plec HTTP address');
+    try {
+      const chunks = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('["node-'));
+          controller.enqueue(new TextEncoder().encode('stream"]'));
+          controller.close();
+        },
+      });
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/_plec/actions/echo`,
+        {
+          method: 'POST',
+          headers: {
+            origin: `http://127.0.0.1:${address.port}`,
+            'content-type': 'application/json',
+          },
+          body: chunks,
+          duplex: 'half',
+        } as RequestInit & { duplex: 'half' },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        value: 'node-stream',
+        pathname: '/_plec/actions/echo',
+      });
+    } finally {
+      host.stopAdmission();
+      host.server.closeAllConnections();
+      await new Promise<void>((resolve) =>
+        host.server.close(() => resolve()),
+      );
       await handler.close();
     }
   });
@@ -202,6 +249,69 @@ describe('@plec/node action path', () => {
       delete (globalThis as Record<string, unknown>)[startedKey];
     }
   });
+
+  it('disconnect cancellation detaches native action execution without closing the application', async () => {
+    const startedKey = `plecActionAbortStarted${Date.now()}`;
+    const dir = await fixture(startedKey);
+    const handler = await createPlecHandler({ dir });
+    const controller = new AbortController();
+    try {
+      const pending = handler.fetch(
+        actionRequest(
+          'pending',
+          jsonBody('[]'),
+          'http://localhost',
+          undefined,
+          controller.signal,
+        ),
+      );
+      for (
+        let attempt = 0;
+        attempt < 100 &&
+        !(globalThis as Record<string, unknown>)[startedKey];
+        attempt++
+      ) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect((globalThis as Record<string, unknown>)[startedKey]).toBe(
+        1,
+      );
+      controller.abort();
+      await expect(pending).rejects.toThrow('PLEC_REQUEST_CANCELLED');
+      expect(
+        (await handler.fetch(new Request('http://localhost/unknown')))
+          .status,
+      ).toBe(200);
+    } finally {
+      await handler.close();
+      delete (globalThis as Record<string, unknown>)[startedKey];
+    }
+  });
+
+  it('closes native application state when the HTTP listener cannot bind', async () => {
+    const dir = await fixture();
+    const blocker = createServer();
+    blocker.listen(0, '127.0.0.1');
+    await once(blocker, 'listening');
+    const address = blocker.address();
+    if (!address || typeof address === 'string')
+      throw new Error('missing blocker address');
+    try {
+      await expect(
+        servePlecHandler({
+          dir,
+          host: '127.0.0.1',
+          port: address.port,
+        }),
+      ).rejects.toMatchObject({ code: 'EADDRINUSE' });
+    } finally {
+      await new Promise<void>((resolve) =>
+        blocker.close(() => resolve()),
+      );
+    }
+    const handler = await createPlecHandler({ dir });
+    await handler.close();
+  });
 });
 
 async function fixture(pendingKey?: string): Promise<string> {
@@ -290,6 +400,7 @@ function actionRequest(
   body: ReadableStream<Uint8Array>,
   origin = 'http://localhost',
   requestCase?: string,
+  signal?: AbortSignal,
 ): Request {
   const headers = new Headers({
     origin,
@@ -300,6 +411,7 @@ function actionRequest(
     method: 'POST',
     headers,
     body,
+    signal,
     duplex: 'half',
   } as RequestInit & { duplex: 'half' });
 }

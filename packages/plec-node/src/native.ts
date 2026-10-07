@@ -41,15 +41,27 @@ export interface NativeActionResponse {
 }
 
 export interface PlecApplication {
+  createCancellation(): NativeCancellation;
+  tryAcquireCallback(): NativeCallbackPermit | null;
   handleDocument(
     request: NativeRequest,
+    cancellation: NativeCancellation,
   ): Promise<NativeDocumentResponse>;
   handleAction(
     request: NativeRequest,
     body: ReadableStream<Uint8Array>,
     cancelBody: (reason: string) => Promise<void>,
+    cancellation: NativeCancellation,
   ): Promise<NativeActionResponse>;
   close(): Promise<void>;
+}
+
+export interface NativeCancellation {
+  cancel(): void;
+}
+
+export interface NativeCallbackPermit {
+  release(): void;
 }
 
 interface NativeModule {
