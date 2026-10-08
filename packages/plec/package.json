@@ -27,6 +27,7 @@
   },
   "homepage": "https://github.com/haitchstubbs/plec#readme",
   "dependencies": {
+    "@plec/node": "^0.1.0",
     "@plec/vite": "^0.1.0"
   },
   "exports": {

@@ -35,6 +35,12 @@ export async function buildWorkspaceSurface() {
   console.log('Cleaning previous plec package build...');
   fs.rmSync(distDir, { recursive: true, force: true });
   ensureBuilt(
+    '@plec/node',
+    'packages/plec-node/dist/index.js',
+    '@plec/node',
+    'build',
+  );
+  ensureBuilt(
     'plec-runtime WASM',
     'packages/plec/dist/runtime/runtime_bg.wasm',
     '@plec/core',

@@ -1,8 +1,8 @@
 # @plec/e2e
 
 Canonical Playwright runner for the monorepo. Playwright owns the fullstack
-server: turbo builds `fullstack`, the `webServer` entry starts
-`plec serve dist`, waits for HTTP readiness, and kills the process group
+host lifecycle: root test scripts build `fullstack`, `webServer` starts the
+selected host, waits for HTTP readiness, and kills the process group
 afterwards. Never spawn the server manually.
 
 ## Tiers
@@ -30,9 +30,9 @@ runner and owns output capture separately.
   fails the run loudly instead of being silently adopted.
 - `PLEC_E2E_HOST` defaults to `axum`. Set `PLEC_E2E_HOST=node` with
   `yarn test:e2e` or `yarn test:acceptance` to run the same suites against
-  `@plec/node`; Playwright builds the native addon, starts the test-only source
-  launcher over `apps/fullstack/dist`, and owns its shutdown. This does not
-  change the production `plec serve` default.
+  `@plec/node`; Playwright builds the package, starts the npm `plec serve`
+  shim over `apps/fullstack/dist`, and owns its shutdown. Axum mode invokes
+  the Rust CLI explicitly, independent of the npm shim default.
 - One-time setup: `yarn install --immutable && yarn install:build-tools` from
   the repository root. This installs the Playwright-pinned Chromium and
   matching ChromeDriver into repository-local caches; the runner rejects

@@ -80,7 +80,7 @@ enum Command {
         port: Option<u16>,
     },
 
-    /// Serve a built Plec application with the native host.
+    /// Serve a built Plec application.
     Serve {
         /// Build output directory containing `plec-server.json`.
         #[arg(default_value = "dist")]

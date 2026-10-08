@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * `plec` bin shim: the `plec` command is owned by this package, so apps do
- * not need a global cargo install. Resolution order:
+ * not need a global cargo install. `serve` runs @plec/node directly;
+ * compiler/inspection commands use the native CLI resolution order:
  *
  *   1. PLEC_BIN env override (authoritative: a set-but-unusable value is an
  *      error, never a silent fallback)
@@ -16,6 +17,7 @@
  */
 import { spawn } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
+import { parseServeOptions, SERVE_HELP } from './serve-options.js';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -34,6 +36,38 @@ const cargoBinary = path.join(
   'bin',
   binaryName,
 );
+
+const [command, ...args] = process.argv.slice(2);
+if (command === 'serve' && !process.env.PLEC_BIN) {
+  try {
+    const parsed = parseServeOptions(args);
+    if (parsed.help) {
+      console.log(SERVE_HELP);
+    } else {
+      const { serve } = await import('@plec/node');
+      await serve(parsed.options);
+    }
+  } catch (error) {
+    console.error(
+      `plec serve: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exitCode = 1;
+  }
+} else {
+  const { binary } = resolveBinary();
+
+  const child = spawn(binary, process.argv.slice(2), {
+    stdio: 'inherit',
+  });
+  child.on('error', (error) => {
+    console.error(`plec: failed to run ${binary}: ${error.message}`);
+    process.exit(1);
+  });
+  child.on('exit', (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    else process.exit(code ?? 0);
+  });
+}
 
 function usable(candidate) {
   try {
@@ -72,17 +106,3 @@ function fail(searched) {
   );
   process.exit(1);
 }
-
-const { binary } = resolveBinary();
-
-const child = spawn(binary, process.argv.slice(2), {
-  stdio: 'inherit',
-});
-child.on('error', (error) => {
-  console.error(`plec: failed to run ${binary}: ${error.message}`);
-  process.exit(1);
-});
-child.on('exit', (code, signal) => {
-  if (signal) process.kill(process.pid, signal);
-  else process.exit(code ?? 0);
-});

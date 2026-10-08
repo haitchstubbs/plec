@@ -19,6 +19,16 @@
       ],
       "outputs": ["dist/**"]
     },
+    "@plec/node#build": {
+      "cache": false,
+      "outputs": [
+        "dist/**",
+        "native/index.js",
+        "native/index.d.ts",
+        "native/bindings.d.ts",
+        "native/*.node"
+      ]
+    },
     "fullstack#build": {
       "cache": false,
       "dependsOn": ["@plec/core#build"],
@@ -42,7 +52,7 @@
       "cache": false,
       "persistent": false,
       "dependsOn": ["fullstack#build"],
-      "env": ["E2E_PORT", "PLEC_E2E_HOST", "PLEC_E2E_DIST"],
+      "env": ["E2E_PORT", "PLEC_E2E_HOST", "PLEC_E2E_DIST", "PLEC_BIN"],
       "outputs": []
     },
     "bench": {

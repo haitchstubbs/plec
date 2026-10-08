@@ -1,0 +1,27 @@
+{
+  "name": "@plec/node-win32-x64-msvc",
+  "version": "0.1.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "index.win32-x64-msvc.node",
+  "files": [
+    "index.win32-x64-msvc.node"
+  ],
+  "description": "Node.js HTTP host and native Plec runtime bindings",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.20.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haitchstubbs/plec.git",
+    "directory": "packages/plec-node"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "win32"
+  ]
+}

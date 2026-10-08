@@ -64,8 +64,26 @@ if (cargoVersion !== packageVersion) {
   );
   process.exit(1);
 }
+const nodePackageVersion = JSON.parse(
+  fs.readFileSync(
+    path.join(repoRoot, 'packages/plec-node/package.json'),
+    'utf8',
+  ),
+).version;
+if (cargoVersion !== nodePackageVersion) {
+  console.error(
+    `Plec product version mismatch: Cargo workspace declares ${cargoVersion}, ` +
+      `packages/plec-node declares ${nodePackageVersion}. ` +
+      'Realign with `plec workspace version --set <version>`.',
+  );
+  process.exit(1);
+}
 
 run(process.execPath, ['scripts/check-rust-deps.mjs', '--full']);
+
+// The public `plec serve` shim imports @plec/node directly, so ensure its
+// package JS, generated N-API loader/types, and build-host addon are current.
+run('yarn', ['workspace', '@plec/node', 'build']);
 
 await buildWorkspaceSurface();
 

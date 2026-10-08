@@ -225,9 +225,89 @@ jobs:
       - run: cargo test --workspace --all-targets --locked
       - run: cargo build --locked -p plec-cli
       - run: yarn format:check
+      - run: yarn workspace @plec/node build
       - run: yarn turbo run typecheck --filter='./packages/*'
       - run: yarn turbo run test --filter='./packages/*' --filter='!@plec/core'
+      - run: yarn workspace @plec/node test:native
+      - run: yarn workspace @plec/node test:package
       - run: yarn turbo run test:package --filter=@plec/core
+
+  node-native-build:
+    name: Build @plec/node ${{ matrix.packageTarget }}
+    needs: [native-unit]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            packageTarget: linux-x64-gnu
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            packageTarget: linux-x64-musl
+            musl: true
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            packageTarget: linux-arm64-gnu
+          - runner: macos-15
+            target: x86_64-apple-darwin
+            packageTarget: darwin-x64
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            packageTarget: darwin-arm64
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            packageTarget: win32-x64-msvc
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-plec
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: 1.98.0
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: node-native-${{ matrix.packageTarget }}
+          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**/*.toml', 'crates/**/*.rs') }}
+          cache-workspace-crates: true
+      - run: yarn install --immutable
+      - if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - if: matrix.musl
+        run: |
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+          echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+      - name: Build N-API addon for target
+        run: >-
+          yarn workspace @plec/node exec napi build --platform
+          --manifest-path ../../crates/plec-node-bindings/Cargo.toml
+          --profile node-release --output-dir native --js index.js
+          --dts bindings.d.ts --format esm --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: plec-node-${{ matrix.packageTarget }}
+          path: packages/plec-node/native/index.${{ matrix.packageTarget }}.node
+          if-no-files-found: error
+
+  node-native-packages:
+    name: Assemble @plec/node platform packages
+    needs: [node-native-build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-plec
+      - run: yarn install --immutable
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: plec-node-*
+          path: packages/plec-node/native
+          merge-multiple: true
+      - run: yarn workspace @plec/node package:dirs
+      - run: yarn workspace @plec/node package:stage
+      - run: yarn workspace @plec/node check:platform-artifacts
+      - run: yarn workspace @plec/node test:package
+      - run: yarn workspace @plec/node check:platform-artifacts
 
   wasm-release:
     name: WASM & Release
@@ -301,6 +381,9 @@ jobs:
       - run: yarn workspace @plec/e2e test:acceptance
         env:
           PLEC_BIN: ${{ github.workspace }}/target/debug/plec
+      - run: yarn workspace @plec/e2e test:acceptance
+        env:
+          PLEC_E2E_HOST: node
 
   e2e:
     name: E2E
@@ -326,6 +409,9 @@ jobs:
       - run: yarn workspace @plec/e2e test:e2e
         env:
           PLEC_BIN: ${{ github.workspace }}/target/debug/plec
+      - run: yarn workspace @plec/e2e test:e2e
+        env:
+          PLEC_E2E_HOST: node
 
   ci-gate:
     name: CI Gate
@@ -337,6 +423,8 @@ jobs:
         dependency-audit,
         trivy-summary,
         native-unit,
+        node-native-build,
+        node-native-packages,
         wasm-release,
         acceptance,
         e2e,

@@ -2026,6 +2026,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@plec/core@workspace:packages/plec"
   dependencies:
+    "@plec/node": "npm:^0.1.0"
     "@plec/vite": "npm:^0.1.0"
   bin:
     plec: ./bin/plec.js
@@ -2066,6 +2067,36 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@plec/node-darwin-arm64@npm:0.1.0, @plec/node-darwin-arm64@workspace:packages/plec-node/npm/darwin-arm64":
+  version: 0.0.0-use.local
+  resolution: "@plec/node-darwin-arm64@workspace:packages/plec-node/npm/darwin-arm64"
+  languageName: unknown
+  linkType: soft
+
+"@plec/node-darwin-x64@npm:0.1.0, @plec/node-darwin-x64@workspace:packages/plec-node/npm/darwin-x64":
+  version: 0.0.0-use.local
+  resolution: "@plec/node-darwin-x64@workspace:packages/plec-node/npm/darwin-x64"
+  languageName: unknown
+  linkType: soft
+
+"@plec/node-linux-arm64-gnu@npm:0.1.0, @plec/node-linux-arm64-gnu@workspace:packages/plec-node/npm/linux-arm64-gnu":
+  version: 0.0.0-use.local
+  resolution: "@plec/node-linux-arm64-gnu@workspace:packages/plec-node/npm/linux-arm64-gnu"
+  languageName: unknown
+  linkType: soft
+
+"@plec/node-linux-x64-gnu@npm:0.1.0, @plec/node-linux-x64-gnu@workspace:packages/plec-node/npm/linux-x64-gnu":
+  version: 0.0.0-use.local
+  resolution: "@plec/node-linux-x64-gnu@workspace:packages/plec-node/npm/linux-x64-gnu"
+  languageName: unknown
+  linkType: soft
+
+"@plec/node-linux-x64-musl@npm:0.1.0, @plec/node-linux-x64-musl@workspace:packages/plec-node/npm/linux-x64-musl":
+  version: 0.0.0-use.local
+  resolution: "@plec/node-linux-x64-musl@workspace:packages/plec-node/npm/linux-x64-musl"
+  languageName: unknown
+  linkType: soft
+
 "@plec/node-runtime@workspace:packages/plec-node-runtime":
   version: 0.0.0-use.local
   resolution: "@plec/node-runtime@workspace:packages/plec-node-runtime"
@@ -2077,11 +2108,36 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@plec/node@workspace:packages/plec-node":
+"@plec/node-win32-x64-msvc@npm:0.1.0, @plec/node-win32-x64-msvc@workspace:packages/plec-node/npm/win32-x64-msvc":
+  version: 0.0.0-use.local
+  resolution: "@plec/node-win32-x64-msvc@workspace:packages/plec-node/npm/win32-x64-msvc"
+  languageName: unknown
+  linkType: soft
+
+"@plec/node@npm:^0.1.0, @plec/node@workspace:packages/plec-node":
   version: 0.0.0-use.local
   resolution: "@plec/node@workspace:packages/plec-node"
   dependencies:
     "@napi-rs/cli": "npm:^3.7.0"
+    "@plec/node-darwin-arm64": "npm:0.1.0"
+    "@plec/node-darwin-x64": "npm:0.1.0"
+    "@plec/node-linux-arm64-gnu": "npm:0.1.0"
+    "@plec/node-linux-x64-gnu": "npm:0.1.0"
+    "@plec/node-linux-x64-musl": "npm:0.1.0"
+    "@plec/node-win32-x64-msvc": "npm:0.1.0"
+  dependenciesMeta:
+    "@plec/node-darwin-arm64":
+      optional: true
+    "@plec/node-darwin-x64":
+      optional: true
+    "@plec/node-linux-arm64-gnu":
+      optional: true
+    "@plec/node-linux-x64-gnu":
+      optional: true
+    "@plec/node-linux-x64-musl":
+      optional: true
+    "@plec/node-win32-x64-msvc":
+      optional: true
   languageName: unknown
   linkType: soft
 

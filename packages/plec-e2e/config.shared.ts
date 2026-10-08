@@ -35,18 +35,16 @@ if (selectedHost !== 'axum' && selectedHost !== 'node') {
 const quoteShell = (value: string) =>
   `'${value.replaceAll("'", "'\\''")}'`;
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
+const workspaceRoot = path.resolve(scriptsDir, '../..');
+const dist =
+  movedDist ?? path.join(workspaceRoot, 'apps/fullstack/dist');
+const plecBin = path.join(workspaceRoot, 'packages/plec/bin/plec.js');
 const startCommand =
   selectedHost === 'node'
-    ? [
-        'yarn workspace @plec/node build:native && node --experimental-transform-types --import',
-        quoteShell(
-          path.join(scriptsDir, 'scripts/node-source-loader.mjs'),
-        ),
-        quoteShell(path.join(scriptsDir, 'scripts/node-host.mjs')),
-      ].join(' ')
-    : movedDist
-      ? `plec serve ${quoteShell(movedDist)}`
-      : 'yarn workspace fullstack exec plec serve dist';
+    ? `yarn workspace @plec/node build && node ${quoteShell(plecBin)} serve ${quoteShell(dist)}`
+    : process.env.PLEC_BIN
+      ? `${quoteShell(path.resolve(process.env.PLEC_BIN))} serve ${quoteShell(dist)}`
+      : `cargo run --locked --manifest-path crates/plec-cli/Cargo.toml -- serve ${quoteShell(dist)}`;
 
 // Playwright owns the fullstack server: turbo builds it, webServer starts
 // the native host, waits for HTTP readiness, and kills the process group
@@ -56,14 +54,11 @@ const startCommand =
 export const webServer = {
   command: startCommand,
   url: baseURL,
-  ...(selectedHost === 'node'
-    ? { cwd: path.resolve(scriptsDir, '../..') }
-    : movedDist
-      ? { cwd: path.dirname(movedDist) }
-      : {}),
+  cwd: workspaceRoot,
   env: {
     PORT: String(e2ePort),
     PLEC_ACCEPTANCE_CONTROL: '1',
+    ...(selectedHost === 'node' ? { PLEC_BIN: '' } : {}),
     ...(movedDist ? { PLEC_E2E_DIST: movedDist } : {}),
   },
   // Intentional: a stale server on the port must fail loudly instead of

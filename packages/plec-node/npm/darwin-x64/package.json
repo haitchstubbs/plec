@@ -1,0 +1,27 @@
+{
+  "name": "@plec/node-darwin-x64",
+  "version": "0.1.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "index.darwin-x64.node",
+  "files": [
+    "index.darwin-x64.node"
+  ],
+  "description": "Node.js HTTP host and native Plec runtime bindings",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.20.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haitchstubbs/plec.git",
+    "directory": "packages/plec-node"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "darwin"
+  ]
+}

@@ -2220,7 +2220,9 @@ The current manifest's server section is sidecar-shaped:
 }
 ```
 
-The final Node-host manifest should not reference a sidecar runtime.
+The Node host reads only the application entry; it does not depend on the
+sidecar runtime field. Axum still uses that field as the parity host until
+Slice 8 retires the sidecar.
 
 Before public 0.1, evolve it to:
 
@@ -2232,20 +2234,13 @@ Before public 0.1, evolve it to:
 }
 ```
 
-Because 0.1 has not established a stable public deployment contract yet, prefer a clean manifest version bump over indefinite compatibility hacks.
-
-Target:
-
-```text id="xq5b6s"
-SERVER_MANIFEST_VERSION = 2
-```
-
-Migration sequence:
-
-1. New readers temporarily understand v1/v2 if useful during development.
-2. New builds emit v2.
-3. Node host requires v2.
-4. Once the sidecar migration is complete, remove v1 compatibility before 0.1 unless there is an explicit compatibility requirement.
+Plec has not released this manifest contract. Keep `SERVER_MANIFEST_VERSION =
+1` and evolve the schema in place before 0.1; do not add a migration reader or
+version solely to represent the Node cutover. The Node host validates v1 and
+requires `server.entry` when a server bundle is present. `server.runtime`
+remains available to Axum during Slice 7, but is ignored by Node and removed
+with the sidecar in Slice 8. Revisit versioning only if a released artifact
+establishes an external compatibility boundary.
 
 ---
 
@@ -2372,7 +2367,7 @@ combinations must fail with a clear module-load error naming the detected
 platform, architecture, libc where relevant, and supported package targets.
 There is no source-build fallback unless separately specified and tested.
 
-Target package model:
+Target package model for the Node binding:
 
 ```text id="qqs2ae"
 @plec/node
@@ -2384,7 +2379,9 @@ Target package model:
 @plec/node-win32-x64-msvc
 ```
 
-Only claim platforms actually tested by CI.
+Slice 7 declares all six target packages above. Report package-build coverage
+separately from runtime-load coverage: the current CI may not execute native-load
+smoke tests on macOS or Windows.
 
 Reuse lessons/scripts from:
 

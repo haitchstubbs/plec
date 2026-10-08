@@ -25,6 +25,21 @@ afterEach(async () => {
 });
 
 describe('@plec/node document path', () => {
+  it('accepts the unreleased manifest v1 contract and rejects other versions', async () => {
+    const dir = await mkdtemp(
+      path.join(os.tmpdir(), 'plec-node-manifest-version-'),
+    );
+    temporaryDirectories.push(dir);
+    await writeFile(
+      path.join(dir, 'plec-server.json'),
+      JSON.stringify({ version: 2 }),
+    );
+
+    await expect(createPlecHandler({ dir })).rejects.toThrow(
+      'unsupported Plec server manifest version 2 (expected 1)',
+    );
+  });
+
   it('renders a compiled document through the native engine and closes explicitly', async () => {
     const dir = await mkdtemp(
       path.join(os.tmpdir(), 'plec-node-document-'),

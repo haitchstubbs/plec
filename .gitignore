@@ -63,4 +63,5 @@ opengrep-results.sarif
 
 # Napi artifacts
 packages/plec-query/native
-packages/plec-node/native
+packages/plec-node/native/*.node
+packages/plec-node/npm/*/*.node

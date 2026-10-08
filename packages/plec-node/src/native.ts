@@ -1,105 +1,52 @@
-import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import type {
+  NativeApplicationOptions,
+  NativeCallbackPermit,
+  NativeCancellation,
+  NativeDocumentResponse,
+  NativeHeader,
+  NativeRequest,
+  PlecApplication,
+} from '../native/index.js';
+import {
+  currentNativeTarget,
+  SUPPORTED_NATIVE_TARGETS,
+} from './native-platform.js';
 
-export interface NativeHeader {
-  name: string;
-  value: string;
-}
+export type {
+  NativeApplicationOptions,
+  NativeCallbackPermit,
+  NativeCancellation,
+  NativeDocumentResponse,
+  NativeHeader,
+  NativeRequest,
+  PlecApplication,
+};
 
-export interface NativeRequest {
-  method: string;
-  url: string;
-  headers: NativeHeader[];
-}
+type NativeModule = typeof import('../native/index.js');
+type HostRenderCallback = Parameters<
+  NativeModule['createCallbacks']
+>[0];
 
-export interface NativeApplicationOptions {
-  artifactPath: string;
-  clientScript?: string;
-  clientStyles?: string[];
-  stylesHref?: string;
-  preloads?: string[];
-  customElements?: string[];
-  title?: string;
-  description?: string;
-  development?: boolean;
-}
-
-export type HostRenderCallback = (
-  requestJson: string,
-) => Promise<string>;
-
-export interface NativeDocumentResponse {
-  readonly status: number;
-  readonly headers: NativeHeader[];
-  body(): ReadableStream<Uint8Array>;
-}
-
-export interface NativeActionResponse {
-  readonly status: number;
-  readonly headers: NativeHeader[];
-  body(): ReadableStream<Uint8Array>;
-}
-
-export interface PlecApplication {
-  createCancellation(): NativeCancellation;
-  tryAcquireCallback(): NativeCallbackPermit | null;
-  handleDocument(
-    request: NativeRequest,
-    cancellation: NativeCancellation,
-  ): Promise<NativeDocumentResponse>;
-  handleAction(
-    request: NativeRequest,
-    body: ReadableStream<Uint8Array>,
-    cancelBody: (reason: string) => Promise<void>,
-    cancellation: NativeCancellation,
-  ): Promise<NativeActionResponse>;
-  close(): Promise<void>;
-}
-
-export interface NativeCancellation {
-  cancel(): void;
-}
-
-export interface NativeCallbackPermit {
-  release(): void;
-}
-
-interface NativeModule {
-  maxRequestBodyBytes(): number;
-  createCallbacks(
-    renderHost: HostRenderCallback,
-    invokeAction: (payload: string) => Promise<string>,
-  ): NativeCallbacks;
-}
-
-interface NativeCallbacks {
-  loadApplication(
-    options: NativeApplicationOptions,
-  ): Promise<PlecApplication>;
-}
-
-function nativeFilename(): string {
-  const platform = process.platform;
-  const arch = process.arch;
-  const report = process.report?.getReport() as
-    { header?: { glibcVersionRuntime?: string } } | undefined;
+async function loadNativeModule(): Promise<NativeModule> {
+  const target = currentNativeTarget();
   if (
-    platform === 'linux' &&
-    arch === 'x64' &&
-    report?.header?.glibcVersionRuntime
-  )
-    return 'index.linux-x64-gnu.node';
-  throw new Error(
-    `@plec/node native addon is unavailable for ${platform}-${arch}`,
-  );
+    !(SUPPORTED_NATIVE_TARGETS as readonly string[]).includes(target)
+  ) {
+    throw new Error(
+      `@plec/node does not provide a native binding for ${target}. Supported targets: ${SUPPORTED_NATIVE_TARGETS.join(', ')}.`,
+    );
+  }
+  try {
+    return (await import('../native/index.js')) as NativeModule;
+  } catch (cause) {
+    throw new Error(
+      `Failed to load @plec/node native binding for ${target}; reinstall @plec/node and its optional platform package @plec/node-${target}.`,
+      { cause },
+    );
+  }
 }
 
-const require = createRequire(import.meta.url);
-const native = require(
-  fileURLToPath(
-    new URL(`../native/${nativeFilename()}`, import.meta.url),
-  ),
-) as NativeModule;
+const native = await loadNativeModule();
 
 export const MAX_REQUEST_BODY_BYTES = native.maxRequestBodyBytes();
 

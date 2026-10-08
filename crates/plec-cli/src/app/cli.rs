@@ -102,7 +102,7 @@ enum Command {
         force: bool,
     },
 
-    /// Serve a built Plec application with the native host.
+    /// Serve a built Plec application.
     ///
     /// Reads `plec-server.json` from the build output; every path inside
     /// resolves relative to that manifest, so the directory is portable.

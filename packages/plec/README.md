@@ -15,11 +15,15 @@ The Plec framework runtime: the package applications import. It provides the
 
 ## CLI
 
-The `plec` command is owned by this package (`"bin"` → `bin/plec.js`): a
-dependency-free Node shim that resolves the native CLI binary and execs it,
-forwarding argv, stdio, and exit codes (Windows resolves `plec.exe`).
+The `plec` command is owned by this package (`"bin"` → `bin/plec.js`). In an
+npm install, `plec serve` starts `@plec/node` directly in the CLI process;
+build/compiler and inspection commands continue to use the native Plec CLI.
+An explicit `PLEC_BIN` keeps the Rust `serve` path available for development
+and Axum parity tests.
 
 Resolution order:
+
+For commands other than `serve`, resolution order is:
 
 1. `PLEC_BIN` — explicit binary override; authoritative, so a set-but-
    unusable value is an error instead of a silent fallback
@@ -30,9 +34,9 @@ Resolution order:
 
 Which variant wins where:
 
-- Inside `yarn`/`npx` in a project that depends on `@plec/core`, the shim wins and
-  serves the packaged **release** variant (app commands only: `inspect`,
-  `raw`, `routes`, `build`).
+- Inside an npm project that depends on `@plec/core`, `plec serve` runs the
+  Node host. Other app commands use the packaged Rust **release** variant
+  (`inspect`, `raw`, `routes`, `build`).
 - A bare `plec` in the shell resolves via the system `PATH`, typically the
   cargo-installed **dev** variant, which additionally carries the `workspace`
   command group used for repo development.
@@ -43,9 +47,11 @@ a file dependency (`"@plec/core": "file:../path/to/packages/plec"`): yarn links
 `node_modules/.bin/plec` and package scripts invoke the shim like any other
 bin. Calling `node <artifact>/bin/plec.js …` directly works too.
 
-If no binary is found, the shim prints every searched path and points at the
-release artifact build (`yarn workspace @plec/core build:artifact`; `PLEC_CLI_VERSION`
-in `.env.plec` selects the variant).
+If no Rust CLI binary is found for a non-`serve` command, the shim prints
+every searched path and points at the release artifact build
+(`yarn workspace @plec/core build:artifact`; `PLEC_CLI_VERSION` in `.env.plec`
+selects the variant). `plec serve` uses the Node host and does not need that
+binary.
 
 ## Version
 

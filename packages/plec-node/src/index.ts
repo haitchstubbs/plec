@@ -29,6 +29,7 @@ export interface PlecHandler {
 }
 
 interface ServerManifest {
+  version?: number;
   publicDir?: string;
   clientDir?: string;
   artifact?: string;
@@ -38,7 +39,7 @@ interface ServerManifest {
   preloads?: string[];
   customElements?: string[];
   document?: { title?: string; description?: string };
-  server?: { entry?: string };
+  server?: { entry?: string; runtime?: string };
 }
 
 interface GeneratedApplication {
@@ -79,6 +80,11 @@ export async function createPlecHandler(
   const manifest = JSON.parse(
     await readFile(manifestPath, 'utf8'),
   ) as ServerManifest;
+  if ((manifest.version ?? 1) !== 1) {
+    throw new Error(
+      `unsupported Plec server manifest version ${manifest.version} (expected 1)`,
+    );
+  }
   const publicRoot = await realpath(
     path.resolve(dir, manifest.publicDir ?? 'public'),
   );
@@ -432,7 +438,7 @@ export async function createPlecHandler(
               url: transportUrl(transport),
               headers,
             },
-            body,
+            body as unknown as ReadableStream<Buffer>,
             async () => {
               await reader?.cancel('native action stream stopped');
             },
@@ -444,10 +450,13 @@ export async function createPlecHandler(
         const responseHeaders = new Headers();
         for (const entry of response.headers)
           responseHeaders.append(entry.name, entry.value);
-        return new Response(response.body(), {
-          status: response.status,
-          headers: responseHeaders,
-        });
+        return new Response(
+          response.body() as unknown as ReadableStream<Uint8Array>,
+          {
+            status: response.status,
+            headers: responseHeaders,
+          },
+        );
       }
       if (routeClass === 'static')
         return serveStatic(request, pathname, publicRoot, clientRoot);
@@ -497,7 +506,7 @@ export async function createPlecHandler(
           nativeResponse.status === 204 ||
           nativeResponse.status === 304
             ? null
-            : nativeResponse.body();
+            : (nativeResponse.body() as unknown as ReadableStream<Uint8Array>);
         return new Response(body, {
           status: nativeResponse.status,
           headers: responseHeaders,
