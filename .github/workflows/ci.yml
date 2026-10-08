@@ -249,7 +249,7 @@ jobs:
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             packageTarget: linux-arm64-gnu
-          - runner: macos-15
+          - runner: macos-15-intel
             target: x86_64-apple-darwin
             packageTarget: darwin-x64
           - runner: macos-15
@@ -284,6 +284,13 @@ jobs:
           --manifest-path ../../crates/plec-node-bindings/Cargo.toml
           --profile node-release --output-dir native --js index.js
           --dts bindings.d.ts --format esm --target ${{ matrix.target }}
+      - name: Smoke-test packed native package on host
+        if: matrix.packageTarget == 'linux-x64-gnu' || startsWith(matrix.packageTarget, 'darwin-') || matrix.packageTarget == 'win32-x64-msvc'
+        run: |
+          yarn workspace @plec/node build:js
+          yarn workspace @plec/node package:dirs
+          yarn workspace @plec/node package:stage:local
+          yarn workspace @plec/node exec node scripts/test-packed-package.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: plec-node-${{ matrix.packageTarget }}

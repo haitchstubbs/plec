@@ -14,9 +14,9 @@ The public API is `createPlecHandler()` and `serve()`. Applications are built
 with `plec build` and served from the resulting distribution directory.
 
 The package metadata and optional platform dependencies target all six
-platforms. The package-install/native-load smoke test runs on the active Linux
-GNU runner; this repository does not currently run native-load smoke tests on
-macOS or Windows.
+platforms. CI installs the packed wrapper and matching platform package and
+loads the native addon on Linux x64 GNU, macOS x64/arm64, and Windows x64.
+Linux musl and arm64 are build/package tested but are not runtime-smoked.
 
 `build:native` builds the current host; `build:native:target` and
 `build:native:cross` accept NAPI-RS target triples. `package:stage` collects

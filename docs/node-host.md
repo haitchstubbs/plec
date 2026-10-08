@@ -2221,8 +2221,11 @@ The current manifest's server section is sidecar-shaped:
 ```
 
 The Node host reads only the application entry; it does not depend on the
-sidecar runtime field. Axum still uses that field as the parity host until
-Slice 8 retires the sidecar.
+sidecar runtime field or the copied `dist/node-runtime.mjs` compatibility
+artifact. The build still emits that artifact and the manifest still names
+`server/runtime.mjs` so Axum remains runnable as the Slice 7 parity host. These
+legacy assets are not dependencies of the default production Node host and are
+removed with the sidecar in Slice 8.
 
 Before public 0.1, evolve it to:
 
@@ -2258,13 +2261,14 @@ dist/
     └── app.mjs
 ```
 
-Do not emit:
+The default Node production path does not need or load:
 
 ```text id="2gncpn"
 server/runtime.mjs
 ```
 
-after sidecar retirement.
+The compatibility build may still emit this file for Axum during Slice 7;
+remove it from generated output when Slice 8 retires the sidecar.
 
 A generated startup file is optional.
 
@@ -2379,9 +2383,10 @@ Target package model for the Node binding:
 @plec/node-win32-x64-msvc
 ```
 
-Slice 7 declares all six target packages above. Report package-build coverage
-separately from runtime-load coverage: the current CI may not execute native-load
-smoke tests on macOS or Windows.
+Slice 7 declares all six target packages above. CI builds all six packages and
+runtime-smokes the packed wrapper plus native platform package on Linux x64
+GNU, macOS x64/arm64, and Windows x64. Linux musl and arm64 remain build/package
+coverage only; they are not runtime-smoked by the current runner matrix.
 
 Reuse lessons/scripts from:
 
