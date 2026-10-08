@@ -60,7 +60,7 @@ The package carries the canonical Plec product SemVer in its `version` field.
 Cargo workspace declaration and every Rust crate and JS workspace package.
 The artifact build fails before assembling anything when the core package and
 Cargo declaration drift, and `plec --version` prints the same value from the
-compiled binary. Protocol versions (IR, route manifest, SSR snapshot, sidecar)
+compiled binary. Protocol versions (IR, route manifest, SSR snapshot)
 are compatibility contracts and are deliberately not coupled to this SemVer.
 
 ## Commands

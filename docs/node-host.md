@@ -1,5 +1,7 @@
 # Plec Node Host Target Implementation Architecture
 
+> **Final architecture:** This document began as a migration plan. Its migration-era Axum/sidecar steps below are historical, not current architecture. `@plec/node` is the sole first-party HTTP host, `plec-server-engine` is the sole Rust server-semantics authority, and `plec-node-bindings` is their in-process N-API boundary. Slice 8 retires the Axum host, Rust `serve`, `packages/plec-node-runtime`, private Rust↔Node transport, and generated `runtime.mjs` artifacts. In development, Vite attaches the Node request dispatcher to its listener; no internal host port is opened.
+
 ## Preface
 
 Plec's current production server architecture is primarily Rust-owned. This keeps Plec-native semantics—routing, loaders, SSR, snapshots, action validation—inside the Rust implementation, but arbitrary application JavaScript still needs a JavaScript runtime.

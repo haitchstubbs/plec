@@ -73,7 +73,7 @@ Canonical constants live in `crates/plec-ir/src/limits.rs` (re-exported by
 | ------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Declared `content-length` | 8 MiB (`MAX_FETCH_RESPONSE_BYTES`) | `declared_length_failure` in `crates/plec-client/src/fetch.rs`; rejected before the body is read. A fast path only: never trusted as the sole ceiling                                                                                                                                |
 | Streamed body bytes       | 8 MiB                              | enforced chunk-by-chunk before whole-body buffering; the stream is cancelled mid-flight when the budget is exceeded — `bounded_body_bytes` (client fetches), `boundedResponseBytes` (browser artifact/graph/runtime-JS loading), `read_bounded_stream` (native server route loaders) |
-| Decoded JSON payload      | 8 MiB                              | `bounded_response_value` (JS Map normalization + bounded JSON parse); native server route loaders parse the bounded text (`crates/plec-server`)                                                                                                                                      |
+| Decoded JSON payload      | 8 MiB                              | `bounded_response_value` (JS Map normalization + bounded JSON parse); native server route loaders parse the bounded text (`crates/plec-server-engine`)                                                                                                                               |
 
 Absent, forged, and lying `content-length` declarations therefore cannot
 buffer a response body past the ceiling: the byte budget is applied while
@@ -131,14 +131,14 @@ the artifact decode boundary.
 
 ## Execution budgets
 
-| Boundary              | Limit                                                                                                                                                                                              | Where                                                                                  |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Expression evaluation | 100,000 shared steps (`MAX_EXPRESSION_STEPS`), Filter/Map nesting 32 (`MAX_EVAL_NESTING`), stack of at most 1,000 values / 8 MiB estimated bytes (`MAX_EVAL_STACK_VALUES`, `MAX_EVAL_STACK_BYTES`) | `crates/plec-eval/src/eval.rs` (SSR mirror in `crates/plec-server/src/ssr/render.rs`)  |
-| Action continuations  | 1,000,000 steps (`MAX_ACTION_STEPS`), call depth 64 (`MAX_CALL_DEPTH`)                                                                                                                             | `crates/plec-action/src/lib.rs` (browser host adapter: `crates/plec-client/src/vm.rs`) |
-| Reaction drain        | 10,000 executions (`MAX_REACTION_STEPS`), nesting 32 (`MAX_REACTION_DRAIN_DEPTH`)                                                                                                                  | same                                                                                   |
-| Graph mount recursion | depth 128 (`MAX_MOUNT_DEPTH`), stack watermark 512 KiB (`MAX_MOUNT_STACK_BYTES`)                                                                                                                   | `crates/plec-client/src/runtime.rs`                                                    |
-| SSR row adoption      | depth 128 + 512 KiB stack watermark (shared mount budgets)                                                                                                                                         | `crates/plec-client/src/runtime.rs` (`adopt_row_node`)                                 |
-| SSR render walk       | depth 256 (`MAX_SSR_RENDER_DEPTH`)                                                                                                                                                                 | `crates/plec-server/src/ssr/render.rs` (`render_node`)                                 |
+| Boundary              | Limit                                                                                                                                                                                              | Where                                                                                        |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Expression evaluation | 100,000 shared steps (`MAX_EXPRESSION_STEPS`), Filter/Map nesting 32 (`MAX_EVAL_NESTING`), stack of at most 1,000 values / 8 MiB estimated bytes (`MAX_EVAL_STACK_VALUES`, `MAX_EVAL_STACK_BYTES`) | `crates/plec-eval/src/eval.rs` (SSR mirror in `crates/plec-server-engine/src/ssr/render.rs`) |
+| Action continuations  | 1,000,000 steps (`MAX_ACTION_STEPS`), call depth 64 (`MAX_CALL_DEPTH`)                                                                                                                             | `crates/plec-action/src/lib.rs` (browser host adapter: `crates/plec-client/src/vm.rs`)       |
+| Reaction drain        | 10,000 executions (`MAX_REACTION_STEPS`), nesting 32 (`MAX_REACTION_DRAIN_DEPTH`)                                                                                                                  | same                                                                                         |
+| Graph mount recursion | depth 128 (`MAX_MOUNT_DEPTH`), stack watermark 512 KiB (`MAX_MOUNT_STACK_BYTES`)                                                                                                                   | `crates/plec-client/src/runtime.rs`                                                          |
+| SSR row adoption      | depth 128 + 512 KiB stack watermark (shared mount budgets)                                                                                                                                         | `crates/plec-client/src/runtime.rs` (`adopt_row_node`)                                       |
+| SSR render walk       | depth 256 (`MAX_SSR_RENDER_DEPTH`)                                                                                                                                                                 | `crates/plec-server-engine/src/ssr/render.rs` (`render_node`)                                |
 
 Because validation caps node-graph depth at `MAX_NODE_GRAPH_DEPTH` (128), a
 validated graph can never push the recursive mount, adoption, or SSR render
@@ -170,10 +170,10 @@ keys remain documented separately from these primary exhaustion defences.
 
 ## Inbound request bodies (dev server)
 
-| Boundary                  | Limit                            | Where                                                                         |
-| ------------------------- | -------------------------------- | ----------------------------------------------------------------------------- |
-| Request body bytes        | 1 MiB (`MAX_REQUEST_BODY_BYTES`) | `read_bounded_body` in `crates/plec-server/src/request.rs` (413 on violation) |
-| Application artifact file | 16 MiB                           | `read_bounded` in `crates/plec-server/src/artifact.rs`                        |
+| Boundary                  | Limit                            | Where                                                         |
+| ------------------------- | -------------------------------- | ------------------------------------------------------------- |
+| Request body bytes        | 1 MiB (`MAX_REQUEST_BODY_BYTES`) | Node API pre-read and incremental native action stream limit  |
+| Application artifact file | 16 MiB                           | `read_bounded` in `crates/plec-server-engine/src/artifact.rs` |
 
 ## Boundary tests
 
@@ -203,5 +203,7 @@ keys remain documented separately from these primary exhaustion defences.
   oversized `frameSlots`, expression stacks beyond the value/byte ceilings,
   reaction cycles, and oversized/over-deep/structurally excessive snapshot
   input values plus snapshot shape path limits at the WASM boundary.
-- `crates/plec-server/tests/server.rs` — oversized request body (413) and
-  oversized artifact file (500).
+- `packages/plec-node/src/api.test.ts` — oversized API bodies reject before
+  application dispatch.
+- `packages/plec-node/src/actions.test.ts` — streamed action overflow rejects
+  before reading the remaining source chunks.

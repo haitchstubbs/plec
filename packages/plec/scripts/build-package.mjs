@@ -46,13 +46,6 @@ export async function buildWorkspaceSurface() {
     '@plec/core',
     'build:wasm',
   );
-  ensureBuilt(
-    '@plec/node-runtime',
-    'packages/plec-node-runtime/dist/runtime.mjs',
-    '@plec/node-runtime',
-    'build',
-  );
-
   console.log('Compiling plec (tsc)...');
   run('yarn', ['exec', 'tsc', '-p', 'packages/plec/tsconfig.json']);
   for (const output of ['server-context.js', 'server-context.d.ts']) {
@@ -92,9 +85,5 @@ export async function buildWorkspaceSurface() {
   fs.copyFileSync(
     path.join(repoRoot, 'packages/plec-browser/dist/index.d.ts'),
     path.join(distDir, 'browser.d.ts'),
-  );
-  fs.copyFileSync(
-    path.join(repoRoot, 'packages/plec-node-runtime/dist/runtime.mjs'),
-    path.join(distDir, 'node-runtime.mjs'),
   );
 }

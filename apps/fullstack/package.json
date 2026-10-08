@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "plec dev",
-    "start": "yarn --cwd ../.. rust:deps:check && cargo run --locked --quiet -p plec-cli -- serve dist",
+    "start": "plec serve dist",
     "copy:licenses": "mkdir -p dist/public/licenses && cp ../../node_modules/lucide/LICENSE dist/public/licenses/Lucide-LICENSE.txt && cp ../../node_modules/@fontsource-variable/outfit/LICENSE dist/public/licenses/Outfit-OFL-1.1.txt && cp ../../node_modules/@fontsource-variable/raleway/LICENSE dist/public/licenses/Raleway-OFL-1.1.txt",
     "build": "yarn check:no-react && plec build && yarn copy:licenses",
     "test": "yarn check:no-react && vitest run",

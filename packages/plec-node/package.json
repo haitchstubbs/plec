@@ -19,6 +19,10 @@
     "./request-target": {
       "types": "./dist/request-target.d.ts",
       "import": "./dist/request-target.js"
+    },
+    "./internal/http": {
+      "types": "./dist/http.d.ts",
+      "import": "./dist/http.js"
     }
   },
   "files": [

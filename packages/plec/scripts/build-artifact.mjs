@@ -134,7 +134,6 @@ for (const required of [
   'runtime/runtime.js',
   'runtime/runtime.js.br',
   'runtime/provenance.json',
-  'node-runtime.mjs',
   `bin/${binaryName}`,
 ]) {
   if (!fs.existsSync(path.join(distDir, required)))

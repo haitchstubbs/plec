@@ -28,18 +28,57 @@ export interface PlecHttpServer {
   waitForActiveRequests(): Promise<void>;
 }
 
+export interface PlecHttpDispatcher {
+  handleRequest(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): void;
+  stopAdmission(): void;
+  abortActiveRequests(): void;
+  waitForActiveRequests(): Promise<void>;
+}
+
+export type PlecResponseTransform = (
+  request: IncomingMessage,
+  response: Response,
+) => Promise<Response>;
+
 type ShutdownHandler = Pick<PlecHandler, 'close'>;
 
 export function createPlecHttpServer(
   handler: PlecHandler,
   maxActiveRequests = MAX_ACTIVE_REQUESTS,
 ): PlecHttpServer {
+  const dispatcher = createPlecHttpDispatcher(
+    handler,
+    maxActiveRequests,
+  );
+  const server = createServer(dispatcher.handleRequest);
+  server.headersTimeout = HEADER_TIMEOUT;
+  server.requestTimeout = BODY_TIMEOUT;
+  return {
+    server,
+    stopAdmission: dispatcher.stopAdmission,
+    abortActiveRequests: dispatcher.abortActiveRequests,
+    waitForActiveRequests: dispatcher.waitForActiveRequests,
+  };
+}
+
+/** @internal Reuses the raw Node transport adapter inside an embedding server. */
+export function createPlecHttpDispatcher(
+  handler: PlecHandler,
+  maxActiveRequests = MAX_ACTIVE_REQUESTS,
+  transformResponse?: PlecResponseTransform,
+): PlecHttpDispatcher {
   let activeRequests = 0;
   let accepting = true;
   let activeRequestsDrained = Promise.resolve();
   let resolveActiveRequestsDrained: (() => void) | undefined;
   const activeControllers = new Set<AbortController>();
-  const server = createServer((request, response) => {
+  const handleRequest = (
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): void => {
     void dispatch(
       request,
       response,
@@ -71,6 +110,7 @@ export function createPlecHttpServer(
         activeControllers.add(controller);
         return () => activeControllers.delete(controller);
       },
+      transformResponse,
     ).catch((error: unknown) => {
       console.error('[PLEC] response dispatch failed', error);
       if (response.headersSent) {
@@ -79,11 +119,9 @@ export function createPlecHttpServer(
         writeError(response, 500, 'Internal Server Error');
       }
     });
-  });
-  server.headersTimeout = HEADER_TIMEOUT;
-  server.requestTimeout = BODY_TIMEOUT;
+  };
   return {
-    server,
+    handleRequest,
     stopAdmission: () => {
       accepting = false;
     },
@@ -205,6 +243,7 @@ async function dispatch(
   acquire: () => boolean,
   release: () => void,
   registerController: (controller: AbortController) => () => void,
+  transformResponse?: PlecResponseTransform,
 ): Promise<void> {
   const target = incoming.url;
   let parsed: ReturnType<typeof canonicalRequestTarget>;
@@ -340,7 +379,7 @@ async function dispatch(
       authority: hosts[0]!,
       signal: controller.signal,
     };
-    const response = await (
+    let response = await (
       handler as typeof handler & {
         dispatch(
           request: Request,
@@ -348,6 +387,8 @@ async function dispatch(
         ): Promise<Response>;
       }
     ).dispatch(request, transport);
+    if (transformResponse)
+      response = await transformResponse(incoming, response);
     await sendResponse(
       outgoing,
       response,

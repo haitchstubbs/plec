@@ -84,10 +84,14 @@ const SSR_ENTRIES: &[EntryPoint] = &[
         "crates/plec-runtime/src/lifecycle.rs",
         381,
     ),
-    ep("SSR renderer", "crates/plec-server/src/ssr/render.rs", 1),
+    ep(
+        "SSR renderer",
+        "crates/plec-server-engine/src/ssr/render.rs",
+        1,
+    ),
     ep(
         "snapshot producer",
-        "crates/plec-server/src/ssr/snapshot.rs",
+        "crates/plec-server-engine/src/ssr/snapshot.rs",
         1,
     ),
 ];
@@ -255,7 +259,7 @@ const COOKIE_ENTRIES: &[EntryPoint] = &[
     ),
     ep(
         "SSR render boundary",
-        "crates/plec-server/src/ssr/render.rs",
+        "crates/plec-server-engine/src/ssr/render.rs",
         979,
     ),
 ];

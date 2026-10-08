@@ -67,3 +67,29 @@ describe.skipIf(!built)('plec bin shim', () => {
     expect(result.stderr).toContain(missing);
   });
 });
+
+it('keeps serve on the Node host when PLEC_BIN is set', () => {
+  const missing = path.join(
+    packageDir,
+    'dist',
+    'bin',
+    'does-not-exist',
+  );
+  const result = runShim(['serve', '--help'], { PLEC_BIN: missing });
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain('Usage: plec serve');
+  expect(result.stderr).not.toContain('PLEC_BIN');
+});
+
+it('uses the checked-out Rust CLI for workspace dev despite PLEC_BIN', () => {
+  const missing = path.join(
+    packageDir,
+    'dist',
+    'bin',
+    'does-not-exist',
+  );
+  const result = runShim(['dev', '--help'], { PLEC_BIN: missing });
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain('Build and serve an application');
+  expect(result.stderr).not.toContain('PLEC_BIN');
+});

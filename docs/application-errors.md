@@ -60,20 +60,21 @@ host's failure handling.
 
 Compiler, runtime, artifact, protocol, SSR, and host failures are internal
 diagnostics. They may select an error UI or produce an HTTP 500, but their
-implementation message is not application data. The Node application runtime
-redacts uncaught handler exceptions to the generic JSON body
+implementation message is not application data. The Node host redacts
+uncaught API handler exceptions to the generic JSON body
 `{"error":"Internal Server Error"}` and logs the original exception on the
-server process. The Rust HTTP host likewise uses a generic 500 body for
-uncaught host/SSR errors. Explicit application `Response` objects are not
-rewritten.
+server process. Document failures follow the configured development-shell or
+generic production response policy. Explicit application `Response` objects
+are not rewritten.
 
 Server-action implementation failures follow the same redaction boundary:
-Node logs the original exception, while the Rust-owned reserved endpoint
-returns only a generic action failure. Unknown/stale action IDs are a distinct 404. The action ID is not an authorization mechanism; every action must perform
-application-specific authentication and authorization itself.
+Node logs the original exception, while the Node host maps the Rust engine's
+action outcome to a generic public failure. Unknown/stale action IDs are a
+distinct 404. The action ID is not an authorization mechanism; every action
+must perform application-specific authentication and authorization itself.
 
 No stack, cause, prototype, arbitrary custom field, filesystem path, or
-sidecar detail is part of the production 500 payload. Development SSR fallback
+internal host detail is part of the production 500 payload. Development SSR fallback
 diagnostics are available only on the server response header and do not alter
 the browser bootstrap payload.
 
@@ -95,13 +96,10 @@ available. Compiler parse/compile codes use numeric subcodes; boundary codes
 use stable domain/class names under the same `PLEC-*` prefix. Native server/operator logs
 identify request, SSR, or action boundaries and retain operational error
 context; the public HTTP body remains bounded/redacted. Ordinary application
-`console.log` / `console.error` output from the Node sidecar continues to be
-forwarded in both development and production. Sidecar startup, request, and
-protocol failures use `PLEC-SIDECAR-*` codes; protocol mismatch output includes
-expected and received versions. Captured sidecar output is appended to an
-internal startup diagnostic only in development mode (`plec serve
---development`, or a non-production `NODE_ENV`); public HTTP/action output
-never receives it. A thrown application action is classified as
+`console.log` / `console.error` output from the Node host is forwarded in both
+development and production. Native host startup and request errors use the
+Node host's controlled diagnostics; public HTTP/action output never receives
+internal detail. A thrown application action is classified as
 `PLEC-SERVER-ACTION`, not as a protocol failure. Host-provider rendering uses
 `PLEC-PROVIDER-RENDER`; server manifest loading uses
 `PLEC-SERVER-MANIFEST`.
@@ -139,15 +137,15 @@ enrichment, not to ordinary operator logging.
 
 ## Issue #45 acceptance map
 
-| Acceptance criterion                                    | Implementation boundary                                                                                           | Regression coverage                                                                                                                                                                                                                                                                                                                  |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Major execution boundaries are documented               | This document's execution-boundary table                                                                          | `application-errors.md` — Execution boundaries                                                                                                                                                                                                                                                                                       |
-| Explicit server serialization and redaction             | `crates/plec-server/src/loader.rs`, Node sidecar HTTP dispatch, Rust HTTP host                                    | `renders_the_error_phase_and_records_the_rejection_when_the_loader_fails`; `application_responses_pass_through_verbatim`; `uncaught_api_handler_failure_is_redacted_http_500_and_runtime_survives`; smoke middleware failure redaction test                                                                                          |
-| SSR/client route-loader parity                          | `plec-schema` public record conversions; server loader; client route navigation; snapshot adoption                | `ssr_adoption_and_fresh_navigation_expose_equivalent_http_route_errors`; `loader_network_failure_uses_the_browser_public_failure_kind`; `loader_decode_failure_uses_the_browser_public_failure_kind`; `typed_fetch_routes_http_decode_network_and_abort_failures`; `malformed_public_loader_failure_adopts_as_generic_route_failure` |
-| Mutation caller rejection and `mutation.error`          | Compiled action machine and mutation state publisher                                                              | `todo create, complete, rename, and delete stay targeted` in `packages/plec-e2e/tests/acceptance/todos-actions.playwright.ts` asserts visible rejection, retained draft, pending clear, later-success clear, and stale-failure suppression; VM concurrency suite covers settlement ordering                                          |
-| Standard API/middleware HTTP failures                   | Node app request runtime and server HTTP response boundary                                                        | `application_responses_pass_through_verbatim`; `uncaught_api_handler_failure_is_redacted_http_500_and_runtime_survives`; smoke `middleware rejects duplicate next calls through the application error path`                                                                                                                          |
-| Internal runtime failures excluded from public records  | Shared public normalizer plus explicit host redaction                                                             | `malformed_runtime_failure_uses_generic_public_record`; `malformed_public_loader_failure_normalizes_without_rejecting_snapshot`; server generic-500 assertions                                                                                                                                                                       |
-| Richer development diagnostics without production drift | `crates/plec-server/src/http.rs` development fallback header and error logging; production HTTP response boundary | `falls_back_to_the_public_shell_when_the_artifact_is_unreadable`; `production_internal_errors_are_generic_and_independent_of_diagnostic_detail`; `route_loaders_without_a_valid_program_fail_the_document_render`; `uncaught_api_handler_failure_is_redacted_http_500_and_runtime_survives`                                          |
+| Acceptance criterion                                    | Implementation boundary                                                                                          | Regression coverage                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Major execution boundaries are documented               | This document's execution-boundary table                                                                         | `application-errors.md` — Execution boundaries                                                                                                                                                                                                                                              |
+| Explicit server serialization and redaction             | `crates/plec-server-engine/src/loader.rs`, `packages/plec-node/src` HTTP dispatch and redaction                  | `returns the API fallback 404 and redacts handler failures`; `preserves action method, origin, ID, JSON, unknown-ID, and callback failure outcomes`; smoke middleware failure redaction test                                                                                                |
+| SSR/client route-loader parity                          | `plec-schema` public record conversions; `plec-server-engine` loader; client route navigation; snapshot adoption | `adoption.playwright.ts` loader transfer; `loader-outcomes.playwright.ts` redirect and not-found coverage; `todos-loaders.playwright.ts` pending, success, error, and retry                                                                                                                 |
+| Mutation caller rejection and `mutation.error`          | Compiled action machine and mutation state publisher                                                             | `todo create, complete, rename, and delete stay targeted` in `packages/plec-e2e/tests/acceptance/todos-actions.playwright.ts` asserts visible rejection, retained draft, pending clear, later-success clear, and stale-failure suppression; VM concurrency suite covers settlement ordering |
+| Standard API/middleware HTTP failures                   | Node app request runtime and server HTTP response boundary                                                       | `returns the API fallback 404 and redacts handler failures`; smoke `middleware rejects duplicate next calls through the application error path`                                                                                                                                             |
+| Internal runtime failures excluded from public records  | Shared public normalizer plus Node host redaction                                                                | `plec-schema` public failure validation; `api.test.ts` handler-failure redaction; `actions.test.ts` action-failure outcomes                                                                                                                                                                 |
+| Richer development diagnostics without production drift | `packages/plec-node/src/index.ts` fallback header and logging; production HTTP response boundary                 | `document.test.ts` compiled-document path; `plec dev` failed-build recovery in `dev-reload.playwright.ts`                                                                                                                                                                                   |
 
 Malformed public failure normalization is scoped to `Rejected.failure` in
 snapshot deserialization. `malformed_unrelated_snapshot_structure_still_fails_closed`

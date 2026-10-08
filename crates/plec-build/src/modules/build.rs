@@ -340,8 +340,7 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
     )?;
     assets::brotli_vite_assets(&client_dir.join("assets"))?;
 
-    // The native host imports this application bundle through its Node
-    // sidecar; the manifest records the path.
+    // The Node host imports this application bundle; the manifest records the path.
     let server_bundle = out_dir.join("server").join("app.mjs");
     server::bundle(
         &app_dir,
@@ -352,25 +351,9 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
         options.optimize,
     )?;
 
-    let has_node_runtime = host::emit_node_runtime(&repo_root, &app_dir, &out_dir)?;
-    if !has_node_runtime
-        && (server_entry.exists() || !api_routes.is_empty() || !server_actions.is_empty())
-    {
-        // The app authored server code, but this workspace does not vendor
-        // the Node application runtime: the emitted manifest carries no
-        // `server` section and `/api/*` will 404 at runtime. Loud here beats
-        // a wall of 404s in the browser.
-        eprintln!(
-            "warning: server entry {} exists, but packages/plec-node-runtime is not vendored in \
-             this workspace; the emitted manifest will have no application runtime and /api/* \
-             will 404",
-            server_entry.display(),
-        );
-    }
     host::emit_server_manifest(
         &out_dir,
         &host_config,
-        has_node_runtime,
         &vite_result.entry,
         &vite_result.styles,
     )?;

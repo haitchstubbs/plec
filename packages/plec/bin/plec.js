@@ -15,8 +15,8 @@
  * Node-only and dependency-free (node builtins): package.json#bin never
  * enters a browser bundle.
  */
-import { spawn } from 'node:child_process';
-import { accessSync, constants } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { parseServeOptions, SERVE_HELP } from './serve-options.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,9 +36,18 @@ const cargoBinary = path.join(
   'bin',
   binaryName,
 );
+const workspaceCliManifest = path.join(
+  import.meta.dirname,
+  '..',
+  '..',
+  '..',
+  'crates',
+  'plec-cli',
+  'Cargo.toml',
+);
 
 const [command, ...args] = process.argv.slice(2);
-if (command === 'serve' && !process.env.PLEC_BIN) {
+if (command === 'serve') {
   try {
     const parsed = parseServeOptions(args);
     if (parsed.help) {
@@ -53,6 +62,48 @@ if (command === 'serve' && !process.env.PLEC_BIN) {
     );
     process.exitCode = 1;
   }
+} else if (command === 'dev' && existsSync(workspaceCliManifest)) {
+  // A globally installed dev CLI may predate the checked-out source. Build
+  // and run this workspace's coordinator so its child build commands use the
+  // same current compiler/build implementation.
+  const build = spawnSync(
+    process.env.CARGO || 'cargo',
+    ['build', '--manifest-path', workspaceCliManifest],
+    { stdio: 'inherit' },
+  );
+  if (build.error) {
+    console.error(
+      `plec dev: failed to build workspace CLI: ${build.error.message}`,
+    );
+    process.exit(1);
+  }
+  if (build.status !== 0) process.exit(build.status ?? 1);
+  const workspaceRoot = path.resolve(
+    path.dirname(workspaceCliManifest),
+    '..',
+    '..',
+  );
+  const workspaceBinary = path.join(
+    workspaceRoot,
+    'target',
+    'debug',
+    binaryName,
+  );
+  const child = spawn(workspaceBinary, [command, ...args], {
+    stdio: 'inherit',
+  });
+  for (const signal of ['SIGINT', 'SIGTERM'])
+    process.once(signal, () => child.kill(signal));
+  child.on('error', (error) => {
+    console.error(
+      `plec dev: failed to run workspace CLI: ${error.message}`,
+    );
+    process.exit(1);
+  });
+  child.on('exit', (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    else process.exit(code ?? 0);
+  });
 } else {
   const { binary } = resolveBinary();
 

@@ -39,7 +39,7 @@ interface ServerManifest {
   preloads?: string[];
   customElements?: string[];
   document?: { title?: string; description?: string };
-  server?: { entry?: string; runtime?: string };
+  server?: { entry?: string };
 }
 
 interface GeneratedApplication {

@@ -25,12 +25,11 @@ export function devPort(name: string): number {
 export const e2ePort = devPort('E2E_PORT');
 export const baseURL = `http://127.0.0.1:${e2ePort}`;
 
-// The native Axum host owns the public listener and spawns the Node sidecar
-// for application-owned `/api/*` handlers.
+// The Node host is the only first-party HTTP server used by E2E.
 const movedDist = process.env.PLEC_E2E_DIST;
-const selectedHost = process.env.PLEC_E2E_HOST ?? 'axum';
-if (selectedHost !== 'axum' && selectedHost !== 'node') {
-  throw new Error('PLEC_E2E_HOST must be either "axum" or "node"');
+const selectedHost = process.env.PLEC_E2E_HOST ?? 'node';
+if (selectedHost !== 'node') {
+  throw new Error('PLEC_E2E_HOST only supports "node"');
 }
 const quoteShell = (value: string) =>
   `'${value.replaceAll("'", "'\\''")}'`;
@@ -39,12 +38,7 @@ const workspaceRoot = path.resolve(scriptsDir, '../..');
 const dist =
   movedDist ?? path.join(workspaceRoot, 'apps/fullstack/dist');
 const plecBin = path.join(workspaceRoot, 'packages/plec/bin/plec.js');
-const startCommand =
-  selectedHost === 'node'
-    ? `yarn workspace @plec/node build && node ${quoteShell(plecBin)} serve ${quoteShell(dist)}`
-    : process.env.PLEC_BIN
-      ? `${quoteShell(path.resolve(process.env.PLEC_BIN))} serve ${quoteShell(dist)}`
-      : `cargo run --locked --manifest-path crates/plec-cli/Cargo.toml -- serve ${quoteShell(dist)}`;
+const startCommand = `yarn workspace @plec/node build && node ${quoteShell(plecBin)} serve ${quoteShell(dist)}`;
 
 // Playwright owns the fullstack server: turbo builds it, webServer starts
 // the native host, waits for HTTP readiness, and kills the process group

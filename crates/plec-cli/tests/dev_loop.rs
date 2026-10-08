@@ -116,10 +116,10 @@ fn http(port: u16, path: &str) -> Option<String> {
 }
 
 fn compiled_asset(html: &str) -> String {
-    html.split("src=\"")
+    html.split("img src=\"")
         .nth(1)
         .and_then(|value| value.split('"').next())
-        .unwrap()
+        .unwrap_or_else(|| panic!("no src attribute in response: {html}"))
         .to_owned()
 }
 
@@ -154,28 +154,6 @@ impl DevChild {
 
     fn output(&self) -> String {
         self.output.lock().unwrap().clone()
-    }
-
-    fn host_pid(&self) -> u32 {
-        let output = self.output();
-        let client = output
-            .rfind("native host pid ")
-            .map(|index| (index, "native host pid ".len()));
-        let restarted = output
-            .rfind("native host restarted (pid ")
-            .map(|index| (index, "native host restarted (pid ".len()));
-        let (index, length) = client
-            .into_iter()
-            .chain(restarted)
-            .max_by_key(|(index, _)| *index)
-            .expect("native host pid is logged");
-        output[index + length..]
-            .split_whitespace()
-            .next()
-            .unwrap()
-            .trim_end_matches(')')
-            .parse()
-            .unwrap()
     }
 
     fn wait_for(&mut self, path: &str, needle: &str, timeout: Duration) -> String {
@@ -217,6 +195,26 @@ impl DevChild {
         }
     }
 
+    fn wait_for_output_count(&mut self, needle: &str, count: usize) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let output = self.output();
+            if output.matches(needle).count() >= count {
+                return;
+            }
+            assert!(
+                self.child.try_wait().unwrap().is_none(),
+                "plec dev exited: {}",
+                self.output()
+            );
+            assert!(
+                Instant::now() < deadline,
+                "missing output {needle:?} occurrence {count}: {output}"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     fn stop(&mut self) {
         if self.child.try_wait().unwrap().is_none() {
             #[cfg(unix)]
@@ -248,7 +246,7 @@ impl Drop for DevChild {
 }
 
 #[test]
-fn vite_dev_keeps_client_host_live_watches_external_assets_and_restarts_for_server_changes() {
+fn vite_dev_reloads_node_handler_for_ssr_and_server_changes_on_one_port() {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("plec-vite-dev-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
@@ -270,40 +268,36 @@ fn vite_dev_keeps_client_host_live_watches_external_assets_and_restarts_for_serv
     let port = free_port();
     let mut dev = DevChild::start(&app, port);
     dev.wait_for("/", "Version A", Duration::from_secs(90));
-    dev.wait_output("native host pid");
-    let initial_host = dev.host_pid();
+    dev.wait_output("Plec dev: Node host attached to Vite");
+    assert!(!dev.output().contains("[PLEC] listening on"));
 
     fs::write(app.join("src/home.tsx"), "import logo from '../shared.svg'; export function Home() { return <div>Version B<img src={logo} /></div>; }\n").unwrap();
     let version_b = dev.wait_for("/", "Version B", Duration::from_secs(60));
-    dev.wait_output("client artifacts updated");
-    assert_eq!(
-        dev.host_pid(),
-        initial_host,
-        "client-only change keeps native host process"
-    );
+    dev.wait_for_output_count("Node host reloaded", 1);
     let old_asset = compiled_asset(&version_b);
 
     fs::write(app.join("shared.svg"), "<svg><text>external B</text></svg>").unwrap();
     let deadline = Instant::now() + Duration::from_secs(60);
     let new_asset = loop {
         let html = http(port, "/").unwrap_or_default();
+        if !html.starts_with("HTTP/1.1 200") {
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        }
         let url = compiled_asset(&html);
-        if url != old_asset && http(port, &url).is_some_and(|asset| asset.contains("external B")) {
+        let asset_response = http(port, &url).unwrap_or_default();
+        if url != old_asset && asset_response.contains("external B") {
             break url;
         }
         assert!(
             Instant::now() < deadline,
-            "external source dependency did not invalidate Plec build: {}",
-            dev.output()
+            "external source dependency did not refresh the asset; url={url}, body={asset_response}, logs={}",
+            dev.output(),
         );
         thread::sleep(Duration::from_millis(50));
     };
     assert_ne!(new_asset, old_asset);
-    assert_eq!(
-        dev.host_pid(),
-        initial_host,
-        "compiled external asset change is client-only"
-    );
+    dev.wait_for_output_count("Node host reloaded", 2);
 
     fs::write(
         app.join("src/server.ts"),
@@ -311,14 +305,7 @@ fn vite_dev_keeps_client_host_live_watches_external_assets_and_restarts_for_serv
     )
     .unwrap();
     dev.wait_for("/api/version", "API B", Duration::from_secs(60));
-    dev.wait_output("native host restarted");
-    let replacement_host = dev.host_pid();
-    assert_ne!(
-        replacement_host,
-        initial_host,
-        "server bundle change restarts native host; logs: {}",
-        dev.output()
-    );
+    dev.wait_for_output_count("Node host reloaded", 3);
     dev.stop();
     assert!(
         TcpListener::bind(("127.0.0.1", port)).is_ok(),

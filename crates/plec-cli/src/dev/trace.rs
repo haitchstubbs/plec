@@ -322,7 +322,7 @@ mod tests {
         );
         assert_eq!(
             categorize(
-                "crates/plec-server/src/ssr/snapshot.rs",
+                "crates/plec-server-engine/src/ssr/snapshot.rs",
                 "pub(crate) fn bootstrap_payload("
             ),
             Category::DefinedIn

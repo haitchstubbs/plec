@@ -28,11 +28,10 @@ runner and owns output capture separately.
   `E2E_PORT=3311 yarn test:e2e`.
 - `reuseExistingServer: false` is intentional: a stale server on the port
   fails the run loudly instead of being silently adopted.
-- `PLEC_E2E_HOST` defaults to `axum`. Set `PLEC_E2E_HOST=node` with
-  `yarn test:e2e` or `yarn test:acceptance` to run the same suites against
-  `@plec/node`; Playwright builds the package, starts the npm `plec serve`
-  shim over `apps/fullstack/dist`, and owns its shutdown. Axum mode invokes
-  the Rust CLI explicitly, independent of the npm shim default.
+- E2E runs only against `@plec/node`; Playwright builds the package, starts
+  the npm `plec serve` shim over `apps/fullstack/dist`, and owns its shutdown.
+  `PLEC_E2E_HOST=node` is accepted for existing local commands; no Axum host
+  mode remains.
 - One-time setup: `yarn install --immutable && yarn install:build-tools` from
   the repository root. This installs the Playwright-pinned Chromium and
   matching ChromeDriver into repository-local caches; the runner rejects

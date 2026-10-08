@@ -1,7 +1,7 @@
 //! Host-independent execution of compiled Plec server semantics.
 //!
-//! This crate deliberately has no dependency on Axum, Tower, or N-API. The
-//! Axum and Node hosts adapt transport into these semantic inputs and outputs.
+//! This crate deliberately has no dependency on HTTP host frameworks or N-API.
+//! The Node host adapts transport into these semantic inputs and outputs.
 
 use std::path::PathBuf;
 

@@ -114,7 +114,7 @@ try {
     [
       '--input-type=module',
       '-e',
-      `import { createPlecHandler, serve } from '@plec/node'; if (typeof createPlecHandler !== 'function' || typeof serve !== 'function') process.exit(1);`,
+      `import { createPlecHandler, serve } from '@plec/node'; import { createPlecHttpDispatcher } from '@plec/node/internal/http'; if (typeof createPlecHandler !== 'function' || typeof serve !== 'function' || typeof createPlecHttpDispatcher !== 'function') process.exit(1);`,
     ],
     { cwd: installation, stdio: 'inherit' },
   );

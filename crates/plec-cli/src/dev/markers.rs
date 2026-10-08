@@ -231,7 +231,7 @@ fn manifest_entry_for_graph<'m>(
 
 // ---------------------------------------------------------------------------
 // Graph walk — the structural mirror of the SSR renderer
-// (crates/plec-server/src/ssr/render.rs). Marker emission order is the
+// (crates/plec-server-engine/src/ssr/render.rs). Marker emission order is the
 // expected HTML order.
 // ---------------------------------------------------------------------------
 
@@ -1248,7 +1248,7 @@ mod tests {
             version: 3,
             revision: "test".into(),
             root_graph_id: "root".into(),
-                root_not_found_graph_id: None,
+            root_not_found_graph_id: None,
             routes: vec![
                 route_entry("home", None, "", "home-graph"),
                 route_entry("about", None, "about", "about-graph"),

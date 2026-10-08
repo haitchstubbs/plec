@@ -47,13 +47,13 @@ describe.skipIf(!built)('plec release artifact', () => {
     expect(output.toString().trim()).toBe(`plec ${packageVersion}`);
   });
 
-  it('exposes self-contained server and browser entries', () => {
+  it('exposes self-contained server and browser entries without sidecar runtime', () => {
     expect(existsSync(path.join(distDir, 'server.js'))).toBe(true);
     expect(existsSync(path.join(distDir, 'browser.js'))).toBe(true);
     expect(existsSync(path.join(distDir, 'server.d.ts'))).toBe(true);
     expect(existsSync(path.join(distDir, 'browser.d.ts'))).toBe(true);
     expect(existsSync(path.join(distDir, 'node-runtime.mjs'))).toBe(
-      true,
+      false,
     );
   });
 

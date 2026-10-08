@@ -2,11 +2,11 @@ use crate::dev;
 
 use clap::{Parser, Subcommand};
 use plec_build::{
-    BuildOptions, RuntimeSource, build, modules::host::resolve_custom_elements,
-    modules::host::resolve_host_imports,
+    build, modules::host::resolve_custom_elements, modules::host::resolve_host_imports,
+    BuildOptions, RuntimeSource,
 };
 use plec_compiler::{
-    CompilerOptions, compile_with_options, load_with_options, lower_route_manifest, lower_routes,
+    compile_with_options, load_with_options, lower_route_manifest, lower_routes, CompilerOptions,
 };
 use plec_inspect::Inspector;
 use std::path::PathBuf;
@@ -78,25 +78,6 @@ enum Command {
         host: Option<String>,
         #[arg(long)]
         port: Option<u16>,
-    },
-
-    /// Serve a built Plec application.
-    Serve {
-        /// Build output directory containing `plec-server.json`.
-        #[arg(default_value = "dist")]
-        dir: PathBuf,
-
-        /// Bind address. Defaults to 127.0.0.1.
-        #[arg(long)]
-        host: Option<String>,
-
-        /// Port; falls back to `$PORT`, then 3000.
-        #[arg(long)]
-        port: Option<u16>,
-
-        /// Development mode (also enabled unless NODE_ENV=production).
-        #[arg(long)]
-        development: bool,
     },
 
     /// Developer workflow helpers for working on the Plec workspace itself.
@@ -181,20 +162,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             host,
             port,
         })?,
-
-        Command::Serve {
-            dir,
-            host,
-            port,
-            development,
-        } => {
-            crate::serve::serve(crate::serve::ServeOptions {
-                dir,
-                host,
-                port,
-                development,
-            })?;
-        }
 
         Command::Workspace { command } => {
             return dev::dispatch(command).map_err(std::convert::Into::into);

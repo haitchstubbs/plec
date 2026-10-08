@@ -13,8 +13,8 @@ export interface PlecHostComponentLifecycle {
   mount(boundary: Element, props: Record<string, unknown>): unknown;
   update?(handle: unknown, props: Record<string, unknown>): void;
   dispose?(handle: unknown): void;
-  /** Server-only renderer. The private Node sidecar invokes this explicit
-   * opt-in hook; browser mount/update semantics never run in Rust. */
+  /** Server-only renderer. The Node host invokes this explicit opt-in hook;
+   * browser mount/update semantics never run in Rust. */
   render?(props: Record<string, unknown>): string;
 }
 

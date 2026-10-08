@@ -4,7 +4,7 @@
 //! policy: the compiler rejects hostile authored props, typed-IR validation
 //! (`plec_schema::typed`) rejects substituted artifacts, the runtime binding
 //! applier (`plec_client::bindings`) enforces it at apply time, and the SSR
-//! serializer in `crates/plec-server` mirrors it. Keep the four surfaces in
+//! serializer in `crates/plec-server-engine` mirrors it. Keep the four surfaces in
 //! lockstep; this module is the authority. Element instantiation is gated by
 //! the element-tag allowlists below (`is_allowed_element_tag`); the host
 //! component registry is a separate boundary outside this module.
