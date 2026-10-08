@@ -18,8 +18,8 @@ The Plec framework runtime: the package applications import. It provides the
 The `plec` command is owned by this package (`"bin"` → `bin/plec.js`). In an
 npm install, `plec serve` starts `@plec/node` directly in the CLI process;
 build/compiler and inspection commands continue to use the native Plec CLI.
-An explicit `PLEC_BIN` keeps the Rust `serve` path available for development
-and Axum parity tests.
+`PLEC_BIN` applies to non-serve Rust CLI commands only; `plec serve` always uses
+`@plec/node`, even when the override is set.
 
 Resolution order:
 
@@ -40,7 +40,7 @@ Which variant wins where:
 - A bare `plec` in the shell resolves via the system `PATH`, typically the
   cargo-installed **dev** variant, which additionally carries the `workspace`
   command group used for repo development.
-- `PLEC_BIN` forces a specific binary anywhere.
+- `PLEC_BIN` forces a specific binary for commands other than `serve`.
 
 Out-of-repo apps get the same command by adding the built artifact folder as
 a file dependency (`"@plec/core": "file:../path/to/packages/plec"`): yarn links

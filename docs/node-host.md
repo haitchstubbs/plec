@@ -1,6 +1,6 @@
 # Plec Node Host Target Implementation Architecture
 
-> **Final architecture:** This document began as a migration plan. Its migration-era Axum/sidecar steps below are historical, not current architecture. `@plec/node` is the sole first-party HTTP host, `plec-server-engine` is the sole Rust server-semantics authority, and `plec-node-bindings` is their in-process N-API boundary. Slice 8 retires the Axum host, Rust `serve`, `packages/plec-node-runtime`, private Rust↔Node transport, and generated `runtime.mjs` artifacts. In development, Vite attaches the Node request dispatcher to its listener; no internal host port is opened.
+> **Final architecture:** This document began as a migration plan. Its migration-era Axum/sidecar steps below are historical, not current architecture. `@plec/node` is the sole first-party HTTP host, `plec-server-engine` is the sole Rust server-semantics authority, and `plec-node-bindings` is their in-process N-API boundary. Slice 8 retired the Axum host, Rust `serve`, `packages/plec-node-runtime`, private Rust↔Node transport, and generated `runtime.mjs` artifacts. In development, Vite attaches the Node request dispatcher to its listener; no internal host port is opened.
 
 ## Preface
 
@@ -2754,7 +2754,7 @@ encoded traversal; static payloads never cross N-API.
 **Exit:** required failure/security tests and identity-sensitive SSR adoption
 pass; the Node host is ready to become the default.
 
-### Slice 7 — Ship and cut over
+### Slice 7 — Ship and cut over (historical; Axum retired in Slice 8)
 
 - Build/test supported native platform packages and generated declarations.
 - Route npm `plec serve` directly to the Node host; verify production build output
@@ -2764,15 +2764,17 @@ pass; the Node host is ready to become the default.
 full acceptance/E2E suite green. Keep Axum available temporarily as a parity
 reference.
 
-### Slice 8 — Retire the sidecar
+### Slice 8 — Retire Axum and the sidecar (completed)
 
-- After cutover is green, remove `packages/plec-node-runtime`, private
-  Rust↔Node transport/supervision, and generated `server/runtime.mjs` output.
+- Remove the Axum public host and Rust CLI `serve` together with
+  `packages/plec-node-runtime`, private Rust↔Node transport/supervision, and
+  generated `server/runtime.mjs` output.
 - Update architecture/tooling references and rerun repository integration
   checks.
 
-**Exit:** the production path has no sidecar process or private HTTP protocol,
-and the Definition of Done in section 39 holds.
+**Exit:** Node is the only first-party HTTP host; there is no Axum listener,
+sidecar process, or private HTTP protocol, and the Definition of Done in
+section 39 holds.
 
 The slices are vertical delivery units, not permission to weaken the acceptance
 criteria or security invariants in the detailed sections below. The existing

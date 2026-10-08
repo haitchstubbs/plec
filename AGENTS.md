@@ -101,7 +101,7 @@ crates/
   plec-runtime/           Rust/WASM runtime
   plec-server-engine/     Host-neutral Plec server semantics (routing/loaders/SSR/actions)
   plec-node-bindings/     napi-rs adapter over the server engine
-  plec-cli/               Plec CLI (`build`, `serve`, `workspace`) and `plec workspace` workflows
+  plec-cli/               Native compiler/dev/inspection/workspace CLI and `plec workspace` workflows
 ```
 
 ## Server host boundary

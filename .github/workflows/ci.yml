@@ -361,7 +361,6 @@ jobs:
           path: |
             apps/fullstack/dist/
             packages/plec/dist/
-            target/debug/plec
           retention-days: 1
 
   acceptance:
@@ -383,14 +382,8 @@ jobs:
         with:
           name: fullstack-dist
           path: .
-      - run: chmod +x target/debug/plec
       - run: yarn install:browser-tools
       - run: yarn workspace @plec/e2e test:acceptance
-        env:
-          PLEC_BIN: ${{ github.workspace }}/target/debug/plec
-      - run: yarn workspace @plec/e2e test:acceptance
-        env:
-          PLEC_E2E_HOST: node
 
   e2e:
     name: E2E
@@ -411,14 +404,8 @@ jobs:
         with:
           name: fullstack-dist
           path: .
-      - run: chmod +x target/debug/plec
       - run: yarn install:browser-tools
       - run: yarn workspace @plec/e2e test:e2e
-        env:
-          PLEC_BIN: ${{ github.workspace }}/target/debug/plec
-      - run: yarn workspace @plec/e2e test:e2e
-        env:
-          PLEC_E2E_HOST: node
 
   ci-gate:
     name: CI Gate

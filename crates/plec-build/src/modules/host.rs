@@ -1,11 +1,10 @@
-//! Host-side build configuration: the app's `plec.toml` plus build-derived
-//! facts, resolved into the generated `dist/plec-server.json` manifest.
+//! Build configuration for the Node host: the app's `plec.toml` plus
+//! build-derived facts, resolved into `dist/plec-server.json`.
 //!
-//! The split is deliberate: serializable host configuration flows from
-//! `plec.toml` through `plec build` into the manifest, and the Rust host
-//! (`plec serve`) consumes only the generated artifact — production never
-//! needs source files, and neither host variant evaluates application code
-//! for its own wiring.
+//! The manifest is portable deployment metadata consumed by `@plec/node`.
+//! Node loads the generated application entry and owns HTTP/filesystem access;
+//! `plec-server-engine` interprets the compiled artifact and owns Plec server
+//! semantics. Production deployment does not require application source files.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
