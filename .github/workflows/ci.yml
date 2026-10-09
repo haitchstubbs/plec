@@ -220,14 +220,13 @@ jobs:
           key: turbo-native-unit-${{ runner.os }}-${{ hashFiles('yarn.lock', 'turbo.json', 'packages/**/package.json', 'packages/**/*.{ts,tsx,js,jsx,json}') }}
           restore-keys: turbo-native-unit-${{ runner.os }}-
       - run: yarn install --immutable
-      - name: Build @plec/node JS exports for CLI dev-loop tests
-        run: yarn workspace @plec/node build:js
+      - name: Build @plec/node native host for CLI dev-loop tests
+        run: yarn workspace @plec/node build
       - run: cargo check --workspace --all-targets --locked
       - run: cargo test --workspace --all-targets --locked --no-run
       - run: cargo test --workspace --all-targets --locked
       - run: cargo build --locked -p plec-cli
       - run: yarn format:check
-      - run: yarn workspace @plec/node build
       - run: yarn turbo run typecheck --filter='./packages/*'
       - run: yarn turbo run test --filter='./packages/*' --filter='!@plec/core'
       - run: yarn workspace @plec/node test:native
