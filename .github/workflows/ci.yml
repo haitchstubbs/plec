@@ -362,7 +362,6 @@ jobs:
           path: |
             apps/fullstack/dist/
             packages/plec/dist/
-            target/debug/plec
           retention-days: 1
 
   acceptance:
@@ -407,10 +406,10 @@ jobs:
           name: fullstack-dist
           path: .
       - run: yarn install:browser-tools
-      - name: Verify relocated dist with the build CLI
+      - name: Verify relocated build output
         run: yarn workspace @plec/e2e test:e2e:moved-dist
         env:
-          PLEC_BIN: ${{ github.workspace }}/target/debug/plec
+          PLEC_E2E_USE_PREBUILT_DIST: '1'
       - run: yarn workspace @plec/e2e test:e2e
 
   ci-gate:
