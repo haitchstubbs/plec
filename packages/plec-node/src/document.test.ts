@@ -7,7 +7,7 @@ import {
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { once } from 'node:events';
 import { createPlecHandler } from './index.js';
 import { createPlecHttpServer } from './http.js';
@@ -274,19 +274,15 @@ describe('@plec/node document path', () => {
 
       (globalThis as Record<string, unknown>)[pendingKey] = true;
       const pending = handler.fetch(new Request('http://localhost/'));
-      for (
-        let attempt = 0;
-        attempt < 100 &&
-        !(globalThis as Record<string, unknown>)[startedKey];
-        attempt += 1
-      ) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      expect((globalThis as Record<string, unknown>)[startedKey]).toBe(
-        true,
-      );
       const pendingRejection = expect(pending).rejects.toThrow(
         'PLEC_APPLICATION_CLOSED',
+      );
+      await vi.waitFor(
+        () =>
+          expect(
+            (globalThis as Record<string, unknown>)[startedKey],
+          ).toBe(true),
+        { timeout: 3_000, interval: 10 },
       );
       await handler.close();
       await pendingRejection;
