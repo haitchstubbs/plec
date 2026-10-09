@@ -1,4 +1,5 @@
 pub mod delta;
+pub mod js_decode;
 pub mod routing;
 pub mod typed;
 

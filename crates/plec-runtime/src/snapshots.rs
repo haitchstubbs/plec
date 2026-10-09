@@ -1,4 +1,4 @@
-use super::lifecycle::decode_untrusted_json;
+use super::lifecycle::{decode_untrusted_json, normalize_untrusted_json};
 use super::PlecRuntime;
 use plec_client::prelude::*;
 use plec_dom::platform::now;
@@ -23,6 +23,50 @@ pub(crate) enum SnapshotShape {
 
 fn default_order_sensitive() -> bool {
     true
+}
+
+fn decode_shape(value: &JsValue) -> Result<SnapshotShape, JsValue> {
+    use plec_schema::js_decode::{boolean, string, ObjectDecoder};
+    let mut object = ObjectDecoder::new(value)?;
+    let kind = string(&object.get("kind")?)?;
+    match kind.as_str() {
+        "scalar" => Ok(SnapshotShape::Scalar),
+        "object" => {
+            let observed_paths = if object.has("observed_paths") {
+                decode_paths(object.get("observed_paths")?)?
+            } else {
+                Vec::new()
+            };
+            Ok(SnapshotShape::Object { observed_paths })
+        }
+        "collection" => {
+            let key_expression = string(&object.get("key_expression")?)?;
+            let order_sensitive = if object.has("order_sensitive") {
+                boolean(&object.get("order_sensitive")?)?
+            } else {
+                default_order_sensitive()
+            };
+            let observed_row_paths = if object.has("observed_row_paths") {
+                decode_paths(object.get("observed_row_paths")?)?
+            } else {
+                Vec::new()
+            };
+            Ok(SnapshotShape::Collection {
+                key_expression,
+                order_sensitive,
+                observed_row_paths,
+            })
+        }
+        _ => Err(JsValue::from_str("unknown variant for enum SnapshotShape")),
+    }
+}
+
+fn decode_paths(value: JsValue) -> Result<Vec<Vec<String>>, JsValue> {
+    use plec_schema::js_decode::{array, string};
+    array(&value)?
+        .iter()
+        .map(|path| array(&path)?.iter().map(string).collect())
+        .collect()
 }
 
 /// Rejects pathological snapshot input shapes before the projection can use
@@ -300,12 +344,12 @@ impl PlecRuntime {
             "snapshot value",
         )?;
         check_value_budget(&value_json)?;
-        let shape_json = decode_untrusted_json(
+        let shape_json = normalize_untrusted_json(
             &shape,
             plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
             "snapshot shape",
         )?;
-        let shape: SnapshotShape = serde_json::from_value(shape_json).map_err(error)?;
+        let shape = decode_shape(&shape_json)?;
         validate_shape(&shape)?;
         let projection = project(value_json, &shape)?;
         let metrics = if matches!(shape, SnapshotShape::Collection { .. }) {

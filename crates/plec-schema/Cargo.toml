@@ -12,5 +12,6 @@ fetch = []
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+js-sys = { workspace = true }
 wasm-bindgen = { workspace = true }
 plec-ir = { path = "../plec-ir", version = "0.1.0" }

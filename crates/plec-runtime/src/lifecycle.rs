@@ -44,6 +44,24 @@ pub(crate) fn decode_untrusted_json(
         .map_err(|error| JsValue::from_str(&format!("{label} is not valid JSON: {error}")))
 }
 
+pub(crate) fn normalize_untrusted_json(
+    value: &JsValue,
+    max_bytes: usize,
+    label: &str,
+) -> Result<JsValue, JsValue> {
+    if value.is_undefined() || value.is_null() {
+        return Err(JsValue::from_str(&format!("{label} is not valid JSON")));
+    }
+    let normalized = plec_client::runtime::normalize_json_value(value, 0)?;
+    let text = js_sys::JSON::stringify(&normalized)
+        .map_err(|_| JsValue::from_str(&format!("{label} is not valid JSON")))?;
+    let text: String = text.into();
+    if text.len() > max_bytes {
+        return Err(JsValue::from_str(&format!("{label} exceeds byte limit")));
+    }
+    Ok(normalized)
+}
+
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn load_application(&self, ir: JsValue) -> Result<(), JsValue> {
@@ -123,8 +141,12 @@ impl PlecRuntime {
         if text.len() > plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES {
             return Err(JsValue::from_str("host inputs exceeds byte limit"));
         }
-        let values: HashMap<String, RuntimeValue> = serde_json::from_str(&text)
-            .map_err(|error| JsValue::from_str(&format!("host inputs: {error}")))?;
+        let values = plec_schema::js_decode::runtime_record(&normalized).map_err(|error| {
+            JsValue::from_str(&format!(
+                "host inputs: {}",
+                error.as_string().unwrap_or_default()
+            ))
+        })?;
         for value in values.values() {
             value.check_limits().map_err(JsValue::from_str)?;
         }

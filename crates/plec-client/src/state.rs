@@ -284,15 +284,26 @@ pub struct TagPolicyGrant {
 
 impl RuntimeState {
     pub fn set_fetch_policy(&self, policy: JsValue) -> Result<(), JsValue> {
-        let policy: Option<Vec<FetchPolicyGrant>> =
-            serde_wasm_bindgen::from_value(policy).map_err(error)?;
+        let policy = if policy.is_null() || policy.is_undefined() {
+            None
+        } else {
+            Some(
+                plec_schema::js_decode::array(&policy)?
+                    .iter()
+                    .map(decode_fetch_policy_grant)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        };
         *self.fetch_policy.borrow_mut() = policy;
         Ok(())
     }
 
     pub fn set_tag_policy(&self, policy: JsValue) -> Result<(), JsValue> {
-        let grant: Option<TagPolicyGrant> =
-            serde_wasm_bindgen::from_value(policy).map_err(error)?;
+        let grant = if policy.is_null() || policy.is_undefined() {
+            None
+        } else {
+            Some(decode_tag_policy_grant(&policy)?)
+        };
         *self.tag_policy.borrow_mut() = grant.map(|grant| plec_ir::sink::TagPolicy {
             custom_elements: grant.custom_elements.into_iter().collect(),
         });
@@ -344,10 +355,7 @@ impl RuntimeState {
             ),
         );
         if let Some(search) = route_search {
-            inputs.insert(
-                "routeSearch".into(),
-                parse_route_search(search)?,
-            );
+            inputs.insert("routeSearch".into(), parse_route_search(search)?);
         } else if !inputs.contains_key("routeSearch") {
             inputs.insert("routeSearch".into(), RuntimeValue::Record(HashMap::new()));
         }
@@ -385,6 +393,53 @@ impl RuntimeState {
         *self.host_registry.borrow_mut() = Some(registry);
         Ok(())
     }
+}
+
+fn decode_fetch_policy_grant(value: &JsValue) -> Result<FetchPolicyGrant, JsValue> {
+    use plec_schema::js_decode::{array, boolean, string, ObjectDecoder};
+    let mut object = ObjectDecoder::new(value)?;
+    let origin = string(&object.get("origin")?)?;
+    let methods = if object.has("methods") {
+        array(&object.get("methods")?)?
+            .iter()
+            .map(string)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    let headers = if object.has("headers") {
+        array(&object.get("headers")?)?
+            .iter()
+            .map(string)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    let credentials = if object.has("credentials") {
+        boolean(&object.get("credentials")?)?
+    } else {
+        false
+    };
+    Ok(FetchPolicyGrant {
+        origin,
+        methods,
+        headers,
+        credentials,
+    })
+}
+
+fn decode_tag_policy_grant(value: &JsValue) -> Result<TagPolicyGrant, JsValue> {
+    use plec_schema::js_decode::{array, string, ObjectDecoder};
+    let mut object = ObjectDecoder::new(value)?;
+    let custom_elements = if object.has("customElements") {
+        array(&object.get("customElements")?)?
+            .iter()
+            .map(string)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    Ok(TagPolicyGrant { custom_elements })
 }
 
 pub(crate) fn parse_route_search(search: &str) -> Result<RuntimeValue, JsValue> {
