@@ -405,6 +405,7 @@ jobs:
           name: fullstack-dist
           path: .
       - run: yarn install:browser-tools
+      - run: yarn workspace @plec/e2e test:e2e:moved-dist
       - run: yarn workspace @plec/e2e test:e2e
 
   ci-gate:

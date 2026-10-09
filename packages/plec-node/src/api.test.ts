@@ -46,6 +46,41 @@ describe('@plec/node API path', () => {
     }
   });
 
+  it('ignores forwarding headers by default and uses validated first forwarded authority when trusted', async () => {
+    const dir = await fixture();
+    const request = () =>
+      new Request('http://internal:4312/api/context', {
+        headers: {
+          'x-forwarded-proto': 'https, http',
+          'x-forwarded-host': 'public.example:8443, ignored.example',
+        },
+      });
+    const direct = await createPlecHandler({ dir });
+    try {
+      const response = await direct.fetch(request());
+      expect((await response.json()).url).toBe(
+        'http://internal:4312/api/context',
+      );
+    } finally {
+      await direct.close();
+    }
+    const trusted = await createPlecHandler({ dir, trustProxy: true });
+    try {
+      const response = await trusted.fetch(request());
+      expect((await response.json()).url).toBe(
+        'https://public.example:8443/api/context',
+      );
+      const malformed = await trusted.fetch(
+        new Request('http://internal/api/context', {
+          headers: { 'x-forwarded-host': 'public.example/evil' },
+        }),
+      );
+      expect(malformed.status).toBe(400);
+    } finally {
+      await trusted.close();
+    }
+  });
+
   it('matches the shared RequestContext parity fixtures', async () => {
     const dir = await fixture();
     for (const testCase of contextCases) {

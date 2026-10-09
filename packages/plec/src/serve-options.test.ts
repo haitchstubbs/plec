@@ -5,7 +5,14 @@ describe('npm plec serve argument parsing', () => {
   it('preserves directory, host, port, and development options', () => {
     expect(
       parseServeOptions(
-        ['dist', '--host=0.0.0.0', '--port', '4312', '--development'],
+        [
+          'dist',
+          '--host=0.0.0.0',
+          '--port',
+          '4312',
+          '--development',
+          '--trust-proxy',
+        ],
         { NODE_ENV: 'production' },
       ),
     ).toEqual({
@@ -14,6 +21,7 @@ describe('npm plec serve argument parsing', () => {
         host: '0.0.0.0',
         port: 4312,
         development: true,
+        trustProxy: true,
       },
     });
   });

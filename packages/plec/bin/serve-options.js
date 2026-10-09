@@ -24,6 +24,10 @@ export function parseServeOptions(args, environment = process.env) {
       options.development = true;
       continue;
     }
+    if (argument === '--trust-proxy') {
+      options.trustProxy = true;
+      continue;
+    }
     if (argument === '--host' || argument === '--port') {
       const value = args[++index];
       if (value === undefined || value.startsWith('-'))
@@ -61,6 +65,7 @@ Options:
       --host <HOST>  Bind address [default: 127.0.0.1]
       --port <PORT>  Port [default: PORT environment variable, then 3000]
       --development  Enable development diagnostics
+      --trust-proxy  Trust forwarding headers from a trusted proxy
   -h, --help         Print help`;
 
 function parsePort(value) {

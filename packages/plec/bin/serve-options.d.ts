@@ -3,6 +3,7 @@ export interface ServeCliOptions {
   host?: string;
   port?: number;
   development: boolean;
+  trustProxy?: boolean;
 }
 
 export function parseServeOptions(

@@ -201,6 +201,17 @@ export async function createPlecHandler(
     ): Promise<Response> {
       if (closed) throw new Error('PLEC_APPLICATION_CLOSED');
       const { pathname, rawQuery } = transport;
+      let authority: string;
+      let scheme: 'http' | 'https';
+      try {
+        ({ authority, scheme } = requestAuthority(
+          transport,
+          request,
+          options.trustProxy ?? false,
+        ));
+      } catch {
+        return new Response('Bad Request', { status: 400 });
+      }
       const routeClass = classifyPlecPath(pathname);
       if (routeClass === 'api') {
         if (activeApiRequests >= MAX_ACTIVE_REQUESTS)
@@ -412,17 +423,8 @@ export async function createPlecHandler(
           transport,
           options.trustProxy ?? false,
         );
-        const forwarded = options.trustProxy
-          ? headerValues(transport, request, 'x-forwarded-proto')[0]
-              ?.split(',')[0]
-              ?.trim()
-              .toLowerCase()
-          : undefined;
-        const scheme =
-          forwarded === 'http' || forwarded === 'https'
-            ? forwarded
-            : transport.scheme;
         setNativeHeader(headers, 'x-forwarded-proto', scheme);
+        setNativeHeader(headers, 'host', authority);
         const cancellation = application.createCancellation();
         const cancelNative = (): void => cancellation.cancel();
         if (transport.signal.aborted) cancelNative();
@@ -435,7 +437,7 @@ export async function createPlecHandler(
           response = await application.handleAction(
             {
               method: request.method,
-              url: transportUrl(transport),
+              url: transportUrl(transport, scheme, authority),
               headers,
             },
             body as unknown as ReadableStream<Buffer>,
@@ -471,17 +473,8 @@ export async function createPlecHandler(
         transport,
         options.trustProxy ?? false,
       );
-      const forwarded = options.trustProxy
-        ? headerValues(transport, request, 'x-forwarded-proto')[0]
-            ?.split(',')[0]
-            ?.trim()
-            .toLowerCase()
-        : undefined;
-      const scheme =
-        forwarded === 'http' || forwarded === 'https'
-          ? forwarded
-          : transport.scheme;
       setNativeHeader(headers, 'x-forwarded-proto', scheme);
+      setNativeHeader(headers, 'host', authority);
       const cancellation = application.createCancellation();
       const cancelNative = (): void => cancellation.cancel();
       if (transport.signal.aborted) cancelNative();
@@ -493,7 +486,7 @@ export async function createPlecHandler(
         const nativeResponse = await application.handleDocument(
           {
             method: request.method,
-            url: transportUrl(transport),
+            url: transportUrl(transport, scheme, authority),
             headers,
           },
           cancellation,
@@ -715,17 +708,12 @@ function buildApiContext(
   request.headers.forEach((value, name) => {
     headers[name] = value;
   });
-  const forwarded = trustProxy
-    ? headerValues(transport, request, 'x-forwarded-proto')[0]
-        ?.split(',')[0]
-        ?.trim()
-        .toLowerCase()
-    : undefined;
-  const scheme =
-    forwarded === 'http' || forwarded === 'https'
-      ? forwarded
-      : transport.scheme;
-  const url = `${scheme}://${transport.authority}${transport.pathname}${transport.rawQuery ? `?${transport.rawQuery}` : ''}`;
+  const { authority, scheme } = requestAuthority(
+    transport,
+    request,
+    trustProxy,
+  );
+  const url = `${scheme}://${authority}${transport.pathname}${transport.rawQuery ? `?${transport.rawQuery}` : ''}`;
   const cookies: Record<string, string> = {};
   for (const part of (headers.cookie ?? '').split(';')) {
     const index = part.indexOf('=');
@@ -790,13 +778,18 @@ function nativeHeaders(
             ([name]) =>
               name.toLowerCase() !== 'host' &&
               name.toLowerCase() !== 'x-forwarded-proto' &&
+              name.toLowerCase() !== 'x-forwarded-host' &&
               name.toLowerCase() !== 'cookie',
           )
           .map(([name, value]) => ({ name, value }))
       : (() => {
           const entries: { name: string; value: string }[] = [];
           request.headers.forEach((value, name) => {
-            if (name !== 'host' && name !== 'x-forwarded-proto')
+            if (
+              name !== 'host' &&
+              name !== 'x-forwarded-proto' &&
+              name !== 'x-forwarded-host'
+            )
               entries.push({ name, value });
           });
           return entries;
@@ -804,19 +797,15 @@ function nativeHeaders(
   const cookies = headerValues(transport, request, 'cookie');
   if (cookies.length > 0)
     headers.push({ name: 'cookie', value: cookies.join('; ') });
-  headers.push({ name: 'host', value: transport.authority });
-  const forwarded = trustProxy
-    ? headerValues(transport, request, 'x-forwarded-proto')[0]
-        ?.split(',')[0]
-        ?.trim()
-        .toLowerCase()
-    : undefined;
+  const { authority, scheme } = requestAuthority(
+    transport,
+    request,
+    trustProxy,
+  );
+  headers.push({ name: 'host', value: authority });
   headers.push({
     name: 'x-forwarded-proto',
-    value:
-      forwarded === 'http' || forwarded === 'https'
-        ? forwarded
-        : transport.scheme,
+    value: scheme,
   });
   return headers;
 }
@@ -834,8 +823,51 @@ function setNativeHeader(
   headers.push({ name, value });
 }
 
-function transportUrl(transport: PlecTransportContext): string {
-  return `${transport.scheme}://${transport.authority}${transport.pathname}${transport.rawQuery ? `?${transport.rawQuery}` : ''}`;
+function transportUrl(
+  transport: PlecTransportContext,
+  scheme: string,
+  authority: string,
+): string {
+  return `${scheme}://${authority}${transport.pathname}${transport.rawQuery ? `?${transport.rawQuery}` : ''}`;
+}
+
+function requestAuthority(
+  transport: PlecTransportContext,
+  request: Request,
+  trustProxy: boolean,
+): { authority: string; scheme: 'http' | 'https' } {
+  const first = (name: string): string | undefined =>
+    headerValues(transport, request, name)[0]?.split(',')[0]?.trim();
+  const forwardedProto = trustProxy
+    ? first('x-forwarded-proto')?.toLowerCase()
+    : undefined;
+  const scheme =
+    forwardedProto === 'http' || forwardedProto === 'https'
+      ? forwardedProto
+      : transport.scheme;
+  const forwardedHost = trustProxy
+    ? first('x-forwarded-host')
+    : undefined;
+  if (forwardedHost !== undefined && !validAuthority(forwardedHost))
+    throw new TypeError('invalid forwarded authority');
+  return { authority: forwardedHost ?? transport.authority, scheme };
+}
+
+function validAuthority(value: string): boolean {
+  if (!value || /[\s/@?#]/u.test(value)) return false;
+  try {
+    const url = new URL(`http://${value}`);
+    return (
+      !!url.hostname &&
+      url.pathname === '/' &&
+      !url.search &&
+      !url.hash &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
 }
 
 function trackApiResponseBody(
