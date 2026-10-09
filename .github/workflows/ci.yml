@@ -274,7 +274,7 @@ jobs:
           cache-workspace-crates: true
       - run: yarn install --immutable
       - if: matrix.musl
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools libgcc-13-dev
       - if: matrix.musl
         run: |
           gcc_runtime_dir="$(dirname "$(gcc -print-file-name=libgcc_s.so.1)")"
