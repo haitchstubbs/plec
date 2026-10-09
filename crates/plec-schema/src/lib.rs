@@ -1,6 +1,7 @@
 pub mod delta;
 pub mod js_decode;
 pub mod routing;
+pub mod ssr_decode;
 pub mod typed;
 
 pub use delta::RuntimeValue;

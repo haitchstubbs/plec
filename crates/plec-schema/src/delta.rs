@@ -3,6 +3,75 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use plec_ir::SsrSnapshotValue;
+use wasm_bindgen::JsValue;
+
+/// Decode one browser delta with the exact aliases/defaults of `Delta`'s
+/// Serde representation, without constructing an intermediate JSON tree.
+pub fn decode_delta_js(value: &JsValue) -> Result<RuntimeDelta, JsValue> {
+    use crate::js_decode as js;
+    fn optional_string(
+        o: &mut js::ObjectDecoder<'_>,
+        name: &str,
+        alias: &str,
+    ) -> Result<Option<String>, JsValue> {
+        o.optional_alias(name, alias)?
+            .map(|v| js::string(&v))
+            .transpose()
+    }
+    fn required_string(
+        o: &mut js::ObjectDecoder<'_>,
+        name: &str,
+        alias: &str,
+    ) -> Result<String, JsValue> {
+        js::string(&o.get_alias(name, alias)?)
+    }
+    fn record(
+        o: &mut js::ObjectDecoder<'_>,
+        name: &str,
+    ) -> Result<HashMap<String, RuntimeValue>, JsValue> {
+        crate::js_decode::runtime_record(&o.get(name)?)
+    }
+    let mut o = js::ObjectDecoder::new(value)?;
+    let tag = js::string(&o.get("type")?)?;
+    let instance_id = o
+        .optional("instanceId")?
+        .map(|value| js::string(&value))
+        .transpose()?;
+    Ok(match tag.as_str() {
+        "update" => RuntimeDelta::Update {
+            instance_id,
+            input_id: required_string(&mut o, "inputId", "input_id")?,
+            row_key: required_string(&mut o, "rowKey", "row_key")?,
+            changes: record(&mut o, "changes")?,
+        },
+        "insert" => RuntimeDelta::Insert {
+            instance_id,
+            input_id: required_string(&mut o, "inputId", "input_id")?,
+            row_key: required_string(&mut o, "rowKey", "row_key")?,
+            row: record(&mut o, "row")?,
+            before_row_key: optional_string(&mut o, "beforeRowKey", "before_row_key")?,
+        },
+        "remove" => RuntimeDelta::Remove {
+            instance_id,
+            input_id: required_string(&mut o, "inputId", "input_id")?,
+            row_key: required_string(&mut o, "rowKey", "row_key")?,
+        },
+        "move" => RuntimeDelta::Move {
+            instance_id,
+            input_id: required_string(&mut o, "inputId", "input_id")?,
+            row_key: required_string(&mut o, "rowKey", "row_key")?,
+            before_row_key: optional_string(&mut o, "beforeRowKey", "before_row_key")?,
+        },
+        _ => return Err(JsValue::from_str("unknown variant for enum Delta")),
+    })
+}
+
+pub fn decode_deltas_js(value: &JsValue) -> Result<Vec<RuntimeDelta>, JsValue> {
+    crate::js_decode::array(value)?
+        .iter()
+        .map(|item| decode_delta_js(&item))
+        .collect()
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -45,6 +114,86 @@ pub enum Delta {
         #[serde(rename = "beforeRowKey", alias = "before_row_key")]
         before_row_key: Option<String>,
     },
+}
+
+/// Runtime-native form of a delta. The public/native `Delta` retains its
+/// `serde_json::Value` fields and serialization behavior; browser input is
+/// decoded directly into this representation instead of materializing JSON
+/// values and converting them afterward.
+#[derive(Clone)]
+pub enum RuntimeDelta {
+    Update {
+        instance_id: Option<String>,
+        input_id: String,
+        row_key: String,
+        changes: HashMap<String, RuntimeValue>,
+    },
+    Insert {
+        instance_id: Option<String>,
+        input_id: String,
+        row_key: String,
+        row: HashMap<String, RuntimeValue>,
+        before_row_key: Option<String>,
+    },
+    Remove {
+        instance_id: Option<String>,
+        input_id: String,
+        row_key: String,
+    },
+    Move {
+        instance_id: Option<String>,
+        input_id: String,
+        row_key: String,
+        before_row_key: Option<String>,
+    },
+}
+
+impl RuntimeDelta {
+    pub fn input_id(&self) -> &str {
+        match self {
+            Self::Update { input_id, .. }
+            | Self::Insert { input_id, .. }
+            | Self::Remove { input_id, .. }
+            | Self::Move { input_id, .. } => input_id,
+        }
+    }
+
+    pub fn instance_id(&self) -> Option<&str> {
+        match self {
+            Self::Update { instance_id, .. }
+            | Self::Insert { instance_id, .. }
+            | Self::Remove { instance_id, .. }
+            | Self::Move { instance_id, .. } => instance_id.as_deref(),
+        }
+    }
+}
+
+pub fn coalesce_runtime_deltas(deltas: Vec<RuntimeDelta>) -> Vec<RuntimeDelta> {
+    let mut result: Vec<RuntimeDelta> = Vec::with_capacity(deltas.len());
+    for delta in deltas {
+        if let (
+            RuntimeDelta::Update {
+                input_id,
+                row_key,
+                changes,
+                ..
+            },
+            Some(RuntimeDelta::Update {
+                input_id: previous_input,
+                row_key: previous_key,
+                changes: previous_changes,
+                ..
+            }),
+        ) = (&delta, result.last_mut())
+        {
+            if input_id == previous_input && row_key == previous_key {
+                previous_changes.extend(changes.clone());
+                continue;
+            }
+        }
+        result.push(delta);
+    }
+    result
 }
 
 /// Keep the browser delta protocol compact without changing its ordering

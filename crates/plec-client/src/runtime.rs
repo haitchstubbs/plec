@@ -118,20 +118,29 @@ fn normalize_json_value_bounded(
         }
         Ok(out.into())
     } else {
+        if let Some(number) = value.as_f64() {
+            // Match the JSON stringify/parse boundary the direct decoder
+            // replaces: non-finite values serialize as null and negative
+            // zero serializes as zero.
+            if !number.is_finite() || number == 0.0 {
+                return Ok(if number.is_finite() {
+                    JsValue::from_f64(0.0)
+                } else {
+                    JsValue::NULL
+                });
+            }
+        }
         Ok(value.clone())
     }
 }
 
-/// Decodes a host-supplied JSON payload with a byte ceiling before
-/// recursion: the payload round-trips through the JS engine's own
-/// `JSON.stringify` (native stack) and `serde_json`'s depth-guarded
-/// parser, so hostile shapes fail predictably instead of overflowing the
-/// WASM stack during `serde_wasm_bindgen`'s recursive walk.
-pub(crate) fn decode_bounded_json<T: serde::de::DeserializeOwned>(
+/// Normalize and enforce the existing byte ceiling while retaining the
+/// already-parsed browser value for schema-specific typed decoding.
+pub(crate) fn normalize_bounded_json(
     value: &JsValue,
     max_bytes: usize,
     label: &str,
-) -> Result<T, JsValue> {
+) -> Result<JsValue, JsValue> {
     if value.is_undefined() || value.is_null() {
         return Err(JsValue::from_str(&format!("{label} is not valid JSON")));
     }
@@ -142,8 +151,7 @@ pub(crate) fn decode_bounded_json<T: serde::de::DeserializeOwned>(
     if text.len() > max_bytes {
         return Err(JsValue::from_str(&format!("{label} exceeds byte limit")));
     }
-    serde_json::from_str(&text)
-        .map_err(|error| JsValue::from_str(&format!("{label} is not valid JSON: {error}")))
+    Ok(normalized)
 }
 
 /// Recorded execution state for one nested component instance
@@ -548,12 +556,18 @@ impl RuntimeState {
     /// wasm-runtime-ixk.7) used to dispatch here only when a typed instance
     /// forest was live; typed instances are now the only execution state.
     pub fn apply_deltas(&self, deltas: JsValue) -> Result<JsValue, JsValue> {
-        let deltas: Vec<Delta> = decode_bounded_json(
+        let normalized = normalize_bounded_json(
             &deltas,
             plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
             "deltas",
         )?;
-        let deltas = coalesce_deltas(deltas);
+        let deltas = plec_schema::delta::decode_deltas_js(&normalized).map_err(|error| {
+            JsValue::from_str(&format!(
+                "deltas is not valid JSON: {}",
+                error.as_string().unwrap_or_default()
+            ))
+        })?;
+        let deltas = plec_schema::delta::coalesce_runtime_deltas(deltas);
         self.apply_typed_deltas(deltas)
     }
 
@@ -928,11 +942,15 @@ impl RuntimeState {
         rows: JsValue,
     ) -> Result<JsValue, JsValue> {
         if self.typed_components.borrow().is_some() {
-            let rows: Vec<Value> = decode_bounded_json(
+            let normalized = normalize_bounded_json(
                 &rows,
                 plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
                 "input rows",
             )?;
+            let rows = plec_schema::js_decode::array(&normalized)?
+                .iter()
+                .map(|row| plec_schema::js_decode::runtime_value(&row))
+                .collect::<Result<Vec<_>, _>>()?;
             let ids = self
                 .typed
                 .borrow()
@@ -980,11 +998,15 @@ impl RuntimeState {
         input_id: &str,
         rows: JsValue,
     ) -> Result<JsValue, JsValue> {
-        let rows: Vec<Value> = decode_bounded_json(
+        let normalized = normalize_bounded_json(
             &rows,
             plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
             "input rows",
         )?;
+        let rows = plec_schema::js_decode::array(&normalized)?
+            .iter()
+            .map(|row| plec_schema::js_decode::runtime_value(&row))
+            .collect::<Result<Vec<_>, _>>()?;
         let metrics = {
             let mut typed = self.typed.borrow_mut();
             let typed = typed
@@ -1004,16 +1026,36 @@ impl RuntimeState {
 
 impl RuntimeState {
     pub fn apply_typed_delta(&self, delta: JsValue) -> Result<JsValue, JsValue> {
-        let delta: Delta = decode_bounded_json(
+        let normalized = normalize_bounded_json(
             &delta,
             plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
             "delta",
         )?;
+        let delta = plec_schema::delta::decode_delta_js(&normalized).map_err(|error| {
+            JsValue::from_str(&format!(
+                "delta is not valid JSON: {}",
+                error.as_string().unwrap_or_default()
+            ))
+        })?;
         self.apply_typed_deltas(vec![delta])
     }
 
     /// Preserve batch order while avoiding one JS/WASM round trip per delta.
-    pub fn apply_typed_deltas(&self, deltas: Vec<Delta>) -> Result<JsValue, JsValue> {
+    pub fn apply_typed_deltas(
+        &self,
+        deltas: Vec<plec_schema::delta::RuntimeDelta>,
+    ) -> Result<JsValue, JsValue> {
+        let metrics = self.apply_typed_deltas_with_metrics(deltas)?;
+        serde_wasm_bindgen::to_value(&metrics).map_err(error)
+    }
+
+    /// Typed internal counterpart used by snapshot reconciliation so a
+    /// Rust-owned delta batch never has to make a JS round trip to recover its
+    /// own metrics.
+    pub fn apply_typed_deltas_with_metrics(
+        &self,
+        deltas: Vec<plec_schema::delta::RuntimeDelta>,
+    ) -> Result<UpdateMetrics, JsValue> {
         let started = now();
         let mut metrics = UpdateMetrics::default();
         for delta in deltas {
@@ -1058,7 +1100,7 @@ impl RuntimeState {
         self.flush_component_work()?;
         self.install_typed_event_listeners()?;
         metrics.wasm_dom_us = (now() - started) * 1000.0;
-        serde_wasm_bindgen::to_value(&metrics).map_err(error)
+        Ok(metrics)
     }
 }
 
@@ -1299,10 +1341,7 @@ fn host_value_to_js(value: &RuntimeValue) -> Result<JsValue, JsValue> {
 /// themselves before invoking.
 fn host_payload_to_runtime(value: &JsValue) -> Result<RuntimeValue, JsValue> {
     let normalized = normalize_json_value(value, 0)?;
-    let text = js_sys::JSON::stringify(&normalized)
-        .map_err(|_| JsValue::from_str("host callback payload is not serializable"))?;
-    let text: String = text.into();
-    serde_json::from_str(&text)
+    plec_schema::js_decode::runtime_value(&normalized)
         .map_err(|_| JsValue::from_str("host callback payload is not serializable"))
 }
 
@@ -4471,7 +4510,7 @@ impl TypedRuntime {
     pub fn reconcile_input(
         &mut self,
         input: &str,
-        values: Vec<Value>,
+        values: Vec<RuntimeValue>,
         metrics: &mut UpdateMetrics,
     ) -> Result<(), JsValue> {
         let input_index = self
@@ -4494,7 +4533,7 @@ impl TypedRuntime {
             let loop_def = self.app.loops[loop_index].clone();
             let mut collection = TypedCollection::default();
             for (index, value) in values.iter().cloned().enumerate() {
-                let row = runtime_from_json(value)?
+                let row = value
                     .record()
                     .cloned()
                     .ok_or_else(|| JsValue::from_str("LOOP_ROW_NOT_OBJECT"))?;
@@ -4516,7 +4555,7 @@ impl TypedRuntime {
             let parent = self.parent_for_loop(loop_index)?;
             let mut projection = Vec::new();
             for (index, value) in values.iter().enumerate() {
-                let row = runtime_from_json(value.clone())?
+                let row = value
                     .record()
                     .cloned()
                     .ok_or_else(|| JsValue::from_str("LOOP_ROW_NOT_OBJECT"))?;
@@ -5668,14 +5707,14 @@ impl TypedRuntime {
 
     pub fn apply_delta(
         &mut self,
-        delta: Delta,
+        delta: plec_schema::delta::RuntimeDelta,
         metrics: &mut UpdateMetrics,
     ) -> Result<(), JsValue> {
         let input = match &delta {
-            Delta::Update { input_id, .. }
-            | Delta::Insert { input_id, .. }
-            | Delta::Remove { input_id, .. }
-            | Delta::Move { input_id, .. } => input_id,
+            plec_schema::delta::RuntimeDelta::Update { input_id, .. }
+            | plec_schema::delta::RuntimeDelta::Insert { input_id, .. }
+            | plec_schema::delta::RuntimeDelta::Remove { input_id, .. }
+            | plec_schema::delta::RuntimeDelta::Move { input_id, .. } => input_id,
         };
         let input_index = self
             .app
@@ -5694,7 +5733,7 @@ impl TypedRuntime {
             .collect::<Vec<_>>();
         for loop_index in targets {
             match &delta {
-                Delta::Update {
+                plec_schema::delta::RuntimeDelta::Update {
                     row_key, changes, ..
                 } => {
                     let (mut values, index) = self
@@ -5719,10 +5758,7 @@ impl TypedRuntime {
                         Some(&values),
                         index,
                     )?);
-                    let changed = changes
-                        .iter()
-                        .map(|(name, value)| Ok((name.clone(), runtime_from_json(value.clone())?)))
-                        .collect::<Result<HashMap<_, _>, JsValue>>()?;
+                    let changed = changes.clone();
                     values.extend(changed.clone());
                     let next_key = typed_value_string(&typed_eval(
                         &self.app,
@@ -5745,16 +5781,13 @@ impl TypedRuntime {
                         metrics,
                     )?;
                 }
-                Delta::Insert {
+                plec_schema::delta::RuntimeDelta::Insert {
                     row_key,
                     row,
                     before_row_key,
                     ..
                 } => {
-                    let values = row
-                        .iter()
-                        .map(|(key, value)| Ok((key.clone(), runtime_from_json(value.clone())?)))
-                        .collect::<Result<HashMap<_, _>, JsValue>>()?;
+                    let values = row.clone();
                     let parent = self.parent_for_loop(loop_index)?;
                     let (position, anchor) = {
                         let rows = self.loops.entry(loop_index).or_default();
@@ -5794,7 +5827,7 @@ impl TypedRuntime {
                         .unwrap_or_default();
                     self.refresh_index_rows(loop_index, keys, metrics)?;
                 }
-                Delta::Remove { row_key, .. } => {
+                plec_schema::delta::RuntimeDelta::Remove { row_key, .. } => {
                     let position = self
                         .loops
                         .get(&loop_index)
@@ -5808,7 +5841,7 @@ impl TypedRuntime {
                         .unwrap_or_default();
                     self.refresh_index_rows(loop_index, keys, metrics)?;
                 }
-                Delta::Move {
+                plec_schema::delta::RuntimeDelta::Move {
                     row_key,
                     before_row_key,
                     ..

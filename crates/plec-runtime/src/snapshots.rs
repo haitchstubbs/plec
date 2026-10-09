@@ -1,4 +1,4 @@
-use super::lifecycle::{decode_untrusted_json, normalize_untrusted_json};
+use super::lifecycle::decode_untrusted_js;
 use super::PlecRuntime;
 use plec_client::prelude::*;
 use plec_dom::platform::now;
@@ -104,9 +104,9 @@ fn validate_shape(shape: &SnapshotShape) -> Result<(), JsValue> {
 /// bytes) to a decoded snapshot payload before it can be retained as a
 /// projection or drive projection allocation. Iterative, so it cannot
 /// overflow the stack on an already-decoded deep tree.
-fn check_value_budget(value: &Value) -> Result<(), JsValue> {
+fn check_value_budget(value: &RuntimeValue) -> Result<(), JsValue> {
     use plec_schema::limits::{MAX_VALUE_DEPTH, MAX_VALUE_NODES, MAX_VALUE_STRING_BYTES};
-    let mut stack: Vec<(&Value, usize)> = vec![(value, 0)];
+    let mut stack: Vec<(&RuntimeValue, usize)> = vec![(value, 0)];
     let mut nodes = 0usize;
     while let Some((value, depth)) = stack.pop() {
         if depth > MAX_VALUE_DEPTH {
@@ -117,20 +117,22 @@ fn check_value_budget(value: &Value) -> Result<(), JsValue> {
             return Err(JsValue::from_str("runtime value size exceeds limit"));
         }
         match value {
-            Value::String(string) => {
+            RuntimeValue::String(string) => {
                 if string.len() > MAX_VALUE_STRING_BYTES {
                     return Err(JsValue::from_str("runtime value string exceeds limit"));
                 }
             }
-            Value::Array(values) => stack.extend(values.iter().map(|value| (value, depth + 1))),
-            Value::Object(map) => {
+            RuntimeValue::Array(values) => {
+                stack.extend(values.iter().map(|value| (value, depth + 1)))
+            }
+            RuntimeValue::Record(map) => {
                 nodes += map.len();
                 if nodes > MAX_VALUE_NODES {
                     return Err(JsValue::from_str("runtime value size exceeds limit"));
                 }
                 stack.extend(map.values().map(|value| (value, depth + 1)));
             }
-            _ => {}
+            RuntimeValue::Null | RuntimeValue::Bool(_) | RuntimeValue::Number(_) => {}
         }
     }
     Ok(())
@@ -138,10 +140,10 @@ fn check_value_budget(value: &Value) -> Result<(), JsValue> {
 
 pub(crate) enum SnapshotProjection {
     #[allow(dead_code)]
-    Value(Vec<Value>),
+    Value(Vec<RuntimeValue>),
     Collection {
         keys: Vec<String>,
-        rows: HashMap<String, HashMap<String, Value>>,
+        rows: HashMap<String, HashMap<String, RuntimeValue>>,
     },
 }
 
@@ -150,29 +152,29 @@ pub(crate) struct SnapshotInput {
     pub(crate) projection: SnapshotProjection,
 }
 
-fn read_path(value: &Value, path: &[String]) -> Value {
+fn read_path(value: &RuntimeValue, path: &[String]) -> RuntimeValue {
     let mut current = value;
     for segment in path {
-        let Some(next) = current.as_object().and_then(|object| object.get(segment)) else {
-            return Value::Null;
+        let Some(next) = current.record().and_then(|object| object.get(segment)) else {
+            return RuntimeValue::Null;
         };
         current = next;
     }
     current.clone()
 }
 
-fn js_key(value: Value) -> String {
+fn js_key(value: RuntimeValue) -> String {
     match value {
-        Value::String(value) => value,
-        Value::Null => "null".into(),
-        Value::Bool(value) => value.to_string(),
-        Value::Number(value) => value.to_string(),
-        Value::Array(values) => values.into_iter().map(js_key).collect::<Vec<_>>().join(","),
-        Value::Object(_) => "[object Object]".into(),
+        RuntimeValue::String(value) => value,
+        RuntimeValue::Null => "null".into(),
+        RuntimeValue::Bool(value) => value.to_string(),
+        RuntimeValue::Number(value) => value.to_string(),
+        RuntimeValue::Array(values) => values.into_iter().map(js_key).collect::<Vec<_>>().join(","),
+        RuntimeValue::Record(_) => "[object Object]".into(),
     }
 }
 
-fn project(value: Value, shape: &SnapshotShape) -> Result<SnapshotProjection, JsValue> {
+fn project(value: RuntimeValue, shape: &SnapshotShape) -> Result<SnapshotProjection, JsValue> {
     match shape {
         SnapshotShape::Scalar => Ok(SnapshotProjection::Value(vec![value])),
         SnapshotShape::Object { observed_paths } => {
@@ -191,7 +193,7 @@ fn project(value: Value, shape: &SnapshotShape) -> Result<SnapshotProjection, Js
             ..
         } => {
             let rows = value
-                .as_array()
+                .array()
                 .ok_or_else(|| JsValue::from_str("snapshot collection must be an array"))?;
             let key_path = key_expression
                 .split('.')
@@ -202,7 +204,7 @@ fn project(value: Value, shape: &SnapshotShape) -> Result<SnapshotProjection, Js
             let mut projected = HashMap::with_capacity(rows.len());
             for row in rows {
                 let key = js_key(read_path(row, &key_path));
-                let source = row.as_object().ok_or_else(|| {
+                let source = row.record().ok_or_else(|| {
                     JsValue::from_str("snapshot collection row must be an object")
                 })?;
                 let fields = if observed_row_paths.is_empty() {
@@ -231,9 +233,9 @@ fn project(value: Value, shape: &SnapshotShape) -> Result<SnapshotProjection, Js
 }
 
 fn diff(
-    previous: &HashMap<String, Value>,
-    next: &HashMap<String, Value>,
-) -> HashMap<String, Value> {
+    previous: &HashMap<String, RuntimeValue>,
+    next: &HashMap<String, RuntimeValue>,
+) -> HashMap<String, RuntimeValue> {
     let mut changes = HashMap::new();
     for (key, value) in next {
         if previous.get(key) != Some(value) {
@@ -244,7 +246,7 @@ fn diff(
     // WASM boundary rather than being silently omitted.
     for key in previous.keys() {
         if !next.contains_key(key) {
-            changes.insert(key.clone(), Value::Null);
+            changes.insert(key.clone(), RuntimeValue::Null);
         }
     }
     changes
@@ -255,7 +257,7 @@ fn reconcile(
     previous: &SnapshotProjection,
     next: &SnapshotProjection,
     shape: &SnapshotShape,
-) -> Vec<Delta> {
+) -> Vec<plec_schema::delta::RuntimeDelta> {
     let (
         SnapshotProjection::Collection {
             keys: previous_keys,
@@ -279,7 +281,7 @@ fn reconcile(
     let mut deltas = Vec::new();
     for key in previous_keys {
         if !next_set.contains(key) {
-            deltas.push(Delta::Remove {
+            deltas.push(plec_schema::delta::RuntimeDelta::Remove {
                 instance_id: None,
                 input_id: input_id.into(),
                 row_key: key.clone(),
@@ -290,7 +292,7 @@ fn reconcile(
         let before_row_key = next_keys.get(index + 1).cloned();
         let row = next_rows.get(key).expect("projected key exists");
         if !previous_set.contains(key) {
-            deltas.push(Delta::Insert {
+            deltas.push(plec_schema::delta::RuntimeDelta::Insert {
                 instance_id: None,
                 input_id: input_id.into(),
                 row_key: key.clone(),
@@ -306,7 +308,7 @@ fn reconcile(
             row,
         );
         if !changes.is_empty() {
-            deltas.push(Delta::Update {
+            deltas.push(plec_schema::delta::RuntimeDelta::Update {
                 instance_id: None,
                 input_id: input_id.into(),
                 row_key: key.clone(),
@@ -314,7 +316,7 @@ fn reconcile(
             });
         }
         if *order_sensitive && previous_keys.get(index) != Some(key) {
-            deltas.push(Delta::Move {
+            deltas.push(plec_schema::delta::RuntimeDelta::Move {
                 instance_id: None,
                 input_id: input_id.into(),
                 row_key: key.clone(),
@@ -322,7 +324,7 @@ fn reconcile(
             });
         }
     }
-    coalesce_deltas(deltas)
+    plec_schema::delta::coalesce_runtime_deltas(deltas)
 }
 
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -333,25 +335,25 @@ impl PlecRuntime {
         value: JsValue,
         shape: JsValue,
     ) -> Result<JsValue, JsValue> {
-        // Both payloads decode through the shared bounded path (JS-value
-        // normalization + byte ceiling + depth-guarded JSON parse) and the
-        // decoded tree passes the runtime-value budgets before any state is
-        // touched, so a hostile payload fails closed without mutating the
-        // snapshot table or reconciling rows.
-        let value_json = decode_untrusted_json(
+        // Both payloads pass through bounded JS normalization and a stringify
+        // byte check, then decode directly into typed runtime values. Values
+        // pass runtime budgets before any state is touched, so hostile input
+        // fails closed without mutating snapshots or reconciling rows.
+        let value_json = decode_untrusted_js(
             &value,
             plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
             "snapshot value",
         )?;
-        check_value_budget(&value_json)?;
-        let shape_json = normalize_untrusted_json(
+        let decoded_value = plec_schema::js_decode::runtime_value(&value_json)?;
+        check_value_budget(&decoded_value)?;
+        let shape_json = decode_untrusted_js(
             &shape,
             plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
             "snapshot shape",
         )?;
         let shape = decode_shape(&shape_json)?;
         validate_shape(&shape)?;
-        let projection = project(value_json, &shape)?;
+        let projection = project(decoded_value, &shape)?;
         let metrics = if matches!(shape, SnapshotShape::Collection { .. }) {
             self.initialize_input(input_id.clone(), value)?
         } else {
@@ -369,11 +371,12 @@ impl PlecRuntime {
         value: JsValue,
     ) -> Result<JsValue, JsValue> {
         let started = now();
-        let value: Value = decode_untrusted_json(
+        let value = decode_untrusted_js(
             &value,
             plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
             "snapshot value",
         )?;
+        let value = plec_schema::js_decode::runtime_value(&value)?;
         check_value_budget(&value)?;
         let deltas = {
             let mut snapshots = self.snapshot_inputs.borrow_mut();
@@ -388,8 +391,7 @@ impl PlecRuntime {
         let mut metrics = if deltas.is_empty() {
             UpdateMetrics::default()
         } else {
-            let value = serde_wasm_bindgen::to_value(&deltas).map_err(error)?;
-            serde_wasm_bindgen::from_value(self.apply_deltas(value)?).map_err(error)?
+            self.state.apply_typed_deltas_with_metrics(deltas)?
         };
         metrics.reconciliation_us = (now() - started) * 1000.0;
         serde_wasm_bindgen::to_value(&metrics).map_err(error)
@@ -412,39 +414,31 @@ mod tests {
     fn reconciles_observed_fields_and_row_order() {
         let shape = collection_shape();
         let previous = project(
-            serde_json::json!([
+            runtime_from_json(serde_json::json!([
                 {"id":"a","title":"A","done":false},
                 {"id":"b","title":"B","done":false}
-            ]),
+            ]))
+            .unwrap(),
             &shape,
         )
         .unwrap();
         let next = project(
-            serde_json::json!([
+            runtime_from_json(serde_json::json!([
                 {"id":"b","title":"B","done":false},
                 {"id":"a","title":"A","done":true},
                 {"id":"c","title":"C","done":false}
-            ]),
+            ]))
+            .unwrap(),
             &shape,
         )
         .unwrap();
         let deltas = reconcile("todos", &previous, &next, &shape);
-        let json = serde_json::to_value(deltas).unwrap();
-        assert!(json
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|delta| delta["type"] == "update" && delta["rowKey"] == "a"));
-        assert!(json
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|delta| delta["type"] == "move" && delta["rowKey"] == "b"));
-        assert!(json
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|delta| delta["type"] == "insert" && delta["rowKey"] == "c"));
+        assert!(deltas.iter().any(|delta| matches!(delta,
+            plec_schema::delta::RuntimeDelta::Update { row_key, .. } if row_key == "a")));
+        assert!(deltas.iter().any(|delta| matches!(delta,
+            plec_schema::delta::RuntimeDelta::Move { row_key, .. } if row_key == "b")));
+        assert!(deltas.iter().any(|delta| matches!(delta,
+            plec_schema::delta::RuntimeDelta::Insert { row_key, .. } if row_key == "c")));
     }
 
     #[test]
@@ -452,8 +446,16 @@ mod tests {
         let shape = SnapshotShape::Object {
             observed_paths: vec![vec!["name".into()]],
         };
-        let previous = project(serde_json::json!({"name":"before"}), &shape).unwrap();
-        let next = project(serde_json::json!({"name":"after"}), &shape).unwrap();
+        let previous = project(
+            runtime_from_json(serde_json::json!({"name":"before"})).unwrap(),
+            &shape,
+        )
+        .unwrap();
+        let next = project(
+            runtime_from_json(serde_json::json!({"name":"after"})).unwrap(),
+            &shape,
+        )
+        .unwrap();
         assert!(reconcile("value", &previous, &next, &shape).is_empty());
     }
 
@@ -490,18 +492,21 @@ mod tests {
     #[wasm_bindgen_test::wasm_bindgen_test]
     fn value_budget_rejects_deep_oversized_and_long_string_trees() {
         use plec_schema::limits::{MAX_VALUE_DEPTH, MAX_VALUE_NODES, MAX_VALUE_STRING_BYTES};
-        let within = serde_json::json!({"a": [1, "two", null, true]});
+        let within = runtime_from_json(serde_json::json!({"a": [1, "two", null, true]})).unwrap();
         assert!(check_value_budget(&within).is_ok());
         let mut current = serde_json::json!(0);
         for _ in 0..=MAX_VALUE_DEPTH {
             current = serde_json::json!([current]);
         }
-        assert!(check_value_budget(&current).is_err());
+        assert!(check_value_budget(&runtime_from_json(current).unwrap()).is_err());
         let oversized = serde_json::json!((0..=MAX_VALUE_NODES)
             .map(|i| i as u32)
             .collect::<Vec<u32>>());
-        assert!(check_value_budget(&oversized).is_err());
+        assert!(check_value_budget(&runtime_from_json(oversized).unwrap()).is_err());
         let long_string = "x".repeat(MAX_VALUE_STRING_BYTES + 1);
-        assert!(check_value_budget(&serde_json::json!(long_string)).is_err());
+        assert!(
+            check_value_budget(&runtime_from_json(serde_json::json!(long_string)).unwrap())
+                .is_err()
+        );
     }
 }

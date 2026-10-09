@@ -239,6 +239,7 @@ impl RuntimeState {
         let policy = if policy.is_null() || policy.is_undefined() {
             None
         } else {
+            let _ = plec_schema::js_decode::ObjectDecoder::new(&policy)?;
             let mut result = HashMap::new();
             let keys = js_sys::Object::keys(policy.unchecked_ref::<js_sys::Object>());
             for key in keys.iter() {

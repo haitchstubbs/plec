@@ -4,6 +4,11 @@ use wasm_bindgen::JsValue;
 
 use super::delta::RuntimeValue;
 
+#[path = "typed_decode.rs"]
+mod js_decode;
+
+pub use js_decode::{decode_component_application, decode_typed_application};
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TypedApplication {

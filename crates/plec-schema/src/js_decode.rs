@@ -27,6 +27,9 @@ impl<'a> ObjectDecoder<'a> {
     }
 
     pub fn get(&mut self, name: &str) -> Result<JsValue, JsValue> {
+        if !self.has(name) {
+            return Err(missing(name));
+        }
         self.fields.retain(|field| field != name);
         js_sys::Reflect::get(self.value, &JsValue::from_str(name))
     }
@@ -37,6 +40,15 @@ impl<'a> ObjectDecoder<'a> {
             (true, false) => self.get(name),
             (false, true) => self.get(alias),
             (false, false) => Err(missing(name)),
+        }
+    }
+
+    pub fn optional_alias(&mut self, name: &str, alias: &str) -> Result<Option<JsValue>, JsValue> {
+        match (self.has(name), self.has(alias)) {
+            (true, true) => Err(JsValue::from_str(&format!("duplicate field `{name}`"))),
+            (true, false) => self.optional(name),
+            (false, true) => self.optional(alias),
+            (false, false) => Ok(None),
         }
     }
 
@@ -89,10 +101,39 @@ pub fn number(value: &JsValue) -> Result<f64, JsValue> {
 
 pub fn usize(value: &JsValue) -> Result<usize, JsValue> {
     let value = number(value)?;
-    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > usize::MAX as f64 {
+    let out_of_range = if usize::BITS == 64 {
+        // `usize::MAX as f64` rounds to 2^64, which itself is out of range.
+        value >= 18_446_744_073_709_551_616.0
+    } else {
+        value > usize::MAX as f64
+    };
+    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || out_of_range {
         return Err(type_error("unsigned integer"));
     }
     Ok(value as usize)
+}
+
+pub fn i64(value: &JsValue) -> Result<i64, JsValue> {
+    let value = number(value)?;
+    // `i64::MAX as f64` rounds up to 2^63, which is already outside the
+    // representable integer range. Use a strict upper bound to avoid a
+    // saturating float-to-int cast silently accepting it.
+    if !value.is_finite()
+        || value.fract() != 0.0
+        || value < -9_223_372_036_854_775_808.0
+        || value >= 9_223_372_036_854_775_808.0
+    {
+        return Err(type_error("integer"));
+    }
+    Ok(value as i64)
+}
+
+pub fn u32(value: &JsValue) -> Result<u32, JsValue> {
+    let value = number(value)?;
+    if !value.is_finite() || value.fract() != 0.0 || !(0.0..=u32::MAX as f64).contains(&value) {
+        return Err(type_error("u32"));
+    }
+    Ok(value as u32)
 }
 
 pub fn tagged<'a>(value: &'a JsValue, field: &str) -> Result<(ObjectDecoder<'a>, String), JsValue> {
@@ -139,12 +180,6 @@ pub fn runtime_value(value: &JsValue) -> Result<crate::RuntimeValue, JsValue> {
             let keys = js_sys::Object::keys(value.unchecked_ref::<js_sys::Object>());
             let mut record = std::collections::HashMap::with_capacity(keys.length() as usize);
             for key in keys.iter() {
-                *nodes += 1;
-                if *nodes > plec_ir::limits::MAX_DECODE_JS_NODES {
-                    return Err(JsValue::from_str(
-                        "payload property or element count exceeds the decode width limit",
-                    ));
-                }
                 let name = string(&key)?;
                 let child = js_sys::Reflect::get(value, &key)?;
                 record.insert(name, visit(&child, depth + 1, nodes)?);

@@ -346,17 +346,15 @@ mod authorization_tests {
         let BrowserRequest::Fetch(request) = &ordinary else {
             unreachable!()
         };
-        assert!(
-            authorize_fetch_policy(
-                &request.url,
-                &request.method,
-                &request.headers,
-                Some(&ordinary),
-                None,
-                None
-            )
-            .is_err()
-        );
+        assert!(authorize_fetch_policy(
+            &request.url,
+            &request.method,
+            &request.headers,
+            Some(&ordinary),
+            None,
+            None
+        )
+        .is_err());
         let facts = (
             "/_plec/actions/sa_test",
             true,
@@ -431,7 +429,10 @@ async fn http_failure(response: Response, url: &str) -> RuntimeValue {
             .filter(|text| !text.is_empty())
             .map(|text| {
                 if is_json {
-                    serde_json::from_str(&text).unwrap_or(RuntimeValue::String(text))
+                    js_sys::JSON::parse(&text)
+                        .ok()
+                        .and_then(|value| bounded_response_value(value, url).ok())
+                        .unwrap_or(RuntimeValue::String(text))
                 } else {
                     RuntimeValue::String(text)
                 }
@@ -563,16 +564,17 @@ fn parse_body_json(text: &str, url: &str) -> Result<RuntimeValue, RuntimeValue> 
     }
 }
 
-/// Bounds a response body decoded through the JS engine: the value is
-/// stringified (native stack), size-checked, then parsed by `serde_json`'s
-/// depth-guarded parser instead of `serde_wasm_bindgen`'s unbounded walk.
+/// Bounds a response body decoded through the JS engine, then converts it
+/// directly into the runtime value representation.
 fn bounded_response_value(value: JsValue, url: &str) -> Result<RuntimeValue, RuntimeValue> {
-    decode_bounded_json::<RuntimeValue>(
+    let normalized = normalize_bounded_json(
         &value,
         plec_ir::limits::MAX_FETCH_RESPONSE_BYTES,
         "response body",
     )
-    .map_err(|message| failure("decode", message.as_string().unwrap_or_default(), url))
+    .map_err(|message| failure("decode", message.as_string().unwrap_or_default(), url))?;
+    plec_schema::js_decode::runtime_value(&normalized)
+        .map_err(|message| failure("decode", message.as_string().unwrap_or_default(), url))
 }
 
 impl RuntimeState {
