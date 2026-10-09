@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPlecHandler } from './index.js';
 import { createPlecHttpServer, servePlecHandler } from './http.js';
 
@@ -212,19 +212,15 @@ describe('@plec/node action path', () => {
       const pending = handler.fetch(
         actionRequest('pending', jsonBody('[]')),
       );
-      for (
-        let attempt = 0;
-        attempt < 100 &&
-        !(globalThis as Record<string, unknown>)[startedKey];
-        attempt++
-      ) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      expect((globalThis as Record<string, unknown>)[startedKey]).toBe(
-        1,
-      );
       const rejected = expect(pending).rejects.toThrow(
         'PLEC_APPLICATION_CLOSED',
+      );
+      await vi.waitFor(
+        () =>
+          expect(
+            (globalThis as Record<string, unknown>)[startedKey],
+          ).toBe(1),
+        { timeout: 3_000, interval: 10 },
       );
       let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
