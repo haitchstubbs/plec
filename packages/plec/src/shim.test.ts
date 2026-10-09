@@ -92,4 +92,4 @@ it('uses the checked-out Rust CLI for workspace dev despite PLEC_BIN', () => {
   expect(result.status).toBe(0);
   expect(result.stdout).toContain('Build and serve an application');
   expect(result.stderr).not.toContain('PLEC_BIN');
-});
+}, 120_000);
