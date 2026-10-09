@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -93,9 +94,7 @@ try {
   const rootTarball = pack(packageRoot, temporaryDirectory);
   const platformTarball = pack(platformPackageDir, temporaryDirectory);
   const installation = path.join(temporaryDirectory, 'installation');
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  execFileSync(
-    npm,
+  runNpm(
     [
       'install',
       '--prefix',
@@ -127,8 +126,7 @@ console.info(
 );
 
 function pack(directory, destination) {
-  const output = execFileSync(
-    process.platform === 'win32' ? 'npm.cmd' : 'npm',
+  const output = runNpm(
     ['pack', directory, '--pack-destination', destination, '--json'],
     { encoding: 'utf8' },
   );
@@ -136,6 +134,24 @@ function pack(directory, destination) {
   if (!result?.filename)
     throw new Error(`npm pack failed for ${directory}`);
   return path.join(destination, result.filename);
+}
+
+function runNpm(args, options) {
+  if (process.platform !== 'win32')
+    return execFileSync('npm', args, options);
+
+  // npm.cmd is a batch file and cannot be spawned directly by Node on
+  // Windows. Invoke the bundled npm CLI with Node instead of a shell.
+  const npmCli = path.join(
+    path.dirname(process.execPath),
+    'node_modules',
+    'npm',
+    'bin',
+    'npm-cli.js',
+  );
+  if (!existsSync(npmCli))
+    throw new Error(`npm CLI not found beside Node: ${npmCli}`);
+  return execFileSync(process.execPath, [npmCli, ...args], options);
 }
 
 function currentNativeTarget() {
