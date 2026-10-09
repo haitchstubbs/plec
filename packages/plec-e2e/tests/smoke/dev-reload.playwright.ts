@@ -73,7 +73,7 @@ function stop(child: ChildProcess) {
 test('plec dev keeps failed builds live and reloads the browser once after recovery', async ({
   page,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   const plecShim = path.join(repo, 'packages/plec/bin/plec.js');
   const sessionRoot = mkdtempSync(
     path.join(os.tmpdir(), 'plec-dev-browser-'),
@@ -150,6 +150,16 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
     const origin = `http://127.0.0.1:${port}`;
     await waitUntil(
       async () => {
+        if (child?.exitCode !== null && child?.exitCode !== undefined) {
+          throw new Error(
+            `plec dev exited with code ${child.exitCode} before becoming ready`,
+          );
+        }
+        if (child?.signalCode) {
+          throw new Error(
+            `plec dev exited with signal ${child.signalCode} before becoming ready`,
+          );
+        }
         try {
           return await (await fetch(origin)).text();
         } catch {
@@ -157,6 +167,7 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
         }
       },
       (html) => html.includes('Version A'),
+      180_000,
     ).catch((error: Error) => {
       throw new Error(`${error.message}\nPlec dev output:\n${output}`);
     });

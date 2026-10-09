@@ -76,6 +76,14 @@
       "dependsOn": ["^typecheck", "@plec/browser#build"],
       "outputs": []
     },
+    "@plec/core#build:types": {
+      "dependsOn": ["^typecheck", "@plec/browser#build"],
+      "outputs": ["dist/**"]
+    },
+    "@plec/lucide#typecheck": {
+      "dependsOn": ["@plec/core#build:types"],
+      "outputs": []
+    },
     "clean": {
       "cache": false
     }
