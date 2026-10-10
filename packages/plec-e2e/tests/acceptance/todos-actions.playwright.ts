@@ -21,15 +21,20 @@ test('server action returns through the Rust and Node execution boundary', async
   ]);
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await waitForMount(page);
-  const invocation = page.waitForResponse((response) =>
-    new URL(response.url()).pathname.startsWith('/_plec/actions/'),
-  );
+  const invocation = page
+    .waitForResponse((response) =>
+      new URL(response.url()).pathname.startsWith('/_plec/actions/'),
+    )
+    .then(async (response) => ({
+      status: response.status(),
+      payload: await response.json(),
+    }));
   await page
     .getByRole('button', { name: 'Call server action' })
     .click();
   const response = await invocation;
-  expect(response.status()).toBe(200);
-  expect(await response.json()).toMatchObject({
+  expect(response.status).toBe(200);
+  expect(response.payload).toMatchObject({
     echoed: 'browser-to-node',
     hasExpectedSession: true,
   });
