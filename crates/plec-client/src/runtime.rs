@@ -1940,10 +1940,11 @@ impl TypedRuntime {
         for loop_def in &self.app.loops {
             self.collect_branch_handles(loop_def.row_template, &mut skipped);
         }
-        for (index, node) in self.app.nodes.clone().into_iter().enumerate() {
+        for index in 0..self.app.nodes.len() {
             if skipped.contains(&index) {
                 continue;
             }
+            let node = self.app.nodes[index].clone();
             match node {
                 TypedNode::Element { tag, host_ref, .. } => {
                     let marker = format!("{path}/node:{index}");
@@ -2185,12 +2186,14 @@ impl TypedRuntime {
             .app
             .loops
             .get(loop_index)
-            .ok_or_else(|| JsValue::from_str("loop handle out of range"))?
-            .clone();
+            .ok_or_else(|| JsValue::from_str("loop handle out of range"))?;
+        let source_expression = loop_def.source_expression;
+        let key_expression = loop_def.key_expression;
+        let template = loop_def.row_template;
         let values = typed_eval(
             &self.app,
             self.cookie_policy.borrow().as_ref(),
-            loop_def.source_expression,
+            source_expression,
             &self.states,
             None,
             0,
@@ -2211,7 +2214,7 @@ impl TypedRuntime {
             let key = typed_value_string(&typed_eval(
                 &self.app,
                 self.cookie_policy.borrow().as_ref(),
-                loop_def.key_expression,
+                key_expression,
                 &self.states,
                 Some(&row),
                 index,
@@ -2255,14 +2258,12 @@ impl TypedRuntime {
             .get(&parent_handle)
             .cloned()
             .ok_or_else(|| JsValue::from_str("loop parent not adopted"))?;
-        let template = loop_def.row_template;
         let root_kind = self
             .app
             .nodes
             .get(template)
-            .cloned()
             .ok_or_else(|| JsValue::from_str("row template handle out of range"))?;
-        let actual_keys = self.row_root_keys(path, loop_node, template, &root_kind, markers);
+        let actual_keys = self.row_root_keys(path, loop_node, template, root_kind, markers);
         let mut seen_dom = HashSet::new();
         for encoded in actual_keys {
             let key = Self::decode_ssr_segment(&encoded);
@@ -2807,18 +2808,18 @@ impl TypedRuntime {
             .get(&format!("plec:conditional-end:{path}:{index}"))
             .cloned()
             .ok_or_else(|| JsValue::from_str(&format!("missing:ssr-branch-end:{path}:{index}")))?;
-        let TypedNode::Conditional {
-            consequent,
-            alternate,
-            ..
-        } = self
+        let (consequent, alternate) = match self
             .app
             .nodes
             .get(index)
             .ok_or_else(|| JsValue::from_str("conditional handle out of range"))?
-            .clone()
-        else {
-            return Err(JsValue::from_str("conditional node expected"));
+        {
+            TypedNode::Conditional {
+                consequent,
+                alternate,
+                ..
+            } => (*consequent, *alternate),
+            _ => return Err(JsValue::from_str("conditional node expected")),
         };
         let selected = match selected {
             Some(selected) => selected,
