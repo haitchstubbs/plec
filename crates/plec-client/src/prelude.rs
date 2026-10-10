@@ -2,7 +2,6 @@
 //! `lifecycle` prelude so the crate extraction stays mechanically
 //! reviewable.
 
-pub use serde_json::Value;
 pub use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -19,7 +18,7 @@ pub use web_sys::{
 };
 
 pub use plec_schema::{
-    delta::{coalesce_deltas, runtime_from_json, Delta, MountMetrics, RuntimeValue, UpdateMetrics},
+    delta::{MountMetrics, RuntimeValue, UpdateMetrics},
     routing::RouteManifest,
     typed::{
         TypedActionInstruction, TypedApplication, TypedCollection, TypedComponentApplication,

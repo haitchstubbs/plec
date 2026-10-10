@@ -1852,7 +1852,6 @@ dependencies = [
  "plec-dom",
  "plec-ir",
  "plec-schema",
- "serde_json",
  "wasm-bindgen",
 ]
 
@@ -1876,6 +1875,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "zmij",
 ]
 
 [[package]]
@@ -1965,7 +1965,6 @@ dependencies = [
  "plec-dom",
  "plec-ir",
  "plec-schema",
- "serde_json",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -1994,10 +1993,12 @@ dependencies = [
 name = "plec-schema"
 version = "0.1.0"
 dependencies = [
+ "js-sys",
  "plec-ir",
  "serde",
  "serde_json",
  "wasm-bindgen",
+ "zmij",
 ]
 
 [[package]]

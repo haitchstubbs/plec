@@ -264,7 +264,7 @@ fn evaluate_bounded<P: ExpressionProgram>(
                         RuntimeValue::String(encode_uri_component(&string(&first)))
                     }
                     "jsonStringify" => {
-                        RuntimeValue::String(serde_json::to_string(&first).unwrap_or_default())
+                        RuntimeValue::String(plec_schema::json_encode::runtime_value(&first))
                     }
                     "includes" => RuntimeValue::Bool(
                         string(&first)

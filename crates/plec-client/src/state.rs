@@ -250,49 +250,60 @@ impl Clone for RuntimeState {
 /// One host-owned fetch grant. Authority comes only from grants published
 /// through `set_fetch_policy`; artifact-declared fetch capability requests
 /// are treated purely as requests and never widen this surface.
-#[derive(Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct FetchPolicyGrant {
     /// Exact origin (scheme, host, port) the grant applies to, as a
     /// serialized URL origin (`https://api.example.com`).
     pub origin: String,
     /// Allowed request methods. An empty list grants no methods.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub methods: Vec<String>,
     /// Allowed request header names (case-insensitive match). An empty list
     /// grants no artifact-controlled headers.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub headers: Vec<String>,
     /// Whether requests under this grant may carry credentials. The runtime
     /// forces `include` when true and `omit` when false; the artifact cannot
     /// influence the credentials mode.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub credentials: bool,
 }
 
 /// One host-owned element-tag capability grant. Authority comes only from
 /// the policy published through `set_tag_policy`; artifacts never carry tag
 /// authority of their own.
-#[derive(Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct TagPolicyGrant {
     /// Trusted custom element tags (canonical lowercase HTML-namespace
     /// names, e.g. `my-widget`).
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub custom_elements: Vec<String>,
 }
 
 impl RuntimeState {
     pub fn set_fetch_policy(&self, policy: JsValue) -> Result<(), JsValue> {
-        let policy: Option<Vec<FetchPolicyGrant>> =
-            serde_wasm_bindgen::from_value(policy).map_err(error)?;
+        let policy = if policy.is_null() || policy.is_undefined() {
+            None
+        } else {
+            Some(
+                plec_schema::js_decode::array(&policy)?
+                    .iter()
+                    .map(decode_fetch_policy_grant)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        };
         *self.fetch_policy.borrow_mut() = policy;
         Ok(())
     }
 
     pub fn set_tag_policy(&self, policy: JsValue) -> Result<(), JsValue> {
-        let grant: Option<TagPolicyGrant> =
-            serde_wasm_bindgen::from_value(policy).map_err(error)?;
+        let grant = if policy.is_null() || policy.is_undefined() {
+            None
+        } else {
+            Some(decode_tag_policy_grant(&policy)?)
+        };
         *self.tag_policy.borrow_mut() = grant.map(|grant| plec_ir::sink::TagPolicy {
             custom_elements: grant.custom_elements.into_iter().collect(),
         });
@@ -344,10 +355,7 @@ impl RuntimeState {
             ),
         );
         if let Some(search) = route_search {
-            inputs.insert(
-                "routeSearch".into(),
-                parse_route_search(search)?,
-            );
+            inputs.insert("routeSearch".into(), parse_route_search(search)?);
         } else if !inputs.contains_key("routeSearch") {
             inputs.insert("routeSearch".into(), RuntimeValue::Record(HashMap::new()));
         }
@@ -385,6 +393,53 @@ impl RuntimeState {
         *self.host_registry.borrow_mut() = Some(registry);
         Ok(())
     }
+}
+
+fn decode_fetch_policy_grant(value: &JsValue) -> Result<FetchPolicyGrant, JsValue> {
+    use plec_schema::js_decode::{array, boolean, string, ObjectDecoder};
+    let mut object = ObjectDecoder::new(value)?;
+    let origin = string(&object.get("origin")?)?;
+    let methods = if object.has("methods") {
+        array(&object.get("methods")?)?
+            .iter()
+            .map(string)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    let headers = if object.has("headers") {
+        array(&object.get("headers")?)?
+            .iter()
+            .map(string)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    let credentials = if object.has("credentials") {
+        boolean(&object.get("credentials")?)?
+    } else {
+        false
+    };
+    Ok(FetchPolicyGrant {
+        origin,
+        methods,
+        headers,
+        credentials,
+    })
+}
+
+fn decode_tag_policy_grant(value: &JsValue) -> Result<TagPolicyGrant, JsValue> {
+    use plec_schema::js_decode::{array, string, ObjectDecoder};
+    let mut object = ObjectDecoder::new(value)?;
+    let custom_elements = if object.has("customElements") {
+        array(&object.get("customElements")?)?
+            .iter()
+            .map(string)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    Ok(TagPolicyGrant { custom_elements })
 }
 
 pub(crate) fn parse_route_search(search: &str) -> Result<RuntimeValue, JsValue> {

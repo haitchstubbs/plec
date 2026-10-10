@@ -5,12 +5,19 @@ edition.workspace = true
 license.workspace = true
 
 [features]
+default = ["serde"]
+serde = ["dep:serde", "dep:serde_json", "plec-ir/serde"]
 # Mirrors the runtime `fetch` feature: when disabled, application validation
 # rejects fetch capability requests instead of compiling them into graphs.
 fetch = []
 
 [dependencies]
-serde = { workspace = true }
-serde_json = { workspace = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+zmij = { workspace = true }
+js-sys = { workspace = true }
 wasm-bindgen = { workspace = true }
-plec-ir = { path = "../plec-ir", version = "0.1.0" }
+plec-ir = { path = "../plec-ir", version = "0.1.0", default-features = false }
+
+[dev-dependencies]
+serde_json = { workspace = true }

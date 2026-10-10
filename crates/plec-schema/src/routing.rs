@@ -1,33 +1,200 @@
 use std::collections::HashMap;
 
+#[cfg(feature = "serde")]
 use serde::Deserialize;
+use wasm_bindgen::JsValue;
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Decode the runtime's reduced manifest view directly from the normalized
+/// browser value. This mirrors the Rust fields and Serde defaults above.
+pub fn decode_runtime_manifest(value: &JsValue) -> Result<RouteManifest, JsValue> {
+    use crate::js_decode as js;
+    let mut object = js::ObjectDecoder::new(value)?;
+    let version = object
+        .optional("version")?
+        .map(|value| js::u32(&value))
+        .transpose()?;
+    let root_graph_id = js::string(&object.get("rootGraphId")?)?;
+    let root_not_found_graph_id = object
+        .optional("rootNotFoundGraphId")?
+        .map(|value| js::string(&value))
+        .transpose()?;
+    let routes = js::array(&object.get("routes")?)?
+        .iter()
+        .map(decode_runtime_route)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(RouteManifest {
+        version,
+        root_graph_id,
+        root_not_found_graph_id,
+        routes,
+    })
+}
+
+fn decode_runtime_route(value: &JsValue) -> Result<RouteManifestEntry, JsValue> {
+    use crate::js_decode as js;
+    let mut object = js::ObjectDecoder::new(value)?;
+    let id = js::string(&object.get("id")?)?;
+    let parent_id = object
+        .optional("parentId")?
+        .map(|value| js::string(&value))
+        .transpose()?;
+    let path = js::string(&object.get("path")?)?;
+    let graph_id = js::string(&object.get("graphId")?)?;
+    let pending_graph_id = object
+        .optional("pendingGraphId")?
+        .map(|value| js::string(&value))
+        .transpose()?;
+    let error_graph_id = object
+        .optional("errorGraphId")?
+        .map(|value| js::string(&value))
+        .transpose()?;
+    let not_found_graph_id = object
+        .optional("notFoundGraphId")?
+        .map(|value| js::string(&value))
+        .transpose()?;
+    let outlet_id = js::string(&object.get("outletId")?)?;
+    let loader_action = object
+        .optional("loaderAction")?
+        .map(|value| js::usize(&value))
+        .transpose()?;
+    let pending_mode = if object.has("pendingMode") {
+        js::string(&object.get("pendingMode")?)?
+    } else {
+        default_pending_mode()
+    };
+    Ok(RouteManifestEntry {
+        id,
+        parent_id,
+        path,
+        graph_id,
+        pending_graph_id,
+        error_graph_id,
+        not_found_graph_id,
+        outlet_id,
+        loader_action,
+        pending_mode,
+    })
+}
+
+/// Decode the full IR manifest representation, including its revision and
+/// metadata, before applying the authoritative `plec-ir` validator.
+pub fn decode_ir_manifest(value: &JsValue) -> Result<plec_ir::RouteManifest, JsValue> {
+    use crate::js_decode as js;
+    let mut object = js::ObjectDecoder::new(value)?;
+    let version = js::u32(&object.get("version")?)?;
+    let revision = if object.has("revision") {
+        js::string(&object.get("revision")?)?
+    } else {
+        String::new()
+    };
+    let root_graph_id = js::string(&object.get("rootGraphId")?)?;
+    let root_not_found_graph_id = object
+        .optional("rootNotFoundGraphId")?
+        .map(|v| js::string(&v))
+        .transpose()?;
+    let routes = js::array(&object.get("routes")?)?
+        .iter()
+        .map(decode_ir_route)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(plec_ir::RouteManifest {
+        version,
+        revision,
+        root_graph_id,
+        root_not_found_graph_id,
+        routes,
+    })
+}
+
+fn decode_ir_route(value: &JsValue) -> Result<plec_ir::RouteManifestEntry, JsValue> {
+    use crate::js_decode as js;
+    let mut object = js::ObjectDecoder::new(value)?;
+    let id = js::string(&object.get("id")?)?;
+    let parent_id = object
+        .optional("parentId")?
+        .map(|v| js::string(&v))
+        .transpose()?;
+    let path = js::string(&object.get("path")?)?;
+    let graph_id = js::string(&object.get("graphId")?)?;
+    let pending_graph_id = object
+        .optional("pendingGraphId")?
+        .map(|v| js::string(&v))
+        .transpose()?;
+    let pending_mode = if object.has("pendingMode") {
+        js::string(&object.get("pendingMode")?)?
+    } else {
+        "replace".into()
+    };
+    let error_graph_id = object
+        .optional("errorGraphId")?
+        .map(|v| js::string(&v))
+        .transpose()?;
+    let not_found_graph_id = object
+        .optional("notFoundGraphId")?
+        .map(|v| js::string(&v))
+        .transpose()?;
+    let loader_action = object
+        .optional("loaderAction")?
+        .map(|v| js::usize(&v))
+        .transpose()?;
+    let outlet_id = js::string(&object.get("outletId")?)?;
+    let meta = object.optional("meta")?.map(decode_metadata).transpose()?;
+    Ok(plec_ir::RouteManifestEntry {
+        id,
+        parent_id,
+        path,
+        graph_id,
+        pending_graph_id,
+        pending_mode,
+        error_graph_id,
+        not_found_graph_id,
+        loader_action,
+        outlet_id,
+        meta,
+    })
+}
+
+fn decode_metadata(value: JsValue) -> Result<plec_ir::RouteMetadata, JsValue> {
+    use crate::js_decode as js;
+    let mut object = js::ObjectDecoder::new(&value)?;
+    let title = object
+        .optional("title")?
+        .map(|v| js::string(&v))
+        .transpose()?;
+    let description = object
+        .optional("description")?
+        .map(|v| js::string(&v))
+        .transpose()?;
+    Ok(plec_ir::RouteMetadata { title, description })
+}
+
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct RouteManifest {
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub version: Option<u32>,
     pub root_graph_id: String,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub root_not_found_graph_id: Option<String>,
     pub routes: Vec<RouteManifestEntry>,
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct RouteManifestEntry {
     pub id: String,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub parent_id: Option<String>,
     pub path: String,
     pub graph_id: String,
     pub pending_graph_id: Option<String>,
     pub error_graph_id: Option<String>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub not_found_graph_id: Option<String>,
     pub outlet_id: String,
     pub loader_action: Option<usize>,
-    #[serde(default = "default_pending_mode")]
+    #[cfg_attr(feature = "serde", serde(default = "default_pending_mode"))]
     pub pending_mode: String,
 }
 

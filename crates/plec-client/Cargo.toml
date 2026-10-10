@@ -5,7 +5,14 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["serde"]
+serde = [
+  "dep:serde",
+  "plec-action/serde",
+  "plec-dom/serde",
+  "plec-eval/serde",
+  "plec-schema/serde",
+]
 # Mirrors the wasm facade's `fetch` feature: compiles the async fetch action
 # VM and enables fetch capability validation in plec-schema.
 fetch = [
@@ -25,15 +32,20 @@ fetch = [
 ]
 
 [dependencies]
-plec-action = { path = "../plec-action", version = "0.1.0" }
+plec-action = { path = "../plec-action", version = "0.1.0", default-features = false }
 js-sys = { workspace = true }
-plec-dom = { path = "../plec-dom", version = "0.1.0" }
-plec-eval = { path = "../plec-eval", version = "0.1.0" }
-plec-ir = { path = "../plec-ir", version = "0.1.0" }
-plec-schema = { path = "../plec-schema", version = "0.1.0" }
-serde = { workspace = true }
-serde_json = { workspace = true }
-serde-wasm-bindgen = { workspace = true }
+plec-dom = { path = "../plec-dom", version = "0.1.0", default-features = false }
+plec-eval = { path = "../plec-eval", version = "0.1.0", default-features = false }
+plec-ir = { path = "../plec-ir", version = "0.1.0", default-features = false }
+plec-schema = { path = "../plec-schema", version = "0.1.0", default-features = false }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
 web-sys = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+plec-schema = { path = "../plec-schema", version = "0.1.0", features = [
+  "serde",
+] }
+serde_json = { workspace = true }
+serde-wasm-bindgen = { workspace = true }

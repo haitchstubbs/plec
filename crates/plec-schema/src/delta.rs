@@ -1,9 +1,81 @@
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "serde")]
 use serde_json::Value;
 use std::collections::HashMap;
 
 use plec_ir::SsrSnapshotValue;
+use wasm_bindgen::JsValue;
 
+/// Decode one browser delta with the exact aliases/defaults of `Delta`'s
+/// Serde representation, without constructing an intermediate JSON tree.
+pub fn decode_delta_js(value: &JsValue) -> Result<RuntimeDelta, JsValue> {
+    use crate::js_decode as js;
+    fn optional_string(
+        o: &mut js::ObjectDecoder<'_>,
+        name: &str,
+        alias: &str,
+    ) -> Result<Option<String>, JsValue> {
+        o.optional_alias(name, alias)?
+            .map(|v| js::string(&v))
+            .transpose()
+    }
+    fn required_string(
+        o: &mut js::ObjectDecoder<'_>,
+        name: &str,
+        alias: &str,
+    ) -> Result<String, JsValue> {
+        js::string(&o.get_alias(name, alias)?)
+    }
+    fn record(
+        o: &mut js::ObjectDecoder<'_>,
+        name: &str,
+    ) -> Result<HashMap<String, RuntimeValue>, JsValue> {
+        crate::js_decode::runtime_record(&o.get(name)?)
+    }
+    let mut o = js::ObjectDecoder::new(value)?;
+    let tag = js::string(&o.get("type")?)?;
+    let instance_id = o
+        .optional("instanceId")?
+        .map(|value| js::string(&value))
+        .transpose()?;
+    Ok(match tag.as_str() {
+        "update" => RuntimeDelta::Update {
+            instance_id,
+            input_id: required_string(&mut o, "inputId", "input_id")?,
+            row_key: required_string(&mut o, "rowKey", "row_key")?,
+            changes: record(&mut o, "changes")?,
+        },
+        "insert" => RuntimeDelta::Insert {
+            instance_id,
+            input_id: required_string(&mut o, "inputId", "input_id")?,
+            row_key: required_string(&mut o, "rowKey", "row_key")?,
+            row: record(&mut o, "row")?,
+            before_row_key: optional_string(&mut o, "beforeRowKey", "before_row_key")?,
+        },
+        "remove" => RuntimeDelta::Remove {
+            instance_id,
+            input_id: required_string(&mut o, "inputId", "input_id")?,
+            row_key: required_string(&mut o, "rowKey", "row_key")?,
+        },
+        "move" => RuntimeDelta::Move {
+            instance_id,
+            input_id: required_string(&mut o, "inputId", "input_id")?,
+            row_key: required_string(&mut o, "rowKey", "row_key")?,
+            before_row_key: optional_string(&mut o, "beforeRowKey", "before_row_key")?,
+        },
+        _ => return Err(JsValue::from_str("unknown variant for enum Delta")),
+    })
+}
+
+pub fn decode_deltas_js(value: &JsValue) -> Result<Vec<RuntimeDelta>, JsValue> {
+    crate::js_decode::array(value)?
+        .iter()
+        .map(|item| decode_delta_js(&item))
+        .collect()
+}
+
+#[cfg(feature = "serde")]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Delta {
@@ -47,8 +119,89 @@ pub enum Delta {
     },
 }
 
+/// Runtime-native form of a delta. The public/native `Delta` retains its
+/// `serde_json::Value` fields and serialization behavior; browser input is
+/// decoded directly into this representation instead of materializing JSON
+/// values and converting them afterward.
+#[derive(Clone)]
+pub enum RuntimeDelta {
+    Update {
+        instance_id: Option<String>,
+        input_id: String,
+        row_key: String,
+        changes: HashMap<String, RuntimeValue>,
+    },
+    Insert {
+        instance_id: Option<String>,
+        input_id: String,
+        row_key: String,
+        row: HashMap<String, RuntimeValue>,
+        before_row_key: Option<String>,
+    },
+    Remove {
+        instance_id: Option<String>,
+        input_id: String,
+        row_key: String,
+    },
+    Move {
+        instance_id: Option<String>,
+        input_id: String,
+        row_key: String,
+        before_row_key: Option<String>,
+    },
+}
+
+impl RuntimeDelta {
+    pub fn input_id(&self) -> &str {
+        match self {
+            Self::Update { input_id, .. }
+            | Self::Insert { input_id, .. }
+            | Self::Remove { input_id, .. }
+            | Self::Move { input_id, .. } => input_id,
+        }
+    }
+
+    pub fn instance_id(&self) -> Option<&str> {
+        match self {
+            Self::Update { instance_id, .. }
+            | Self::Insert { instance_id, .. }
+            | Self::Remove { instance_id, .. }
+            | Self::Move { instance_id, .. } => instance_id.as_deref(),
+        }
+    }
+}
+
+pub fn coalesce_runtime_deltas(deltas: Vec<RuntimeDelta>) -> Vec<RuntimeDelta> {
+    let mut result: Vec<RuntimeDelta> = Vec::with_capacity(deltas.len());
+    for delta in deltas {
+        if let (
+            RuntimeDelta::Update {
+                input_id,
+                row_key,
+                changes,
+                ..
+            },
+            Some(RuntimeDelta::Update {
+                input_id: previous_input,
+                row_key: previous_key,
+                changes: previous_changes,
+                ..
+            }),
+        ) = (&delta, result.last_mut())
+        {
+            if input_id == previous_input && row_key == previous_key {
+                previous_changes.extend(changes.clone());
+                continue;
+            }
+        }
+        result.push(delta);
+    }
+    result
+}
+
 /// Keep the browser delta protocol compact without changing its ordering
 /// semantics: only adjacent field updates for the same row are merged.
+#[cfg(feature = "serde")]
 pub fn coalesce_deltas(deltas: Vec<Delta>) -> Vec<Delta> {
     let mut result: Vec<Delta> = Vec::with_capacity(deltas.len());
     for delta in deltas {
@@ -77,6 +230,7 @@ pub fn coalesce_deltas(deltas: Vec<Delta>) -> Vec<Delta> {
     result
 }
 
+#[cfg(feature = "serde")]
 impl Delta {
     pub fn input_id(&self) -> &str {
         match self {
@@ -97,10 +251,11 @@ impl Delta {
     }
 }
 
-#[derive(Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct UpdateMetrics {
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub reconciliation_us: f64,
     pub dom_operations: u32,
     pub nodes_touched: u32,
@@ -112,13 +267,14 @@ pub struct UpdateMetrics {
     /// Physical relocation cost: how many DOM nodes a row move displaced,
     /// distinct from the logical `row_moves` count and from `dom_operations`
     /// (one mutation call per staged node plus one range splice).
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub dom_nodes_moved: u32,
     pub wasm_dom_us: f64,
 }
 
-#[derive(Default, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Default)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct MountMetrics {
     pub decode_us: f64,
     pub static_mount_us: f64,
@@ -139,8 +295,9 @@ pub struct MountMetrics {
     pub dom_operations: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(untagged))]
 pub enum RuntimeValue {
     Null,
     Bool(bool),
@@ -176,7 +333,7 @@ impl RuntimeValue {
             Self::Null => String::new(),
             Self::Bool(value) => value.to_string(),
             Self::Number(value) => value.to_string(),
-            Self::Array(_) | Self::Record(_) => serde_json::to_string(self).unwrap_or_default(),
+            Self::Array(_) | Self::Record(_) => crate::json_encode::runtime_value(self),
         }
     }
 
@@ -204,6 +361,7 @@ impl RuntimeValue {
 
     /// Converts a transport JSON value without applying an input-size limit.
     /// Callers accepting untrusted input must use `runtime_from_json` instead.
+    #[cfg(feature = "serde")]
     pub fn from_json_value(value: Value) -> Self {
         match value {
             Value::Null => Self::Null,
@@ -224,6 +382,7 @@ impl RuntimeValue {
 
     /// Converts to JSON using the SSR loader contract: non-finite numbers
     /// become null because JSON cannot represent them.
+    #[cfg(feature = "serde")]
     pub fn into_json_value(self) -> Value {
         match self {
             Self::Null => Value::Null,
@@ -403,6 +562,7 @@ impl RuntimeValue {
     }
 }
 
+#[cfg(feature = "serde")]
 pub fn runtime_from_json(value: Value) -> Result<RuntimeValue, String> {
     let runtime: RuntimeValue = serde_json::from_value(value).map_err(|error| error.to_string())?;
     runtime.check_limits().map_err(str::to_owned)?;
@@ -411,6 +571,7 @@ pub fn runtime_from_json(value: Value) -> Result<RuntimeValue, String> {
 
 /// JSON transport variants share RuntimeValue's coercion and stack-accounting
 /// rules without requiring the SSR evaluator to allocate a second value tree.
+#[cfg(feature = "serde")]
 pub fn json_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
@@ -422,6 +583,7 @@ pub fn json_truthy(value: &Value) -> bool {
     }
 }
 
+#[cfg(feature = "serde")]
 pub fn json_dom_string(value: &Value) -> String {
     match value {
         Value::String(value) => value.clone(),
@@ -435,6 +597,7 @@ pub fn json_dom_string(value: &Value) -> String {
     }
 }
 
+#[cfg(feature = "serde")]
 pub fn json_estimated_size_bytes(value: &Value) -> usize {
     let mut bytes = 0usize;
     let mut pending = vec![value];

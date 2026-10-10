@@ -236,8 +236,30 @@ impl RuntimeState {
     /// Both asynchronous cookie operations and synchronous `getSync` reads
     /// gate on this per-runtime store; no cross-runtime global exists.
     pub fn set_cookie_policy(&self, policy: JsValue) -> Result<(), JsValue> {
-        let policy: Option<HashMap<String, CookiePolicy>> =
-            serde_wasm_bindgen::from_value(policy).map_err(error)?;
+        let policy = if policy.is_null() || policy.is_undefined() {
+            None
+        } else {
+            let _ = plec_schema::js_decode::ObjectDecoder::new(&policy)?;
+            let mut result = HashMap::new();
+            let keys = js_sys::Object::keys(policy.unchecked_ref::<js_sys::Object>());
+            for key in keys.iter() {
+                let name = key
+                    .as_string()
+                    .ok_or_else(|| JsValue::from_str("expected string key"))?;
+                let value = js_sys::Reflect::get(&policy, &key)?;
+                let mut object = plec_schema::js_decode::ObjectDecoder::new(&value)?;
+                let operations = plec_schema::js_decode::array(&object.get("operations")?)?
+                    .iter()
+                    .map(plec_schema::js_decode::string)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let path = object
+                    .optional("path")?
+                    .map(|value| plec_schema::js_decode::string(&value))
+                    .transpose()?;
+                result.insert(name, CookiePolicy { operations, path });
+            }
+            Some(result)
+        };
         *self.cookie_policy.borrow_mut() = policy;
         Ok(())
     }
