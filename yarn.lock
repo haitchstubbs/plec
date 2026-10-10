@@ -2026,6 +2026,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@plec/core@workspace:packages/plec"
   dependencies:
+    "@plec/node": "npm:^0.1.0"
     "@plec/vite": "npm:^0.1.0"
   bin:
     plec: ./bin/plec.js
@@ -2066,14 +2067,66 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@plec/node-runtime@workspace:packages/plec-node-runtime":
+"@plec/node-darwin-arm64@npm:0.1.0, @plec/node-darwin-arm64@workspace:packages/plec-node/npm/darwin-arm64":
   version: 0.0.0-use.local
-  resolution: "@plec/node-runtime@workspace:packages/plec-node-runtime"
+  resolution: "@plec/node-darwin-arm64@workspace:packages/plec-node/npm/darwin-arm64"
+  languageName: unknown
+  linkType: soft
+
+"@plec/node-darwin-x64@npm:0.1.0, @plec/node-darwin-x64@workspace:packages/plec-node/npm/darwin-x64":
+  version: 0.0.0-use.local
+  resolution: "@plec/node-darwin-x64@workspace:packages/plec-node/npm/darwin-x64"
+  languageName: unknown
+  linkType: soft
+
+"@plec/node-linux-arm64-gnu@npm:0.1.0, @plec/node-linux-arm64-gnu@workspace:packages/plec-node/npm/linux-arm64-gnu":
+  version: 0.0.0-use.local
+  resolution: "@plec/node-linux-arm64-gnu@workspace:packages/plec-node/npm/linux-arm64-gnu"
+  languageName: unknown
+  linkType: soft
+
+"@plec/node-linux-x64-gnu@npm:0.1.0, @plec/node-linux-x64-gnu@workspace:packages/plec-node/npm/linux-x64-gnu":
+  version: 0.0.0-use.local
+  resolution: "@plec/node-linux-x64-gnu@workspace:packages/plec-node/npm/linux-x64-gnu"
+  languageName: unknown
+  linkType: soft
+
+"@plec/node-linux-x64-musl@npm:0.1.0, @plec/node-linux-x64-musl@workspace:packages/plec-node/npm/linux-x64-musl":
+  version: 0.0.0-use.local
+  resolution: "@plec/node-linux-x64-musl@workspace:packages/plec-node/npm/linux-x64-musl"
+  languageName: unknown
+  linkType: soft
+
+"@plec/node-win32-x64-msvc@npm:0.1.0, @plec/node-win32-x64-msvc@workspace:packages/plec-node/npm/win32-x64-msvc":
+  version: 0.0.0-use.local
+  resolution: "@plec/node-win32-x64-msvc@workspace:packages/plec-node/npm/win32-x64-msvc"
+  languageName: unknown
+  linkType: soft
+
+"@plec/node@npm:0.1.0, @plec/node@npm:^0.1.0, @plec/node@workspace:packages/plec-node":
+  version: 0.0.0-use.local
+  resolution: "@plec/node@workspace:packages/plec-node"
   dependencies:
-    "@types/node": "npm:^26.4.1"
-    esbuild: "npm:^0.28.1"
-    typescript: "npm:^7.0.2"
-    vitest: "npm:^4.1.11"
+    "@napi-rs/cli": "npm:^3.7.0"
+    "@plec/node-darwin-arm64": "npm:0.1.0"
+    "@plec/node-darwin-x64": "npm:0.1.0"
+    "@plec/node-linux-arm64-gnu": "npm:0.1.0"
+    "@plec/node-linux-x64-gnu": "npm:0.1.0"
+    "@plec/node-linux-x64-musl": "npm:0.1.0"
+    "@plec/node-win32-x64-msvc": "npm:0.1.0"
+  dependenciesMeta:
+    "@plec/node-darwin-arm64":
+      optional: true
+    "@plec/node-darwin-x64":
+      optional: true
+    "@plec/node-linux-arm64-gnu":
+      optional: true
+    "@plec/node-linux-x64-gnu":
+      optional: true
+    "@plec/node-linux-x64-musl":
+      optional: true
+    "@plec/node-win32-x64-msvc":
+      optional: true
   languageName: unknown
   linkType: soft
 
@@ -2122,6 +2175,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@plec/vite@workspace:packages/plec-vite"
   dependencies:
+    "@plec/node": "npm:0.1.0"
     vite: "npm:^7.1.7"
   languageName: unknown
   linkType: soft
@@ -2749,15 +2803,6 @@ __metadata:
   dependencies:
     undici-types: "npm:~7.18.0"
   checksum: 10c0/a5bc08f49b9581dcdca90e02cd77197a3c799840807664942e5cd5161a553d4d2ae8064f7e3294410d748d7d098b5c1848be7fa50c06f29c4193ab16be4e59eb
-  languageName: node
-  linkType: hard
-
-"@types/node@npm:^26.4.1":
-  version: 26.4.1
-  resolution: "@types/node@npm:26.4.1"
-  dependencies:
-    undici-types: "npm:~8.3.0"
-  checksum: 10c0/29568336db8bc67740744782492af0e81ab1f88d86eaa07e38cf0a4c8bae7250a7b4b85c80ac1014fc98b2bc6d4bcac872b2c494ee0671b3880eada7c1fdbc94
   languageName: node
   linkType: hard
 
@@ -6775,10 +6820,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"source-map-js@npm:^1.2.1":
-  version: 1.2.1
-  resolution: "source-map-js@npm:1.2.1"
-  checksum: 10c0/7bda1fc4c197e3c6ff17de1b8b2c20e60af81b63a52cb32ec5a5d67a20a7d42651e2cb34ebe93833c5a2a084377e17455854fee3e21e7925c64a51b6a52b0faf
+"source-map-js@npm:1.2.2":
+  version: 1.2.2
+  resolution: "source-map-js@npm:1.2.2"
+  checksum: 10c0/d5d6dec62266834f83dd4f8a2606a196fb1a006ca5d53b0ef80ee513b7eba2f4e2ae241f4bc129ae7e9b80dea24f6e3d92b446b7e6e96be7653cab8888168a94
   languageName: node
   linkType: hard
 
@@ -7283,13 +7328,6 @@ __metadata:
   version: 7.18.2
   resolution: "undici-types@npm:7.18.2"
   checksum: 10c0/85a79189113a238959d7a647368e4f7c5559c3a404ebdb8fc4488145ce9426fcd82252a844a302798dfc0e37e6fb178ff481ed03bc4caf634c5757d9ef43521d
-  languageName: node
-  linkType: hard
-
-"undici-types@npm:~8.3.0":
-  version: 8.3.0
-  resolution: "undici-types@npm:8.3.0"
-  checksum: 10c0/c8aa7e2fbebfce519654dafadc0ece59be888d2ccaf180fb4495da875e7b536d2456345c384069c7e6f3e9c9ab7435f074957da306f142343eee86ff8048855a
   languageName: node
   linkType: hard
 

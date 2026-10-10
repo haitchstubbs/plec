@@ -16,10 +16,12 @@ const temporaryRoot = await mkdtemp(
 const movedDist = path.join(temporaryRoot, 'application');
 
 try {
-  execFileSync('yarn', ['workspace', 'fullstack', 'build'], {
-    cwd: workspaceRoot,
-    stdio: 'inherit',
-  });
+  if (process.env.PLEC_E2E_USE_PREBUILT_DIST !== '1') {
+    execFileSync('yarn', ['workspace', 'fullstack', 'build'], {
+      cwd: workspaceRoot,
+      stdio: 'inherit',
+    });
+  }
   await cp(sourceDist, movedDist, { recursive: true });
 
   const env = { ...process.env, PLEC_E2E_DIST: movedDist };

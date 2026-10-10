@@ -12,6 +12,9 @@ coverage/
 **/target/
 
 # Generated files
+packages/plec-node/native/index.js
+packages/plec-node/native/index.d.ts
+packages/plec-node/native/bindings.d.ts
 packages/lucide-plec/src/icons.generated.ts
 packages/lucide-plec/packages/lucide-plec/src/icons.generated.ts
 packages/compiler/src/index.js

@@ -1,0 +1,83 @@
+{
+  "name": "@plec/node",
+  "version": "0.1.0",
+  "description": "Node.js HTTP host and native Plec runtime bindings",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haitchstubbs/plec.git",
+    "directory": "packages/plec-node"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./request-target": {
+      "types": "./dist/request-target.d.ts",
+      "import": "./dist/request-target.js"
+    },
+    "./internal/http": {
+      "types": "./dist/http.d.ts",
+      "import": "./dist/http.js"
+    }
+  },
+  "files": [
+    "dist",
+    "native/index.js",
+    "native/index.d.ts",
+    "native/bindings.d.ts",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "optionalDependencies": {
+    "@plec/node-darwin-arm64": "0.1.0",
+    "@plec/node-darwin-x64": "0.1.0",
+    "@plec/node-linux-arm64-gnu": "0.1.0",
+    "@plec/node-linux-x64-gnu": "0.1.0",
+    "@plec/node-linux-x64-musl": "0.1.0",
+    "@plec/node-win32-x64-msvc": "0.1.0"
+  },
+  "engines": {
+    "node": ">=22.20.0"
+  },
+  "napi": {
+    "binaryName": "index",
+    "packageName": "@plec/node",
+    "npmClient": "yarn",
+    "rootPublisher": "yarn",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "scripts": {
+    "build": "yarn clean && yarn build:native && yarn build:js",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build:js": "yarn --cwd ../.. exec tsc -p packages/plec-node/tsconfig.build.json",
+    "build:native": "napi build --platform --manifest-path ../../crates/plec-node-bindings/Cargo.toml --profile node-release --output-dir native --js index.js --dts bindings.d.ts --format esm",
+    "build:native:target": "napi build --platform --manifest-path ../../crates/plec-node-bindings/Cargo.toml --profile node-release --output-dir native --js index.js --dts bindings.d.ts --format esm",
+    "build:native:cross": "napi build --platform --cross-compile --manifest-path ../../crates/plec-node-bindings/Cargo.toml --profile node-release --output-dir native --js index.js --dts bindings.d.ts --format esm",
+    "build:native:gate": "napi build --platform --manifest-path ../../crates/plec-node-bindings/Cargo.toml --profile node-release --features feasibility-gate --output-dir native --js index.js --dts bindings.d.ts --format esm",
+    "package:dirs": "napi create-npm-dirs",
+    "package:stage": "napi artifacts --output-dir native --npm-dir npm",
+    "package:stage:local": "node --experimental-transform-types scripts/stage-local-native.mjs",
+    "check:platform-artifacts": "node scripts/check-platform-artifacts.mjs",
+    "test:package": "yarn build && yarn package:dirs && yarn package:stage:local && node scripts/test-packed-package.mjs",
+    "test": "yarn --cwd ../.. exec vitest run packages/plec-node/src/request-target.test.ts packages/plec-node/src/native-platform.test.ts packages/plec-node/src/static.test.ts packages/plec-node/src/document.test.ts packages/plec-node/src/providers.test.ts packages/plec-node/src/actions.test.ts packages/plec-node/src/api.test.ts packages/plec-node/src/http.test.ts",
+    "test:native": "yarn build:native:gate && yarn --cwd ../.. exec vitest run packages/plec-node/src/native-feasibility.test.ts",
+    "typecheck": "yarn --cwd ../.. exec tsc -p packages/plec-node/tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.7.0"
+  }
+}

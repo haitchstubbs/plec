@@ -25,14 +25,20 @@ export function devPort(name: string): number {
 export const e2ePort = devPort('E2E_PORT');
 export const baseURL = `http://127.0.0.1:${e2ePort}`;
 
-// The native Axum host owns the public listener and spawns the Node sidecar
-// for application-owned `/api/*` handlers.
+// The Node host is the only first-party HTTP server used by E2E.
 const movedDist = process.env.PLEC_E2E_DIST;
+const selectedHost = process.env.PLEC_E2E_HOST ?? 'node';
+if (selectedHost !== 'node') {
+  throw new Error('PLEC_E2E_HOST only supports "node"');
+}
 const quoteShell = (value: string) =>
   `'${value.replaceAll("'", "'\\''")}'`;
-const startCommand = movedDist
-  ? `plec serve ${quoteShell(movedDist)}`
-  : 'yarn workspace fullstack exec plec serve dist';
+const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
+const workspaceRoot = path.resolve(scriptsDir, '../..');
+const dist =
+  movedDist ?? path.join(workspaceRoot, 'apps/fullstack/dist');
+const plecBin = path.join(workspaceRoot, 'packages/plec/bin/plec.js');
+const startCommand = `yarn workspace @plec/node build && node ${quoteShell(plecBin)} serve ${quoteShell(dist)}`;
 
 // Playwright owns the fullstack server: turbo builds it, webServer starts
 // the native host, waits for HTTP readiness, and kills the process group
@@ -42,13 +48,15 @@ const startCommand = movedDist
 export const webServer = {
   command: startCommand,
   url: baseURL,
-  ...(movedDist ? { cwd: path.dirname(movedDist) } : {}),
+  cwd: workspaceRoot,
   env: {
     PORT: String(e2ePort),
     PLEC_ACCEPTANCE_CONTROL: '1',
+    ...(selectedHost === 'node' ? { PLEC_BIN: '' } : {}),
+    ...(movedDist ? { PLEC_E2E_DIST: movedDist } : {}),
   },
   // Intentional: a stale server on the port must fail loudly instead of
   // being silently adopted (that is how orphaned servers went unnoticed).
   reuseExistingServer: false,
-  timeout: 30_000,
+  timeout: selectedHost === 'node' ? 120_000 : 30_000,
 } satisfies NonNullable<Config['webServer']>;

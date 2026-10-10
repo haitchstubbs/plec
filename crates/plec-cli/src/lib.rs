@@ -2,7 +2,6 @@ mod app;
 mod dev;
 mod dev_loop;
 mod diagnostic;
-pub mod serve;
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // The CLI variant is selected at compile time: build.rs bakes

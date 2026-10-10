@@ -15,11 +15,15 @@ The Plec framework runtime: the package applications import. It provides the
 
 ## CLI
 
-The `plec` command is owned by this package (`"bin"` → `bin/plec.js`): a
-dependency-free Node shim that resolves the native CLI binary and execs it,
-forwarding argv, stdio, and exit codes (Windows resolves `plec.exe`).
+The `plec` command is owned by this package (`"bin"` → `bin/plec.js`). In an
+npm install, `plec serve` starts `@plec/node` directly in the CLI process;
+build/compiler and inspection commands continue to use the native Plec CLI.
+`PLEC_BIN` applies to non-serve Rust CLI commands only; `plec serve` always uses
+`@plec/node`, even when the override is set.
 
 Resolution order:
+
+For commands other than `serve`, resolution order is:
 
 1. `PLEC_BIN` — explicit binary override; authoritative, so a set-but-
    unusable value is an error instead of a silent fallback
@@ -30,22 +34,24 @@ Resolution order:
 
 Which variant wins where:
 
-- Inside `yarn`/`npx` in a project that depends on `@plec/core`, the shim wins and
-  serves the packaged **release** variant (app commands only: `inspect`,
-  `raw`, `routes`, `build`).
+- Inside an npm project that depends on `@plec/core`, `plec serve` runs the
+  Node host. Other app commands use the packaged Rust **release** variant
+  (`inspect`, `raw`, `routes`, `build`).
 - A bare `plec` in the shell resolves via the system `PATH`, typically the
   cargo-installed **dev** variant, which additionally carries the `workspace`
   command group used for repo development.
-- `PLEC_BIN` forces a specific binary anywhere.
+- `PLEC_BIN` forces a specific binary for commands other than `serve`.
 
 Out-of-repo apps get the same command by adding the built artifact folder as
 a file dependency (`"@plec/core": "file:../path/to/packages/plec"`): yarn links
 `node_modules/.bin/plec` and package scripts invoke the shim like any other
 bin. Calling `node <artifact>/bin/plec.js …` directly works too.
 
-If no binary is found, the shim prints every searched path and points at the
-release artifact build (`yarn workspace @plec/core build:artifact`; `PLEC_CLI_VERSION`
-in `.env.plec` selects the variant).
+If no Rust CLI binary is found for a non-`serve` command, the shim prints
+every searched path and points at the release artifact build
+(`yarn workspace @plec/core build:artifact`; `PLEC_CLI_VERSION` in `.env.plec`
+selects the variant). `plec serve` uses the Node host and does not need that
+binary.
 
 ## Version
 
@@ -54,7 +60,7 @@ The package carries the canonical Plec product SemVer in its `version` field.
 Cargo workspace declaration and every Rust crate and JS workspace package.
 The artifact build fails before assembling anything when the core package and
 Cargo declaration drift, and `plec --version` prints the same value from the
-compiled binary. Protocol versions (IR, route manifest, SSR snapshot, sidecar)
+compiled binary. Protocol versions (IR, route manifest, SSR snapshot)
 are compatibility contracts and are deliberately not coupled to this SemVer.
 
 ## Commands

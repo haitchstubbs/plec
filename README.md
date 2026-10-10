@@ -26,7 +26,7 @@ WebAssembly is part of Plec's browser implementation, not the architectural goal
 
 The compiler and runtimes operate over the same executable application semantics.
 
-On the server, Plec's native Rust host performs routing, loader execution, SSR, asset serving, and snapshot construction. Application-authored server and API code crosses an explicit runtime boundary into the Node sidecar.
+On the server, `@plec/node` owns HTTP and static asset transport while `plec-server-engine` performs routing, loader execution, SSR, and snapshot construction. Application-authored server and API code executes directly in Node.
 
 In the browser, the Rust/WASM runtime adopts server-rendered state when possible and owns client execution, state, actions, routing, identity, and targeted DOM mutation.
 
@@ -142,22 +142,12 @@ Browser TypeScript acts as host glue: it loads artifacts, initializes the runtim
 
 ### Server runtime
 
-Plec's production HTTP host is native Rust.
-
-`plec-server` owns:
-
-- HTTP serving
-- application artifact loading
-- routing
-- route loader execution
-- server-side rendering
-- SSR execution snapshots
-- static assets
-- server manifest handling
-
-Application-authored server and API code remains TypeScript/JavaScript and executes behind the `ApplicationRuntime` boundary through the private Node sidecar.
-
-This keeps application server code ergonomic without moving Plec's routing, loader, or rendering semantics into Node.
+`@plec/node` owns the production HTTP host, static assets, process lifecycle,
+and application JavaScript. The `plec-server-engine` crate owns compiled Plec
+server semantics: routing, route loaders, SSR, snapshots, and action validation.
+The Node host calls the engine through the in-process napi-rs binding; no
+sidecar or private HTTP protocol is involved. `plec dev` also runs the
+development application server through `@plec/node`.
 
 ### Build system
 
@@ -205,7 +195,6 @@ dist/
   server/
     route-artifact.json
     app.mjs
-    runtime.mjs
 ```
 
 `public/` contains application-owned public content, `client/` contains
@@ -272,7 +261,7 @@ apps/
 packages/
   plec/                   @plec/core: authoring APIs, JS package and CLI shim
   plec-browser/           @plec/browser: browser transport and host integration
-  plec-node-runtime/      @plec/node-runtime: Node application-runtime sidecar
+  plec-node/              @plec/node: Node HTTP host and native runtime bindings
   plec-query/             @plec/query: query authoring APIs and adapters
   plec-e2e/               @plec/e2e: canonical Playwright E2E runner
   plec-eslint-config/     @plec/eslint-config: shared ESLint configuration
@@ -294,7 +283,8 @@ crates/
   plec-dom/               Browser host primitives
   plec-router/            Routing and navigation runtime
   plec-runtime/           WASM runtime façade
-  plec-server/            Native HTTP / SSR host
+  plec-server-engine/     Host-neutral server semantics
+  plec-node-bindings/     napi-rs adapter for the Node host
   plec-query-core/        Shared query engine
   plec-query-node/        Native Node query bindings
   plec-cli/               Plec CLI and workspace tooling

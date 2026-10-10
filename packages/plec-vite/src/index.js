@@ -7,16 +7,19 @@ import {
   rm,
   stat,
 } from 'node:fs/promises';
-import { rmSync } from 'node:fs';
+import { rmSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { canonicalRequestTarget } from '@plec/node/request-target';
 
+const nodeHostEntry = import.meta.resolve('@plec/node');
+const nodeHttpEntry = import.meta.resolve('@plec/node/internal/http');
 const SERVER_OWNED = [
   'server/app.mjs',
-  'server/runtime.mjs',
+  'server/route-artifact.json',
   'plec-server.json',
 ];
 
-/** Adapts Vite's watcher/reload transport to Plec's Rust build and native host. */
+/** Adds Plec's Node host to Vite's existing development HTTP server. */
 export function plec(options) {
   let host;
   let activeOutput;
@@ -95,33 +98,24 @@ export function plec(options) {
           );
 
           if (!activeOutput) {
-            await startHost(candidate);
+            host = await startHost(candidate, vite);
             activeOutput = candidate;
-            console.log(`Plec dev: native host pid ${host.pid}`);
+            console.log('Plec dev: Node host attached to Vite');
           } else if (
             (await classifyBuildImpact(activeOutput, candidate)) !==
             'client-only'
           ) {
             const oldHost = host;
             const oldOutput = activeOutput;
-            await stopHost(oldHost);
-            try {
-              await startHost(candidate);
-              activeOutput = candidate;
-              await rm(oldOutput, { recursive: true, force: true });
-              console.log(
-                `Plec dev: native host restarted (pid ${host.pid})`,
-              );
-            } catch (error) {
-              await startHost(oldOutput);
-              throw error;
-            }
+            host = await startHost(candidate, vite);
+            activeOutput = candidate;
+            await closeHost(oldHost);
+            await rm(oldOutput, { recursive: true, force: true });
+            console.log('Plec dev: Node host reloaded');
           } else {
             await promoteClientOutput(candidate, activeOutput);
             await rm(candidate, { recursive: true, force: true });
-            console.log(
-              `Plec dev: client artifacts updated; native host pid ${host.pid}`,
-            );
+            console.log('Plec dev: client artifacts updated');
           }
           replacementReady = true;
         } catch (error) {
@@ -138,36 +132,59 @@ export function plec(options) {
     }
   }
 
-  async function startHost(directory) {
-    const port = options.internalPort;
-    const child = spawn(
-      options.cli,
-      [
-        'serve',
-        directory,
-        '--development',
-        '--host',
-        '127.0.0.1',
-        '--port',
-        String(port),
-      ],
-      { cwd: options.root, stdio: 'inherit' },
+  async function startHost(directory, vite) {
+    const [nodeHost, nodeHttp] = await Promise.all([
+      import(nodeHostEntry),
+      import(nodeHttpEntry),
+    ]);
+    if (typeof nodeHttp.createPlecHttpDispatcher !== 'function')
+      throw new Error(
+        `@plec/node HTTP dispatcher missing from ${nodeHttpEntry} (exports: ${Object.keys(nodeHttp).join(', ')})`,
+      );
+    const { createPlecHandler } = nodeHost;
+    const { createPlecHttpDispatcher } = nodeHttp;
+    const handler = await createPlecHandler({
+      dir: directory,
+      development: true,
+    });
+    const dispatcher = createPlecHttpDispatcher(
+      handler,
+      undefined,
+      async (request, response) => {
+        if (
+          request.method !== 'GET' ||
+          !response.headers.get('content-type')?.startsWith('text/html')
+        )
+          return response;
+        const html = await vite.transformIndexHtml(
+          request.url ?? '/',
+          await response.text(),
+        );
+        const headers = new Headers(response.headers);
+        headers.delete('content-length');
+        return new Response(html, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      },
     );
-    try {
-      await waitReady(port, child);
-      host = child;
-    } catch (error) {
-      child.kill('SIGTERM');
-      await waitExit(child);
-      throw error;
-    }
+    return { handler, dispatcher };
+  }
+
+  async function closeHost(current) {
+    if (!current) return;
+    current.dispatcher.stopAdmission();
+    current.dispatcher.abortActiveRequests();
+    await current.dispatcher.waitForActiveRequests();
+    await current.handler.close();
   }
 
   function cleanup() {
     if (!cleanupTask) {
       cleanupTask = (async () => {
         closing = true;
-        await stopHost(host);
+        await closeHost(host);
         host = undefined;
         if (activeOutput) {
           await rm(activeOutput, { recursive: true, force: true });
@@ -208,64 +225,28 @@ export function plec(options) {
     },
     configureServer(vite) {
       watcher = vite.watcher;
+      if (vite.httpServer) {
+        vite.httpServer.headersTimeout = 10_000;
+        vite.httpServer.requestTimeout = 30_000;
+      }
       vite.httpServer?.once('close', () => {
         void cleanup();
       });
-      vite.middlewares.use(async (req, res, next) => {
-        if (
-          req.method !== 'GET' ||
-          !req.headers.accept?.includes('text/html')
-        )
-          return next();
+      vite.middlewares.use((req, res, next) => {
+        let pathname;
         try {
-          const headers = Object.fromEntries(
-            Object.entries(req.headers)
-              .filter(
-                ([name, value]) =>
-                  value !== undefined &&
-                  ![
-                    'connection',
-                    'content-length',
-                    'transfer-encoding',
-                  ].includes(name.toLowerCase()),
-              )
-              .map(([name, value]) => [
-                name,
-                Array.isArray(value) ? value.join(', ') : value,
-              ]),
-          );
-          const response = await fetch(
-            `http://127.0.0.1:${options.internalPort}${req.url}`,
-            {
-              headers,
-            },
-          );
-          const html = await vite.transformIndexHtml(
-            req.url ?? '/',
-            await response.text(),
-          );
-          res.statusCode = response.status;
-          for (const [name, value] of response.headers) {
-            if (
-              ![
-                'connection',
-                'content-length',
-                'transfer-encoding',
-              ].includes(name.toLowerCase())
-            ) {
-              res.setHeader(name, value);
-            }
-          }
-          const setCookies = response.headers.getSetCookie?.();
-          if (setCookies?.length)
-            res.setHeader('set-cookie', setCookies);
-          if (!res.hasHeader('content-type')) {
-            res.setHeader('content-type', 'text/html; charset=utf-8');
-          }
-          res.end(html);
+          pathname = canonicalRequestTarget(req.url ?? '').path;
         } catch {
-          next();
+          host?.dispatcher.handleRequest(req, res);
+          return;
         }
+        if (shouldViteServeStatic(pathname)) return next();
+        if (!host) {
+          res.statusCode = 503;
+          res.end('Plec dev host is starting');
+          return;
+        }
+        host.dispatcher.handleRequest(req, res);
       });
       vite.watcher.on('all', (event, file) => {
         const absolute = path.resolve(file);
@@ -367,6 +348,39 @@ export function plec(options) {
       await rename(temporary, destination);
     }
   }
+
+  function shouldViteServeStatic(pathname) {
+    if (/^\/(?:@vite|@id|@fs|node_modules|src)(?:\/|$)/u.test(pathname))
+      return true;
+    try {
+      const segments = pathname
+        .slice(1)
+        .split('/')
+        .map((segment) => decodeURIComponent(segment));
+      if (
+        segments.some(
+          (segment) =>
+            !segment ||
+            segment === '.' ||
+            segment === '..' ||
+            /[/\\]/u.test(segment),
+        )
+      )
+        return false;
+      const publicRoot = path.resolve(options.root, 'public');
+      const candidate = path.resolve(publicRoot, ...segments);
+      const relative = path.relative(publicRoot, candidate);
+      if (
+        relative.startsWith(`..${path.sep}`) ||
+        relative === '..' ||
+        path.isAbsolute(relative)
+      )
+        return false;
+      return statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  }
 }
 
 /** Runs after Vite's HTML transform so Plec's prebuilt browser bundle stays opaque. */
@@ -384,41 +398,4 @@ export function plecHtmlFinalizer() {
       },
     },
   };
-}
-
-async function waitReady(port, child) {
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null)
-      throw new Error('native Plec host exited before becoming ready');
-    try {
-      const response = await fetch(
-        `http://127.0.0.1:${port}/__plec/health`,
-      );
-      await response.body?.cancel();
-      return;
-    } catch {
-      /* Still starting. */
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error('timed out waiting for native Plec host');
-}
-
-async function stopHost(child) {
-  if (!child || child.exitCode !== null) return;
-  child.kill('SIGTERM');
-  await Promise.race([
-    waitExit(child),
-    new Promise((resolve) => setTimeout(resolve, 5000)),
-  ]);
-  if (child.exitCode === null) child.kill('SIGKILL');
-  await waitExit(child);
-}
-
-function waitExit(child) {
-  return new Promise((resolve) => {
-    if (child.exitCode !== null) resolve();
-    else child.once('exit', resolve);
-  });
 }

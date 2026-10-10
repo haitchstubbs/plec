@@ -64,7 +64,7 @@ pub fn write_index(
 }
 
 /// Escape a value for an HTML text context. Mirrors the host's SSR escaping
-/// (`plec-server` `ssr::escape_html`): the document shell and SSR documents
+/// (`plec-server-engine` `ssr::escape_html`): the document shell and SSR documents
 /// must agree on how application metadata renders.
 fn escape_html(value: &str) -> String {
     value

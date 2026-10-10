@@ -1,0 +1,76 @@
+[
+  { "target": "/", "path": "/", "class": "document" },
+  { "target": "/api", "path": "/api", "class": "api" },
+  { "target": "/api/", "path": "/api/", "class": "api" },
+  {
+    "target": "/api/foo?x=1",
+    "path": "/api/foo",
+    "query": "x=1",
+    "class": "api"
+  },
+  {
+    "target": "/_plec/actions/save-item",
+    "path": "/_plec/actions/save-item",
+    "class": "action"
+  },
+  { "target": "/foo", "path": "/foo", "class": "document" },
+  { "target": "/foo/", "path": "/foo/", "class": "document" },
+  { "target": "/foo.bar", "path": "/foo.bar", "class": "static" },
+  { "target": "/foo.", "path": "/foo.", "class": "static" },
+  {
+    "target": "/.well-known",
+    "path": "/.well-known",
+    "class": "static"
+  },
+  {
+    "target": "/foo.bar/baz",
+    "path": "/foo.bar/baz",
+    "class": "document"
+  },
+  { "target": "/foo%2Ebar", "path": "/foo%2Ebar", "class": "document" },
+  { "target": "/foo%2Fbar", "path": "/foo%2Fbar", "class": "document" },
+  { "target": "/foo%5Cbar", "path": "/foo%5Cbar", "class": "document" },
+  { "target": "/a/../b", "path": "/a/../b", "class": "document" },
+  { "target": "/a//b", "path": "/a//b", "class": "document" },
+  {
+    "target": "http://example.test/a/../b?q=1",
+    "path": "/a/../b",
+    "query": "q=1",
+    "class": "document"
+  },
+  {
+    "target": "http://example.test?x=1",
+    "path": "/",
+    "query": "x=1",
+    "class": "document"
+  },
+  {
+    "target": "HTTP://example.test/upper",
+    "path": "/upper",
+    "class": "document"
+  },
+  {
+    "target": "http://[::1]:8443/foo",
+    "path": "/foo",
+    "class": "document"
+  },
+  {
+    "target": "https://example.test/api/x?q=1",
+    "path": "/api/x",
+    "query": "q=1",
+    "class": "api"
+  },
+  { "target": "/literal\\backslash", "invalid": true },
+  { "target": "/bad%", "invalid": true },
+  { "target": "/bad%2", "invalid": true },
+  { "target": "/bad%GG", "invalid": true },
+  { "target": "/with space", "invalid": true },
+  { "target": "/path#fragment", "invalid": true },
+  { "target": "*", "invalid": true },
+  { "target": "ftp://example.test/path", "invalid": true },
+  { "target": "http://user@example.test/path", "invalid": true },
+  { "target": "http://example.test:bad/path", "invalid": true },
+  { "target": "http://[invalid]/path", "invalid": true },
+  { "target": "http:///path", "invalid": true },
+  { "target": "relative/path", "invalid": true }
+]

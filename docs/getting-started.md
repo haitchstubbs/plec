@@ -62,7 +62,7 @@ separate application ownership from Plec's browser implementation:
 dist/public/         public static files, served at /
 dist/client/         browser assets, served at /_plec/
 dist/server/         private server/application-runtime output
-dist/plec-server.json  native host deployment manifest
+dist/plec-server.json  Node host deployment manifest
 ```
 
 `/_plec/` is a reserved framework URL prefix; deployment hosts should expose
@@ -107,14 +107,15 @@ tracking. It stays outside `dist/public/` and is not required by `plec serve`.
 yarn workspace fullstack dev
 ```
 
-`plec dev` starts Vite on the public development port and proxies application
-requests to an internal native Plec host. Vite owns file watching, CSS/assets,
+`plec dev` starts Vite on the public development port and attaches `@plec/node`
+request dispatch to that same HTTP server, so development uses one listening
+port. Vite owns file watching, CSS/assets,
 and the browser development connection. Plec builds into an isolated candidate
 directory so a failed build prints its structured diagnostic while leaving the
 last successful application available; fixing the source triggers another
 build automatically. Client-only replacements keep the native host running.
-Server-owned changes restart the native host and application sidecar when
-needed. After the replacement is ready, Vite sends one full-page reload.
+Server-owned changes restart the Node application host when needed. After the
+replacement is ready, Vite sends one full-page reload.
 Vite HMR is not Plec semantic HMR. A successful Plec source change recompiles
 and triggers a full-page reload; application state is not preserved and Plec
 does not hot-replace semantic modules.

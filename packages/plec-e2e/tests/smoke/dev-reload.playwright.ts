@@ -10,7 +10,6 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:net';
-import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,6 +52,10 @@ async function waitUntil<T>(
   );
 }
 
+function countOccurrences(value: string, needle: string): number {
+  return value.split(needle).length - 1;
+}
+
 function stop(child: ChildProcess) {
   return new Promise<void>((resolve) => {
     if (child.exitCode !== null || child.killed) return resolve();
@@ -70,16 +73,8 @@ function stop(child: ChildProcess) {
 test('plec dev keeps failed builds live and reloads the browser once after recovery', async ({
   page,
 }) => {
-  test.setTimeout(120_000);
-  const plecBinary = process.env.PLEC_BIN
-    ? path.resolve(process.env.PLEC_BIN)
-    : path.join(repo, 'target/debug/plec');
-  if (!existsSync(plecBinary)) {
-    execFileSync('cargo', ['build', '-p', 'plec-cli'], {
-      cwd: repo,
-      stdio: 'ignore',
-    });
-  }
+  test.setTimeout(240_000);
+  const plecShim = path.join(repo, 'packages/plec/bin/plec.js');
   const sessionRoot = mkdtempSync(
     path.join(os.tmpdir(), 'plec-dev-browser-'),
   );
@@ -97,6 +92,14 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
     page.on('response', (response) => {
       if (response.status() >= 400)
         output += `[browser response ${response.status()}] ${response.url()}\n`;
+      if (response.request().resourceType() === 'script') {
+        void response
+          .headerValue('content-type')
+          .then((contentType) => {
+            if (contentType?.includes('text/html'))
+              output += `[script response ${response.status()} ${contentType}] ${response.url()}\n`;
+          });
+      }
     });
     mkdirSync(app, { recursive: true });
     cpSync(fixtureSource, path.join(app, 'src'), { recursive: true });
@@ -127,11 +130,15 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
       path.join(app, 'api/version.ts'),
       "export function GET() { return new Response('API A'); }\n",
     );
-    child = spawn(plecBinary, ['dev', '--port', String(port)], {
-      cwd: app,
-      env: { ...process.env, NODE_ENV: 'development' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    child = spawn(
+      process.execPath,
+      [plecShim, 'dev', '--port', String(port)],
+      {
+        cwd: app,
+        env: { ...process.env, NODE_ENV: 'development' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
     child.stdout?.on(
       'data',
       (chunk: Buffer) => (output += chunk.toString()),
@@ -143,6 +150,16 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
     const origin = `http://127.0.0.1:${port}`;
     await waitUntil(
       async () => {
+        if (child?.exitCode !== null && child?.exitCode !== undefined) {
+          throw new Error(
+            `plec dev exited with code ${child.exitCode} before becoming ready`,
+          );
+        }
+        if (child?.signalCode) {
+          throw new Error(
+            `plec dev exited with signal ${child.signalCode} before becoming ready`,
+          );
+        }
         try {
           return await (await fetch(origin)).text();
         } catch {
@@ -150,6 +167,7 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
         }
       },
       (html) => html.includes('Version A'),
+      180_000,
     ).catch((error: Error) => {
       throw new Error(`${error.message}\nPlec dev output:\n${output}`);
     });
@@ -162,12 +180,12 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
     });
     await page.goto(origin);
     await expect(page.getByText('Version A')).toBeVisible();
+    expect(output).not.toContain('packages/plec-node-runtime');
+    expect(output).toContain('Plec dev: Node host attached to Vite');
+    expect(output).not.toContain('[PLEC] listening on');
     expect(
       await page.locator('script[src="/@vite/client"]').count(),
     ).toBe(1);
-    const hostPidMatch = output.match(/native host pid (\d+)/);
-    expect(hostPidMatch).not.toBeNull();
-    const originalHostPid = hostPidMatch?.[1];
     expect(
       await page.evaluate(() =>
         sessionStorage.getItem('plec-dev-page-loads'),
@@ -195,9 +213,14 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
       path.join(app, 'src/home.tsx'),
       "import logo from '../shared.svg'; export function Home() { return <div>Version B<img src={logo} /></div>; }\n",
     );
+    const reloadsBeforeB = countOccurrences(
+      output,
+      'Node host reloaded',
+    );
     await waitUntil(
       async () => output,
-      (text) => text.includes('client artifacts updated'),
+      (text) =>
+        countOccurrences(text, 'Node host reloaded') > reloadsBeforeB,
     );
     await expect(page.getByText('Version B'))
       .toBeVisible({
@@ -208,9 +231,7 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
           `${error.message}\nPlec dev output:\n${output}`,
         );
       });
-    expect(output).toContain(
-      `client artifacts updated; native host pid ${originalHostPid}`,
-    );
+    expect(output).not.toContain('[script response');
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -257,6 +278,10 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
     const oldAssetUrl = await page
       .locator('#app img')
       .getAttribute('src');
+    const reloadsBeforeAsset = countOccurrences(
+      output,
+      'Node host reloaded',
+    );
     writeFileSync(
       path.join(app, 'shared.svg'),
       '<svg><text>external B</text></svg>',
@@ -266,6 +291,12 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
         timeout: 60_000,
       })
       .not.toBe(oldAssetUrl);
+    await waitUntil(
+      async () => output,
+      (text) =>
+        countOccurrences(text, 'Node host reloaded') >
+        reloadsBeforeAsset,
+    );
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -273,7 +304,10 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
         ),
       )
       .toBe('4');
-
+    const reloadsBeforeApi = countOccurrences(
+      output,
+      'Node host reloaded',
+    );
     writeFileSync(
       path.join(app, 'api/version.ts'),
       "export function GET() { return new Response('API B'); }\n",
@@ -283,28 +317,11 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
         timeout: 60_000,
       })
       .toBe('API B');
-    await expect
-      .poll(() => output.includes('native host restarted (pid'))
-      .toBe(true);
-    const replacementPid = output.match(
-      /native host restarted \(pid (\d+)\)/,
-    )?.[1];
-    expect(replacementPid).toBeTruthy();
-    expect(replacementPid).not.toBe(originalHostPid);
-    const sidecarPid =
-      process.platform === 'linux'
-        ? Number(
-            execFileSync(
-              'ps',
-              ['-o', 'pid=', '--ppid', replacementPid!],
-              {
-                encoding: 'utf8',
-              },
-            )
-              .trim()
-              .split(/\s+/)[0],
-          )
-        : undefined;
+    await waitUntil(
+      async () => output,
+      (text) =>
+        countOccurrences(text, 'Node host reloaded') > reloadsBeforeApi,
+    );
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -313,25 +330,14 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
       )
       .toBe('5');
 
-    const internalPort = Number(
-      output.match(
-        /Plec host listening on http:\/\/127\.0\.0\.1:(\d+)/,
-      )?.[1],
+    expect(output).not.toMatch(
+      /listening on http:\/\/127\.0\.0\.1:\d+/,
     );
-    expect(internalPort).toBeGreaterThan(0);
     await stop(child);
     child = undefined;
     await expect
       .poll(() => canBind(port), { timeout: 10_000 })
       .toBe(true);
-    await expect
-      .poll(() => canBind(internalPort), { timeout: 10_000 })
-      .toBe(true);
-    await expect
-      .poll(() => isProcessRunning(Number(replacementPid)))
-      .toBe(false);
-    if (sidecarPid)
-      await expect.poll(() => isProcessRunning(sidecarPid)).toBe(false);
     await expect
       .poll(async () =>
         (await import('node:fs')).readdirSync(
@@ -344,15 +350,6 @@ test('plec dev keeps failed builds live and reloads the browser once after recov
     rmSync(sessionRoot, { recursive: true, force: true });
   }
 });
-
-function isProcessRunning(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function canBind(port: number) {
   return new Promise<boolean>((resolve) => {

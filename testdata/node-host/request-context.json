@@ -1,0 +1,55 @@
+[
+  {
+    "target": "/api/context?tag=one&tag=two+words&empty=&flag",
+    "host": "app.example.test:8443",
+    "transportScheme": "http",
+    "forwardedProto": "https, http",
+    "trustProxy": true,
+    "cookie": "session=hello%20world; theme=dark",
+    "requestHeaders": [
+      ["x-repeat", "one"],
+      ["x-repeat", "two"]
+    ],
+    "expectedUrl": "https://app.example.test:8443/api/context?tag=one&tag=two+words&empty=&flag",
+    "expectedHeaders": { "x-repeat": "one, two" },
+    "expectedQuery": {
+      "tag": ["one", "two words"],
+      "empty": "",
+      "flag": ""
+    },
+    "expectedCookies": { "session": "hello world", "theme": "dark" }
+  },
+  {
+    "target": "/api/context?tag=one&tag=two+words&empty=&flag",
+    "host": "app.example.test",
+    "transportScheme": "https",
+    "forwardedProto": "http",
+    "trustProxy": false,
+    "cookie": "session=hello%20world",
+    "expectedUrl": "https://app.example.test/api/context?tag=one&tag=two+words&empty=&flag",
+    "expectedQuery": {
+      "tag": ["one", "two words"],
+      "empty": "",
+      "flag": ""
+    },
+    "expectedCookies": { "session": "hello world" }
+  },
+  {
+    "target": "/api/context?bad=%",
+    "host": "[::1]:8080",
+    "transportScheme": "http",
+    "forwardedProto": "ftp, https",
+    "trustProxy": true,
+    "cookie": "session=hello%20world",
+    "invalid": true
+  },
+  {
+    "target": "/api/context?ok=1",
+    "host": "app.example.test",
+    "transportScheme": "http",
+    "forwardedProto": "https",
+    "trustProxy": false,
+    "cookie": "session=bad%",
+    "invalid": true
+  }
+]

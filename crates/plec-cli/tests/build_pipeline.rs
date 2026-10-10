@@ -67,6 +67,12 @@ fn build_defaults_to_src_app_tsx_and_dist() {
     assert_success(&output);
     assert!(app.join("dist/plec-server.json").is_file());
     assert!(app.join("dist/client/route-manifest.json").is_file());
+    assert!(app.join("dist/server/app.mjs").is_file());
+    assert!(!app.join("dist/server/runtime.mjs").exists());
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(app.join("dist/plec-server.json")).unwrap()).unwrap();
+    assert_eq!(manifest["server"]["entry"], "server/app.mjs");
+    assert!(manifest["server"].get("runtime").is_none());
 }
 
 fn assert_success(output: &Output) {
@@ -206,13 +212,11 @@ fn builds_expected_output_structure() {
 
     // Vite's emitted browser entry is hashed and retains Plec's Brotli sidecar.
     let client_path = client_entry_path(&out_dir);
-    assert!(
-        client_path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .starts_with("client-")
-    );
+    assert!(client_path
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with("client-"));
     let client = fs::read(&client_path).expect("hashed client entry");
     let compressed = fs::read(client_path.with_file_name(format!(
         "{}.br",
@@ -264,23 +268,19 @@ fn builds_expected_output_structure() {
     assert!(!client_url.contains('?'));
     let server_manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(out_dir.join("plec-server.json")).unwrap()).unwrap();
-    assert!(
-        server_manifest["clientStyles"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|url| !url.as_str().unwrap().contains('?'))
-    );
+    assert!(server_manifest["clientStyles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|url| !url.as_str().unwrap().contains('?')));
     let provider_manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(out_dir.join("client/host-providers.json")).unwrap())
             .unwrap();
-    assert!(
-        provider_manifest["providers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|provider| !provider["module"].as_str().unwrap().contains('?'))
-    );
+    assert!(provider_manifest["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|provider| !provider["module"].as_str().unwrap().contains('?')));
     assert!(!index.contains("client.meta.json"));
     assert!(!out_dir.join("public/runtime").exists());
     assert!(!out_dir.join("public/graphs").exists());
@@ -418,16 +418,12 @@ fn compiled_asset_imports_are_fingerprinted_deduplicated_and_cleaned() {
         2,
         "both source paths should remain build dependencies"
     );
-    assert!(
-        entries
-            .iter()
-            .any(|entry| entry["source"] == "src/logo.svg")
-    );
-    assert!(
-        entries
-            .iter()
-            .any(|entry| entry["source"] == "src/duplicate.svg")
-    );
+    assert!(entries
+        .iter()
+        .any(|entry| entry["source"] == "src/logo.svg"));
+    assert!(entries
+        .iter()
+        .any(|entry| entry["source"] == "src/duplicate.svg"));
     let url = entries[0]["url"].as_str().unwrap();
     assert!(url.starts_with("/assets/compiled/"));
     let emitted = out_dir.join("public").join(url.trim_start_matches('/'));
@@ -466,12 +462,10 @@ fn compiled_asset_imports_are_fingerprinted_deduplicated_and_cleaned() {
         serde_json::from_str(&read(out_dir.join("plec-assets.json"))).unwrap();
     let changed_url = changed[0]["url"].as_str().unwrap();
     assert_ne!(changed_url, url);
-    assert!(
-        !out_dir
-            .join("public")
-            .join(url.trim_start_matches('/'))
-            .exists()
-    );
+    assert!(!out_dir
+        .join("public")
+        .join(url.trim_start_matches('/'))
+        .exists());
     assert_eq!(
         fs::read(
             out_dir
@@ -491,12 +485,10 @@ fn compiled_asset_imports_are_fingerprinted_deduplicated_and_cleaned() {
     let no_assets: serde_json::Value =
         serde_json::from_str(&read(out_dir.join("plec-assets.json"))).unwrap();
     assert!(no_assets.as_array().unwrap().is_empty());
-    assert!(
-        !out_dir
-            .join("public")
-            .join(changed_url.trim_start_matches('/'))
-            .exists()
-    );
+    assert!(!out_dir
+        .join("public")
+        .join(changed_url.trim_start_matches('/'))
+        .exists());
 }
 
 #[test]
@@ -524,9 +516,7 @@ fn compiled_assets_reject_public_collisions_and_symlink_escapes() {
     fs::write(app.join("public").join(&url_path), "public-owned").unwrap();
     let collision = run_build(&app, &output_dir("compiled-asset-collision"), &[]);
     assert!(!collision.status.success());
-    assert!(
-        String::from_utf8_lossy(&collision.stderr).contains("conflicts with Plec-owned output")
-    );
+    assert!(String::from_utf8_lossy(&collision.stderr).contains("conflicts with Plec-owned output"));
 
     #[cfg(unix)]
     {

@@ -77,18 +77,6 @@ impl DevelopmentDiagnostic {
                 .then_some("Review the Plec configuration file and its field names/values."),
         }
     }
-
-    pub(crate) fn server_manifest(error: impl fmt::Display) -> Self {
-        Self {
-            code: "PLEC-SERVER-MANIFEST",
-            phase: "server",
-            message: error.to_string(),
-            source: None,
-            location: None,
-            detail: None,
-            suggestion: Some("Rebuild the application or check the selected serve directory."),
-        }
-    }
 }
 
 fn verbose() -> bool {

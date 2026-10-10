@@ -1,11 +1,11 @@
 use crate::diagnostic::DevelopmentDiagnostic;
 use clap::{Parser, Subcommand};
 use plec_build::{
-    BuildOptions, RuntimeSource, build, modules::host::resolve_custom_elements,
-    modules::host::resolve_host_imports,
+    build, modules::host::resolve_custom_elements, modules::host::resolve_host_imports,
+    BuildOptions, RuntimeSource,
 };
 use plec_compiler::{
-    CompilerOptions, compile_with_options, load_with_options, lower_route_manifest, lower_routes,
+    compile_with_options, load_with_options, lower_route_manifest, lower_routes, CompilerOptions,
 };
 use plec_inspect::Inspector;
 use pollster::block_on;
@@ -101,30 +101,6 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
-
-    /// Serve a built Plec application with the native host.
-    ///
-    /// Reads `plec-server.json` from the build output; every path inside
-    /// resolves relative to that manifest, so the directory is portable.
-    /// When the manifest carries a server bundle, a Node application
-    /// runtime is spawned for `/api/*` traffic and shut down with the host.
-    Serve {
-        /// Build output directory containing `plec-server.json`.
-        #[arg(default_value = "dist")]
-        dir: PathBuf,
-
-        /// Bind address. Defaults to 127.0.0.1, or 0.0.0.0 in a container.
-        #[arg(long)]
-        host: Option<String>,
-
-        /// Port; falls back to `$PORT`, then 3000.
-        #[arg(long)]
-        port: Option<u16>,
-
-        /// Development mode (also enabled unless NODE_ENV=production).
-        #[arg(long)]
-        development: bool,
-    },
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -213,18 +189,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         })?,
 
         Command::Init { directory, force } => crate::app::init::run(directory, force)?,
-
-        Command::Serve {
-            dir,
-            host,
-            port,
-            development,
-        } => crate::serve::serve(crate::serve::ServeOptions {
-            dir,
-            host,
-            port,
-            development,
-        })?,
     }
     Ok(())
 }

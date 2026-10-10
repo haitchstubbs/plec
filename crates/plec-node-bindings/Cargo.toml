@@ -1,0 +1,34 @@
+[package]
+name = "plec-node-bindings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[features]
+feasibility-gate = []
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "=3.14.0", default-features = false, features = [
+  "napi8",
+  "tokio_rt",
+  "web_stream",
+  "serde-json",
+] }
+napi-derive = "3"
+futures-util.workspace = true
+futures-executor.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+http = "1"
+bytes = "1"
+reqwest = { workspace = true, features = ["stream"] }
+serde_json.workspace = true
+plec-server-engine = { path = "../plec-server-engine", version = "0.1.0" }
+plec-ir = { path = "../plec-ir", version = "0.1.0" }
+
+[build-dependencies]
+napi-build = "2"

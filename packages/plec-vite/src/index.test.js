@@ -18,7 +18,6 @@ test('Plec Vite adapter provides Vite client and stylesheet to SSR documents', (
     root: process.cwd(),
     source: 'src/router.tsx',
     outDir: 'dist',
-    internalPort: 3001,
     cli: 'plec',
   });
   const pre = plugin.transformIndexHtml.handler(
@@ -35,6 +34,16 @@ test('Plec Vite adapter provides Vite client and stylesheet to SSR documents', (
   );
   assert.match(html, /src="\/@vite\/client"/);
   assert.match(html, /src="\/_plec\/assets\/client-a1b2\.js"/);
+});
+
+test('dev Node host is attached to Vite without another listener', async () => {
+  const source = await readFile(
+    new URL('./index.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /import\.meta\.resolve\('@plec\/node'\)/);
+  assert.match(source, /createPlecHttpDispatcher/);
+  assert.doesNotMatch(source, /options\.internalPort/);
 });
 
 test('production build emits hashed client, CSS, assets, and provider entries', async () => {

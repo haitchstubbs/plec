@@ -2809,7 +2809,12 @@ fn lower_map_call(
             swc_ecma_ast::Pat::Ident(ident) => Some(ident.id.sym.to_string()),
             _ => None,
         })
-        .ok_or("Expected .map() callback to have one parameter")?;
+        .ok_or_else(|| {
+            format!(
+                "Expected .map() callback parameter to be a simple identifier in {} at {}..{}",
+                span.module_id, span.start, span.end
+            )
+        })?;
 
     ctx.push_scope();
     let item_binding = ctx.declare_binding(
@@ -4127,6 +4132,22 @@ mod tests {
                 panic!("Expected ForEach body to contain an element");
             }
         }
+    }
+
+    #[test]
+    fn unsupported_map_parameter_diagnostic_includes_module_and_span() {
+        let source = r#"
+            export function App({ items }) {
+                return <div>{items.map(([tag, attributes]) => <span />)}</div>;
+            }
+        "#;
+
+        let error = build_and_lower(source).expect_err("tuple destructuring is unsupported");
+
+        assert!(
+            error.contains("simple identifier in test.tsx at"),
+            "diagnostic should locate the unsupported callback: {error}"
+        );
     }
 
     #[test]

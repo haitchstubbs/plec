@@ -15,6 +15,15 @@ When instructions conflict, use this order:
 
 Never use a stale plan or issue description to override code/tests that establish the current contract.
 
+## Node version
+
+This workspace pins Node `22.20.0` (`.node-version`, `engines.node` in `package.json`). nvm is installed, but its default alias may point at Node 24 — seeing `v24.x` from `node --version` is an environment mismatch, **not a task failure**.
+
+- Before running `yarn`/`node` tooling, check `node --version`.
+- If it is not `22.20.0`, fix it and continue: `nvm use` (reads `.nvmrc`) or `nvm use 22.20.0`. nvm is a shell function, so if the switch does not persist across commands, prefix them: `source ~/.nvm/nvm.sh && nvm use && <command>`.
+- Do not abort, downgrade tooling, or report the task as blocked over a version mismatch; switching versions takes seconds.
+- Never change `.node-version` or `engines.node` as a workaround.
+
 ## Core invariants
 
 - `apps/fullstack` is a Plec application and **must remain React-free**.
@@ -76,7 +85,7 @@ apps/
 packages/
   plec/                   Plec authoring/runtime-facing TS APIs
   plec-browser/           Browser glue and graph/artifact loading
-  plec-node-runtime/      Node sidecar: imports the app server bundle over a private socket
+  plec-node/              First-party Node HTTP host and native runtime bindings
   plec-e2e/               Canonical Playwright E2E runner
   ui/                     React/shadcn UI package; do not leak into fullstack
   lucide-plec/            Generated Plec icon components
@@ -90,20 +99,18 @@ crates/
   plec-compiler/          Compiler driver
   plec-diagnostics/       Compiler diagnostics
   plec-runtime/           Rust/WASM runtime
-  plec-server/            Native HTTP host (assets/SSR/loaders in Rust); `ApplicationRuntime` sidecar boundary
-  plec-cli/               Plec CLI (`build`, `serve`, `workspace`) and `plec workspace` workflows
+  plec-server-engine/     Host-neutral Plec server semantics (routing/loaders/SSR/actions)
+  plec-node-bindings/     napi-rs adapter over the server engine
+  plec-cli/               Native compiler/dev/inspection/workspace CLI and `plec workspace` workflows
 ```
 
 ## Server host boundary
 
-The public socket is owned by Rust (`crates/plec-server`). Application
-server code lives entirely in the app (e.g. `apps/fullstack/src/server.ts`
-exporting `handleRequest`); the framework knows only contracts: the
-`handleRequest` export, `plec.toml` -> `dist/plec-server.json`, and the
-sidecar protocol. `/api/*` traffic crosses the `ApplicationRuntime` trait
-into the Node sidecar (private UDS/loopback+token); loaders, SSR
-expressions, and snapshots execute in Rust. E2E runs the same native host and
-`dist/server/app.mjs` application artifact used in production.
+Node (`@plec/node`) owns the production HTTP socket, static assets, and
+application JavaScript. `plec-server-engine` owns Plec server semantics
+(document routing, loaders, SSR, snapshots, and action validation), exposed to
+Node through the in-process napi-rs boundary. The generated `server/app.mjs`
+owns `/api` dispatch. There is no Rust HTTP host or Node sidecar.
 
 Do not infer ownership from an old package path. Inspect the current workspace before introducing a new package or crate.
 

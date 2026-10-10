@@ -1,5 +1,7 @@
 # Plec Node Host Target Implementation Architecture
 
+> **Final architecture:** This document began as a migration plan. Its migration-era Axum/sidecar steps below are historical, not current architecture. `@plec/node` is the sole first-party HTTP host, `plec-server-engine` is the sole Rust server-semantics authority, and `plec-node-bindings` is their in-process N-API boundary. Slice 8 retired the Axum host, Rust `serve`, `packages/plec-node-runtime`, private Rust↔Node transport, and generated `runtime.mjs` artifacts. In development, Vite attaches the Node request dispatcher to its listener; no internal host port is opened.
+
 ## Preface
 
 Plec's current production server architecture is primarily Rust-owned. This keeps Plec-native semantics—routing, loaders, SSR, snapshots, action validation—inside the Rust implementation, but arbitrary application JavaScript still needs a JavaScript runtime.
@@ -1018,6 +1020,31 @@ enabled features, Node support range, and verified stream/cancellation behavior
 as implementation inputs. This is an architecture gate, not a standalone
 production implementation; do not freeze DTO signatures or lifecycle design
 until it passes.
+
+### Feasibility gate result
+
+The initial binding gate passes on the repository's Node floor, `22.20.0`, with
+`napi 3.14.0`, `napi-derive 3.6.5`, and `napi-sys 3.4.0`. The binding crate
+enables `napi8`, `tokio_rt`, `web_stream`, and `serde-json`, with napi default
+features disabled. The supported Node floor remains 22.20.0; this gate was run
+on that minimum version on Linux x64 GNU.
+
+The native smoke suite verifies native class load, Promise callback resolve and
+reject, callback re-entry into an async native method, close during a pending
+callback, post-close rejection, multi-chunk inbound stream reads, demand-driven
+outbound stream polling, and outbound stream error propagation. A napi-rs
+`ReadableStream::read()` creates its JS reader synchronously; the resulting
+reader can then be moved into a worker task. Dropping that reader does not call
+the source's `cancel()` hook, so the Node adapter must retain a per-operation
+cancellation bridge and call the underlying source reader's `cancel()` when
+native consumption stops early. The overflow fixture verifies cancellation
+through that explicit bridge and confirms no later source chunks are pulled.
+
+Run the gate with `yarn workspace @plec/node test:native` under Node 22.20.0.
+These are implementation inputs for the actual binding, not permission to omit
+the cancellation bridge or the separately specified lifecycle/admission rules.
+The exercised probe exports are behind the binding crate's
+`feasibility-gate` feature and are not the production N-API surface.
 
 ## 10.2 Dedicated release profile
 
@@ -2050,39 +2077,44 @@ Do not make Node call Rust merely to construct API `RequestContext`.
 
 # 25. Static asset host
 
-Implement after document/action parity, not before.
+Implement after document/action parity, not before. Node owns static lookup and
+streams file bytes directly; static payloads never cross N-API.
 
-The Node static host must match current `ServeDir` behavior for:
+Plec's 0.1 static contract is:
 
-```text id="88seip"
-public root containment
-/_plec client assets
-content types
-.br/.gz sidecars
-Accept-Encoding
-HEAD
-ranges
-not found
-malformed/unsafe paths
-cache-control
-```
+- `/...` resolves beneath canonical `publicRoot`; `/_plec/...` resolves beneath
+  the canonical client root. `/_plec` itself and absent files return JSON 404
+  `{ "error": "asset not found" }`.
+- Decode each URL path segment once for filesystem lookup. Reject malformed
+  escapes, decoded separators, dot segments, and candidates whose canonical
+  target escapes the selected root with JSON 400
+  `{ "error": "invalid asset path" }`. Symlinks are allowed only when their
+  canonical target remains within that root. Explicit dotfiles are servable;
+  directories are not implicitly mapped to index files.
+- Only GET and HEAD are supported; other methods return 405 with
+  `Allow: GET, HEAD`. Successful representations use `Cache-Control: no-cache`.
+- MIME types follow Plec's explicit extension table; unknown extensions use
+  `application/octet-stream`. The table covers AVIF, CSS, CSV, GIF, HTML/HTM,
+  ICO, JPEG/JPG, JavaScript/MJS, JSON, MP3, MP4, OTF, PDF, PNG, SVG, TXT, WASM,
+  web manifests, WebP, WOFF/WOFF2, and XML. Content type comes from the original
+  asset path, not a `.br`/`.gz` sidecar.
+- Present in-root `.br` and `.gz` sidecars are eligible representations.
+  Parse `Accept-Encoding` quality values, select the available coding with the
+  highest quality, and prefer Brotli on ties. Explicit coding quality overrides
+  wildcard; identity is acceptable by default unless explicitly excluded. If no
+  available representation is acceptable, return 406. Emit
+  `Vary: Accept-Encoding` when sidecars make negotiation relevant and
+  `Content-Encoding` for a selected sidecar.
+- Support one byte range for identity representations. A satisfiable range
+  returns 206 with `Accept-Ranges` and `Content-Range`; a valid unsatisfiable
+  range returns 416 with `Content-Range: bytes */<size>`. Malformed or multiple
+  ranges are ignored and served as a full 200. Compressed sidecars are served
+  whole rather than applying ranges to encoded bytes.
+- HEAD returns GET's status and representation headers without body bytes.
 
-Before implementation, inspect and fixture the current `ServeDir` behavior for
-dotfiles, directory requests/index lookup, MIME fallback, range edge cases,
-precompressed sidecars, and cache headers. Explicitly present dotfiles may be
-served beneath the root; traversal and special path segments are rejected. Do
-not add implicit directory index lookup unless parity requires it. Use an
-established MIME database or explicit mappings with
-`application/octet-stream` fallback. Prefer Brotli over gzip when acceptable
-and available, otherwise identity; emit `Vary: Accept-Encoding` whenever
-representation negotiation applies. Preserve the current single-range behavior.
-
-Create the parity fixture table before selecting or implementing the Node file
-server. Include valid single, unsatisfiable, multiple, and malformed Range
-headers; `Accept-Encoding` values for Brotli/gzip, `q=0`, weighted qualities,
-wildcards, and identity; HEAD; conditional/304 behavior if present; directory,
-dotfile, missing-file, and precompressed-sidecar cases. Match measured current
-`ServeDir` behavior rather than a library's defaults.
+Tests assert this Plec contract directly. Exhaustive parity with `ServeDir`
+defaults, directory-index behavior, and conditional-request behavior are not
+acceptance criteria.
 
 Do not implement naive:
 
@@ -2190,7 +2222,12 @@ The current manifest's server section is sidecar-shaped:
 }
 ```
 
-The final Node-host manifest should not reference a sidecar runtime.
+The Node host reads only the application entry; it does not depend on the
+sidecar runtime field or the copied `dist/node-runtime.mjs` compatibility
+artifact. The build still emits that artifact and the manifest still names
+`server/runtime.mjs` so Axum remains runnable as the Slice 7 parity host. These
+legacy assets are not dependencies of the default production Node host and are
+removed with the sidecar in Slice 8.
 
 Before public 0.1, evolve it to:
 
@@ -2202,20 +2239,13 @@ Before public 0.1, evolve it to:
 }
 ```
 
-Because 0.1 has not established a stable public deployment contract yet, prefer a clean manifest version bump over indefinite compatibility hacks.
-
-Target:
-
-```text id="xq5b6s"
-SERVER_MANIFEST_VERSION = 2
-```
-
-Migration sequence:
-
-1. New readers temporarily understand v1/v2 if useful during development.
-2. New builds emit v2.
-3. Node host requires v2.
-4. Once the sidecar migration is complete, remove v1 compatibility before 0.1 unless there is an explicit compatibility requirement.
+Plec has not released this manifest contract. Keep `SERVER_MANIFEST_VERSION =
+1` and evolve the schema in place before 0.1; do not add a migration reader or
+version solely to represent the Node cutover. The Node host validates v1 and
+requires `server.entry` when a server bundle is present. `server.runtime`
+remains available to Axum during Slice 7, but is ignored by Node and removed
+with the sidecar in Slice 8. Revisit versioning only if a released artifact
+establishes an external compatibility boundary.
 
 ---
 
@@ -2233,13 +2263,14 @@ dist/
     └── app.mjs
 ```
 
-Do not emit:
+The default Node production path does not need or load:
 
 ```text id="2gncpn"
 server/runtime.mjs
 ```
 
-after sidecar retirement.
+The compatibility build may still emit this file for Axum during Slice 7;
+remove it from generated output when Slice 8 retires the sidecar.
 
 A generated startup file is optional.
 
@@ -2342,7 +2373,7 @@ combinations must fail with a clear module-load error naming the detected
 platform, architecture, libc where relevant, and supported package targets.
 There is no source-build fallback unless separately specified and tested.
 
-Target package model:
+Target package model for the Node binding:
 
 ```text id="qqs2ae"
 @plec/node
@@ -2354,7 +2385,10 @@ Target package model:
 @plec/node-win32-x64-msvc
 ```
 
-Only claim platforms actually tested by CI.
+Slice 7 declares all six target packages above. CI builds all six packages and
+runtime-smokes the packed wrapper plus native platform package on Linux x64
+GNU, macOS x64/arm64, and Windows x64. Linux musl and arm64 remain build/package
+coverage only; they are not runtime-smoked by the current runner matrix.
 
 Reuse lessons/scripts from:
 
@@ -2629,6 +2663,123 @@ before the Node host becomes default.
 
 Execute in this order.
 
+## Vertical slices
+
+Deliver the migration as end-to-end slices. Each slice should leave a usable,
+testable path through the layers it touches; avoid completing all engine work,
+then all bindings, then all host work as isolated horizontal phases. The
+feasibility and shared-contract work in Slice 0 is a prerequisite, and the
+existing Axum host remains available until parity and cutover are complete.
+
+### Slice 0 — Prove the boundary and freeze host contracts
+
+- Fixture-test canonical raw request-target parsing and shared path
+  classification/matching rules.
+- Freeze admission/permit lifetimes and the `fetch(Request)` versus `serve()`
+  guarantees.
+- Pass the napi-rs feasibility gate for native loading, async callback re-entry,
+  Web Stream backpressure/cancellation, and close races; record Node/napi-rs
+  versions and features.
+- Verify representative HTTP framing rejection remains Node-owned.
+
+**Exit:** these contracts and the binding gate pass before native DTOs or a
+production Node-host option are treated as stable.
+
+### Slice 1 — Shared engine + Node document response
+
+- Extract the host-independent execution boundary and make Axum use it without
+  changing observable behavior.
+- Add the native application lifecycle and the minimum binding needed to load
+  an application and execute a document request.
+- Add the small `@plec/node` handler path needed to send document status,
+  headers, and streamed response bytes; retain SSR's current complete-String
+  generation and fallback-shell behavior.
+
+**Exit:** a compiled document renders through Node → N-API → Rust, with Axum
+parity and explicit close behavior. This slice does not depend on request-body
+streaming.
+
+### Slice 2 — Host-provider SSR callback
+
+- Load and validate provider metadata/modules in `@plec/node`.
+- Connect the engine's host-provider boundary to a scoped, Promise-aware native
+  callback.
+- Preserve allowlisting, containment, output limits, and inert fallback behavior.
+
+**Exit:** provider SSR fixtures match the existing host, including failure and
+oversize cases.
+
+### Slice 3 — Server actions + streamed native request body
+
+- Move action transport/value validation into the shared engine and expose
+  `handleAction` through the binding.
+- Pass action request bodies as Web Streams through N-API; enforce the
+  authoritative body limit incrementally in Rust before bounded JSON decoding.
+- Wire generated `hasAction`/`invokeAction` behavior and map semantic outcomes
+  to the existing public HTTP contract.
+
+**Exit:** action parity covers origin and ID validation, limits, errors,
+concurrency/ALS isolation, callback settlement, and incremental body rejection.
+
+### Slice 4 — Direct Node API dispatch
+
+- Route `/api` and `/api/*` directly to cached `app.mjs` code.
+- Build canonical Node `RequestContext` with shared parity fixtures.
+- Ignore GET/HEAD bodies; for other methods enforce bounded pre-read and
+  aggregate byte admission before middleware or handler invocation.
+- Preserve API response streaming, redaction, overload, timeout, and abort
+  behavior.
+
+**Exit:** API routing/middleware and context behavior match the existing
+contract, including `/api`, `/api/`, and `/api/foo`; oversized or overloaded
+requests never invoke application code.
+
+### Slice 5 — Node static-file serving
+
+- Implement static lookup and streaming under the canonical public root.
+- Implement section 25's explicit Plec static contract for containment, MIME,
+  compression negotiation, HEAD, single ranges, caching, and path errors.
+
+**Exit:** focused section 25 contract tests pass, including symlink escape and
+encoded traversal; static payloads never cross N-API.
+
+### Slice 6 — Complete lifecycle and transport integration
+
+- Complete request cancellation, admission permits, deadlines, response-stream
+  state handling, and deterministic `close()`/`serve()` shutdown ordering.
+- Complete raw-header and request-target handling in the `node:http` adapter;
+  keep `fetch(Request)` guarantees distinct where Web normalization loses data.
+- Run dual-host parity and browser E2E against the Node host.
+
+**Exit:** required failure/security tests and identity-sensitive SSR adoption
+pass; the Node host is ready to become the default.
+
+### Slice 7 — Ship and cut over (historical; Axum retired in Slice 8)
+
+- Build/test supported native platform packages and generated declarations.
+- Route npm `plec serve` directly to the Node host; verify production build output
+  and manifest no longer require the sidecar runtime.
+
+**Exit:** Node is the production process owner on all claimed targets, with the
+full acceptance/E2E suite green. Keep Axum available temporarily as a parity
+reference.
+
+### Slice 8 — Retire Axum and the sidecar (completed)
+
+- Remove the Axum public host and Rust CLI `serve` together with
+  `packages/plec-node-runtime`, private Rust↔Node transport/supervision, and
+  generated `server/runtime.mjs` output.
+- Update architecture/tooling references and rerun repository integration
+  checks.
+
+**Exit:** Node is the only first-party HTTP host; there is no Axum listener,
+sidecar process, or private HTTP protocol, and the Definition of Done in
+section 39 holds.
+
+The slices are vertical delivery units, not permission to weaken the acceptance
+criteria or security invariants in the detailed sections below. The existing
+layer-specific test strategy remains the validation matrix for each slice.
+
 ## Milestone 0 — Validate N-API feasibility and host contracts
 
 Before the semantic extraction locks in native API assumptions, settle only
@@ -2826,7 +2977,7 @@ slow-body timeout releases admission and prevents handler invocation
 
 Implement Node static serving.
 
-Acceptance against current ServeDir contract.
+Acceptance against the explicit Plec static contract in section 25.
 Containment and symlink policy applies equally to manifest, artifact, app entry,
 provider modules, and static assets; escape and path-race tests pass.
 

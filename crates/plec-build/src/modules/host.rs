@@ -1,11 +1,10 @@
-//! Host-side build configuration: the app's `plec.toml` plus build-derived
-//! facts, resolved into the generated `dist/plec-server.json` manifest.
+//! Build configuration for the Node host: the app's `plec.toml` plus
+//! build-derived facts, resolved into `dist/plec-server.json`.
 //!
-//! The split is deliberate: serializable host configuration flows from
-//! `plec.toml` through `plec build` into the manifest, and the Rust host
-//! (`plec serve`) consumes only the generated artifact — production never
-//! needs source files, and neither host variant evaluates application code
-//! for its own wiring.
+//! The manifest is portable deployment metadata consumed by `@plec/node`.
+//! Node loads the generated application entry and owns HTTP/filesystem access;
+//! `plec-server-engine` interprets the compiled artifact and owns Plec server
+//! semantics. Production deployment does not require application source files.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -70,8 +69,8 @@ struct CompilerSection {
 struct HostImportBinding {
     provider: String,
     adapter: String,
-    /// Explicitly permits this adapter to load in the private Node sidecar
-    /// for SSR. Browser-only providers stay inert on the server.
+    /// Explicitly permits this adapter to load in the Node host for SSR.
+    /// Browser-only providers stay inert on the server.
     #[serde(default)]
     ssr: bool,
 }
@@ -308,10 +307,7 @@ struct ServerManifest {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     custom_elements: Vec<String>,
     document: ManifestDocument,
-    /// Absent when the workspace does not vendor `packages/plec-node-runtime`;
-    /// the host then serves documents and assets only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    server: Option<ManifestRuntimeSection>,
+    server: ManifestServerSection,
 }
 
 #[derive(Debug, Serialize)]
@@ -325,9 +321,8 @@ struct ManifestDocument {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ManifestRuntimeSection {
+struct ManifestServerSection {
     entry: &'static str,
-    runtime: &'static str,
 }
 
 /// Wire version of `/host-providers.json`. Browser glue gates the same
@@ -409,7 +404,6 @@ pub fn emit_provider_manifest(
 pub fn emit_server_manifest(
     out_dir: &std::path::Path,
     config: &HostConfig,
-    has_node_runtime: bool,
     client_script: &str,
     client_styles: &[String],
 ) -> Result<(), BuildError> {
@@ -429,13 +423,8 @@ pub fn emit_server_manifest(
             title: Some(config.title.clone()),
             description: config.description.clone(),
         },
-        server: if has_node_runtime {
-            Some(ManifestRuntimeSection {
-                entry: "server/app.mjs",
-                runtime: "server/runtime.mjs",
-            })
-        } else {
-            None
+        server: ManifestServerSection {
+            entry: "server/app.mjs",
         },
     };
     let json = serde_json::to_string_pretty(&manifest).map_err(|error| {
@@ -452,75 +441,6 @@ pub fn emit_server_manifest(
             error,
         )
     })
-}
-
-/// Bundles the vendored `plec-node-runtime` TypeScript source into the build
-/// output and reports whether the Node application-runtime section applies.
-/// The build owns the bundling (it already drives esbuild), so no separate
-/// package build step or workspace task ordering is required.
-pub fn emit_node_runtime(
-    repo_root: &Path,
-    app_dir: &Path,
-    out_dir: &std::path::Path,
-) -> Result<bool, BuildError> {
-    let source = repo_root.join("packages/plec-node-runtime/src/runtime.ts");
-    let server_dir = out_dir.join("server");
-
-    if !source.exists() {
-        let packaged = app_dir
-            .ancestors()
-            .map(|ancestor| ancestor.join("node_modules/@plec/core/dist/node-runtime.mjs"))
-            .find(|candidate| candidate.is_file())
-            .or_else(|| {
-                app_dir
-                    .ancestors()
-                    .map(|ancestor| {
-                        ancestor.join("node_modules/@plec/node-runtime/dist/runtime.mjs")
-                    })
-                    .find(|candidate| candidate.is_file())
-            });
-
-        let Some(packaged) = packaged else {
-            return Ok(false);
-        };
-
-        std::fs::create_dir_all(&server_dir).map_err(|error| {
-            BuildError::with_source(
-                Stage::ServerManifest,
-                format!("cannot create {}", server_dir.display()),
-                error,
-            )
-        })?;
-        std::fs::copy(&packaged, server_dir.join("runtime.mjs")).map_err(|error| {
-            BuildError::with_source(
-                Stage::ServerManifest,
-                format!("cannot copy {}", packaged.display()),
-                error,
-            )
-        })?;
-        return Ok(true);
-    }
-
-    std::fs::create_dir_all(&server_dir).map_err(|error| {
-        BuildError::with_source(
-            Stage::ServerManifest,
-            format!("cannot create {}", server_dir.display()),
-            error,
-        )
-    })?;
-    let esbuild_bin = super::esbuild::resolve(app_dir)
-        .map_err(|error| BuildError::new(Stage::ServerManifest, error))?;
-    super::esbuild::run(&[
-        esbuild_bin.to_string_lossy().into_owned(),
-        "--bundle".into(),
-        "--format=esm".into(),
-        "--platform=node".into(),
-        "--target=node20".into(),
-        format!("--outfile={}", server_dir.join("runtime.mjs").display()),
-        source.to_string_lossy().into_owned(),
-    ])
-    .map_err(|error| BuildError::new(Stage::ServerManifest, error))?;
-    Ok(true)
 }
 
 #[cfg(test)]
@@ -592,14 +512,8 @@ preloads = ["/a.woff2", "/b.woff2"]
             host_ssr_providers: BTreeSet::new(),
             custom_elements: Default::default(),
         };
-        emit_server_manifest(
-            dir.path(),
-            &config,
-            true,
-            "/_plec/assets/client-hash.js",
-            &[],
-        )
-        .expect("manifest");
+        emit_server_manifest(dir.path(), &config, "/_plec/assets/client-hash.js", &[])
+            .expect("manifest");
 
         let json: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(dir.path().join("plec-server.json")).expect("manifest read"),
@@ -610,13 +524,12 @@ preloads = ["/a.woff2", "/b.woff2"]
         assert_eq!(json["artifact"], "server/route-artifact.json");
         assert_eq!(json["clientScript"], "/_plec/assets/client-hash.js");
         assert_eq!(json["server"]["entry"], "server/app.mjs");
-        assert_eq!(json["server"]["runtime"], "server/runtime.mjs");
         assert_eq!(json["document"]["title"], "Plec fullstack playground");
         assert!(json["document"]["description"] == "desc");
     }
 
     #[test]
-    fn manifest_omits_the_runtime_section_without_the_node_package() {
+    fn manifest_declares_node_host_application_entry() {
         let dir = tempfile::tempdir().expect("dir");
         let config = HostConfig {
             title: "t".into(),
@@ -629,39 +542,13 @@ preloads = ["/a.woff2", "/b.woff2"]
             host_ssr_providers: BTreeSet::new(),
             custom_elements: Default::default(),
         };
-        emit_server_manifest(
-            dir.path(),
-            &config,
-            false,
-            "/_plec/assets/client-hash.js",
-            &[],
-        )
-        .expect("manifest");
+        emit_server_manifest(dir.path(), &config, "/_plec/assets/client-hash.js", &[])
+            .expect("manifest");
         let json: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(dir.path().join("plec-server.json")).expect("manifest read"),
         )
         .expect("json");
-        assert!(json.get("server").is_none());
-    }
-
-    #[test]
-    fn copies_packaged_node_runtime_for_out_of_repo_apps() {
-        let root = tempfile::tempdir().expect("root");
-        let app = root.path().join("app");
-        let package = app.join("node_modules/@plec/core/dist");
-        let out = root.path().join("dist");
-        std::fs::create_dir_all(&package).expect("package dir");
-        std::fs::write(
-            package.join("node-runtime.mjs"),
-            "export const ready = true;",
-        )
-        .expect("runtime");
-
-        assert!(emit_node_runtime(root.path(), &app, &out).expect("runtime copy"));
-        assert_eq!(
-            std::fs::read_to_string(out.join("server/runtime.mjs")).expect("copied runtime"),
-            "export const ready = true;"
-        );
+        assert_eq!(json["server"]["entry"], "server/app.mjs");
     }
 
     #[test]
