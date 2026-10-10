@@ -2242,9 +2242,8 @@ impl TypedRuntime {
         self.loops.entry(loop_index).or_default().path_base =
             Some(format!("{path}/loop:{loop_node}/key:"));
 
-        // Template handles are not top-level mounted nodes. Keep the outer
-        // adoption walk from trying to claim them with the unscoped path.
-        self.collect_branch_handles(loop_def.row_template, skipped);
+        // The adoption prepass already marked every loop template handle as
+        // skipped, so this row walk need not traverse the template again.
         let parent_handle = match self.app.nodes.get(loop_node) {
             Some(TypedNode::Loop { parent, .. }) => {
                 parent.ok_or_else(|| JsValue::from_str("loop parent missing"))?
