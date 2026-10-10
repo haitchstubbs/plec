@@ -274,22 +274,31 @@ jobs:
           cache-workspace-crates: true
       - run: yarn install --immutable
       - if: matrix.musl
-        run: sudo apt-get update && sudo apt-get install -y musl-tools libgcc-13-dev
-      - if: matrix.musl
-        run: |
-          gcc_runtime_dir="$(dirname "$(gcc -print-file-name=libgcc_s.so.1)")"
-          test -f "$gcc_runtime_dir/libgcc_s.so.1"
-          echo "LIBRARY_PATH=$gcc_runtime_dir${LIBRARY_PATH:+:$LIBRARY_PATH}" >> "$GITHUB_ENV"
-      - if: matrix.musl
-        run: |
-          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
-          echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+        run: cargo install cross --version 0.2.5 --locked
       - name: Build N-API addon for target
         run: >-
           yarn workspace @plec/node exec napi build --platform
+          ${{ matrix.musl && '--use-cross' || '' }}
           --manifest-path ../../crates/plec-node-bindings/Cargo.toml
           --profile node-release --output-dir native --js index.js
           --dts bindings.d.ts --format esm --target ${{ matrix.target }}
+      - name: Smoke-test musl addon in Alpine Node
+        if: matrix.musl
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace/packages/plec-node \
+            node:22.20.0-alpine \
+            node --input-type=commonjs -e '
+              const { createRequire } = require("node:module");
+              const native = createRequire(process.cwd() + "/package.json")(
+                "./native/index.linux-x64-musl.node"
+              );
+              if (native.maxRequestBodyBytes() <= 0) {
+                throw new Error("musl native binding returned an invalid limit");
+              }
+              console.log("Loaded linux-x64-musl addon under Alpine/musl");
+            '
       - name: Smoke-test packed native package on host
         if: matrix.packageTarget == 'linux-x64-gnu' || startsWith(matrix.packageTarget, 'darwin-') || matrix.packageTarget == 'win32-x64-msvc'
         run: |
