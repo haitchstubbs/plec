@@ -299,16 +299,12 @@ describe('@plec/node action path', () => {
           controller.signal,
         ),
       );
-      for (
-        let attempt = 0;
-        attempt < 100 &&
-        !(globalThis as Record<string, unknown>)[startedKey];
-        attempt++
-      ) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      expect((globalThis as Record<string, unknown>)[startedKey]).toBe(
-        1,
+      await vi.waitFor(
+        () =>
+          expect(
+            (globalThis as Record<string, unknown>)[startedKey],
+          ).toBe(1),
+        { timeout: 3_000, interval: 10 },
       );
 
       controller.abort();
