@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::js_decode as js;
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 
 fn field<T>(
     object: &mut js::ObjectDecoder<'_>,
@@ -42,7 +42,16 @@ fn array<T>(
     value: &JsValue,
     decode: impl Fn(&JsValue) -> Result<T, JsValue>,
 ) -> Result<Vec<T>, JsValue> {
-    js::array(value)?.iter().map(|item| decode(&item)).collect()
+    if !value.is_instance_of::<js_sys::Array>() {
+        return Err(js::type_error("sequence"));
+    }
+    let array = value.unchecked_ref::<js_sys::Array>();
+    let length = array.length();
+    let mut decoded = Vec::with_capacity(length as usize);
+    for index in 0..length {
+        decoded.push(decode(&array.get(index))?);
+    }
+    Ok(decoded)
 }
 
 fn strings(value: &JsValue) -> Result<Vec<String>, JsValue> {

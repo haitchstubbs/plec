@@ -6,31 +6,55 @@ use wasm_bindgen::JsValue;
 
 pub struct ObjectDecoder<'a> {
     value: &'a JsValue,
-    fields: Vec<String>,
+    fields: Option<Vec<String>>,
 }
 
 impl<'a> ObjectDecoder<'a> {
     pub fn new(value: &'a JsValue) -> Result<Self, JsValue> {
+        Self::with_unknown_field_rejection(value, false)
+    }
+
+    pub fn strict(value: &'a JsValue) -> Result<Self, JsValue> {
+        Self::with_unknown_field_rejection(value, true)
+    }
+
+    fn with_unknown_field_rejection(
+        value: &'a JsValue,
+        reject_unknown: bool,
+    ) -> Result<Self, JsValue> {
         if !value.is_object() || value.is_null() || value.is_instance_of::<js_sys::Array>() {
             return Err(type_error("object"));
         }
-        let keys = js_sys::Object::keys(value.unchecked_ref::<js_sys::Object>());
-        let mut fields = Vec::with_capacity(keys.length() as usize);
-        for key in keys.iter() {
-            fields.push(key.as_string().ok_or_else(|| type_error("string key"))?);
-        }
+        let fields = reject_unknown
+            .then(|| {
+                let keys = js_sys::Object::keys(value.unchecked_ref::<js_sys::Object>());
+                let mut fields = Vec::with_capacity(keys.length() as usize);
+                for key in keys.iter() {
+                    fields.push(key.as_string().ok_or_else(|| type_error("string key"))?);
+                }
+                Ok::<_, JsValue>(fields)
+            })
+            .transpose()?;
         Ok(Self { value, fields })
     }
 
     pub fn has(&self, name: &str) -> bool {
-        self.fields.iter().any(|field| field == name)
+        match &self.fields {
+            Some(fields) => fields.iter().any(|field| field == name),
+            None => js_sys::Object::has_own(
+                self.value.unchecked_ref::<js_sys::Object>(),
+                &JsValue::from_str(name),
+            ),
+        }
     }
 
     pub fn get(&mut self, name: &str) -> Result<JsValue, JsValue> {
         if !self.has(name) {
             return Err(missing(name));
         }
-        self.fields.retain(|field| field != name);
+        if let Some(fields) = &mut self.fields {
+            fields.retain(|field| field != name);
+        }
         js_sys::Reflect::get(self.value, &JsValue::from_str(name))
     }
 
@@ -73,7 +97,7 @@ impl<'a> ObjectDecoder<'a> {
     }
 
     pub fn reject_unknown(self) -> Result<(), JsValue> {
-        match self.fields.first() {
+        match self.fields.as_ref().and_then(|fields| fields.first()) {
             Some(field) => Err(JsValue::from_str(&format!("unknown field `{field}`"))),
             None => Ok(()),
         }
