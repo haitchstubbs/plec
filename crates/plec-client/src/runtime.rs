@@ -2279,6 +2279,7 @@ impl TypedRuntime {
             let row_path = Self::ssr_row_path(path, loop_node, &key);
             let mut nodes = HashMap::new();
             let mut conditionals = HashMap::new();
+            let mut claim_order = Vec::new();
             let (root, end) = self.adopt_row_node(
                 template,
                 &row_path,
@@ -2292,6 +2293,7 @@ impl TypedRuntime {
                 markers,
                 &mut nodes,
                 &mut conditionals,
+                &mut claim_order,
                 skipped,
             )?;
             if !root
@@ -2423,6 +2425,7 @@ impl TypedRuntime {
         markers: &TypedAdoptionIndex,
         local: &mut HashMap<usize, Node>,
         regions: &mut HashMap<usize, TypedConditionalRegion>,
+        claim_order: &mut Vec<usize>,
         skipped: &mut HashSet<usize>,
     ) -> Result<(Node, Option<Node>), JsValue> {
         // Every recursive adoption path (element children and conditional
@@ -2454,11 +2457,15 @@ impl TypedRuntime {
             markers,
             local,
             regions,
+            claim_order,
             skipped,
         );
         self.adopt_depth -= 1;
         if self.adopt_depth == 0 {
             self.adopt_stack_base = 0;
+        }
+        if result.is_ok() && local.contains_key(&index) {
+            claim_order.push(index);
         }
         result
     }
@@ -2474,6 +2481,7 @@ impl TypedRuntime {
         markers: &TypedAdoptionIndex,
         local: &mut HashMap<usize, Node>,
         regions: &mut HashMap<usize, TypedConditionalRegion>,
+        claim_order: &mut Vec<usize>,
         skipped: &mut HashSet<usize>,
     ) -> Result<(Node, Option<Node>), JsValue> {
         let node = self
@@ -2517,6 +2525,7 @@ impl TypedRuntime {
                         markers,
                         local,
                         regions,
+                        claim_order,
                         skipped,
                     )?;
                 }
@@ -2630,6 +2639,7 @@ impl TypedRuntime {
                 self.next_generation += 1;
                 local.insert(index, start.clone());
                 if let Some(branch) = selected {
+                    let claim_start = claim_order.len();
                     self.adopt_row_node(
                         branch,
                         path,
@@ -2640,29 +2650,45 @@ impl TypedRuntime {
                         markers,
                         local,
                         regions,
+                        claim_order,
                         skipped,
                     )?;
+                    let mut nodes = HashMap::new();
+                    for claimed in &claim_order[claim_start..] {
+                        if let Some(node) = local.get(claimed) {
+                            nodes.insert(*claimed, node.clone());
+                        }
+                    }
+                    regions.insert(
+                        index,
+                        TypedConditionalRegion {
+                            start: start.clone(),
+                            end: end.clone(),
+                            selected,
+                            nodes,
+                            generation,
+                            region_slot: RegionSlot::acquire(self.region_tracker.clone())?,
+                        },
+                    );
                 } else {
                     self.collect_branch_handles(consequent, skipped);
                     if let Some(alternate) = alternate {
                         self.collect_branch_handles(alternate, skipped);
                     }
                 }
-                let mut nodes = HashMap::new();
-                if let Some(branch) = selected {
-                    self.collect_instantiated_branch_nodes(branch, local, &mut nodes);
+                if selected.is_none() {
+                    regions.insert(
+                        index,
+                        TypedConditionalRegion {
+                            start: start.clone(),
+                            end: end.clone(),
+                            selected,
+                            nodes: HashMap::new(),
+                            generation,
+                            region_slot: RegionSlot::acquire(self.region_tracker.clone())?,
+                        },
+                    );
                 }
-                regions.insert(
-                    index,
-                    TypedConditionalRegion {
-                        start: start.clone(),
-                        end: end.clone(),
-                        selected,
-                        nodes,
-                        generation,
-                        region_slot: RegionSlot::acquire(self.region_tracker.clone())?,
-                    },
-                );
                 Ok((start, Some(end)))
             }
             TypedNode::Component {
