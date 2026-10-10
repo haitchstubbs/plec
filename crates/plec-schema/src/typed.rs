@@ -1,3 +1,4 @@
+#[cfg(feature = "serde")]
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use wasm_bindgen::JsValue;
@@ -9,66 +10,67 @@ mod js_decode;
 
 pub use js_decode::{decode_component_application, decode_typed_application};
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TypedApplication {
-    #[serde(default = "component_version")]
+    #[cfg_attr(feature = "serde", serde(default = "component_version"))]
     pub version: String,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub id: String,
     pub root_node: usize,
     pub strings: Vec<String>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub constants: Vec<RuntimeValue>,
     pub nodes: Vec<TypedNode>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub texts: Vec<TypedText>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub bindings: Vec<TypedBinding>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub prop_programs: Vec<TypedPropProgram>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub events: Vec<TypedEvent>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub inputs: Vec<TypedInput>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub state_slots: Vec<TypedStateSlot>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub ref_slots: Vec<TypedRefSlot>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub host_refs: Vec<TypedHostRef>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub reactions: Vec<TypedReaction>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub listeners: Vec<TypedGlobalListener>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub parameters: Vec<TypedComponentParameter>,
     pub route_error_state: Option<usize>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub expressions: Vec<TypedProgram>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub actions: Vec<TypedAction>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub loops: Vec<TypedLoop>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub dependency_edges: Vec<TypedDependencyEdge>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub route_outlets: Vec<TypedRouteOutlet>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub host_slots: Vec<TypedHostSlot>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub capabilities: Vec<TypedCookieCapability>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub server_actions: Vec<TypedServerActionRef>,
-    #[serde(skip)]
+    #[cfg_attr(feature = "serde", serde(skip))]
     pub host_inputs: HashMap<String, RuntimeValue>,
-    #[serde(skip)]
+    #[cfg_attr(feature = "serde", serde(skip))]
     pub runtime_props: Vec<RuntimeValue>,
-    #[serde(skip)]
+    #[cfg_attr(feature = "serde", serde(skip))]
     pub runtime_component_props: Vec<Option<usize>>,
-    #[serde(skip)]
+    #[cfg_attr(feature = "serde", serde(skip))]
     pub runtime_host_component_props: Vec<Option<TypedHostComponentTarget>>,
-    #[serde(skip)]
+    #[cfg_attr(feature = "serde", serde(skip))]
     pub ref_values: Vec<RuntimeValue>,
 }
 
@@ -76,8 +78,9 @@ fn component_version() -> String {
     "0.10".into()
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TypedComponentApplication {
     pub version: String,
     pub root_component: usize,
@@ -412,11 +415,12 @@ where
     Ok(())
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedComponentParameter {
     pub name: usize,
     pub callable: bool,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub component: bool,
 }
 
@@ -437,13 +441,15 @@ pub enum TypedComponentProp {
     },
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TypedHostComponentTarget {
     pub provider: String,
     pub component: String,
 }
 
+#[cfg(feature = "serde")]
 impl<'de> Deserialize<'de> for TypedComponentProp {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -507,28 +513,31 @@ impl TypedComponentProp {
     }
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TypedHostSlot {
     pub kind: String,
     pub query: Option<usize>,
     pub name: Option<usize>,
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TypedCookieCapability {
     pub kind: String,
     pub name: String,
     pub operations: Vec<String>,
-    #[serde(default = "default_cookie_path")]
+    #[cfg_attr(feature = "serde", serde(default = "default_cookie_path"))]
     pub path: String,
     pub same_site: Option<String>,
     pub secure: Option<bool>,
     pub expiry_modes: Vec<String>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedServerActionRef {
     pub id: String,
 }
@@ -536,51 +545,56 @@ fn default_cookie_path() -> String {
     "/".into()
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedRouteOutlet {
     pub id: String,
     pub node: usize,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedEvent {
     pub target: usize,
-    #[serde(rename = "type")]
+    #[cfg_attr(feature = "serde", serde(rename = "type"))]
     pub event_type: usize,
     pub action: usize,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub fields: Vec<TypedEventField>,
     pub r#loop: Option<usize>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedEventField {
     pub name: usize,
     pub slot: usize,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TypedAction {
     pub instructions: Vec<TypedActionInstruction>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub frame_slots: usize,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub parameter_slots: Vec<usize>,
     pub loader_result_state: Option<usize>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub route_loader: bool,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub route_retry: bool,
     /// Loader fetches decode to the response body (not the transport
     /// envelope). Hosts gate envelope unwrapping on this flag instead of
     /// shape-sniffing the loader value.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub loader_decode_body: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "op", rename_all = "camelCase")]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "op", rename_all = "camelCase"))]
 pub enum TypedActionInstruction {
     Evaluate {
         expression: usize,
@@ -598,9 +612,9 @@ pub enum TypedActionInstruction {
         pending: usize,
         error: usize,
         data: usize,
-        #[serde(rename = "invocationSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "invocationSlot"))]
         invocation_slot: usize,
-        #[serde(rename = "valueSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "valueSlot"))]
         value_slot: usize,
         success: bool,
     },
@@ -623,12 +637,12 @@ pub enum TypedActionInstruction {
     RouteReload,
     CallProp {
         prop: usize,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         arguments: Vec<usize>,
     },
     CallPropOptional {
         prop: usize,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         arguments: Vec<usize>,
     },
     CollectionMutation {
@@ -642,28 +656,28 @@ pub enum TypedActionInstruction {
     },
     Call {
         action: usize,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         arguments: Vec<usize>,
-        #[serde(rename = "successPc")]
+        #[cfg_attr(feature = "serde", serde(rename = "successPc"))]
         success_pc: Option<usize>,
-        #[serde(rename = "failurePc")]
+        #[cfg_attr(feature = "serde", serde(rename = "failurePc"))]
         failure_pc: Option<usize>,
-        #[serde(rename = "resultSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "resultSlot"))]
         result_slot: Option<usize>,
-        #[serde(rename = "errorSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "errorSlot"))]
         error_slot: Option<usize>,
     },
     CallFrame {
         parameter: usize,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         arguments: Vec<usize>,
-        #[serde(rename = "successPc")]
+        #[cfg_attr(feature = "serde", serde(rename = "successPc"))]
         success_pc: Option<usize>,
-        #[serde(rename = "failurePc")]
+        #[cfg_attr(feature = "serde", serde(rename = "failurePc"))]
         failure_pc: Option<usize>,
-        #[serde(rename = "resultSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "resultSlot"))]
         result_slot: Option<usize>,
-        #[serde(rename = "errorSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "errorSlot"))]
         error_slot: Option<usize>,
     },
     Jump {
@@ -673,28 +687,29 @@ pub enum TypedActionInstruction {
         target: usize,
     },
     CapabilityRequest {
-        #[serde(flatten)]
+        #[cfg_attr(feature = "serde", serde(flatten))]
         request: TypedCapabilityRequest,
-        #[serde(rename = "successPc")]
+        #[cfg_attr(feature = "serde", serde(rename = "successPc"))]
         success_pc: usize,
-        #[serde(rename = "failurePc")]
+        #[cfg_attr(feature = "serde", serde(rename = "failurePc"))]
         failure_pc: usize,
-        #[serde(rename = "finallyPc")]
+        #[cfg_attr(feature = "serde", serde(rename = "finallyPc"))]
         finally_pc: Option<usize>,
-        #[serde(rename = "resultSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "resultSlot"))]
         result_slot: usize,
-        #[serde(rename = "errorSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "errorSlot"))]
         error_slot: usize,
     },
     Return {
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         outcome: TypedReturnOutcome,
         value: Option<usize>,
     },
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum TypedReturnOutcome {
     Success,
     Failure,
@@ -710,52 +725,60 @@ impl Default for TypedReturnOutcome {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "capability", content = "request", rename_all = "camelCase")]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(tag = "capability", content = "request", rename_all = "camelCase")
+)]
 pub enum TypedCapabilityRequest {
     Fetch(TypedFetchRequest),
     Cookie(TypedCookieRequest),
     ServerAction(TypedServerActionRequest),
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TypedServerActionRequest {
     pub action: usize,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub arguments: Vec<usize>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TypedFetchRequest {
     pub url: usize,
     pub method: String,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub headers: Vec<TypedFetchHeader>,
     pub body: Option<usize>,
     pub decode: String,
-    #[serde(default = "default_true")]
+    #[cfg_attr(feature = "serde", serde(default = "default_true"))]
     pub require_ok: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedFetchHeader {
     pub name: usize,
     pub value: usize,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TypedCookieRequest {
     pub operation: String,
     pub name: usize,
     pub value: Option<usize>,
-    #[serde(default = "default_cookie_path")]
+    #[cfg_attr(feature = "serde", serde(default = "default_cookie_path"))]
     pub path: String,
     pub same_site: Option<String>,
     pub secure: Option<bool>,
-    #[serde(default = "default_cookie_expiry")]
+    #[cfg_attr(feature = "serde", serde(default = "default_cookie_expiry"))]
     pub expiry: String,
     pub max_age: Option<i64>,
 }
@@ -763,21 +786,23 @@ fn default_cookie_expiry() -> String {
     "session".into()
 }
 
+#[cfg(feature = "serde")]
 fn default_true() -> bool {
     true
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(tag = "op", rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "op", rename_all = "camelCase"))]
 pub enum TypedNode {
     Element {
         tag: usize,
-        #[serde(default = "html_namespace")]
+        #[cfg_attr(feature = "serde", serde(default = "html_namespace"))]
         namespace: String,
         parent: Option<usize>,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         children: Vec<usize>,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         host_ref: Option<usize>,
     },
     Text {
@@ -797,24 +822,24 @@ pub enum TypedNode {
     Component {
         component: usize,
         parent: Option<usize>,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         props: Vec<TypedComponentProp>,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         children: Vec<usize>,
     },
     DynamicComponent {
         prop: usize,
         parent: Option<usize>,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         props: Vec<TypedComponentProp>,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         children: Vec<usize>,
     },
     HostComponent {
         provider: String,
         component: String,
         parent: Option<usize>,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         props: Vec<TypedComponentProp>,
     },
     Slot {
@@ -825,13 +850,15 @@ fn html_namespace() -> String {
     "html".into()
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedText {
     pub value: Option<String>,
     pub binding: Option<usize>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedBinding {
     pub target: usize,
     pub sink: String,
@@ -839,63 +866,76 @@ pub struct TypedBinding {
     pub expression: usize,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedPropProgram {
     pub target: usize,
     pub writes: Vec<TypedPropWrite>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedPropWrite {
     pub name: Option<usize>,
     pub kind: String,
     pub constant: Option<usize>,
     pub expression: Option<usize>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub spread: bool,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedInput {
     pub name: usize,
     pub kind: String,
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TypedStateSlot {
     pub name: Option<usize>,
     pub initial_expression: usize,
     pub frame_slot: usize,
 }
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TypedRefSlot {
     pub initial_expression: usize,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedHostRef {}
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedReaction {
     pub dependencies: Vec<usize>,
     pub action: usize,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub cleanup_action: Option<usize>,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedGlobalListener {
     pub source: String,
     pub event: usize,
     pub action: usize,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedProgram {
     pub instructions: Vec<TypedExpressionInstruction>,
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")
+)]
 pub enum TypedExpressionInstruction {
     Constant {
         constant: usize,
@@ -934,17 +974,17 @@ pub enum TypedExpressionInstruction {
     },
     String {
         kind: String,
-        #[serde(default = "one")]
+        #[cfg_attr(feature = "serde", serde(default = "one"))]
         count: usize,
     },
     MakeArray {
         count: usize,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         spreads: Vec<bool>,
     },
     MakeRecord {
         fields: Vec<usize>,
-        #[serde(default)]
+        #[cfg_attr(feature = "serde", serde(default))]
         spreads: Vec<bool>,
     },
     OmitFields {
@@ -952,16 +992,16 @@ pub enum TypedExpressionInstruction {
     },
     Filter {
         predicate: usize,
-        #[serde(rename = "item_slot", alias = "itemSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "item_slot", alias = "itemSlot"))]
         item_slot: usize,
-        #[serde(rename = "index_slot", alias = "indexSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "index_slot", alias = "indexSlot"))]
         index_slot: Option<usize>,
     },
     Map {
         mapper: usize,
-        #[serde(rename = "item_slot", alias = "itemSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "item_slot", alias = "itemSlot"))]
         item_slot: usize,
-        #[serde(rename = "index_slot", alias = "indexSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "index_slot", alias = "indexSlot"))]
         index_slot: Option<usize>,
     },
     Jump {
@@ -980,26 +1020,29 @@ fn one() -> usize {
     1
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TypedLoop {
     pub source_expression: usize,
     pub key_expression: usize,
     pub item_slot: usize,
     pub index_slot: Option<usize>,
     pub row_template: usize,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub dependency_slots: Vec<usize>,
     pub input: Option<usize>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedDependencyEdge {
     pub source: TypedDependencyEndpoint,
     pub target: TypedDependencyEndpoint,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct TypedDependencyEndpoint {
     pub kind: String,
     pub handle: usize,
@@ -2061,43 +2104,37 @@ mod tests {
             serde_json::json!({"op":"collectionMutation","input":0,"kind":"append","key":0,"value":0}),
             "scalar",
         );
-        assert!(
-            validate_typed_action_contract(
-                &scalar.actions[0],
-                scalar.expressions.len(),
-                &["scalar".into()]
-            )
-            .unwrap_err()
-            .contains("collection input")
-        );
+        assert!(validate_typed_action_contract(
+            &scalar.actions[0],
+            scalar.expressions.len(),
+            &["scalar".into()]
+        )
+        .unwrap_err()
+        .contains("collection input"));
 
         let missing_value = typed_action_artifact(
             serde_json::json!({"op":"collectionMutation","input":0,"kind":"append","key":0}),
             "collection",
         );
-        assert!(
-            validate_typed_action_contract(
-                &missing_value.actions[0],
-                missing_value.expressions.len(),
-                &["collection".into()]
-            )
-            .unwrap_err()
-            .contains("requires a value")
-        );
+        assert!(validate_typed_action_contract(
+            &missing_value.actions[0],
+            missing_value.expressions.len(),
+            &["collection".into()]
+        )
+        .unwrap_err()
+        .contains("requires a value"));
 
         let remove_value = typed_action_artifact(
             serde_json::json!({"op":"collectionMutation","input":0,"kind":"keyedRemove","key":0,"value":0}),
             "collection",
         );
-        assert!(
-            validate_typed_action_contract(
-                &remove_value.actions[0],
-                remove_value.expressions.len(),
-                &["collection".into()]
-            )
-            .unwrap_err()
-            .contains("forbids a value")
-        );
+        assert!(validate_typed_action_contract(
+            &remove_value.actions[0],
+            remove_value.expressions.len(),
+            &["collection".into()]
+        )
+        .unwrap_err()
+        .contains("forbids a value"));
     }
 
     #[cfg(not(feature = "fetch"))]
@@ -2115,15 +2152,13 @@ mod tests {
         let mut app = typed_action_artifact(serde_json::json!({"op":"return"}), "collection");
         app.actions[0].frame_slots = 1;
         app.actions[0].parameter_slots = vec![0, 0];
-        assert!(
-            validate_typed_action_contract(
-                &app.actions[0],
-                app.expressions.len(),
-                &["collection".into()]
-            )
-            .unwrap_err()
-            .contains("duplicate")
-        );
+        assert!(validate_typed_action_contract(
+            &app.actions[0],
+            app.expressions.len(),
+            &["collection".into()]
+        )
+        .unwrap_err()
+        .contains("duplicate"));
     }
 
     #[test]
@@ -2190,31 +2225,27 @@ mod tests {
             ],
             r#loop: None,
         });
-        assert!(
-            validate_typed_event_contract(
-                &app.events[0],
-                app.nodes.len(),
-                app.strings.len(),
-                app.actions.len(),
-                app.loops.len(),
-                app.actions[0].frame_slots,
-            )
-            .is_err()
-        );
+        assert!(validate_typed_event_contract(
+            &app.events[0],
+            app.nodes.len(),
+            app.strings.len(),
+            app.actions.len(),
+            app.loops.len(),
+            app.actions[0].frame_slots,
+        )
+        .is_err());
 
         app.events[0].fields.pop();
         app.events[0].r#loop = Some(0);
-        assert!(
-            validate_typed_event_contract(
-                &app.events[0],
-                app.nodes.len(),
-                app.strings.len(),
-                app.actions.len(),
-                app.loops.len(),
-                app.actions[0].frame_slots,
-            )
-            .is_err()
-        );
+        assert!(validate_typed_event_contract(
+            &app.events[0],
+            app.nodes.len(),
+            app.strings.len(),
+            app.actions.len(),
+            app.loops.len(),
+            app.actions[0].frame_slots,
+        )
+        .is_err());
     }
 
     #[test]
@@ -2510,15 +2541,13 @@ mod tests {
                 component
             })
             .collect();
-        assert!(
-            TypedComponentApplication {
-                version: "0.10".into(),
-                root_component: 0,
-                components,
-            }
-            .validate()
-            .is_ok()
-        );
+        assert!(TypedComponentApplication {
+            version: "0.10".into(),
+            root_component: 0,
+            components,
+        }
+        .validate()
+        .is_ok());
     }
 
     fn topology_application(nodes: Value, loops: Value) -> TypedApplication {
@@ -2789,11 +2818,9 @@ mod tests {
         let policy = plec_ir::sink::TagPolicy {
             custom_elements: std::collections::BTreeSet::from([String::from("my-widget")]),
         };
-        assert!(
-            policy_application("my-widget")
-                .validate_with_policy(&policy)
-                .is_ok()
-        );
+        assert!(policy_application("my-widget")
+            .validate_with_policy(&policy)
+            .is_ok());
         // The policy cannot rehabilitate forbidden tags: strict validation
         // still rejects `script` with the same identity rule.
         assert_eq!(
@@ -2879,11 +2906,9 @@ mod tests {
             tag_application("svg:script", "html").validate_contract(),
             Err("unsafe element tag")
         );
-        assert!(
-            tag_application("clipPath", "svg")
-                .validate_contract()
-                .is_ok()
-        );
+        assert!(tag_application("clipPath", "svg")
+            .validate_contract()
+            .is_ok());
 
         let text = topology_application(
             serde_json::json!([

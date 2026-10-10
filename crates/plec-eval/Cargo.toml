@@ -4,10 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["serde"]
+serde = ["plec-dom/serde", "plec-schema/serde"]
+
 [dependencies]
 js-sys = { workspace = true }
-plec-dom = { path = "../plec-dom", version = "0.1.0" }
-plec-ir = { path = "../plec-ir", version = "0.1.0" }
-plec-schema = { path = "../plec-schema", version = "0.1.0" }
-serde_json = { workspace = true }
+plec-dom = { path = "../plec-dom", version = "0.1.0", default-features = false }
+plec-ir = { path = "../plec-ir", version = "0.1.0", default-features = false }
+plec-schema = { path = "../plec-schema", version = "0.1.0", default-features = false }
 wasm-bindgen = { workspace = true }

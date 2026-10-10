@@ -8,15 +8,14 @@
 
 use crate::platform::document;
 use plec_schema::delta::RuntimeValue;
-use serde::Deserialize;
 use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct CookiePolicy {
     pub operations: Vec<String>,
-    #[serde(default)]
     pub path: Option<String>,
 }
 

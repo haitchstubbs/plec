@@ -2,21 +2,16 @@ use super::lifecycle::decode_untrusted_js;
 use super::PlecRuntime;
 use plec_client::prelude::*;
 use plec_dom::platform::now;
-use serde::Deserialize;
 
-#[derive(Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Clone)]
 pub(crate) enum SnapshotShape {
     Scalar,
     Object {
-        #[serde(default)]
         observed_paths: Vec<Vec<String>>,
     },
     Collection {
         key_expression: String,
-        #[serde(default = "default_order_sensitive")]
         order_sensitive: bool,
-        #[serde(default)]
         observed_row_paths: Vec<Vec<String>>,
     },
 }
@@ -357,7 +352,7 @@ impl PlecRuntime {
         let metrics = if matches!(shape, SnapshotShape::Collection { .. }) {
             self.initialize_input(input_id.clone(), value)?
         } else {
-            serde_wasm_bindgen::to_value(&UpdateMetrics::default()).map_err(error)?
+            plec_schema::js_encode::update_metrics(&UpdateMetrics::default())?
         };
         self.snapshot_inputs
             .borrow_mut()
@@ -394,13 +389,14 @@ impl PlecRuntime {
             self.state.apply_typed_deltas_with_metrics(deltas)?
         };
         metrics.reconciliation_us = (now() - started) * 1000.0;
-        serde_wasm_bindgen::to_value(&metrics).map_err(error)
+        plec_schema::js_encode::update_metrics(&metrics)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plec_schema::delta::runtime_from_json;
 
     fn collection_shape() -> SnapshotShape {
         SnapshotShape::Collection {

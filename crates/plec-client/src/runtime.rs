@@ -598,7 +598,7 @@ impl RuntimeState {
                     .then(|| id.clone())
             })
             .collect::<Vec<_>>();
-        serde_wasm_bindgen::to_value(&ids).map_err(error)
+        Ok(plec_schema::js_encode::string_array(&ids))
     }
 }
 
@@ -616,7 +616,7 @@ impl RuntimeState {
         self.flush_component_work()?;
         self.install_typed_event_listeners()?;
         self.install_typed_global_listeners()?;
-        serde_wasm_bindgen::to_value(&metrics).map_err(error)
+        plec_schema::js_encode::mount_metrics(&metrics)
     }
 }
 
@@ -984,7 +984,7 @@ impl RuntimeState {
             }
             self.flush_component_work()?;
             self.install_typed_event_listeners()?;
-            return serde_wasm_bindgen::to_value(&metrics).map_err(error);
+            return plec_schema::js_encode::update_metrics(&metrics);
         }
         let id = graph_instance_id(None, "main", None);
         self.initialize_typed_input_for(&id, input_id, rows)
@@ -1020,7 +1020,7 @@ impl RuntimeState {
         };
         self.flush_component_work()?;
         self.install_typed_event_listeners()?;
-        serde_wasm_bindgen::to_value(&metrics).map_err(error)
+        plec_schema::js_encode::update_metrics(&metrics)
     }
 }
 
@@ -1046,7 +1046,7 @@ impl RuntimeState {
         deltas: Vec<plec_schema::delta::RuntimeDelta>,
     ) -> Result<JsValue, JsValue> {
         let metrics = self.apply_typed_deltas_with_metrics(deltas)?;
-        serde_wasm_bindgen::to_value(&metrics).map_err(error)
+        plec_schema::js_encode::update_metrics(&metrics)
     }
 
     /// Typed internal counterpart used by snapshot reconciliation so a
@@ -1328,10 +1328,7 @@ fn evaluate_host_prop_values(
 /// (className, href, aria-*, ...) at the provider boundary. Nested records
 /// inside props must stay plain objects for the same reason.
 fn host_value_to_js(value: &RuntimeValue) -> Result<JsValue, JsValue> {
-    use serde::Serialize as _;
-    value
-        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
-        .map_err(error)
+    plec_schema::js_encode::runtime_value(value, true)
 }
 
 /// Converts a provider callback payload into a runtime value through the

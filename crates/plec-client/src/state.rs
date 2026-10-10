@@ -250,35 +250,35 @@ impl Clone for RuntimeState {
 /// One host-owned fetch grant. Authority comes only from grants published
 /// through `set_fetch_policy`; artifact-declared fetch capability requests
 /// are treated purely as requests and never widen this surface.
-#[derive(Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct FetchPolicyGrant {
     /// Exact origin (scheme, host, port) the grant applies to, as a
     /// serialized URL origin (`https://api.example.com`).
     pub origin: String,
     /// Allowed request methods. An empty list grants no methods.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub methods: Vec<String>,
     /// Allowed request header names (case-insensitive match). An empty list
     /// grants no artifact-controlled headers.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub headers: Vec<String>,
     /// Whether requests under this grant may carry credentials. The runtime
     /// forces `include` when true and `omit` when false; the artifact cannot
     /// influence the credentials mode.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub credentials: bool,
 }
 
 /// One host-owned element-tag capability grant. Authority comes only from
 /// the policy published through `set_tag_policy`; artifacts never carry tag
 /// authority of their own.
-#[derive(Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct TagPolicyGrant {
     /// Trusted custom element tags (canonical lowercase HTML-namespace
     /// names, e.g. `my-widget`).
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub custom_elements: Vec<String>,
 }
 

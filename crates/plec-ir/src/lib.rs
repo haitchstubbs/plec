@@ -1,3 +1,4 @@
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 pub mod limits;
@@ -11,16 +12,18 @@ pub const COMPONENT_VERSION: &str = "0.10";
 /// Execution ownership and public exposure are intentionally separate. A
 /// value may be serializable while still being server-only (for example a
 /// session identifier); only an explicit PublicExport may cross the boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum ExecutionOwner {
     Shared,
     Server,
     Client,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct PublicExport {
     pub name: String,
     pub source_owner: ExecutionOwner,
@@ -43,8 +46,9 @@ pub fn validate_public_export(export: &PublicExport) -> Result<(), &'static str>
 
 /// A separately-versioned component application.  Component definitions keep
 /// their local node/state handles; call nodes connect those local programs.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct ComponentApplication {
     pub version: &'static str,
     pub root_component: usize,
@@ -53,53 +57,62 @@ pub struct ComponentApplication {
 
 /// The router is deliberately a separate artifact: graphs keep local runtime
 /// handles while this manifest owns the links between route instances.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct RouteManifest {
     pub version: u32,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub revision: String,
     pub root_graph_id: String,
     /// Not-found boundary graph for the root route
     /// (`createRootRoute({ notFoundComponent })`). The root route is
     /// deliberately outside `routes`, so its boundary needs a separate slot.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub root_not_found_graph_id: Option<String>,
     pub routes: Vec<RouteManifestEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct RouteManifestEntry {
     pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub parent_id: Option<String>,
     pub path: String,
     pub graph_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub pending_graph_id: Option<String>,
-    #[serde(
-        skip_serializing_if = "is_replace_pending_mode",
-        default = "default_pending_mode"
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            skip_serializing_if = "is_replace_pending_mode",
+            default = "default_pending_mode"
+        )
     )]
     pub pending_mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub error_graph_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub not_found_graph_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub loader_action: Option<usize>,
     pub outlet_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub meta: Option<RouteMetadata>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct RouteMetadata {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub description: Option<String>,
 }
 
@@ -124,10 +137,12 @@ impl RouteManifest {
     }
 }
 
+#[cfg(feature = "serde")]
 fn is_replace_pending_mode(value: &String) -> bool {
     value == "replace"
 }
 
+#[cfg(feature = "serde")]
 fn default_pending_mode() -> String {
     "replace".into()
 }
@@ -193,13 +208,17 @@ pub const SSR_SNAPSHOT_VERSION: u32 = 2;
 pub const ROOT_GRAPH_INSTANCE_ID: &str = "root/outlet:main";
 
 /// The server-rendered execution state for one request.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct PlecSsrSnapshot {
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub version: u32,
     /// Must equal the `RouteManifest` revision (the freshness handshake).
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub revision: String,
     /// The matched route chain, outermost first.
     pub routes: Vec<SsrRouteInstance>,
@@ -207,7 +226,7 @@ pub struct PlecSsrSnapshot {
     pub public: SsrPublicState,
     /// Outcomes of route loaders executed server-side, keyed by manifest
     /// entry (`graph_id` + `loader_action`).
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub loaders: Vec<SsrLoaderOutcome>,
     /// Structural ownership per mounted graph instance.
     pub structure: SsrStructure,
@@ -246,21 +265,29 @@ pub struct SsrSnapshotReferences<'a> {
     pub application: &'a dyn SsrStructureApplication,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct SsrRouteInstance {
     /// A `RouteManifestEntry.id`.
     pub route_id: String,
     /// Matched `$param` values accumulated through this entry's route branch.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")
+    )]
     pub params: std::collections::BTreeMap<String, String>,
     /// Which phase graph the instance rendered.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub phase: SsrRoutePhase,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum SsrRoutePhase {
     #[default]
     Active,
@@ -273,20 +300,31 @@ pub enum SsrRoutePhase {
     NotFound,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct SsrPublicState {
     /// Absolute request path the snapshot was produced for.
     pub location: String,
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")
+    )]
     pub exports: std::collections::BTreeMap<String, SsrPublicExport>,
 }
 
 /// One value that crossed the server boundary through an explicit public
 /// export. The declaration is carried alongside the value so consumers (and
 /// `validate`) can re-check the boundary at import time.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct SsrPublicExport {
     pub value: SsrSnapshotValue,
     pub declaration: PublicExport,
@@ -294,8 +332,9 @@ pub struct SsrPublicExport {
 
 /// A JSON-transportable value. Deliberately separate from the graph `Value`
 /// enum, which is serialize-only; the snapshot needs strict round-tripping.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(untagged))]
 pub enum SsrSnapshotValue {
     Null,
     Bool(bool),
@@ -305,6 +344,58 @@ pub enum SsrSnapshotValue {
     Record(std::collections::BTreeMap<String, SsrSnapshotValue>),
 }
 
+impl SsrSnapshotValue {
+    /// Number of bytes in the compact JSON encoding, without allocating a
+    /// serialized buffer. This is used by the browser's public-failure limit
+    /// check when the native Serde feature is not present.
+    fn compact_json_len(&self) -> Option<usize> {
+        let mut pending = vec![self];
+        let mut bytes = 0usize;
+        let mut add = |count: usize| {
+            bytes = bytes.checked_add(count)?;
+            Some(())
+        };
+        while let Some(value) = pending.pop() {
+            match value {
+                Self::Null => add(4)?,
+                Self::Bool(true) => add(4)?,
+                Self::Bool(false) => add(5)?,
+                Self::Number(number) if !number.is_finite() => add(4)?,
+                Self::Number(number) => {
+                    let mut buffer = zmij::Buffer::new();
+                    add(buffer.format_finite(*number).len())?;
+                }
+                Self::String(value) => add(compact_json_string_len(value)?)?,
+                Self::Array(values) => {
+                    add(2 + values.len().saturating_sub(1))?;
+                    pending.extend(values.iter());
+                }
+                Self::Record(values) => {
+                    add(2 + values.len().saturating_sub(1))?;
+                    for (name, value) in values {
+                        add(compact_json_string_len(name)?.checked_add(1)?)?;
+                        pending.push(value);
+                    }
+                }
+            }
+        }
+        Some(bytes)
+    }
+}
+
+fn compact_json_string_len(value: &str) -> Option<usize> {
+    let mut bytes = 2usize;
+    for character in value.chars() {
+        let escaped = match character {
+            '"' | '\\' | '\u{08}' | '\u{0c}' | '\n' | '\r' | '\t' => 2,
+            character if character <= '\u{1f}' => 6,
+            character => character.len_utf8(),
+        };
+        bytes = bytes.checked_add(escaped)?;
+    }
+    Some(bytes)
+}
+
 /// Canonical loader reference derived from a `RouteManifestEntry`:
 /// `"{graph_id}#action:{n}"`. Graph ids may contain `#`, so parse refs from
 /// the right.
@@ -312,8 +403,12 @@ pub fn loader_ref(graph_id: &str, action: usize) -> String {
     format!("{graph_id}#action:{action}")
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct SsrLoaderOutcome {
     /// The `RouteManifestEntry.graph_id` that owns the loader.
     pub graph_id: String,
@@ -327,16 +422,20 @@ pub struct SsrLoaderOutcome {
 /// snapshot (the server resolves them before rendering); a `Redirect` outcome
 /// arriving at any snapshot consumer must fail closed. There is no
 /// "unresolved" state to represent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "kind", rename_all = "camelCase"))]
 pub enum SsrLoaderState {
     Resolved {
         value: SsrSnapshotValue,
     },
     Rejected {
-        #[serde(
-            default = "PublicRouteLoaderFailure::generic",
-            deserialize_with = "deserialize_public_route_loader_failure"
+        #[cfg_attr(
+            feature = "serde",
+            serde(
+                default = "PublicRouteLoaderFailure::generic",
+                deserialize_with = "deserialize_public_route_loader_failure"
+            )
         )]
         failure: PublicRouteLoaderFailure,
     },
@@ -346,6 +445,7 @@ pub enum SsrLoaderState {
 /// Only the public failure record is lenient at the snapshot boundary. The
 /// enclosing loader outcome and every other snapshot field retain strict
 /// deserialization and validation.
+#[cfg(feature = "serde")]
 fn deserialize_public_route_loader_failure<'de, D>(
     deserializer: D,
 ) -> Result<PublicRouteLoaderFailure, D::Error>
@@ -363,23 +463,40 @@ where
 /// The deliberately small application-visible route-loader failure contract.
 /// Internal evaluator, runtime, protocol, and resource diagnostics must not be
 /// represented here.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct PublicRouteLoaderFailure {
     pub kind: PublicRouteLoaderFailureKind,
     pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub status: Option<u16>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub status_text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub body: Option<SsrSnapshotValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub url: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum PublicRouteLoaderFailureKind {
     Http,
     Network,
@@ -415,7 +532,8 @@ impl PublicRouteLoaderFailure {
             return Err("route loader failure field exceeds limit");
         }
         if self.body.as_ref().is_some_and(|body| {
-            serde_json::to_vec(body).map_or(true, |encoded| encoded.len() > Self::MAX_BODY_BYTES)
+            body.compact_json_len()
+                .map_or(true, |len| len > Self::MAX_BODY_BYTES)
         }) {
             return Err("route loader failure body exceeds limit");
         }
@@ -546,53 +664,82 @@ mod public_status_text_tests {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct SsrStructure {
     /// Structural ownership per graph instance, keyed by instance id. The
     /// map key grammar keeps snapshot keys identical to runtime instance ids.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")
+    )]
     pub graphs: std::collections::BTreeMap<String, SsrGraphStructure>,
     /// Structural ownership for nested component instances, keyed by the
     /// component's marker path (`{instance marker path}/component:{handle}`,
     /// row-scoped below loops). Since the 2 snapshot these records are the
     /// ownership cause for nested component adoption; the DOM-shape inference
     /// fallback only serves legacy producers.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")
+    )]
     pub nested: std::collections::BTreeMap<String, SsrGraphStructure>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct SsrGraphStructure {
     /// The compiled component graph mounted at this instance.
     pub graph_id: String,
     /// Selected conditional branches, ordered by node handle.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
     pub branches: Vec<SsrBranchSelection>,
     /// Claimed loop rows, ordered by node handle.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
     pub loops: Vec<SsrLoopRows>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct SsrBranchSelection {
     /// Handle of the `Node::Conditional` within `graph_id`'s component.
     pub node: usize,
     pub selected: SsrSelectedBranch,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum SsrSelectedBranch {
     Consequent,
     Alternate,
     None,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct SsrLoopRows {
     /// Handle of the `Node::Loop` within `graph_id`'s component.
     pub node: usize,
@@ -1057,8 +1204,9 @@ fn validate_escaped_segment(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct ExecutableComponent {
     pub id: String,
     pub root_node: usize,
@@ -1070,40 +1218,69 @@ pub struct ExecutableComponent {
     pub prop_programs: Vec<PropProgram>,
     pub events: Vec<Event>,
     pub inputs: Vec<Input>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub host_slots: Vec<HostSlot>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub capabilities: Vec<CookieCapability>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub server_actions: Vec<ServerActionRef>,
     pub state_slots: Vec<StateSlot>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub ref_slots: Vec<RefSlot>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub host_refs: Vec<HostRef>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub reactions: Vec<Reaction>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub listeners: Vec<Listener>,
     pub parameters: Vec<ComponentParameter>,
     pub expressions: Vec<ExpressionProgram>,
     pub actions: Vec<ActionProgram>,
     pub loops: Vec<Loop>,
     pub dependency_edges: Vec<DependencyEdge>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub route_outlets: Vec<RouteOutlet>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct ComponentParameter {
     pub name: usize,
     pub callable: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "std::ops::Not::not", default)
+    )]
     pub component: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(tag = "kind", rename_all = "camelCase"))]
 pub enum ComponentProp {
     Value {
         name: usize,
@@ -1116,21 +1293,26 @@ pub enum ComponentProp {
     Component {
         name: usize,
         component: usize,
-        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[cfg_attr(
+            feature = "serde",
+            serde(skip_serializing_if = "Option::is_none", default)
+        )]
         host: Option<HostComponentTarget>,
     },
 }
 
 /// Stable identity for a registered external renderer component.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct HostComponentTarget {
     pub provider: String,
     pub component: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct ExecutableApplication {
     pub version: &'static str,
     pub root_node: usize,
@@ -1142,28 +1324,55 @@ pub struct ExecutableApplication {
     pub prop_programs: Vec<PropProgram>,
     pub events: Vec<Event>,
     pub inputs: Vec<Input>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub host_slots: Vec<HostSlot>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub capabilities: Vec<CookieCapability>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub server_actions: Vec<ServerActionRef>,
     pub state_slots: Vec<StateSlot>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub ref_slots: Vec<RefSlot>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub host_refs: Vec<HostRef>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub reactions: Vec<Reaction>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub listeners: Vec<Listener>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub parameters: Vec<ComponentParameter>,
     pub expressions: Vec<ExpressionProgram>,
     pub actions: Vec<ActionProgram>,
     pub loops: Vec<Loop>,
     pub dependency_edges: Vec<DependencyEdge>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub route_outlets: Vec<RouteOutlet>,
 }
 
@@ -1198,8 +1407,9 @@ impl Default for ExecutableApplication {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(untagged))]
 pub enum Value {
     Null,
     Bool(bool),
@@ -1209,16 +1419,17 @@ pub enum Value {
     Record(std::collections::BTreeMap<String, Value>),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "op", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(tag = "op", rename_all = "camelCase"))]
 pub enum Node {
     Element {
         tag: usize,
-        #[serde(skip_serializing_if = "is_html_namespace")]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "is_html_namespace"))]
         namespace: &'static str,
         parent: Option<usize>,
         children: Vec<usize>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
         host_ref: Option<usize>,
     },
     Text {
@@ -1239,7 +1450,10 @@ pub enum Node {
         component: usize,
         parent: Option<usize>,
         props: Vec<ComponentProp>,
-        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        #[cfg_attr(
+            feature = "serde",
+            serde(skip_serializing_if = "Vec::is_empty", default)
+        )]
         children: Vec<usize>,
     },
     /// A component whose graph definition comes from a component-valued prop.
@@ -1247,7 +1461,10 @@ pub enum Node {
         prop: usize,
         parent: Option<usize>,
         props: Vec<ComponentProp>,
-        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        #[cfg_attr(
+            feature = "serde",
+            serde(skip_serializing_if = "Vec::is_empty", default)
+        )]
         children: Vec<usize>,
     },
     /// A provider-owned DOM subtree. The runtime owns only the boundary.
@@ -1264,118 +1481,141 @@ pub enum Node {
     },
 }
 
+#[cfg(feature = "serde")]
 fn is_html_namespace(value: &&'static str) -> bool {
     *value == "html"
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Text {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub value: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub binding: Option<usize>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Binding {
     pub target: usize,
     pub sink: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub name: Option<usize>,
     pub expression: usize,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct PropProgram {
     pub target: usize,
     pub writes: Vec<PropWrite>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct PropWrite {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub name: Option<usize>,
     pub kind: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub constant: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub expression: Option<usize>,
-    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "std::ops::Not::not", default)
+    )]
     pub spread: bool,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Event {
     pub target: usize,
-    #[serde(rename = "type")]
+    #[cfg_attr(feature = "serde", serde(rename = "type"))]
     pub event_type: usize,
     pub action: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub r#loop: Option<usize>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub fields: Vec<EventField>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Input {
     pub name: usize,
     pub kind: &'static str,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct HostSlot {
     pub kind: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub query: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub name: Option<usize>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct CookieCapability {
     pub kind: &'static str,
     pub name: String,
     pub operations: Vec<&'static str>,
     pub path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub same_site: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub secure: Option<bool>,
     pub expiry_modes: Vec<&'static str>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct EventField {
     pub name: usize,
     pub slot: usize,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct StateSlot {
     pub initial_expression: usize,
     pub frame_slot: usize,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct RefSlot {
     pub initial_expression: usize,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct HostRef {}
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Reaction {
     pub dependencies: Vec<usize>,
     pub action: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub cleanup_action: Option<usize>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct Listener {
     pub source: &'static str,
     pub event: usize,
     pub action: usize,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct ExpressionProgram {
     pub instructions: Vec<ExpressionInstruction>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "op", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(tag = "op", rename_all = "camelCase"))]
 pub enum ExpressionInstruction {
     Constant {
         constant: usize,
@@ -1418,12 +1658,18 @@ pub enum ExpressionInstruction {
     },
     MakeArray {
         count: usize,
-        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        #[cfg_attr(
+            feature = "serde",
+            serde(skip_serializing_if = "Vec::is_empty", default)
+        )]
         spreads: Vec<bool>,
     },
     MakeRecord {
         fields: Vec<usize>,
-        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        #[cfg_attr(
+            feature = "serde",
+            serde(skip_serializing_if = "Vec::is_empty", default)
+        )]
         spreads: Vec<bool>,
     },
     OmitFields {
@@ -1432,13 +1678,13 @@ pub enum ExpressionInstruction {
     Map {
         mapper: usize,
         item_slot: usize,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
         index_slot: Option<usize>,
     },
     Filter {
         predicate: usize,
         item_slot: usize,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
         index_slot: Option<usize>,
     },
     Jump {
@@ -1449,34 +1695,41 @@ pub enum ExpressionInstruction {
     },
     Return,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct ActionProgram {
-    #[serde(skip_serializing_if = "is_zero", default)]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "is_zero", default))]
     pub frame_slots: usize,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub parameter_slots: Vec<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub loader_result_state: Option<usize>,
-    #[serde(skip_serializing_if = "is_false", default)]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "is_false", default))]
     pub route_loader: bool,
     /// Loader fetches decode to the response body (not the transport
     /// envelope). Hosts gate envelope unwrapping on this flag instead of
     /// shape-sniffing the loader value.
-    #[serde(skip_serializing_if = "is_false", default)]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "is_false", default))]
     pub loader_decode_body: bool,
     pub instructions: Vec<ActionInstruction>,
 }
 
+#[cfg(feature = "serde")]
 fn is_zero(value: &usize) -> bool {
     *value == 0
 }
 
+#[cfg(feature = "serde")]
 fn is_false(value: &bool) -> bool {
     !*value
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "op", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(tag = "op", rename_all = "camelCase"))]
 pub enum ActionInstruction {
     Evaluate {
         expression: usize,
@@ -1494,9 +1747,9 @@ pub enum ActionInstruction {
         pending: usize,
         error: usize,
         data: usize,
-        #[serde(rename = "invocationSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "invocationSlot"))]
         invocation_slot: usize,
-        #[serde(rename = "valueSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "valueSlot"))]
         value_slot: usize,
         success: bool,
     },
@@ -1519,59 +1772,98 @@ pub enum ActionInstruction {
     RouteReload,
     CallProp {
         prop: usize,
-        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        #[cfg_attr(
+            feature = "serde",
+            serde(skip_serializing_if = "Vec::is_empty", default)
+        )]
         arguments: Vec<usize>,
     },
     CallPropOptional {
         prop: usize,
-        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        #[cfg_attr(
+            feature = "serde",
+            serde(skip_serializing_if = "Vec::is_empty", default)
+        )]
         arguments: Vec<usize>,
     },
     CollectionMutation {
         input: usize,
         kind: &'static str,
         key: usize,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
         value: Option<usize>,
     },
     CapabilityRequest {
-        #[serde(flatten)]
+        #[cfg_attr(feature = "serde", serde(flatten))]
         request: CapabilityRequest,
-        #[serde(rename = "successPc")]
+        #[cfg_attr(feature = "serde", serde(rename = "successPc"))]
         success_pc: usize,
-        #[serde(rename = "failurePc")]
+        #[cfg_attr(feature = "serde", serde(rename = "failurePc"))]
         failure_pc: usize,
-        #[serde(rename = "finallyPc", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(rename = "finallyPc", skip_serializing_if = "Option::is_none")
+        )]
         finally_pc: Option<usize>,
-        #[serde(rename = "resultSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "resultSlot"))]
         result_slot: usize,
-        #[serde(rename = "errorSlot")]
+        #[cfg_attr(feature = "serde", serde(rename = "errorSlot"))]
         error_slot: usize,
     },
     Call {
         action: usize,
-        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        #[cfg_attr(
+            feature = "serde",
+            serde(skip_serializing_if = "Vec::is_empty", default)
+        )]
         arguments: Vec<usize>,
-        #[serde(rename = "successPc", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(rename = "successPc", skip_serializing_if = "Option::is_none")
+        )]
         success_pc: Option<usize>,
-        #[serde(rename = "failurePc", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(rename = "failurePc", skip_serializing_if = "Option::is_none")
+        )]
         failure_pc: Option<usize>,
-        #[serde(rename = "resultSlot", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(rename = "resultSlot", skip_serializing_if = "Option::is_none")
+        )]
         result_slot: Option<usize>,
-        #[serde(rename = "errorSlot", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(rename = "errorSlot", skip_serializing_if = "Option::is_none")
+        )]
         error_slot: Option<usize>,
     },
     CallFrame {
         parameter: usize,
-        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        #[cfg_attr(
+            feature = "serde",
+            serde(skip_serializing_if = "Vec::is_empty", default)
+        )]
         arguments: Vec<usize>,
-        #[serde(rename = "successPc", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(rename = "successPc", skip_serializing_if = "Option::is_none")
+        )]
         success_pc: Option<usize>,
-        #[serde(rename = "failurePc", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(rename = "failurePc", skip_serializing_if = "Option::is_none")
+        )]
         failure_pc: Option<usize>,
-        #[serde(rename = "resultSlot", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(rename = "resultSlot", skip_serializing_if = "Option::is_none")
+        )]
         result_slot: Option<usize>,
-        #[serde(rename = "errorSlot", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(rename = "errorSlot", skip_serializing_if = "Option::is_none")
+        )]
         error_slot: Option<usize>,
     },
     Jump {
@@ -1581,19 +1873,21 @@ pub enum ActionInstruction {
         target: usize,
     },
     Return {
-        #[serde(skip_serializing_if = "is_success", default)]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "is_success", default))]
         outcome: ReturnOutcome,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
         value: Option<usize>,
     },
 }
 
+#[cfg(feature = "serde")]
 fn is_success(value: &ReturnOutcome) -> bool {
     matches!(value, ReturnOutcome::Success)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 #[derive(Default)]
 pub enum ReturnOutcome {
     #[default]
@@ -1607,78 +1901,100 @@ pub enum ReturnOutcome {
     NotFound,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "capability", content = "request", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(tag = "capability", content = "request", rename_all = "camelCase")
+)]
 pub enum CapabilityRequest {
     Fetch {
         url: usize,
         method: &'static str,
-        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        #[cfg_attr(
+            feature = "serde",
+            serde(skip_serializing_if = "Vec::is_empty", default)
+        )]
         headers: Vec<FetchHeader>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
         body: Option<usize>,
         decode: &'static str,
-        #[serde(rename = "requireOk")]
+        #[cfg_attr(feature = "serde", serde(rename = "requireOk"))]
         require_ok: bool,
     },
     Cookie {
         operation: &'static str,
         name: usize,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
         value: Option<usize>,
         path: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
         same_site: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
         secure: Option<bool>,
         expiry: &'static str,
-        #[serde(rename = "maxAge", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(rename = "maxAge", skip_serializing_if = "Option::is_none")
+        )]
         max_age: Option<i64>,
     },
     ServerAction {
         action: usize,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Vec::is_empty")
+        )]
         arguments: Vec<usize>,
     },
 }
 
 /// Opaque externally routable server-action identity. It is never a local
 /// table index and is safe to include in public executable graphs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct ServerActionRef {
     pub id: String,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct FetchHeader {
     pub name: usize,
     pub value: usize,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct Loop {
     pub source_expression: usize,
     pub key_expression: usize,
     pub item_slot: usize,
     pub row_template: usize,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Vec::is_empty", default)
+    )]
     pub dependency_slots: Vec<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub input: Option<usize>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct DependencyEdge {
     pub source: DependencyEndpoint,
     pub target: DependencyEndpoint,
 }
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct DependencyEndpoint {
     pub kind: &'static str,
     pub handle: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub r#loop: Option<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct RouteOutlet {
     pub id: String,
     pub node: usize,
@@ -1687,6 +2003,32 @@ pub struct RouteOutlet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failure_body_json_length_matches_native_serde_encoding() {
+        let values = [
+            SsrSnapshotValue::String("quote \" slash \\ controls\0\u{08}\u{0c}\n\r\t ☃".into()),
+            SsrSnapshotValue::Array(vec![
+                SsrSnapshotValue::Number(-0.0),
+                SsrSnapshotValue::Number(1.0e21),
+                SsrSnapshotValue::Number(1.0e-7),
+                SsrSnapshotValue::Number(f64::NAN),
+            ]),
+            SsrSnapshotValue::Record(std::collections::BTreeMap::from([
+                ("a".into(), SsrSnapshotValue::Null),
+                (
+                    "b".into(),
+                    SsrSnapshotValue::Array(vec![SsrSnapshotValue::Bool(true)]),
+                ),
+            ])),
+        ];
+        for value in values {
+            assert_eq!(
+                value.compact_json_len(),
+                Some(serde_json::to_vec(&value).unwrap().len())
+            );
+        }
+    }
 
     #[test]
     fn mutation_publish_serializes_slot_fields_in_camel_case() {
@@ -1758,12 +2100,10 @@ mod tests {
     fn route_manifest_rejects_a_non_v3_version() {
         let value =
             serde_json::json!({"version":2,"revision":"x","rootGraphId":"root","routes":[]});
-        assert!(
-            serde_json::from_value::<RouteManifest>(value)
-                .unwrap()
-                .validate()
-                .is_err()
-        );
+        assert!(serde_json::from_value::<RouteManifest>(value)
+            .unwrap()
+            .validate()
+            .is_err());
     }
 
     fn test_manifest() -> RouteManifest {
@@ -2224,14 +2564,12 @@ mod tests {
         let snapshot = valid_snapshot();
         let manifest = test_manifest();
         let application = test_application(true);
-        assert!(
-            snapshot
-                .validate(&SsrSnapshotReferences {
-                    manifest: &manifest,
-                    application: &application,
-                })
-                .is_ok()
-        );
+        assert!(snapshot
+            .validate(&SsrSnapshotReferences {
+                manifest: &manifest,
+                application: &application,
+            })
+            .is_ok());
     }
 
     #[test]
@@ -2306,7 +2644,8 @@ mod tests {
     fn ssr_snapshot_round_trips_nested_records() {
         let json = serde_json::to_value(valid_snapshot()).unwrap();
         assert_eq!(
-            json["structure"]["nested"]["root/outlet:main/outlet:main/key:todos/component:1"]["graphId"],
+            json["structure"]["nested"]["root/outlet:main/outlet:main/key:todos/component:1"]
+                ["graphId"],
             "app#Todo"
         );
         assert_eq!(
@@ -2446,26 +2785,24 @@ mod tests {
 
     #[test]
     fn ssr_snapshot_rejects_duplicate_and_unordered_branch_selections() {
-        assert!(
-            snapshot_error(|snapshot| {
-                snapshot
-                    .structure
-                    .graphs
-                    .get_mut("root/outlet:main/outlet:main/key:todos")
-                    .unwrap()
-                    .branches = vec![
-                    SsrBranchSelection {
-                        node: 0,
-                        selected: SsrSelectedBranch::Consequent,
-                    },
-                    SsrBranchSelection {
-                        node: 0,
-                        selected: SsrSelectedBranch::None,
-                    },
-                ];
-            })
-            .contains("must be ordered by node handle without duplicates")
-        );
+        assert!(snapshot_error(|snapshot| {
+            snapshot
+                .structure
+                .graphs
+                .get_mut("root/outlet:main/outlet:main/key:todos")
+                .unwrap()
+                .branches = vec![
+                SsrBranchSelection {
+                    node: 0,
+                    selected: SsrSelectedBranch::Consequent,
+                },
+                SsrBranchSelection {
+                    node: 0,
+                    selected: SsrSelectedBranch::None,
+                },
+            ];
+        })
+        .contains("must be ordered by node handle without duplicates"));
     }
 
     #[test]
@@ -2591,14 +2928,12 @@ mod tests {
         let snapshot: PlecSsrSnapshot = serde_json::from_value(json).unwrap();
         let manifest = test_manifest();
         let application = test_application(true);
-        assert!(
-            snapshot
-                .validate(&SsrSnapshotReferences {
-                    manifest: &manifest,
-                    application: &application,
-                })
-                .is_err()
-        );
+        assert!(snapshot
+            .validate(&SsrSnapshotReferences {
+                manifest: &manifest,
+                application: &application,
+            })
+            .is_err());
     }
 
     #[test]

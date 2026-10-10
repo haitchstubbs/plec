@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+#[cfg(feature = "serde")]
 use serde::Deserialize;
 use wasm_bindgen::JsValue;
 
@@ -166,32 +167,34 @@ fn decode_metadata(value: JsValue) -> Result<plec_ir::RouteMetadata, JsValue> {
     Ok(plec_ir::RouteMetadata { title, description })
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct RouteManifest {
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub version: Option<u32>,
     pub root_graph_id: String,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub root_not_found_graph_id: Option<String>,
     pub routes: Vec<RouteManifestEntry>,
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct RouteManifestEntry {
     pub id: String,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub parent_id: Option<String>,
     pub path: String,
     pub graph_id: String,
     pub pending_graph_id: Option<String>,
     pub error_graph_id: Option<String>,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub not_found_graph_id: Option<String>,
     pub outlet_id: String,
     pub loader_action: Option<usize>,
-    #[serde(default = "default_pending_mode")]
+    #[cfg_attr(feature = "serde", serde(default = "default_pending_mode"))]
     pub pending_mode: String,
 }
 

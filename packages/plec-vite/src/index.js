@@ -121,6 +121,7 @@ export function plec(options) {
         } catch (error) {
           await rm(candidate, { recursive: true, force: true });
           console.error(`Plec dev: ${error.message}`);
+          if (initial) throw error;
           console.error('Plec dev: serving previous successful build');
         }
       } while (dirty && !closing);
@@ -223,7 +224,7 @@ export function plec(options) {
         );
       },
     },
-    configureServer(vite) {
+    async configureServer(vite) {
       watcher = vite.watcher;
       if (vite.httpServer) {
         vite.httpServer.headersTimeout = 10_000;
@@ -274,7 +275,7 @@ export function plec(options) {
           return;
         void build(vite);
       });
-      void build(vite, true);
+      await build(vite, true);
     },
   };
 

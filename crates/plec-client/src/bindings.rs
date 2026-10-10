@@ -75,7 +75,7 @@ pub fn typed_apply_value(
         js_sys::Reflect::set(
             &element,
             &JsValue::from_str(name),
-            &serde_wasm_bindgen::to_value(&value)?,
+            &plec_schema::js_encode::runtime_value(&value, false)?,
         )
         .map_err(|_| JsValue::from_str("property write failed"))?;
         return Ok(());
@@ -189,7 +189,7 @@ pub fn typed_apply_spread(
             js_sys::Reflect::set(
                 &element,
                 &JsValue::from_str("value"),
-                &serde_wasm_bindgen::to_value(&value)?,
+                &plec_schema::js_encode::runtime_value(&value, false)?,
             )
             .map_err(|_| JsValue::from_str("spread property write failed"))?;
         } else if matches!(value, RuntimeValue::Bool(false) | RuntimeValue::Null) {

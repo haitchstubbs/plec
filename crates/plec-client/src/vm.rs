@@ -461,8 +461,7 @@ impl BrowserActionHost<'_> {
                 .check_limits()
                 .map_err(|_| ActionError("server action argument exceeds value limits".into()))?;
         }
-        let body = serde_json::to_string(&arguments)
-            .map_err(|_| ActionError("server action arguments are not serializable".into()))?;
+        let body = plec_schema::json_encode::runtime_values(&arguments);
         if body.len() > plec_ir::limits::MAX_REQUEST_BODY_BYTES {
             return Err(ActionError(
                 "server action arguments exceed byte limit".into(),
@@ -1156,11 +1155,9 @@ mod tests {
         // never run.
         let suspended_generation = instance.runtime.graph_generation;
         instance.runtime.invalidate_fetches();
-        assert!(
-            instance
-                .runtime_for_generation_mut(suspended_generation)
-                .is_none()
-        );
+        assert!(instance
+            .runtime_for_generation_mut(suspended_generation)
+            .is_none());
         assert_eq!(instance.runtime.states[0], RuntimeValue::Bool(true));
         assert_eq!(instance.runtime.states[1], RuntimeValue::Null);
         assert_eq!(instance.runtime.states[2], RuntimeValue::Null);

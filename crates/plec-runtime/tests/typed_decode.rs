@@ -1,3 +1,4 @@
+use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -163,4 +164,70 @@ fn normalization_matches_json_number_coercions_without_a_json_decode_tree() {
         plec_client::runtime::normalize_json_value(&JsValue::from_f64(-0.0), 0).unwrap();
     assert_eq!(negative_zero.as_f64(), Some(0.0));
     assert!(!negative_zero.as_f64().unwrap().is_sign_negative());
+}
+
+#[wasm_bindgen_test]
+fn handwritten_js_encoders_match_serde_wasm_values() {
+    use serde::Serialize as _;
+    let update = plec_schema::delta::UpdateMetrics {
+        reconciliation_us: 1.25,
+        dom_operations: 3,
+        nodes_touched: 4,
+        bindings_touched: 5,
+        prop_writes: 6,
+        row_inserts: 7,
+        row_removes: 8,
+        row_moves: 9,
+        dom_nodes_moved: 10,
+        wasm_dom_us: 11.5,
+    };
+    let serde_update = serde_wasm_bindgen::to_value(&update).unwrap();
+    let direct_update = plec_schema::js_encode::update_metrics(&update).unwrap();
+    assert_eq!(
+        js_sys::JSON::stringify(&direct_update).unwrap().as_string(),
+        js_sys::JSON::stringify(&serde_update).unwrap().as_string()
+    );
+
+    let mount = plec_schema::delta::MountMetrics {
+        decode_us: 1.0,
+        program_revision: Some("rev".into()),
+        ..Default::default()
+    };
+    let serde_mount = serde_wasm_bindgen::to_value(&mount).unwrap();
+    let direct_mount = plec_schema::js_encode::mount_metrics(&mount).unwrap();
+    assert_eq!(
+        js_sys::JSON::stringify(&direct_mount).unwrap().as_string(),
+        js_sys::JSON::stringify(&serde_mount).unwrap().as_string()
+    );
+    let mount_without_revision = plec_schema::delta::MountMetrics::default();
+    assert_eq!(
+        js_sys::JSON::stringify(
+            &plec_schema::js_encode::mount_metrics(&mount_without_revision).unwrap()
+        )
+        .unwrap()
+        .as_string(),
+        js_sys::JSON::stringify(&serde_wasm_bindgen::to_value(&mount_without_revision).unwrap())
+            .unwrap()
+            .as_string()
+    );
+
+    let value = plec_schema::RuntimeValue::Record(std::collections::HashMap::from([(
+        "nested".into(),
+        plec_schema::RuntimeValue::Array(vec![plec_schema::RuntimeValue::String("value".into())]),
+    )]));
+    let default = plec_schema::js_encode::runtime_value(&value, false).unwrap();
+    assert!(default.is_instance_of::<js_sys::Map>());
+    let json_compatible = plec_schema::js_encode::runtime_value(&value, true).unwrap();
+    assert!(json_compatible.is_object() && !json_compatible.is_instance_of::<js_sys::Map>());
+    let serde_compatible = value
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .unwrap();
+    assert_eq!(
+        js_sys::JSON::stringify(&json_compatible)
+            .unwrap()
+            .as_string(),
+        js_sys::JSON::stringify(&serde_compatible)
+            .unwrap()
+            .as_string()
+    );
 }
