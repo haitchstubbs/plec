@@ -44,6 +44,8 @@ web-sys = { workspace = true }
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
-plec-schema = { path = "../plec-schema", version = "0.1.0", features = ["serde"] }
+plec-schema = { path = "../plec-schema", version = "0.1.0", features = [
+  "serde",
+] }
 serde_json = { workspace = true }
 serde-wasm-bindgen = { workspace = true }
