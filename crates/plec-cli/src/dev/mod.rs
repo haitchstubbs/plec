@@ -25,6 +25,7 @@ pub mod trace;
 pub mod verify;
 pub mod version;
 pub mod wasm_section;
+pub mod wasm_size;
 pub mod wasmtest;
 
 use clap::Subcommand;
@@ -123,6 +124,12 @@ pub enum WorkspaceCommand {
     Markers {
         #[command(subcommand)]
         command: MarkersCommand,
+    },
+
+    /// Inspect and compare compiled WASM and server artifact sizes.
+    WasmSize {
+        #[command(subcommand)]
+        command: WasmSizeCommand,
     },
 
     /// Show, set, or verify the Plec product SemVer.
@@ -309,6 +316,40 @@ pub enum GraphCommand {
     },
 }
 
+#[derive(Subcommand)]
+pub enum WasmSizeCommand {
+    /// Rebuild production artifacts and write JSON/HTML size reports.
+    Inspect {
+        #[arg(long, default_value = ".cache/plec/wasm-size.json")]
+        json: PathBuf,
+        #[arg(long, default_value = ".cache/plec/wasm-size.html")]
+        html: PathBuf,
+    },
+    /// Compare inventories captured from two git revisions.
+    Diff {
+        base: String,
+        target: String,
+        /// Include unchanged functions as well as changed ones.
+        #[arg(long)]
+        all: bool,
+        /// Maximum function rows to print (ignored with --all).
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Rank functions from the latest inventory, optionally by Rust crate.
+    Top {
+        #[arg(long = "crate")]
+        crate_name: Option<String>,
+        /// Restrict to wasm, native, or server-bundle output.
+        #[arg(long)]
+        artifact: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long, default_value = ".cache/plec/wasm-size.json")]
+        input: PathBuf,
+    },
+}
+
 pub fn dispatch(command: WorkspaceCommand) -> Result<(), String> {
     let repo = Repo::discover()?;
 
@@ -385,6 +426,27 @@ pub fn dispatch(command: WorkspaceCommand) -> Result<(), String> {
         WorkspaceCommand::Graph { command } => dispatch_graph(&repo, command),
         WorkspaceCommand::Markers { command } => dispatch_markers(&repo, command),
         WorkspaceCommand::Version { set, check } => version::run(&repo, set, check),
+        WorkspaceCommand::WasmSize { command } => match command {
+            WasmSizeCommand::Inspect { json, html } => wasm_size::inspect(&repo, &json, &html),
+            WasmSizeCommand::Diff {
+                base,
+                target,
+                all,
+                limit,
+            } => wasm_size::diff(&repo, &base, &target, all, limit),
+            WasmSizeCommand::Top {
+                crate_name,
+                artifact,
+                limit,
+                input,
+            } => wasm_size::top(
+                &repo,
+                &input,
+                crate_name.as_deref(),
+                artifact.as_deref(),
+                limit,
+            ),
+        },
     }
 }
 

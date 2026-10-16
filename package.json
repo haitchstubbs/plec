@@ -57,6 +57,7 @@
     "@puppeteer/browsers": "3.2.2",
     "@types/node": "^24.4.0",
     "binaryen": "^131.0.0",
+    "chart.js": "4.5.1",
     "dotenv-cli": "^11.0.0",
     "prettier": "^3.9.6",
     "prettier-plugin-toml": "^2.0.6",

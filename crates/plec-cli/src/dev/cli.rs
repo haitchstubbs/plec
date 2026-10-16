@@ -138,6 +138,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 styles_href: None,
                 preloads: Vec::new(),
                 runtime_source: runtime_source.into(),
+                server_metafile: None,
             })
             .map_err(crate::diagnostic::DevelopmentDiagnostic::build)?;
             println!(

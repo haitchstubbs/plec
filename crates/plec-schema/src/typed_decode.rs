@@ -31,10 +31,9 @@ fn defaulted<T>(
     default: T,
     decode: impl FnOnce(&JsValue) -> Result<T, JsValue>,
 ) -> Result<T, JsValue> {
-    if object.has(name) {
-        field(object, name, decode)
-    } else {
-        Ok(default)
+    match object.get_if_present(name)? {
+        Some(value) => decode(&value),
+        None => Ok(default),
     }
 }
 
@@ -47,6 +46,11 @@ fn array<T>(
     }
     let array = value.unchecked_ref::<js_sys::Array>();
     let length = array.length();
+    if length as usize > plec_ir::limits::MAX_DECODE_JS_NODES {
+        return Err(JsValue::from_str(
+            "payload property or element count exceeds the decode width limit",
+        ));
+    }
     let mut decoded = Vec::with_capacity(length as usize);
     for index in 0..length {
         decoded.push(decode(&array.get(index))?);

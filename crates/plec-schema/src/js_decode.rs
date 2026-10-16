@@ -49,13 +49,17 @@ impl<'a> ObjectDecoder<'a> {
     }
 
     pub fn get(&mut self, name: &str) -> Result<JsValue, JsValue> {
+        self.get_if_present(name)?.ok_or_else(|| missing(name))
+    }
+
+    pub fn get_if_present(&mut self, name: &str) -> Result<Option<JsValue>, JsValue> {
         if !self.has(name) {
-            return Err(missing(name));
+            return Ok(None);
         }
         if let Some(fields) = &mut self.fields {
             fields.retain(|field| field != name);
         }
-        js_sys::Reflect::get(self.value, &JsValue::from_str(name))
+        js_sys::Reflect::get(self.value, &JsValue::from_str(name)).map(Some)
     }
 
     pub fn get_alias(&mut self, name: &str, alias: &str) -> Result<JsValue, JsValue> {
@@ -77,15 +81,9 @@ impl<'a> ObjectDecoder<'a> {
     }
 
     pub fn optional(&mut self, name: &str) -> Result<Option<JsValue>, JsValue> {
-        if !self.has(name) {
-            return Ok(None);
-        }
-        let value = self.get(name)?;
-        Ok(if value.is_null() || value.is_undefined() {
-            None
-        } else {
-            Some(value)
-        })
+        Ok(self
+            .get_if_present(name)?
+            .filter(|value| !value.is_null() && !value.is_undefined()))
     }
 
     pub fn defaulted(&mut self, name: &str, default: JsValue) -> Result<JsValue, JsValue> {

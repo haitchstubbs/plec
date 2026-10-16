@@ -481,6 +481,7 @@ preloads = ["/a.woff2", "/b.woff2"]
             styles_href: None,
             preloads: Vec::new(),
             runtime_source: RuntimeSource::Auto,
+            server_metafile: None,
         };
         let config = resolve_host_config(dir.path(), &options).expect("config");
         assert_eq!(config.title, "From toml");

@@ -106,7 +106,6 @@ export async function buildWasm({
       '--out-name',
       outName,
     ];
-
     // Cargo must use the workspace lockfile when wasm-pack builds the crate.
     args.push('--', '--locked');
 
@@ -152,6 +151,10 @@ export async function buildWasm({
       },
     });
 
+    if (process.env.PLEC_WASM_SIZE_ANALYSIS === '1') {
+      await bindgenWithNames(absoluteCratePath, absoluteOutDir, outName);
+    }
+
     // Optimize if requested
     if (optimize) {
       await optimizeWasm(outDir, outName);
@@ -184,6 +187,40 @@ export async function buildWasm({
  * @param {string} outDir - Output directory containing WASM file
  * @param {string} outName - Name of the WASM file (without extension)
  */
+async function bindgenWithNames(cratePath, outDir, outName) {
+  const manifestPath = path.join(cratePath, 'Cargo.toml');
+  const metadata = JSON.parse(
+    execFileSync(
+      'cargo',
+      ['metadata', '--no-deps', '--format-version', '1', '--manifest-path', manifestPath],
+      { cwd: repoRoot, encoding: 'utf8' },
+    ),
+  );
+  const manifest = path.resolve(manifestPath);
+  const crate = metadata.packages.find(
+    (item) => path.resolve(item.manifest_path) === manifest,
+  );
+  const library = crate?.targets.find(
+    (item) => item.kind.includes('cdylib') || item.kind.includes('rlib'),
+  );
+  if (!library) throw new Error(`could not find a Rust library target in ${manifestPath}`);
+  const input = path.join(
+    metadata.target_directory,
+    'wasm32-unknown-unknown',
+    'release',
+    `${library.name}.wasm`,
+  );
+  const wasmBindgen = path.join(
+    wasmBindgenBinPath(),
+    `wasm-bindgen${process.platform === 'win32' ? '.exe' : ''}`,
+  );
+  execFileSync(
+    wasmBindgen,
+    [input, '--target', 'web', '--out-dir', outDir, '--out-name', outName, '--keep-debug'],
+    { cwd: repoRoot, stdio: 'inherit' },
+  );
+}
+
 async function optimizeWasm(outDir, outName) {
   const wasmOpt = await findWasmOpt();
   const wasmTools = await findWasmTools();
@@ -212,7 +249,9 @@ async function optimizeWasm(outDir, outName) {
     wasmOpt,
     [
       '-Oz',
-      '--strip-debug',
+      ...(process.env.PLEC_WASM_SIZE_ANALYSIS === '1'
+        ? ['--debuginfo', '--strip-dwarf']
+        : ['--strip-debug']),
       '--strip-producers',
       wasmPath,
       '-o',
@@ -230,6 +269,15 @@ async function optimizeWasm(outDir, outName) {
       stdio: 'inherit',
     },
   );
+
+  // Keep the optimized, named binary for local size attribution. This artifact
+  // has the same optimized code section as the shipped stripped file, while
+  // retaining the custom name metadata needed by wasmparser inventories.
+  if (process.env.PLEC_WASM_SIZE_ANALYSIS === '1') {
+    const analysisPath = path.join(repoRoot, '.cache/plec/runtime-analysis.wasm');
+    await mkdir(path.dirname(analysisPath), { recursive: true });
+    await writeFile(analysisPath, await readFile(optimizedWasmPath));
+  }
 
   await rm(wasmPath, { force: true });
   await rm(optimizedWasmPath, { force: true });
