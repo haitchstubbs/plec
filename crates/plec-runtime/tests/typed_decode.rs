@@ -60,6 +60,27 @@ fn component_application_decoder_rejects_missing_fields_bad_tags_and_alias_colli
 }
 
 #[wasm_bindgen_test]
+fn typed_decoder_preserves_present_undefined_and_guards_array_capacity() {
+    let application = js(r#"{"rootNode":0,"strings":[],"nodes":[]}"#);
+    assert!(plec_schema::typed::decode_typed_application(&application).is_ok());
+    js_sys::Reflect::set(&application, &JsValue::from_str("id"), &JsValue::UNDEFINED).unwrap();
+    assert!(plec_schema::typed::decode_typed_application(&application).is_err());
+
+    let envelope = js(r#"{"version":"0.10","rootComponent":0}"#);
+    let components = js_sys::Array::new();
+    components.set_length((plec_schema::limits::MAX_DECODE_JS_NODES + 1) as u32);
+    js_sys::Reflect::set(&envelope, &JsValue::from_str("components"), &components).unwrap();
+    let error = match plec_schema::typed::decode_component_application(&envelope) {
+        Ok(_) => panic!("oversized array should be rejected"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.as_string().as_deref(),
+        Some("payload property or element count exceeds the decode width limit")
+    );
+}
+
+#[wasm_bindgen_test]
 fn delta_decoder_preserves_aliases_optional_nulls_and_runtime_value_types() {
     let delta = plec_schema::delta::decode_delta_js(&js(
         r#"{"type":"insert","instanceId":null,"input_id":"items","row_key":"a","row":{"id":"a","n":2},"before_row_key":null,"ignored":true}"#,

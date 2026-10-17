@@ -1,6 +1,6 @@
 use std::{error::Error, fmt};
 
-use plec_build::{BuildError, modules::build::Stage};
+use plec_build::{modules::build::Stage, BuildError};
 
 /// Narrow CLI adapter for authoritative compiler/build failures.
 pub(crate) struct DevelopmentDiagnostic {
@@ -117,7 +117,7 @@ impl Error for DevelopmentDiagnostic {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plec_build::{BuildOptions, RuntimeSource, modules::host::resolve_host_config};
+    use plec_build::{modules::host::resolve_host_config, BuildOptions, RuntimeSource};
     use std::path::PathBuf;
 
     #[test]
@@ -211,6 +211,7 @@ mod tests {
             styles_href: None,
             preloads: Vec::new(),
             runtime_source: RuntimeSource::Auto,
+            server_metafile: None,
         };
         let error = resolve_host_config(directory.path(), &options).unwrap_err();
         assert_eq!(error.stage, Stage::Configuration);

@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::js_decode as js;
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 
 fn field<T>(
     object: &mut js::ObjectDecoder<'_>,
@@ -31,10 +31,9 @@ fn defaulted<T>(
     default: T,
     decode: impl FnOnce(&JsValue) -> Result<T, JsValue>,
 ) -> Result<T, JsValue> {
-    if object.has(name) {
-        field(object, name, decode)
-    } else {
-        Ok(default)
+    match object.get_if_present(name)? {
+        Some(value) => decode(&value),
+        None => Ok(default),
     }
 }
 
@@ -42,7 +41,21 @@ fn array<T>(
     value: &JsValue,
     decode: impl Fn(&JsValue) -> Result<T, JsValue>,
 ) -> Result<Vec<T>, JsValue> {
-    js::array(value)?.iter().map(|item| decode(&item)).collect()
+    if !value.is_instance_of::<js_sys::Array>() {
+        return Err(js::type_error("sequence"));
+    }
+    let array = value.unchecked_ref::<js_sys::Array>();
+    let length = array.length();
+    if length as usize > plec_ir::limits::MAX_DECODE_JS_NODES {
+        return Err(JsValue::from_str(
+            "payload property or element count exceeds the decode width limit",
+        ));
+    }
+    let mut decoded = Vec::with_capacity(length as usize);
+    for index in 0..length {
+        decoded.push(decode(&array.get(index))?);
+    }
+    Ok(decoded)
 }
 
 fn strings(value: &JsValue) -> Result<Vec<String>, JsValue> {

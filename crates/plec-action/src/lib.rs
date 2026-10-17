@@ -598,14 +598,10 @@ fn drive<H: ActionHost>(
                     host.route_reload()?;
                 }
                 TypedActionInstruction::CallProp { prop, arguments } => {
-                    let arguments =
-                        evaluate_arguments(arguments, &continuation.current.frame, host)?;
-                    host.call_prop(prop, arguments, false)?;
+                    call_prop(prop, arguments, false, &continuation.current.frame, host)?;
                 }
                 TypedActionInstruction::CallPropOptional { prop, arguments } => {
-                    let arguments =
-                        evaluate_arguments(arguments, &continuation.current.frame, host)?;
-                    host.call_prop(prop, arguments, true)?;
+                    call_prop(prop, arguments, true, &continuation.current.frame, host)?;
                 }
                 TypedActionInstruction::CollectionMutation {
                     input,
@@ -750,6 +746,17 @@ fn evaluate_arguments<H: ActionHost>(
         .into_iter()
         .map(|expression| host.evaluate(expression, frame))
         .collect()
+}
+
+fn call_prop<H: ActionHost>(
+    prop: usize,
+    expressions: Vec<usize>,
+    optional: bool,
+    frame: &[RuntimeValue],
+    host: &mut H,
+) -> Result<(), ActionError> {
+    let arguments = evaluate_arguments(expressions, frame, host)?;
+    host.call_prop(prop, arguments, optional)
 }
 
 #[cfg(test)]

@@ -134,6 +134,8 @@ pub struct BuildOptions {
     /// Runtime asset resolution policy. Auto preserves workspace development
     /// behavior; Package is used when dogfooding the release artifact.
     pub runtime_source: RuntimeSource,
+    /// Optional esbuild metafile output for local size attribution.
+    pub server_metafile: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -349,6 +351,7 @@ pub fn build(options: BuildOptions) -> Result<BuildResult, BuildError> {
         &server_actions,
         &server_bundle,
         options.optimize,
+        options.server_metafile.as_deref(),
     )?;
 
     host::emit_server_manifest(

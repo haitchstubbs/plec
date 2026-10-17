@@ -161,6 +161,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 styles_href: styles,
                 preloads,
                 runtime_source: runtime_source.into(),
+                server_metafile: None,
             };
 
             let result = build(options).map_err(DevelopmentDiagnostic::build)?;

@@ -1199,6 +1199,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@kurkle/color@npm:^0.3.0":
+  version: 0.3.4
+  resolution: "@kurkle/color@npm:0.3.4"
+  checksum: 10c0/0e9fd55c614b005c5f0c4c755bca19ec0293bc7513b4ea3ec1725234f9c2fa81afbc78156baf555c8b9cb0d305619253c3f5bca016067daeebb3d00ebb4ea683
+  languageName: node
+  linkType: hard
+
 "@modelcontextprotocol/sdk@npm:^1.26.0":
   version: 1.30.0
   resolution: "@modelcontextprotocol/sdk@npm:1.30.0"
@@ -3509,6 +3516,15 @@ __metadata:
   version: 2.2.0
   resolution: "chardet@npm:2.2.0"
   checksum: 10c0/8d43a1dd3ce535aa070d04139fae62f879b4388394eb1d857364ce416675a1f0f63974fba8208e9cd11b49e1a6da3e65ea6393d0fc654a8c4217c0d74c16b1b4
+  languageName: node
+  linkType: hard
+
+"chart.js@npm:4.5.1":
+  version: 4.5.1
+  resolution: "chart.js@npm:4.5.1"
+  dependencies:
+    "@kurkle/color": "npm:^0.3.0"
+  checksum: 10c0/3f2a11dcaae9079e8e6b8ad077e2ae311f04996f9da14815730891e66215ee8b5f2c0eb70b5a156e5bde0f89a41bae13506dc6153e50fd22dcb282b21eec706f
   languageName: node
   linkType: hard
 
@@ -6204,6 +6220,7 @@ __metadata:
     "@puppeteer/browsers": "npm:3.2.2"
     "@types/node": "npm:^24.4.0"
     binaryen: "npm:^131.0.0"
+    chart.js: "npm:4.5.1"
     dotenv-cli: "npm:^11.0.0"
     prettier: "npm:^3.9.6"
     prettier-plugin-toml: "npm:^2.0.6"

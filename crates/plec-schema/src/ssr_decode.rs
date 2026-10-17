@@ -42,7 +42,7 @@ fn string_map<T>(
 }
 
 pub fn decode_snapshot(v: &JsValue) -> Result<plec_ir::PlecSsrSnapshot, JsValue> {
-    let mut o = js::ObjectDecoder::new(v)?;
+    let mut o = js::ObjectDecoder::strict(v)?;
     let version = if o.has("version") {
         js::u32(&o.get("version")?)?
     } else {
@@ -73,7 +73,7 @@ pub fn decode_snapshot(v: &JsValue) -> Result<plec_ir::PlecSsrSnapshot, JsValue>
 }
 
 fn decode_route_instance(v: &JsValue) -> Result<plec_ir::SsrRouteInstance, JsValue> {
-    let mut o = js::ObjectDecoder::new(v)?;
+    let mut o = js::ObjectDecoder::strict(v)?;
     let route_id = required(&mut o, "routeId", js::string)?;
     let params = if o.has("params") {
         string_map(&o.get("params")?, js::string)?
@@ -102,7 +102,7 @@ fn decode_phase(v: &JsValue) -> Result<plec_ir::SsrRoutePhase, JsValue> {
     }
 }
 fn decode_public_state(v: &JsValue) -> Result<plec_ir::SsrPublicState, JsValue> {
-    let mut o = js::ObjectDecoder::new(v)?;
+    let mut o = js::ObjectDecoder::strict(v)?;
     let location = required(&mut o, "location", js::string)?;
     let exports = if o.has("exports") {
         string_map(&o.get("exports")?, decode_public_export)?
@@ -113,7 +113,7 @@ fn decode_public_state(v: &JsValue) -> Result<plec_ir::SsrPublicState, JsValue> 
     Ok(plec_ir::SsrPublicState { location, exports })
 }
 fn decode_public_export(v: &JsValue) -> Result<plec_ir::SsrPublicExport, JsValue> {
-    let mut o = js::ObjectDecoder::new(v)?;
+    let mut o = js::ObjectDecoder::strict(v)?;
     let value = required(&mut o, "value", decode_snapshot_value)?;
     let declaration = required(&mut o, "declaration", decode_public_export_declaration)?;
     o.reject_unknown()?;
@@ -167,7 +167,7 @@ fn decode_snapshot_value(v: &JsValue) -> Result<plec_ir::SsrSnapshotValue, JsVal
 }
 
 fn decode_loader_outcome(v: &JsValue) -> Result<plec_ir::SsrLoaderOutcome, JsValue> {
-    let mut o = js::ObjectDecoder::new(v)?;
+    let mut o = js::ObjectDecoder::strict(v)?;
     let graph_id = required(&mut o, "graphId", js::string)?;
     let action = required(&mut o, "action", js::usize)?;
     let state = required(&mut o, "state", decode_loader_state)?;
@@ -198,7 +198,7 @@ fn decode_loader_state(v: &JsValue) -> Result<plec_ir::SsrLoaderState, JsValue> 
     }
 }
 fn decode_public_failure(v: &JsValue) -> Result<plec_ir::PublicRouteLoaderFailure, JsValue> {
-    let mut o = js::ObjectDecoder::new(v)?;
+    let mut o = js::ObjectDecoder::strict(v)?;
     let kind = match js::string(&o.get("kind")?)?.as_str() {
         "http" => plec_ir::PublicRouteLoaderFailureKind::Http,
         "network" => plec_ir::PublicRouteLoaderFailureKind::Network,
@@ -231,7 +231,7 @@ fn decode_public_failure(v: &JsValue) -> Result<plec_ir::PublicRouteLoaderFailur
 }
 
 fn decode_structure(v: &JsValue) -> Result<plec_ir::SsrStructure, JsValue> {
-    let mut o = js::ObjectDecoder::new(v)?;
+    let mut o = js::ObjectDecoder::strict(v)?;
     let graphs = if o.has("graphs") {
         string_map(&o.get("graphs")?, decode_graph_structure)?
     } else {
@@ -246,7 +246,7 @@ fn decode_structure(v: &JsValue) -> Result<plec_ir::SsrStructure, JsValue> {
     Ok(plec_ir::SsrStructure { graphs, nested })
 }
 fn decode_graph_structure(v: &JsValue) -> Result<plec_ir::SsrGraphStructure, JsValue> {
-    let mut o = js::ObjectDecoder::new(v)?;
+    let mut o = js::ObjectDecoder::strict(v)?;
     let graph_id = required(&mut o, "graphId", js::string)?;
     let branches = if o.has("branches") {
         array(&o.get("branches")?, decode_branch)?
@@ -266,7 +266,7 @@ fn decode_graph_structure(v: &JsValue) -> Result<plec_ir::SsrGraphStructure, JsV
     })
 }
 fn decode_branch(v: &JsValue) -> Result<plec_ir::SsrBranchSelection, JsValue> {
-    let mut o = js::ObjectDecoder::new(v)?;
+    let mut o = js::ObjectDecoder::strict(v)?;
     let node = required(&mut o, "node", js::usize)?;
     let selected = match js::string(&o.get("selected")?)?.as_str() {
         "consequent" => plec_ir::SsrSelectedBranch::Consequent,
@@ -282,7 +282,7 @@ fn decode_branch(v: &JsValue) -> Result<plec_ir::SsrBranchSelection, JsValue> {
     Ok(plec_ir::SsrBranchSelection { node, selected })
 }
 fn decode_loop_rows(v: &JsValue) -> Result<plec_ir::SsrLoopRows, JsValue> {
-    let mut o = js::ObjectDecoder::new(v)?;
+    let mut o = js::ObjectDecoder::strict(v)?;
     let node = required(&mut o, "node", js::usize)?;
     let keys = required(&mut o, "keys", |v| array(v, js::string))?;
     o.reject_unknown()?;

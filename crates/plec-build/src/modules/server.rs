@@ -22,6 +22,7 @@ pub fn bundle(
     server_actions: &[ServerActionImport],
     outfile: &Path,
     optimize: bool,
+    metafile: Option<&Path>,
 ) -> Result<(), BuildError> {
     let stage = Stage::ServerBundle;
     let esbuild_bin = esbuild::resolve(app_dir).map_err(|error| BuildError::new(stage, error))?;
@@ -41,6 +42,9 @@ pub fn bundle(
         ),
         format!("--outfile={}", outfile.display()),
     ];
+    if let Some(metafile) = metafile {
+        args.push(format!("--metafile={}", metafile.display()));
+    }
     if optimize {
         args.push("--minify".into());
     }
@@ -289,10 +293,8 @@ mod tests {
         };
         let source = generated_source(Path::new("/app"), None, &[route], &[]);
 
-        assert!(
-            source
-                .contains("import { middleware as middleware0_0 } from \"./api/_middleware.ts\";")
-        );
+        assert!(source
+            .contains("import { middleware as middleware0_0 } from \"./api/_middleware.ts\";"));
         assert!(source.contains(
             "import { middleware as middleware0_1 } from \"./api/admin/_middleware.js\";"
         ));
