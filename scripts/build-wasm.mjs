@@ -152,7 +152,11 @@ export async function buildWasm({
     });
 
     if (process.env.PLEC_WASM_SIZE_ANALYSIS === '1') {
-      await bindgenWithNames(absoluteCratePath, absoluteOutDir, outName);
+      await bindgenWithNames(
+        absoluteCratePath,
+        absoluteOutDir,
+        outName,
+      );
     }
 
     // Optimize if requested
@@ -192,7 +196,14 @@ async function bindgenWithNames(cratePath, outDir, outName) {
   const metadata = JSON.parse(
     execFileSync(
       'cargo',
-      ['metadata', '--no-deps', '--format-version', '1', '--manifest-path', manifestPath],
+      [
+        'metadata',
+        '--no-deps',
+        '--format-version',
+        '1',
+        '--manifest-path',
+        manifestPath,
+      ],
       { cwd: repoRoot, encoding: 'utf8' },
     ),
   );
@@ -201,9 +212,13 @@ async function bindgenWithNames(cratePath, outDir, outName) {
     (item) => path.resolve(item.manifest_path) === manifest,
   );
   const library = crate?.targets.find(
-    (item) => item.kind.includes('cdylib') || item.kind.includes('rlib'),
+    (item) =>
+      item.kind.includes('cdylib') || item.kind.includes('rlib'),
   );
-  if (!library) throw new Error(`could not find a Rust library target in ${manifestPath}`);
+  if (!library)
+    throw new Error(
+      `could not find a Rust library target in ${manifestPath}`,
+    );
   const input = path.join(
     metadata.target_directory,
     'wasm32-unknown-unknown',
@@ -216,7 +231,16 @@ async function bindgenWithNames(cratePath, outDir, outName) {
   );
   execFileSync(
     wasmBindgen,
-    [input, '--target', 'web', '--out-dir', outDir, '--out-name', outName, '--keep-debug'],
+    [
+      input,
+      '--target',
+      'web',
+      '--out-dir',
+      outDir,
+      '--out-name',
+      outName,
+      '--keep-debug',
+    ],
     { cwd: repoRoot, stdio: 'inherit' },
   );
 }
@@ -274,7 +298,10 @@ async function optimizeWasm(outDir, outName) {
   // has the same optimized code section as the shipped stripped file, while
   // retaining the custom name metadata needed by wasmparser inventories.
   if (process.env.PLEC_WASM_SIZE_ANALYSIS === '1') {
-    const analysisPath = path.join(repoRoot, '.cache/plec/runtime-analysis.wasm');
+    const analysisPath = path.join(
+      repoRoot,
+      '.cache/plec/runtime-analysis.wasm',
+    );
     await mkdir(path.dirname(analysisPath), { recursive: true });
     await writeFile(analysisPath, await readFile(optimizedWasmPath));
   }
