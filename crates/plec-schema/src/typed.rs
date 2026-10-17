@@ -319,6 +319,7 @@ fn runtime_value_nodes(value: &RuntimeValue) -> usize {
         match value {
             RuntimeValue::Array(values) => stack.extend(values),
             RuntimeValue::Record(values) => stack.extend(values.values()),
+            RuntimeValue::Error { .. } => {}
             RuntimeValue::Null
             | RuntimeValue::Bool(_)
             | RuntimeValue::Number(_)

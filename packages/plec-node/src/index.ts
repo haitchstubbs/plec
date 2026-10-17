@@ -157,8 +157,23 @@ export async function createPlecHandler(
     };
     if (!generated?.hasAction(id))
       return JSON.stringify({ found: false });
-    const value = await generated.invokeAction(id, args, context);
-    return JSON.stringify({ found: true, value: value ?? null });
+    try {
+      const value = await generated.invokeAction(id, args, context);
+      return JSON.stringify({
+        found: true,
+        outcome: { kind: 'success', value: value ?? null },
+      });
+    } catch (error) {
+      const failure = publicActionFailure(error);
+      if (failure) {
+        return JSON.stringify({
+          found: true,
+          outcome: { kind: 'failure', failure },
+        });
+      }
+      console.error('[PLEC-SERVER-ACTION] action failed', error);
+      throw error;
+    }
   };
   const application: PlecApplication = await loadApplication(
     nativeOptions,
@@ -558,6 +573,35 @@ export async function createPlecHandler(
     },
   };
   return plecHandler;
+}
+
+function publicActionFailure(
+  error: unknown,
+): { code: string; message: string } | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const record = error as Error & Record<PropertyKey, unknown>;
+  if (record[Symbol.for('plec.action-failure')] !== true)
+    return undefined;
+  const fields = Object.keys(error).sort();
+  if (
+    fields.length !== 2 ||
+    fields[0] !== 'code' ||
+    fields[1] !== 'message'
+  ) {
+    return undefined;
+  }
+  const { code, message } = record;
+  if (
+    typeof code !== 'string' ||
+    code.length > 64 ||
+    !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(code) ||
+    typeof message !== 'string' ||
+    message.length === 0 ||
+    new TextEncoder().encode(message).byteLength > 1024
+  ) {
+    return undefined;
+  }
+  return { code, message };
 }
 
 export interface ServeOptions extends PlecNodeOptions {

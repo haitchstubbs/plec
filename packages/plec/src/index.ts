@@ -45,7 +45,10 @@ export {
   Outlet,
 };
 export type { PlecChild, PlecComponent, PlecNode } from './client/jsx';
-export type { PlecMutation } from './client/state/use-mutation';
+export type {
+  PlecMutation,
+  PlecMutationError,
+} from './client/state/use-mutation';
 export type { PlecController } from './client/root/root-state';
 export type {
   RedirectOptions,

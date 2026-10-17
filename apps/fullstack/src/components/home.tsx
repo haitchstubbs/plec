@@ -16,8 +16,12 @@ export function HomePage() {
     return await echoAction(value);
   });
   async function callEcho() {
-    const result = await echo.run('browser-to-node');
-    setEchoed(result.echoed);
+    try {
+      const result = await echo.run('browser-to-node');
+      setEchoed(result.echoed);
+    } catch (error) {
+      if (error instanceof Error) setEchoed(error.message);
+    }
   }
   return (
     <PageFrame>
@@ -95,6 +99,14 @@ export function HomePage() {
               >
                 {echoed}
               </output>
+              {echo.error && (
+                <p
+                  id="server-action-error"
+                  className="text-sm text-destructive"
+                >
+                  {echo.error.message}
+                </p>
+              )}
             </div>
           </InfoCard>
         </section>

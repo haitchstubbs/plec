@@ -35,9 +35,65 @@ test('server action returns through the Rust and Node execution boundary', async
   const response = await invocation;
   expect(response.status).toBe(200);
   expect(response.payload).toMatchObject({
-    echoed: 'browser-to-node',
-    hasExpectedSession: true,
+    kind: 'success',
+    value: {
+      echoed: 'browser-to-node',
+      hasExpectedSession: true,
+    },
   });
+  await expect(page.locator('#server-action-result')).toHaveText(
+    'browser-to-node',
+  );
+});
+
+test('expected action failures are serializable and reported by mutation.run', async ({
+  page,
+}) => {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await waitForMount(page);
+  const invocation = page
+    .waitForResponse((response) =>
+      new URL(response.url()).pathname.startsWith('/_plec/actions/'),
+    )
+    .then(async (response) => ({
+      status: response.status(),
+      payload: await response.json(),
+    }));
+  await page
+    .getByRole('button', { name: 'Call server action' })
+    .click();
+  const response = await invocation;
+  expect(response.status).toBe(200);
+  expect(response.payload).toEqual({
+    kind: 'failure',
+    failure: {
+      code: 'SESSION_REQUIRED',
+      message: 'Action was rejected.',
+    },
+  });
+  await expect(page.locator('#server-action-result')).toHaveText(
+    'Action was rejected.',
+  );
+  await expect(page.locator('#server-action-error')).toHaveText(
+    'Action was rejected.',
+  );
+  const actionButton = page.getByRole('button', {
+    name: 'Call server action',
+  });
+  await expect(actionButton).toBeEnabled();
+
+  await page
+    .context()
+    .addCookies([
+      { name: 'session', value: 'action-session', url: baseURL },
+    ]);
+  const successfulInvocation = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.startsWith('/_plec/actions/'),
+  );
+  await actionButton.click();
+  const successfulResponse = await successfulInvocation;
+  expect(successfulResponse.status()).toBe(200);
+  await expect(page.locator('#server-action-error')).toHaveCount(0);
   await expect(page.locator('#server-action-result')).toHaveText(
     'browser-to-node',
   );

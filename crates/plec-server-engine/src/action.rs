@@ -16,8 +16,42 @@ pub struct ServerActionRequest {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum ActionCallbackResult {
+    Success(RuntimeValue),
+    ExpectedFailure(PublicActionFailure),
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicActionFailure {
+    pub code: String,
+    pub message: String,
+}
+
+impl PublicActionFailure {
+    pub const MAX_CODE_BYTES: usize = 64;
+    pub const MAX_MESSAGE_BYTES: usize = 1024;
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let mut bytes = self.code.bytes();
+        let valid_identifier = bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+            && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+        if !valid_identifier || self.code.len() > Self::MAX_CODE_BYTES {
+            return Err("invalid action failure code");
+        }
+        if self.message.is_empty() || self.message.len() > Self::MAX_MESSAGE_BYTES {
+            return Err("invalid action failure message");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum ActionOutcome {
     Success(RuntimeValue),
+    ExpectedFailure(PublicActionFailure),
     MethodNotAllowed,
     SameOriginRequired,
     UnknownAction,
@@ -32,7 +66,7 @@ pub enum ActionOutcome {
 impl ActionOutcome {
     pub fn status(&self) -> u16 {
         match self {
-            Self::Success(_) => 200,
+            Self::Success(_) | Self::ExpectedFailure(_) => 200,
             Self::MethodNotAllowed => 405,
             Self::SameOriginRequired => 403,
             Self::UnknownAction => 404,
@@ -45,7 +79,14 @@ impl ActionOutcome {
 
     pub fn body(&self) -> serde_json::Value {
         match self {
-            Self::Success(value) => serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
+            Self::Success(value) => serde_json::json!({
+                "kind": "success",
+                "value": serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
+            }),
+            Self::ExpectedFailure(failure) => serde_json::json!({
+                "kind": "failure",
+                "failure": failure,
+            }),
             Self::MethodNotAllowed => json!({"error": "method not allowed"}),
             Self::SameOriginRequired => json!({"error": "same-origin action POST required"}),
             Self::UnknownAction => json!({"error": "unknown server action"}),
@@ -150,8 +191,14 @@ where
         })
         .await
     {
-        Ok(value) if value.check_limits().is_ok() => ActionOutcome::Success(value),
-        Ok(_) => ActionOutcome::ResultTooLarge,
+        Ok(ActionCallbackResult::Success(value)) if value.check_limits().is_ok() => {
+            ActionOutcome::Success(value)
+        }
+        Ok(ActionCallbackResult::Success(_)) => ActionOutcome::ResultTooLarge,
+        Ok(ActionCallbackResult::ExpectedFailure(failure)) if failure.validate().is_ok() => {
+            ActionOutcome::ExpectedFailure(failure)
+        }
+        Ok(ActionCallbackResult::ExpectedFailure(_)) => ActionOutcome::Failed,
         Err(error) if matches!(error, crate::ServerError::UnknownServerAction) => {
             ActionOutcome::UnknownAction
         }
@@ -275,5 +322,41 @@ mod tests {
             "https://example.test/_plec/actions/x",
             &headers(&["https://user@example.test"])
         ));
+    }
+
+    #[test]
+    fn public_action_failure_enforces_v1_fields_and_byte_budgets() {
+        let failure = PublicActionFailure {
+            code: "EMAIL_TAKEN".into(),
+            message: "That email address is already registered.".into(),
+        };
+        assert!(failure.validate().is_ok());
+        assert_eq!(
+            ActionOutcome::ExpectedFailure(failure).body(),
+            serde_json::json!({
+                "kind": "failure",
+                "failure": {
+                    "code": "EMAIL_TAKEN",
+                    "message": "That email address is already registered."
+                }
+            })
+        );
+
+        for code in [String::new(), "9BAD".into(), "éCODE".into(), "A".repeat(65)] {
+            assert!(PublicActionFailure {
+                code,
+                message: "no".into(),
+            }
+            .validate()
+            .is_err());
+        }
+        for message in [String::new(), "é".repeat(513)] {
+            assert!(PublicActionFailure {
+                code: "BAD_INPUT".into(),
+                message,
+            }
+            .validate()
+            .is_err());
+        }
     }
 }

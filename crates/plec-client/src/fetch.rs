@@ -319,6 +319,88 @@ impl RuntimeState {
 mod authorization_tests {
     use super::*;
 
+    #[test]
+    fn server_action_outcomes_are_strictly_unwrapped() {
+        let success = RuntimeValue::Record(std::collections::HashMap::from([
+            ("kind".into(), RuntimeValue::String("success".into())),
+            ("value".into(), RuntimeValue::String("saved".into())),
+        ]));
+        assert_eq!(
+            RuntimeState::decode_server_action_outcome(success),
+            Ok(RuntimeValue::String("saved".into()))
+        );
+
+        let ordinary_failure_shape = RuntimeValue::Record(std::collections::HashMap::from([
+            ("kind".into(), RuntimeValue::String("success".into())),
+            (
+                "value".into(),
+                RuntimeValue::Record(std::collections::HashMap::from([
+                    ("kind".into(), RuntimeValue::String("failure".into())),
+                    (
+                        "message".into(),
+                        RuntimeValue::String("ordinary data".into()),
+                    ),
+                ])),
+            ),
+        ]));
+        assert_eq!(
+            RuntimeState::decode_server_action_outcome(ordinary_failure_shape),
+            Ok(RuntimeValue::Record(std::collections::HashMap::from([
+                ("kind".into(), RuntimeValue::String("failure".into())),
+                (
+                    "message".into(),
+                    RuntimeValue::String("ordinary data".into())
+                ),
+            ])))
+        );
+
+        let failure = RuntimeValue::Record(std::collections::HashMap::from([
+            ("kind".into(), RuntimeValue::String("failure".into())),
+            (
+                "failure".into(),
+                RuntimeValue::Record(std::collections::HashMap::from([
+                    ("code".into(), RuntimeValue::String("EMAIL_TAKEN".into())),
+                    (
+                        "message".into(),
+                        RuntimeValue::String("That email is already registered.".into()),
+                    ),
+                ])),
+            ),
+        ]));
+        assert_eq!(
+            RuntimeState::decode_server_action_outcome(failure),
+            Err(RuntimeValue::Error {
+                code: Some("EMAIL_TAKEN".into()),
+                message: "That email is already registered.".into(),
+            })
+        );
+
+        let malformed = RuntimeValue::Record(std::collections::HashMap::from([
+            ("kind".into(), RuntimeValue::String("failure".into())),
+            (
+                "failure".into(),
+                RuntimeValue::Record(std::collections::HashMap::from([
+                    ("code".into(), RuntimeValue::String("EMAIL_TAKEN".into())),
+                    ("message".into(), RuntimeValue::String("x".repeat(1025))),
+                ])),
+            ),
+        ]));
+        assert_eq!(
+            RuntimeState::decode_server_action_outcome(malformed),
+            Err(RuntimeValue::Error {
+                code: None,
+                message: "Server action failed.".into(),
+            })
+        );
+        assert_eq!(
+            RuntimeState::private_action_error(),
+            RuntimeValue::Error {
+                code: None,
+                message: "Server action failed.".into(),
+            }
+        );
+    }
+
     fn request(server_action: bool, url: &str) -> BrowserRequest {
         let request = TypedLoaderFetchRequest {
             url: url.into(),
@@ -721,6 +803,7 @@ impl RuntimeState {
         mut pending: TypedPendingFetch,
         result: Result<RuntimeValue, RuntimeValue>,
     ) -> Result<(), JsValue> {
+        let server_action = matches!(pending.suspension.request, BrowserRequest::ServerAction(_));
         let url = match &pending.suspension.request {
             BrowserRequest::Fetch(request) | BrowserRequest::ServerAction(request) => {
                 request.url.clone()
@@ -737,11 +820,21 @@ impl RuntimeState {
                     charge_response_bytes(&mut pending.suspension, bytes)
                         .map_err(|error| failure("limit", error.to_string(), &url))
                 }) {
+                    Ok(()) if server_action => Self::decode_server_action_outcome(value),
                     Ok(()) => Ok(value),
                     Err(error) => Err(error),
                 }
             }
             Err(error) => Err(error),
+        };
+        let result = if server_action {
+            match result {
+                Err(error @ RuntimeValue::Error { code: Some(_), .. }) => Err(error),
+                Err(_) => Err(Self::private_action_error()),
+                Ok(value) => Ok(value),
+            }
+        } else {
+            result
         };
         let graph_generation = pending.graph_generation;
         let route_loader = pending.route_loader;
@@ -800,6 +893,59 @@ impl RuntimeState {
                 self.install_typed_event_listeners()?;
                 Ok(())
             }
+        }
+    }
+
+    fn decode_server_action_outcome(value: RuntimeValue) -> Result<RuntimeValue, RuntimeValue> {
+        let RuntimeValue::Record(envelope) = value else {
+            return Err(Self::private_action_error());
+        };
+        match envelope.get("kind") {
+            Some(RuntimeValue::String(kind)) if kind == "success" => {
+                if envelope.len() != 2 {
+                    return Err(Self::private_action_error());
+                }
+                envelope
+                    .get("value")
+                    .cloned()
+                    .ok_or_else(Self::private_action_error)
+            }
+            Some(RuntimeValue::String(kind)) if kind == "failure" => {
+                if envelope.len() != 2 {
+                    return Err(Self::private_action_error());
+                }
+                let Some(RuntimeValue::Record(failure)) = envelope.get("failure") else {
+                    return Err(Self::private_action_error());
+                };
+                if failure.len() != 2 {
+                    return Err(Self::private_action_error());
+                }
+                let (Some(RuntimeValue::String(code)), Some(RuntimeValue::String(message))) =
+                    (failure.get("code"), failure.get("message"))
+                else {
+                    return Err(Self::private_action_error());
+                };
+                let mut code_bytes = code.bytes();
+                let valid_code = code_bytes
+                    .next()
+                    .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+                    && code_bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+                if !valid_code || code.len() > 64 || message.is_empty() || message.len() > 1024 {
+                    return Err(Self::private_action_error());
+                }
+                Err(RuntimeValue::Error {
+                    code: Some(code.clone()),
+                    message: message.clone(),
+                })
+            }
+            _ => Err(Self::private_action_error()),
+        }
+    }
+
+    fn private_action_error() -> RuntimeValue {
+        RuntimeValue::Error {
+            code: None,
+            message: "Server action failed.".into(),
         }
     }
 
