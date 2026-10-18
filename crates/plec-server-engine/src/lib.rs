@@ -99,8 +99,9 @@ pub mod runtime {
 
     pub type ActionFuture<'a> = std::pin::Pin<
         Box<
-            dyn std::future::Future<Output = Result<plec_schema::RuntimeValue, crate::ServerError>>
-                + Send
+            dyn std::future::Future<
+                    Output = Result<crate::action::ActionCallbackResult, crate::ServerError>,
+                > + Send
                 + 'a,
         >,
     >;

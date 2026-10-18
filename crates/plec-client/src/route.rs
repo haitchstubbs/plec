@@ -167,64 +167,87 @@ impl RuntimeState {
         }
         #[cfg(feature = "fetch")]
         {
-            let (run, pending_graph) =
+            let (run, pending_graph, request_version) =
                 {
                     let mut typed = self.typed.borrow_mut();
                     let instance = typed
                         .get_mut(id)
                         .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
-                    let action_def =
-                        instance.runtime.app.actions.get(action).ok_or_else(|| {
-                            JsValue::from_str("typed route loader action is invalid")
-                        })?;
-                    let values = if action_def.parameter_slots.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![
-                            (
-                                0,
-                                RuntimeValue::Record(
-                                    params
-                                        .into_iter()
-                                        .map(|(key, value)| (key, RuntimeValue::String(value)))
-                                        .collect(),
+                    let (run, values) = {
+                        // A pending phase owns `instance.runtime`; the route's
+                        // loader action and suspended continuation remain on
+                        // the preserved normal graph in `loader_runtime`.
+                        let loader_runtime = match instance.loader_runtime.as_mut() {
+                            Some(loader_runtime) => loader_runtime,
+                            None => &mut instance.runtime,
+                        };
+                        let action_def = loader_runtime
+                            .app
+                            .actions
+                            .get(action)
+                            .ok_or_else(|| {
+                                JsValue::from_str("typed route loader action is invalid")
+                            })?;
+                        let values = if action_def.parameter_slots.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![
+                                (
+                                    0,
+                                    RuntimeValue::Record(
+                                        params
+                                            .into_iter()
+                                            .map(|(key, value)| {
+                                                (key, RuntimeValue::String(value))
+                                            })
+                                            .collect(),
+                                    ),
                                 ),
-                            ),
-                            (
-                                1,
-                                RuntimeValue::Record(HashMap::from([
-                                    (
-                                        "pathname".into(),
-                                        RuntimeValue::String(location.pathname.clone()),
-                                    ),
-                                    (
-                                        "search".into(),
-                                        RuntimeValue::String(location.search.clone()),
-                                    ),
-                                    ("hash".into(), RuntimeValue::String(location.hash.clone())),
-                                ])),
-                            ),
-                        ]
+                                (
+                                    1,
+                                    RuntimeValue::Record(HashMap::from([
+                                        (
+                                            "pathname".into(),
+                                            RuntimeValue::String(location.pathname.clone()),
+                                        ),
+                                        (
+                                            "search".into(),
+                                            RuntimeValue::String(location.search.clone()),
+                                        ),
+                                        (
+                                            "hash".into(),
+                                            RuntimeValue::String(location.hash.clone()),
+                                        ),
+                                    ])),
+                                ),
+                            ]
+                        };
+                        let action_def = loader_runtime
+                            .app
+                            .actions
+                            .get(action)
+                            .cloned()
+                            .ok_or_else(|| {
+                                JsValue::from_str("typed route loader action is invalid")
+                            })?;
+                        let mut frame = vec![RuntimeValue::Null; action_def.frame_slots];
+                        for (slot, value) in &values {
+                            let target = frame.get_mut(*slot).ok_or_else(|| {
+                                JsValue::from_str("event frame slot out of range")
+                            })?;
+                            *target = value.clone();
+                        }
+                        let run = loader_runtime.start_shared_route_loader(action, frame)?;
+                        (run, values)
                     };
-                    let action_def = instance
-                        .runtime
-                        .app
-                        .actions
-                        .get(action)
-                        .cloned()
-                        .ok_or_else(|| JsValue::from_str("typed route loader action is invalid"))?;
-                    let mut frame = vec![RuntimeValue::Null; action_def.frame_slots];
-                    for (slot, value) in &values {
-                        let target = frame
-                            .get_mut(*slot)
-                            .ok_or_else(|| JsValue::from_str("event frame slot out of range"))?;
-                        *target = value.clone();
-                    }
-                    let run = instance.runtime.start_shared_route_loader(action, frame)?;
                     let state = instance
                         .route_state
                         .as_mut()
                         .ok_or_else(|| JsValue::from_str("typed loader route state missing"))?;
+                    state.loader_request_version = state
+                        .loader_request_version
+                        .checked_add(1)
+                        .ok_or_else(|| JsValue::from_str("route loader request version exhausted"))?;
                     state.params = match &values.first().map(|(_, value)| value) {
                         Some(RuntimeValue::Record(values)) => values
                             .iter()
@@ -241,15 +264,27 @@ impl RuntimeState {
                         location.hash.clone(),
                     );
                     state.phase = TypedRoutePhase::Loading;
-                    (
-                        run,
-                        (state.pending_mode != "retain")
-                            .then(|| state.pending_graph_id.clone())
-                            .flatten(),
-                    )
+                        let pending_graph = if instance.loader_runtime.is_some() {
+                            None
+                        } else {
+                            (state.pending_mode != "retain")
+                                .then(|| state.pending_graph_id.clone())
+                                .flatten()
+                        };
+                        (run, pending_graph, state.loader_request_version)
                 };
             if let Some(graph_id) = pending_graph {
-                self.show_typed_route_graph(id, &graph_id, true, None)?;
+                // SSR adoption may not have needed to transfer the pending
+                // phase graph. Keep the current graph mounted rather than
+                // failing an otherwise-valid loader revalidation; navigation
+                // preloads phase graphs before starting its loader.
+                if self
+                    .typed_component_registry
+                    .borrow()
+                    .contains_key(&graph_id)
+                {
+                    self.show_typed_route_graph(id, &graph_id, true, None)?;
+                }
             }
             match run {
                 plec_action::Run::Suspended(suspension) => {
@@ -272,6 +307,7 @@ impl RuntimeState {
                             suspension,
                             graph_generation,
                             request_id: 0,
+                            request_version,
                         })
                         .is_err()
                     {
@@ -301,7 +337,12 @@ impl RuntimeState {
                                 .map(|instance| instance.runtime.graph_generation)
                         })
                         .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
-                    self.complete_shared_route_loader(id, graph_generation, outcome)?;
+                    self.complete_shared_route_loader(
+                        id,
+                        graph_generation,
+                        Some(request_version),
+                        outcome,
+                    )?;
                 }
             }
             Ok(())

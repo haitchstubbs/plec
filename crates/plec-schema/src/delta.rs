@@ -305,6 +305,12 @@ pub enum RuntimeValue {
     String(String),
     Array(Vec<RuntimeValue>),
     Record(HashMap<String, RuntimeValue>),
+    /// Typed, browser-visible error identity. Transport JSON objects remain
+    /// `Record`; only framework-owned boundaries construct this variant.
+    Error {
+        code: Option<String>,
+        message: String,
+    },
 }
 
 impl Default for RuntimeValue {
@@ -321,7 +327,7 @@ impl RuntimeValue {
             Self::Number(value) => *value != 0.0,
             Self::String(value) => !value.is_empty(),
             Self::Array(value) => !value.is_empty(),
-            Self::Record(_) => true,
+            Self::Record(_) | Self::Error { .. } => true,
         }
     }
 
@@ -333,6 +339,7 @@ impl RuntimeValue {
             Self::Null => String::new(),
             Self::Bool(value) => value.to_string(),
             Self::Number(value) => value.to_string(),
+            Self::Error { message, .. } => format!("Error: {message}"),
             Self::Array(_) | Self::Record(_) => crate::json_encode::runtime_value(self),
         }
     }
@@ -353,6 +360,9 @@ impl RuntimeValue {
                 Self::Record(values) => {
                     bytes += 16 + 8 * values.len();
                     pending.extend(values.values());
+                }
+                Self::Error { code, message } => {
+                    bytes += 16 + message.len() + code.as_ref().map_or(0, String::len);
                 }
             }
         }
@@ -400,6 +410,14 @@ impl RuntimeValue {
                     .map(|(name, value)| (name, value.into_json_value()))
                     .collect(),
             ),
+            Self::Error { code, message } => {
+                let mut values = serde_json::Map::new();
+                if let Some(code) = code {
+                    values.insert("code".into(), Value::String(code));
+                }
+                values.insert("message".into(), Value::String(message));
+                Value::Object(values)
+            }
         }
     }
 
@@ -436,6 +454,14 @@ impl RuntimeValue {
                     .map(|(name, value)| (name, value.into_ssr_snapshot()))
                     .collect(),
             ),
+            Self::Error { code, message } => {
+                let mut values =
+                    HashMap::from([("message".into(), SsrSnapshotValue::String(message))]);
+                if let Some(code) = code {
+                    values.insert("code".into(), SsrSnapshotValue::String(code));
+                }
+                SsrSnapshotValue::Record(values.into_iter().collect())
+            }
         }
     }
     /// Bounds a decoded untrusted value tree before it can drive further
@@ -468,6 +494,15 @@ impl RuntimeValue {
                         return Err("runtime value size exceeds limit");
                     }
                     stack.extend(values.values().map(|value| (value, depth + 1)));
+                }
+                RuntimeValue::Error { code, message } => {
+                    if message.len() > MAX_VALUE_STRING_BYTES
+                        || code
+                            .as_ref()
+                            .is_some_and(|code| code.len() > MAX_VALUE_STRING_BYTES)
+                    {
+                        return Err("runtime value string exceeds limit");
+                    }
                 }
                 _ => {}
             }
@@ -551,6 +586,19 @@ impl RuntimeValue {
                         output.push(':');
                         write(value, output)?;
                     }
+                    output.push('}');
+                }
+                RuntimeValue::Error { code, message } => {
+                    output.push('{');
+                    if let Some(code) = code {
+                        write(&RuntimeValue::String("code".into()), output)?;
+                        output.push(':');
+                        write(&RuntimeValue::String(code.clone()), output)?;
+                        output.push(',');
+                    }
+                    write(&RuntimeValue::String("message".into()), output)?;
+                    output.push(':');
+                    write(&RuntimeValue::String(message.clone()), output)?;
                     output.push('}');
                 }
             }

@@ -501,9 +501,13 @@ pub struct TypedRouteState {
     pub error_graph_id: Option<String>,
     pub not_found_graph_id: Option<String>,
     pub loader_action: Option<usize>,
+    pub dependencies: Vec<String>,
     pub params: HashMap<String, String>,
     pub location: (String, String, String),
     pub phase: TypedRoutePhase,
+    /// Monotonic identity for the latest loader invocation on this mounted
+    /// route instance. Graph generations alone do not distinguish reloads.
+    pub loader_request_version: u64,
 }
 
 #[derive(PartialEq, Eq)]

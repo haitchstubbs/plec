@@ -63,6 +63,8 @@ pub struct Route {
     pub not_found_graph_id: Option<String>,
     #[serde(default)]
     pub loader_action: Option<usize>,
+    #[serde(default)]
+    pub dependencies: Vec<plec_ir::ResourceIdentityTemplate>,
     #[serde(default = "default_pending_mode")]
     pub pending_mode: String,
     #[serde(default)]
@@ -92,6 +94,7 @@ impl Manifest {
                     not_found_graph_id: route.not_found_graph_id.clone(),
                     outlet_id: route.outlet_id.clone(),
                     loader_action: route.loader_action,
+                    dependencies: route.dependencies.clone(),
                     pending_mode: route.pending_mode.clone(),
                 })
                 .collect(),

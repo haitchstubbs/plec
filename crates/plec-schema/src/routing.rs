@@ -57,6 +57,16 @@ fn decode_runtime_route(value: &JsValue) -> Result<RouteManifestEntry, JsValue> 
         .optional("loaderAction")?
         .map(|value| js::usize(&value))
         .transpose()?;
+    let dependencies = object
+        .optional("dependencies")?
+        .map(|value| {
+            js::array(&value)?
+                .iter()
+                .map(decode_identity_template)
+                .collect()
+        })
+        .transpose()?
+        .unwrap_or_default();
     let pending_mode = if object.has("pendingMode") {
         js::string(&object.get("pendingMode")?)?
     } else {
@@ -72,6 +82,7 @@ fn decode_runtime_route(value: &JsValue) -> Result<RouteManifestEntry, JsValue> 
         not_found_graph_id,
         outlet_id,
         loader_action,
+        dependencies,
         pending_mode,
     })
 }
@@ -136,6 +147,16 @@ fn decode_ir_route(value: &JsValue) -> Result<plec_ir::RouteManifestEntry, JsVal
         .optional("loaderAction")?
         .map(|v| js::usize(&v))
         .transpose()?;
+    let dependencies = object
+        .optional("dependencies")?
+        .map(|value| {
+            js::array(&value)?
+                .iter()
+                .map(decode_ir_identity_template)
+                .collect()
+        })
+        .transpose()?
+        .unwrap_or_default();
     let outlet_id = js::string(&object.get("outletId")?)?;
     let meta = object.optional("meta")?.map(decode_metadata).transpose()?;
     Ok(plec_ir::RouteManifestEntry {
@@ -148,9 +169,35 @@ fn decode_ir_route(value: &JsValue) -> Result<plec_ir::RouteManifestEntry, JsVal
         error_graph_id,
         not_found_graph_id,
         loader_action,
+        dependencies,
         outlet_id,
         meta,
     })
+}
+
+fn decode_identity_template(value: &JsValue) -> Result<plec_ir::ResourceIdentityTemplate, JsValue> {
+    use crate::js_decode as js;
+    let mut object = js::ObjectDecoder::new(value)?;
+    let parts = js::array(&object.get("parts")?)?
+        .iter()
+        .map(|part| {
+            let mut part_object = js::ObjectDecoder::new(part)?;
+            let kind = js::string(&part_object.get("kind")?)?;
+            let value = js::string(&part_object.get("value")?)?;
+            match kind.as_str() {
+                "static" => Ok(plec_ir::ResourceIdentityPart::Static(value)),
+                "param" => Ok(plec_ir::ResourceIdentityPart::Param(value)),
+                _ => Err(JsValue::from_str("invalid resource identity part")),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(plec_ir::ResourceIdentityTemplate { parts })
+}
+
+fn decode_ir_identity_template(
+    value: &JsValue,
+) -> Result<plec_ir::ResourceIdentityTemplate, JsValue> {
+    decode_identity_template(value)
 }
 
 fn decode_metadata(value: JsValue) -> Result<plec_ir::RouteMetadata, JsValue> {
@@ -194,6 +241,8 @@ pub struct RouteManifestEntry {
     pub not_found_graph_id: Option<String>,
     pub outlet_id: String,
     pub loader_action: Option<usize>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub dependencies: Vec<plec_ir::ResourceIdentityTemplate>,
     #[cfg_attr(feature = "serde", serde(default = "default_pending_mode"))]
     pub pending_mode: String,
 }
@@ -204,6 +253,31 @@ pub struct RouteManifestEntry {
 pub struct RouteMatch {
     pub route: RouteManifestEntry,
     pub params: HashMap<String, String>,
+}
+
+pub fn resolve_resource_identities(
+    templates: &[plec_ir::ResourceIdentityTemplate],
+    params: &HashMap<String, String>,
+) -> Result<Vec<String>, String> {
+    let mut identities = Vec::with_capacity(templates.len());
+    for template in templates {
+        let mut identity = String::new();
+        for part in &template.parts {
+            match part {
+                plec_ir::ResourceIdentityPart::Static(value) => identity.push_str(value),
+                plec_ir::ResourceIdentityPart::Param(name) => {
+                    identity.push_str(params.get(name).ok_or_else(|| {
+                        "resource identity references a missing route parameter".to_owned()
+                    })?)
+                }
+            }
+            if identity.len() > plec_ir::limits::MAX_RESOURCE_IDENTITY_BYTES {
+                return Err("resolved resource identity exceeds 256 UTF-8 bytes".into());
+            }
+        }
+        identities.push(identity);
+    }
+    Ok(identities)
 }
 
 /// Resolves a pathname against the compiled route tree. Browser navigation and
@@ -360,8 +434,51 @@ mod tests {
             not_found_graph_id: None,
             outlet_id: "main".into(),
             loader_action: None,
+            dependencies: vec![],
             pending_mode: "replace".into(),
         }
+    }
+
+    #[test]
+    fn resource_identity_resolution_uses_decoded_route_params_verbatim() {
+        let matched = match_route_chain(
+            &RouteManifest {
+                version: Some(3),
+                root_graph_id: "root".into(),
+                root_not_found_graph_id: None,
+                routes: vec![RouteManifestEntry {
+                    id: "project".into(),
+                    parent_id: None,
+                    path: "projects/$id".into(),
+                    graph_id: "project".into(),
+                    pending_graph_id: None,
+                    error_graph_id: None,
+                    not_found_graph_id: None,
+                    outlet_id: "main".into(),
+                    loader_action: Some(0),
+                    dependencies: vec![plec_ir::ResourceIdentityTemplate {
+                        parts: vec![
+                            plec_ir::ResourceIdentityPart::Static("project:".into()),
+                            plec_ir::ResourceIdentityPart::Param("id".into()),
+                        ],
+                    }],
+                    pending_mode: "replace".into(),
+                }],
+            },
+            "/projects/a%2Fb",
+        )
+        .unwrap();
+        let identities =
+            resolve_resource_identities(&matched[0].route.dependencies, &matched[0].params)
+                .unwrap();
+        assert_eq!(identities, vec!["project:a/b"]);
+        assert!(resolve_resource_identities(
+            &[plec_ir::ResourceIdentityTemplate {
+                parts: vec![plec_ir::ResourceIdentityPart::Param("id".into())]
+            }],
+            &HashMap::from([("id".into(), "x".repeat(257))]),
+        )
+        .is_err());
     }
 
     #[test]

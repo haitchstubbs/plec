@@ -101,9 +101,32 @@ pub struct RouteManifestEntry {
     pub not_found_graph_id: Option<String>,
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub loader_action: Option<usize>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub dependencies: Vec<ResourceIdentityTemplate>,
     pub outlet_id: String,
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub meta: Option<RouteMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+pub struct ResourceIdentityTemplate {
+    pub parts: Vec<ResourceIdentityPart>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(tag = "kind", content = "value", rename_all = "camelCase")
+)]
+pub enum ResourceIdentityPart {
+    Static(String),
+    Param(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -132,6 +155,58 @@ impl RouteManifest {
         }
         if self.routes.len() > MAX_MANIFEST_ROUTES {
             return Err("route manifest exceeds the route count limit".into());
+        }
+        for route in &self.routes {
+            if route.dependencies.len() > limits::MAX_LOADER_DEPENDENCIES {
+                return Err("route loader exceeds the dependency count limit".into());
+            }
+            if route.loader_action.is_none() && !route.dependencies.is_empty() {
+                return Err("route dependencies require a loader".into());
+            }
+            for template in &route.dependencies {
+                let static_bytes = template
+                    .parts
+                    .iter()
+                    .map(|part| match part {
+                        ResourceIdentityPart::Static(identity) => identity.len(),
+                        ResourceIdentityPart::Param(_) => 0,
+                    })
+                    .sum::<usize>();
+                if static_bytes > limits::MAX_RESOURCE_IDENTITY_BYTES {
+                    return Err("static resource identity exceeds the byte limit".into());
+                }
+                for part in &template.parts {
+                    let ResourceIdentityPart::Param(name) = part else {
+                        continue;
+                    };
+                    let mut cursor = Some(route);
+                    let mut declared = false;
+                    while let Some(candidate) = cursor {
+                        if candidate
+                            .path
+                            .split('/')
+                            .any(|segment| segment.strip_prefix('$') == Some(name.as_str()))
+                        {
+                            declared = true;
+                            break;
+                        }
+                        cursor = candidate
+                            .parent_id
+                            .as_deref()
+                            .and_then(|parent| self.routes.iter().find(|entry| entry.id == parent));
+                    }
+                    if !declared {
+                        return Err(
+                            "resource identity references an undeclared route parameter".into()
+                        );
+                    }
+                }
+                if template.parts.iter().any(
+                    |part| matches!(part, ResourceIdentityPart::Param(name) if name.is_empty()),
+                ) {
+                    return Err("resource identity contains an empty parameter name".into());
+                }
+            }
         }
         Ok(())
     }
@@ -2065,6 +2140,7 @@ mod tests {
                 pending_mode: "replace".into(),
                 error_graph_id: None,
                 loader_action: None,
+                dependencies: vec![],
                 not_found_graph_id: None,
                 outlet_id: "main".into(),
                 meta: None,
@@ -2106,6 +2182,34 @@ mod tests {
             .is_err());
     }
 
+    #[test]
+    fn route_manifest_validates_resource_dependency_budgets_and_loader_ownership() {
+        let mut manifest = test_manifest();
+        let dependency = |identity: String| ResourceIdentityTemplate {
+            parts: vec![ResourceIdentityPart::Static(identity)],
+        };
+        manifest.routes[1].dependencies = vec![dependency(
+            "x".repeat(limits::MAX_RESOURCE_IDENTITY_BYTES + 1),
+        )];
+        assert_eq!(
+            manifest.validate().unwrap_err(),
+            "static resource identity exceeds the byte limit"
+        );
+        manifest.routes[1].dependencies = (0..=limits::MAX_LOADER_DEPENDENCIES)
+            .map(|_| dependency("x".into()))
+            .collect();
+        assert_eq!(
+            manifest.validate().unwrap_err(),
+            "route loader exceeds the dependency count limit"
+        );
+        manifest.routes[1].dependencies.clear();
+        manifest.routes[0].dependencies = vec![dependency("x".into())];
+        assert_eq!(
+            manifest.validate().unwrap_err(),
+            "route dependencies require a loader"
+        );
+    }
+
     fn test_manifest() -> RouteManifest {
         RouteManifest {
             version: 3,
@@ -2122,6 +2226,7 @@ mod tests {
                     pending_mode: "replace".into(),
                     error_graph_id: None,
                     loader_action: None,
+                    dependencies: vec![],
                     not_found_graph_id: None,
                     outlet_id: "main".into(),
                     meta: None,
@@ -2135,6 +2240,7 @@ mod tests {
                     pending_mode: "replace".into(),
                     error_graph_id: None,
                     loader_action: Some(0),
+                    dependencies: vec![],
                     not_found_graph_id: None,
                     outlet_id: "main".into(),
                     meta: None,
@@ -2423,6 +2529,7 @@ mod tests {
                 pending_mode: "replace".into(),
                 error_graph_id: None,
                 loader_action: None,
+                dependencies: vec![],
                 not_found_graph_id: None,
                 outlet_id: "main".into(),
                 meta: None,

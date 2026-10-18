@@ -41,6 +41,13 @@ pub fn runtime_value(value: &RuntimeValue, records_as_objects: bool) -> Result<J
             }
             output.into()
         }
+        RuntimeValue::Error { code, message } => {
+            let error = js_sys::Error::new(message);
+            if let Some(code) = code {
+                Reflect::set(&error, &JsValue::from_str("code"), &JsValue::from_str(code))?;
+            }
+            error.into()
+        }
     })
 }
 

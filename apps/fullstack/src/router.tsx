@@ -3,11 +3,14 @@ import { Route as rootRoute } from './routes/index';
 import { Route as homeRoute } from './routes/home.route';
 import { Route as aboutRoute } from './routes/about.route';
 import { Route as projectRoute } from './routes/project.route';
+import { Route as projectDetailsRoute } from './routes/project-details.route';
 import { Route as todosRoute } from './routes/todos';
 import { Route as notesRoute } from './routes/notes.route';
 import { Route as adminRoute } from './routes/admin.route';
 import { Route as stressRoute } from './routes/stress.route';
 import { Route as notFoundRoute } from './routes/not-found.route';
+
+projectRoute.addChildren([projectDetailsRoute]);
 
 export const router = createRouter({
   routeTree: rootRoute.addChildren([

@@ -25,6 +25,7 @@ pub struct TypedPendingLoaderFetch {
     pub suspension: Suspension<TypedLoaderFetchRequest>,
     pub graph_generation: u64,
     pub request_id: u64,
+    pub request_version: u64,
 }
 
 fn fetch_origin(url: &str) -> Option<String> {
@@ -264,6 +265,10 @@ impl RuntimeState {
             let Some(instance) = typed.get_mut(&pending.instance_id) else {
                 return Ok(());
             };
+            let is_latest = instance
+                .route_state
+                .as_ref()
+                .is_some_and(|route| route.loader_request_version == pending.request_version);
             let Some(runtime) = instance.runtime_for_generation_mut(pending.graph_generation)
             else {
                 return Ok(());
@@ -275,6 +280,9 @@ impl RuntimeState {
             {
                 self.region_tracker.release_fetch();
             }
+            if !is_latest {
+                return Ok(());
+            }
             runtime.resume_shared_route_loader(pending.suspension, result)?
         };
         match run {
@@ -283,10 +291,12 @@ impl RuntimeState {
                 suspension,
                 graph_generation: pending.graph_generation,
                 request_id: 0,
+                request_version: pending.request_version,
             }),
             Run::Complete(outcome) => self.complete_shared_route_loader(
                 &pending.instance_id,
                 pending.graph_generation,
+                Some(pending.request_version),
                 outcome,
             ),
         }
@@ -318,6 +328,93 @@ impl RuntimeState {
 #[cfg(test)]
 mod authorization_tests {
     use super::*;
+
+    #[test]
+    fn server_action_outcomes_are_strictly_unwrapped() {
+        let success = RuntimeValue::Record(std::collections::HashMap::from([
+            ("kind".into(), RuntimeValue::String("success".into())),
+            ("value".into(), RuntimeValue::String("saved".into())),
+            ("invalidations".into(), RuntimeValue::Array(vec![])),
+        ]));
+        assert_eq!(
+            RuntimeState::decode_server_action_outcome(success),
+            Ok((RuntimeValue::String("saved".into()), vec![]))
+        );
+
+        let ordinary_failure_shape = RuntimeValue::Record(std::collections::HashMap::from([
+            ("kind".into(), RuntimeValue::String("success".into())),
+            ("invalidations".into(), RuntimeValue::Array(vec![])),
+            (
+                "value".into(),
+                RuntimeValue::Record(std::collections::HashMap::from([
+                    ("kind".into(), RuntimeValue::String("failure".into())),
+                    (
+                        "message".into(),
+                        RuntimeValue::String("ordinary data".into()),
+                    ),
+                ])),
+            ),
+        ]));
+        assert_eq!(
+            RuntimeState::decode_server_action_outcome(ordinary_failure_shape),
+            Ok((
+                RuntimeValue::Record(std::collections::HashMap::from([
+                    ("kind".into(), RuntimeValue::String("failure".into())),
+                    (
+                        "message".into(),
+                        RuntimeValue::String("ordinary data".into())
+                    ),
+                ])),
+                vec![]
+            ))
+        );
+
+        let failure = RuntimeValue::Record(std::collections::HashMap::from([
+            ("kind".into(), RuntimeValue::String("failure".into())),
+            (
+                "failure".into(),
+                RuntimeValue::Record(std::collections::HashMap::from([
+                    ("code".into(), RuntimeValue::String("EMAIL_TAKEN".into())),
+                    (
+                        "message".into(),
+                        RuntimeValue::String("That email is already registered.".into()),
+                    ),
+                ])),
+            ),
+        ]));
+        assert_eq!(
+            RuntimeState::decode_server_action_outcome(failure),
+            Err(RuntimeValue::Error {
+                code: Some("EMAIL_TAKEN".into()),
+                message: "That email is already registered.".into(),
+            })
+        );
+
+        let malformed = RuntimeValue::Record(std::collections::HashMap::from([
+            ("kind".into(), RuntimeValue::String("failure".into())),
+            (
+                "failure".into(),
+                RuntimeValue::Record(std::collections::HashMap::from([
+                    ("code".into(), RuntimeValue::String("EMAIL_TAKEN".into())),
+                    ("message".into(), RuntimeValue::String("x".repeat(1025))),
+                ])),
+            ),
+        ]));
+        assert_eq!(
+            RuntimeState::decode_server_action_outcome(malformed),
+            Err(RuntimeValue::Error {
+                code: None,
+                message: "Server action failed.".into(),
+            })
+        );
+        assert_eq!(
+            RuntimeState::private_action_error(),
+            RuntimeValue::Error {
+                code: None,
+                message: "Server action failed.".into(),
+            }
+        );
+    }
 
     fn request(server_action: bool, url: &str) -> BrowserRequest {
         let request = TypedLoaderFetchRequest {
@@ -588,6 +685,7 @@ impl RuntimeState {
                 ));
             }
         };
+        let server_action = matches!(pending.suspension.request, BrowserRequest::ServerAction(_));
         // Host-policy gate before any browser resource is touched. A denial
         // completes the action through its failure path without a network
         // request, exactly like any other fetch failure.
@@ -606,7 +704,9 @@ impl RuntimeState {
         let controller = AbortController::new()?;
         let init = RequestInit::new();
         init.set_method(&request.method);
-        init.set_signal(Some(&controller.signal()));
+        if !server_action {
+            init.set_signal(Some(&controller.signal()));
+        }
         // The credentials mode is host-owned: artifact code cannot widen it.
         init.set_credentials(if credentials {
             RequestCredentials::Include
@@ -633,9 +733,11 @@ impl RuntimeState {
             self.region_tracker.acquire_fetch()?;
             typed.next_fetch_id += 1;
             pending.request_id = typed.next_fetch_id;
-            typed
-                .abort_controllers
-                .insert(pending.request_id, controller.clone());
+            if !server_action {
+                typed
+                    .abort_controllers
+                    .insert(pending.request_id, controller.clone());
+            }
         }
         // Start the browser request before yielding. Disposal can then abort an
         // in-flight promise even when it happens in the same event turn.
@@ -721,13 +823,14 @@ impl RuntimeState {
         mut pending: TypedPendingFetch,
         result: Result<RuntimeValue, RuntimeValue>,
     ) -> Result<(), JsValue> {
+        let server_action = matches!(pending.suspension.request, BrowserRequest::ServerAction(_));
         let url = match &pending.suspension.request {
             BrowserRequest::Fetch(request) | BrowserRequest::ServerAction(request) => {
                 request.url.clone()
             }
             BrowserRequest::Cookie { .. } => String::new(),
         };
-        let result = match result {
+        let (result, invalidations) = match result {
             Ok(value) => {
                 let bytes = value
                     .json_body()
@@ -737,14 +840,33 @@ impl RuntimeState {
                     charge_response_bytes(&mut pending.suspension, bytes)
                         .map_err(|error| failure("limit", error.to_string(), &url))
                 }) {
-                    Ok(()) => Ok(value),
-                    Err(error) => Err(error),
+                    Ok(()) if server_action => match Self::decode_server_action_outcome(value) {
+                        Ok((value, invalidations)) => (Ok(value), invalidations),
+                        Err(error) => (Err(error), Vec::new()),
+                    },
+                    Ok(()) => (Ok(value), Vec::new()),
+                    Err(error) => (Err(error), Vec::new()),
                 }
             }
-            Err(error) => Err(error),
+            Err(error) => (Err(error), Vec::new()),
+        };
+        if server_action && !invalidations.is_empty() {
+            Self::dispatch_action_invalidations(&invalidations)?;
+        }
+        let result = if server_action {
+            match result {
+                Err(error @ RuntimeValue::Error { code: Some(_), .. }) => Err(error),
+                Err(_) => Err(Self::private_action_error()),
+                Ok(value) => Ok(value),
+            }
+        } else {
+            result
         };
         let graph_generation = pending.graph_generation;
         let route_loader = pending.route_loader;
+        if server_action {
+            self.region_tracker.release_fetch();
+        }
         let run = {
             let mut typed = self.typed.borrow_mut();
             let Some(instance) = typed.get_mut(&pending.instance_id) else {
@@ -753,10 +875,11 @@ impl RuntimeState {
             let Some(runtime) = instance.runtime_for_generation_mut(graph_generation) else {
                 return Ok(());
             };
-            if runtime
-                .abort_controllers
-                .remove(&pending.request_id)
-                .is_some()
+            if !server_action
+                && runtime
+                    .abort_controllers
+                    .remove(&pending.request_id)
+                    .is_some()
             {
                 self.region_tracker.release_fetch();
             }
@@ -790,6 +913,7 @@ impl RuntimeState {
                     return self.complete_shared_route_loader(
                         &instance_id,
                         graph_generation,
+                        None,
                         outcome,
                     );
                 }
@@ -803,12 +927,131 @@ impl RuntimeState {
         }
     }
 
+    fn decode_server_action_outcome(
+        value: RuntimeValue,
+    ) -> Result<(RuntimeValue, Vec<String>), RuntimeValue> {
+        let RuntimeValue::Record(envelope) = value else {
+            return Err(Self::private_action_error());
+        };
+        match envelope.get("kind") {
+            Some(RuntimeValue::String(kind)) if kind == "success" => {
+                if envelope.len() != 3 {
+                    return Err(Self::private_action_error());
+                }
+                let value = envelope
+                    .get("value")
+                    .cloned()
+                    .ok_or_else(Self::private_action_error)?;
+                let Some(RuntimeValue::Array(values)) = envelope.get("invalidations") else {
+                    return Err(Self::private_action_error());
+                };
+                let mut invalidations = Vec::with_capacity(values.len());
+                let mut seen = std::collections::HashSet::new();
+                for value in values {
+                    let RuntimeValue::String(identity) = value else {
+                        return Err(Self::private_action_error());
+                    };
+                    if identity.len() > plec_ir::limits::MAX_RESOURCE_IDENTITY_BYTES
+                        || !seen.insert(identity.clone())
+                    {
+                        return Err(Self::private_action_error());
+                    }
+                    invalidations.push(identity.clone());
+                }
+                if invalidations.len() > plec_ir::limits::MAX_ACTION_INVALIDATIONS
+                    || RuntimeValue::Array(
+                        invalidations
+                            .iter()
+                            .cloned()
+                            .map(RuntimeValue::String)
+                            .collect(),
+                    )
+                    .json_body()
+                    .map(|json| json.len())
+                    .unwrap_or(usize::MAX)
+                        > plec_ir::limits::MAX_ACTION_INVALIDATIONS_JSON_BYTES
+                {
+                    return Err(Self::private_action_error());
+                }
+                Ok((value, invalidations))
+            }
+            Some(RuntimeValue::String(kind)) if kind == "failure" => {
+                if envelope.len() != 2 {
+                    return Err(Self::private_action_error());
+                }
+                let Some(RuntimeValue::Record(failure)) = envelope.get("failure") else {
+                    return Err(Self::private_action_error());
+                };
+                if failure.len() != 2 {
+                    return Err(Self::private_action_error());
+                }
+                let (Some(RuntimeValue::String(code)), Some(RuntimeValue::String(message))) =
+                    (failure.get("code"), failure.get("message"))
+                else {
+                    return Err(Self::private_action_error());
+                };
+                let mut code_bytes = code.bytes();
+                let valid_code = code_bytes
+                    .next()
+                    .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+                    && code_bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+                if !valid_code || code.len() > 64 || message.is_empty() || message.len() > 1024 {
+                    return Err(Self::private_action_error());
+                }
+                Err(RuntimeValue::Error {
+                    code: Some(code.clone()),
+                    message: message.clone(),
+                })
+            }
+            _ => Err(Self::private_action_error()),
+        }
+    }
+
+    fn dispatch_action_invalidations(invalidations: &[String]) -> Result<(), JsValue> {
+        let identities = js_sys::Array::new();
+        for identity in invalidations {
+            identities.push(&JsValue::from_str(identity));
+        }
+        let detail = js_sys::Object::new();
+        js_sys::Reflect::set(&detail, &JsValue::from_str("invalidations"), &identities)?;
+        let init = web_sys::CustomEventInit::new();
+        init.set_detail(&detail);
+        let event =
+            web_sys::CustomEvent::new_with_event_init_dict("plec:action-invalidations", &init)?;
+        web_sys::window()
+            .ok_or_else(|| JsValue::from_str("window unavailable"))?
+            .document()
+            .ok_or_else(|| JsValue::from_str("document unavailable"))?
+            .dispatch_event(&event)?;
+        Ok(())
+    }
+
+    fn private_action_error() -> RuntimeValue {
+        RuntimeValue::Error {
+            code: None,
+            message: "Server action failed.".into(),
+        }
+    }
+
     pub(crate) fn complete_shared_route_loader(
         &self,
         instance_id: &str,
         graph_generation: u64,
+        request_version: Option<u64>,
         outcome: ActionOutcome,
     ) -> Result<(), JsValue> {
+        if let Some(request_version) = request_version {
+            let typed = self.typed.borrow();
+            let Some(route) = typed
+                .get(instance_id)
+                .and_then(|instance| instance.route_state.as_ref())
+            else {
+                return Ok(());
+            };
+            if route.loader_request_version != request_version {
+                return Ok(());
+            }
+        }
         // Terminal navigation outcomes never commit the loader value or the
         // route: the router resolves them before anything paints as final.
         match &outcome {
