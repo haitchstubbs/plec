@@ -158,10 +158,21 @@ export async function createPlecHandler(
     if (!generated?.hasAction(id))
       return JSON.stringify({ found: false });
     try {
-      const value = await generated.invokeAction(id, args, context);
+      const result = await generated.invokeAction(id, args, context) as {
+        value: unknown;
+        invalidations: unknown;
+      };
+      if (
+        !result ||
+        !Array.isArray(result.invalidations) ||
+        result.invalidations.length > 32 ||
+        result.invalidations.some((identity) => typeof identity !== 'string' || Buffer.byteLength(identity, 'utf8') > 256) ||
+        new Set(result.invalidations).size !== result.invalidations.length ||
+        Buffer.byteLength(JSON.stringify(result.invalidations), 'utf8') > 4 * 1024
+      ) throw new Error('invalid server action invalidation metadata');
       return JSON.stringify({
         found: true,
-        outcome: { kind: 'success', value: value ?? null },
+        outcome: { kind: 'success', value: result.value ?? null, invalidations: result.invalidations },
       });
     } catch (error) {
       const failure = publicActionFailure(error);

@@ -194,12 +194,32 @@ impl ActionCapabilities for CallbackManager {
                     )
                 })?;
             match outcome.get("kind").and_then(serde_json::Value::as_str) {
-                Some("success") if outcome.len() == 2 && outcome.contains_key("value") => {
-                    serde_json::from_value(outcome["value"].clone())
-                        .map(plec_server_engine::action::ActionCallbackResult::Success)
-                        .map_err(|_| {
-                            plec_server_engine::ServerError::message("invalid server action result")
-                        })
+                Some("success")
+                    if outcome.len() == 3
+                        && outcome.contains_key("value")
+                        && outcome.contains_key("invalidations") =>
+                {
+                    let value = serde_json::from_value(outcome["value"].clone()).map_err(|_| {
+                        plec_server_engine::ServerError::message("invalid server action result")
+                    })?;
+                    let invalidations =
+                        serde_json::from_value::<Vec<String>>(outcome["invalidations"].clone())
+                            .map_err(|_| {
+                                plec_server_engine::ServerError::message(
+                                    "invalid server action invalidations",
+                                )
+                            })?;
+                    plec_server_engine::action::validate_invalidations(&invalidations).map_err(
+                        |_| {
+                            plec_server_engine::ServerError::message(
+                                "invalid server action invalidations",
+                            )
+                        },
+                    )?;
+                    Ok(plec_server_engine::action::ActionCallbackResult::Success {
+                        value,
+                        invalidations,
+                    })
                 }
                 Some("failure") if outcome.len() == 2 && outcome.contains_key("failure") => {
                     let failure = serde_json::from_value::<

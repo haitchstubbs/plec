@@ -87,6 +87,9 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
     };
     for (index, matched) in derived_chain.into_iter().enumerate() {
         let route = matched.route;
+        let dependencies =
+            plec_schema::routing::resolve_resource_identities(&route.dependencies, &matched.params)
+                .map_err(|message| JsValue::from_str(&message))?;
         if Some(index) == owner_position.filter(|depth| *depth != usize::MAX) {
             // The boundary owner: the server rendered its not-found graph.
             let Some(boundary_graph_id) = route.not_found_graph_id.clone() else {
@@ -140,6 +143,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                 error_graph_id: route.error_graph_id,
                 not_found_graph_id: route.not_found_graph_id,
                 loader_action: loader.map(|(action, _)| action),
+                dependencies: dependencies.clone(),
                 params: matched.params,
                 location: (
                     location.pathname.clone(),
@@ -212,6 +216,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                 error_graph_id: route.error_graph_id,
                 not_found_graph_id: route.not_found_graph_id,
                 loader_action: Some(action),
+                dependencies: dependencies.clone(),
                 params: matched.params,
                 location: (
                     location.pathname.clone(),
@@ -266,6 +271,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                 error_graph_id: route.error_graph_id,
                 not_found_graph_id: route.not_found_graph_id,
                 loader_action: loader.map(|(action, _)| action),
+                dependencies: dependencies.clone(),
                 params: matched.params,
                 location: (
                     location.pathname.clone(),
@@ -331,6 +337,38 @@ pub fn refresh_navigation_state(state: &RuntimeState, pathname: &str) -> Result<
             link.set_attribute("aria-current", "page")?;
         } else {
             link.remove_attribute("aria-current")?;
+        }
+    }
+    Ok(())
+}
+
+/// Applies a successful action's invalidations to currently mounted route
+/// instances. Mutation continuation liveness is intentionally irrelevant here.
+pub fn handle_action_invalidations(
+    state: &RuntimeState,
+    invalidations: &[String],
+) -> Result<(), JsValue> {
+    let invalidated = invalidations
+        .iter()
+        .collect::<std::collections::HashSet<_>>();
+    let affected = state
+        .typed
+        .borrow()
+        .iter()
+        .filter_map(|(id, instance)| {
+            let route = instance.route_state.as_ref()?;
+            route.loader_action?;
+            route
+                .dependencies
+                .iter()
+                .any(|identity| invalidated.contains(identity))
+                .then(|| id.clone())
+        })
+        .collect::<Vec<_>>();
+    for id in affected {
+        // The route may have been disposed by a synchronous earlier reload.
+        if state.typed.borrow().contains_key(&id) {
+            state.reload_typed_route(&id)?;
         }
     }
     Ok(())
@@ -710,6 +748,11 @@ fn mount_typed_child(
         error_graph_id: route.error_graph_id.clone(),
         not_found_graph_id: route.not_found_graph_id.clone(),
         loader_action: route.loader_action,
+        dependencies: plec_schema::routing::resolve_resource_identities(
+            &route.dependencies,
+            params,
+        )
+        .map_err(|message| JsValue::from_str(&message))?,
         params: params.clone(),
         location: (
             location.pathname.clone(),
@@ -1057,6 +1100,7 @@ mod tests {
             not_found_graph_id: None,
             outlet_id: "main".into(),
             loader_action: None,
+            dependencies: vec![],
         }
     }
     #[test]

@@ -17,7 +17,10 @@ pub struct ServerActionRequest {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActionCallbackResult {
-    Success(RuntimeValue),
+    Success {
+        value: RuntimeValue,
+        invalidations: Vec<String>,
+    },
     ExpectedFailure(PublicActionFailure),
 }
 
@@ -50,7 +53,10 @@ impl PublicActionFailure {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActionOutcome {
-    Success(RuntimeValue),
+    Success {
+        value: RuntimeValue,
+        invalidations: Vec<String>,
+    },
     ExpectedFailure(PublicActionFailure),
     MethodNotAllowed,
     SameOriginRequired,
@@ -66,7 +72,7 @@ pub enum ActionOutcome {
 impl ActionOutcome {
     pub fn status(&self) -> u16 {
         match self {
-            Self::Success(_) | Self::ExpectedFailure(_) => 200,
+            Self::Success { .. } | Self::ExpectedFailure(_) => 200,
             Self::MethodNotAllowed => 405,
             Self::SameOriginRequired => 403,
             Self::UnknownAction => 404,
@@ -79,9 +85,13 @@ impl ActionOutcome {
 
     pub fn body(&self) -> serde_json::Value {
         match self {
-            Self::Success(value) => serde_json::json!({
+            Self::Success {
+                value,
+                invalidations,
+            } => serde_json::json!({
                 "kind": "success",
                 "value": serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
+                "invalidations": invalidations,
             }),
             Self::ExpectedFailure(failure) => serde_json::json!({
                 "kind": "failure",
@@ -191,10 +201,19 @@ where
         })
         .await
     {
-        Ok(ActionCallbackResult::Success(value)) if value.check_limits().is_ok() => {
-            ActionOutcome::Success(value)
+        Ok(ActionCallbackResult::Success {
+            value,
+            invalidations,
+        }) if value.check_limits().is_ok() && validate_invalidations(&invalidations).is_ok() => {
+            ActionOutcome::Success {
+                value,
+                invalidations,
+            }
         }
-        Ok(ActionCallbackResult::Success(_)) => ActionOutcome::ResultTooLarge,
+        Ok(ActionCallbackResult::Success { value, .. }) if value.check_limits().is_err() => {
+            ActionOutcome::ResultTooLarge
+        }
+        Ok(ActionCallbackResult::Success { .. }) => ActionOutcome::Failed,
         Ok(ActionCallbackResult::ExpectedFailure(failure)) if failure.validate().is_ok() => {
             ActionOutcome::ExpectedFailure(failure)
         }
@@ -207,6 +226,27 @@ where
         }
         Err(_) => ActionOutcome::Failed,
     }
+}
+
+pub fn validate_invalidations(invalidations: &[String]) -> Result<(), &'static str> {
+    use std::collections::HashSet;
+    if invalidations.len() > plec_ir::limits::MAX_ACTION_INVALIDATIONS {
+        return Err("too many action invalidations");
+    }
+    let mut seen = HashSet::new();
+    for identity in invalidations {
+        if identity.len() > plec_ir::limits::MAX_RESOURCE_IDENTITY_BYTES {
+            return Err("action invalidation identity exceeds the byte limit");
+        }
+        if !seen.insert(identity) {
+            return Err("action invalidations are not deduplicated");
+        }
+    }
+    let payload = serde_json::to_vec(invalidations).map_err(|_| "invalid action invalidations")?;
+    if payload.len() > plec_ir::limits::MAX_ACTION_INVALIDATIONS_JSON_BYTES {
+        return Err("action invalidation metadata exceeds the byte limit");
+    }
+    Ok(())
 }
 
 fn same_origin(request_url: &str, headers: &HeaderMap) -> bool {
@@ -358,5 +398,28 @@ mod tests {
             .validate()
             .is_err());
         }
+    }
+
+    #[test]
+    fn action_invalidations_enforce_identity_count_deduplication_and_canonical_json_bytes() {
+        assert!(validate_invalidations(&["é".repeat(128)]).is_ok());
+        assert!(validate_invalidations(&["é".repeat(129)]).is_err());
+        assert!(validate_invalidations(&["same".into(), "same".into()]).is_err());
+        assert!(validate_invalidations(
+            &(0..33).map(|index| format!("r{index}")).collect::<Vec<_>>()
+        )
+        .is_err());
+        let large = (0..20)
+            .map(|index| format!("{index}:{}", "x".repeat(230)))
+            .collect::<Vec<_>>();
+        assert!(validate_invalidations(&large).is_err());
+        let outcome = ActionOutcome::Success {
+            value: RuntimeValue::Null,
+            invalidations: vec!["resource".into()],
+        };
+        assert_eq!(
+            outcome.body(),
+            serde_json::json!({"kind":"success","value":null,"invalidations":["resource"]})
+        );
     }
 }

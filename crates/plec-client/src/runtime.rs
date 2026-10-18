@@ -501,6 +501,7 @@ pub struct TypedRouteState {
     pub error_graph_id: Option<String>,
     pub not_found_graph_id: Option<String>,
     pub loader_action: Option<usize>,
+    pub dependencies: Vec<String>,
     pub params: HashMap<String, String>,
     pub location: (String, String, String),
     pub phase: TypedRoutePhase,

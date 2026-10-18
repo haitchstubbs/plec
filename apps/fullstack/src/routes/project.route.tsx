@@ -8,6 +8,7 @@ type Project = { missing: boolean; name: string | null };
 export const Route = createRoute<Project>({
   getParentRoute: () => rootRoute,
   path: 'projects/$id',
+  dependsOn: ({ params }) => [`project:${params.id}`],
   loader: async ({ params }) => {
     const project = (await fetch(
       `/api/projects/${params.id}`,

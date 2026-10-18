@@ -1,4 +1,6 @@
 /** Request facts passed from the native host's Node sidecar to application code. */
+export { invalidate } from './server-context';
+
 export type RequestContext = {
   url: string;
   pathname: string;

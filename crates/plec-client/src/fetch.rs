@@ -324,14 +324,16 @@ mod authorization_tests {
         let success = RuntimeValue::Record(std::collections::HashMap::from([
             ("kind".into(), RuntimeValue::String("success".into())),
             ("value".into(), RuntimeValue::String("saved".into())),
+            ("invalidations".into(), RuntimeValue::Array(vec![])),
         ]));
         assert_eq!(
             RuntimeState::decode_server_action_outcome(success),
-            Ok(RuntimeValue::String("saved".into()))
+            Ok((RuntimeValue::String("saved".into()), vec![]))
         );
 
         let ordinary_failure_shape = RuntimeValue::Record(std::collections::HashMap::from([
             ("kind".into(), RuntimeValue::String("success".into())),
+            ("invalidations".into(), RuntimeValue::Array(vec![])),
             (
                 "value".into(),
                 RuntimeValue::Record(std::collections::HashMap::from([
@@ -345,13 +347,16 @@ mod authorization_tests {
         ]));
         assert_eq!(
             RuntimeState::decode_server_action_outcome(ordinary_failure_shape),
-            Ok(RuntimeValue::Record(std::collections::HashMap::from([
-                ("kind".into(), RuntimeValue::String("failure".into())),
-                (
-                    "message".into(),
-                    RuntimeValue::String("ordinary data".into())
-                ),
-            ])))
+            Ok((
+                RuntimeValue::Record(std::collections::HashMap::from([
+                    ("kind".into(), RuntimeValue::String("failure".into())),
+                    (
+                        "message".into(),
+                        RuntimeValue::String("ordinary data".into())
+                    ),
+                ])),
+                vec![]
+            ))
         );
 
         let failure = RuntimeValue::Record(std::collections::HashMap::from([
@@ -670,6 +675,7 @@ impl RuntimeState {
                 ));
             }
         };
+        let server_action = matches!(pending.suspension.request, BrowserRequest::ServerAction(_));
         // Host-policy gate before any browser resource is touched. A denial
         // completes the action through its failure path without a network
         // request, exactly like any other fetch failure.
@@ -688,7 +694,9 @@ impl RuntimeState {
         let controller = AbortController::new()?;
         let init = RequestInit::new();
         init.set_method(&request.method);
-        init.set_signal(Some(&controller.signal()));
+        if !server_action {
+            init.set_signal(Some(&controller.signal()));
+        }
         // The credentials mode is host-owned: artifact code cannot widen it.
         init.set_credentials(if credentials {
             RequestCredentials::Include
@@ -715,9 +723,11 @@ impl RuntimeState {
             self.region_tracker.acquire_fetch()?;
             typed.next_fetch_id += 1;
             pending.request_id = typed.next_fetch_id;
-            typed
-                .abort_controllers
-                .insert(pending.request_id, controller.clone());
+            if !server_action {
+                typed
+                    .abort_controllers
+                    .insert(pending.request_id, controller.clone());
+            }
         }
         // Start the browser request before yielding. Disposal can then abort an
         // in-flight promise even when it happens in the same event turn.
@@ -810,7 +820,7 @@ impl RuntimeState {
             }
             BrowserRequest::Cookie { .. } => String::new(),
         };
-        let result = match result {
+        let (result, invalidations) = match result {
             Ok(value) => {
                 let bytes = value
                     .json_body()
@@ -820,13 +830,19 @@ impl RuntimeState {
                     charge_response_bytes(&mut pending.suspension, bytes)
                         .map_err(|error| failure("limit", error.to_string(), &url))
                 }) {
-                    Ok(()) if server_action => Self::decode_server_action_outcome(value),
-                    Ok(()) => Ok(value),
-                    Err(error) => Err(error),
+                    Ok(()) if server_action => match Self::decode_server_action_outcome(value) {
+                        Ok((value, invalidations)) => (Ok(value), invalidations),
+                        Err(error) => (Err(error), Vec::new()),
+                    },
+                    Ok(()) => (Ok(value), Vec::new()),
+                    Err(error) => (Err(error), Vec::new()),
                 }
             }
-            Err(error) => Err(error),
+            Err(error) => (Err(error), Vec::new()),
         };
+        if server_action && !invalidations.is_empty() {
+            Self::dispatch_action_invalidations(&invalidations)?;
+        }
         let result = if server_action {
             match result {
                 Err(error @ RuntimeValue::Error { code: Some(_), .. }) => Err(error),
@@ -838,6 +854,9 @@ impl RuntimeState {
         };
         let graph_generation = pending.graph_generation;
         let route_loader = pending.route_loader;
+        if server_action {
+            self.region_tracker.release_fetch();
+        }
         let run = {
             let mut typed = self.typed.borrow_mut();
             let Some(instance) = typed.get_mut(&pending.instance_id) else {
@@ -846,10 +865,11 @@ impl RuntimeState {
             let Some(runtime) = instance.runtime_for_generation_mut(graph_generation) else {
                 return Ok(());
             };
-            if runtime
-                .abort_controllers
-                .remove(&pending.request_id)
-                .is_some()
+            if !server_action
+                && runtime
+                    .abort_controllers
+                    .remove(&pending.request_id)
+                    .is_some()
             {
                 self.region_tracker.release_fetch();
             }
@@ -896,19 +916,53 @@ impl RuntimeState {
         }
     }
 
-    fn decode_server_action_outcome(value: RuntimeValue) -> Result<RuntimeValue, RuntimeValue> {
+    fn decode_server_action_outcome(
+        value: RuntimeValue,
+    ) -> Result<(RuntimeValue, Vec<String>), RuntimeValue> {
         let RuntimeValue::Record(envelope) = value else {
             return Err(Self::private_action_error());
         };
         match envelope.get("kind") {
             Some(RuntimeValue::String(kind)) if kind == "success" => {
-                if envelope.len() != 2 {
+                if envelope.len() != 3 {
                     return Err(Self::private_action_error());
                 }
-                envelope
+                let value = envelope
                     .get("value")
                     .cloned()
-                    .ok_or_else(Self::private_action_error)
+                    .ok_or_else(Self::private_action_error)?;
+                let Some(RuntimeValue::Array(values)) = envelope.get("invalidations") else {
+                    return Err(Self::private_action_error());
+                };
+                let mut invalidations = Vec::with_capacity(values.len());
+                let mut seen = std::collections::HashSet::new();
+                for value in values {
+                    let RuntimeValue::String(identity) = value else {
+                        return Err(Self::private_action_error());
+                    };
+                    if identity.len() > plec_ir::limits::MAX_RESOURCE_IDENTITY_BYTES
+                        || !seen.insert(identity.clone())
+                    {
+                        return Err(Self::private_action_error());
+                    }
+                    invalidations.push(identity.clone());
+                }
+                if invalidations.len() > plec_ir::limits::MAX_ACTION_INVALIDATIONS
+                    || RuntimeValue::Array(
+                        invalidations
+                            .iter()
+                            .cloned()
+                            .map(RuntimeValue::String)
+                            .collect(),
+                    )
+                    .json_body()
+                    .map(|json| json.len())
+                    .unwrap_or(usize::MAX)
+                        > plec_ir::limits::MAX_ACTION_INVALIDATIONS_JSON_BYTES
+                {
+                    return Err(Self::private_action_error());
+                }
+                Ok((value, invalidations))
             }
             Some(RuntimeValue::String(kind)) if kind == "failure" => {
                 if envelope.len() != 2 {
@@ -940,6 +994,25 @@ impl RuntimeState {
             }
             _ => Err(Self::private_action_error()),
         }
+    }
+
+    fn dispatch_action_invalidations(invalidations: &[String]) -> Result<(), JsValue> {
+        let identities = js_sys::Array::new();
+        for identity in invalidations {
+            identities.push(&JsValue::from_str(identity));
+        }
+        let detail = js_sys::Object::new();
+        js_sys::Reflect::set(&detail, &JsValue::from_str("invalidations"), &identities)?;
+        let init = web_sys::CustomEventInit::new();
+        init.set_detail(&detail);
+        let event =
+            web_sys::CustomEvent::new_with_event_init_dict("plec:action-invalidations", &init)?;
+        web_sys::window()
+            .ok_or_else(|| JsValue::from_str("window unavailable"))?
+            .document()
+            .ok_or_else(|| JsValue::from_str("document unavailable"))?
+            .dispatch_event(&event)?;
+        Ok(())
     }
 
     fn private_action_error() -> RuntimeValue {

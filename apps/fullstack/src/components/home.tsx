@@ -6,7 +6,7 @@ import {
 import { useLocation, useMutation, useState } from '@plec/core';
 import logoUrl from '../assets/plec-logo-transparent.png';
 import { DuckHead } from './duck-head';
-import { echoAction } from '../server-actions';
+import { echoAction, renameProject } from '../server-actions';
 
 export function HomePage() {
   const location = useLocation();
@@ -14,6 +14,9 @@ export function HomePage() {
   const [echoed, setEchoed] = useState('not called');
   const echo = useMutation(async (value: string) => {
     return await echoAction(value);
+  });
+  const rename = useMutation(async (name: string) => {
+    return await renameProject('plec', name);
   });
   async function callEcho() {
     try {
@@ -99,6 +102,13 @@ export function HomePage() {
               >
                 {echoed}
               </output>
+              <button
+                id="rename-project-from-home"
+                type="button"
+                onClick={() => rename.run('Project renamed from disposed page')}
+              >
+                Rename project from this page
+              </button>
               {echo.error && (
                 <p
                   id="server-action-error"

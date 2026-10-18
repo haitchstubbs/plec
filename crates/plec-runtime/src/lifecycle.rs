@@ -638,6 +638,7 @@ pub(crate) fn typed_route_manifest(manifest: plec_ir::RouteManifest) -> RouteMan
                 not_found_graph_id: route.not_found_graph_id,
                 outlet_id: route.outlet_id,
                 loader_action: route.loader_action,
+                dependencies: route.dependencies,
             })
             .collect(),
     }

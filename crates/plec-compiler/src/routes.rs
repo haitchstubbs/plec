@@ -1,10 +1,17 @@
 use std::collections::HashMap;
 
-use plec_hir::{ComponentId, HirApplication, HirRoute, HirRouteApplication, HirRouteMetadata};
-use plec_ir::{ActionProgram, ComponentApplication, RouteManifest, RouteManifestEntry, RouteMetadata, RouteOutlet};
+use plec_hir::{
+    ComponentId, HirApplication, HirResourceIdentityPart, HirResourceIdentityTemplate, HirRoute,
+    HirRouteApplication, HirRouteMetadata,
+};
+use plec_ir::{
+    ActionProgram, ComponentApplication, RouteManifest, RouteManifestEntry, RouteMetadata,
+    RouteOutlet,
+};
 use plec_model::{resolve_local_symbol, SemanticGraph};
 use plec_parser::ParsedModule;
 use serde::Serialize;
+use swc_common::Spanned;
 use swc_ecma_ast::{
     ArrowFunctionBody, Callee, Decl, Expr, KeyValueProp, ModuleItem, Pat, Prop, PropName,
     PropOrSpread, Stmt, VarDecl,
@@ -106,6 +113,43 @@ pub fn lower_routes(
                     graph,
                 )?;
                 let loader = optional_ident_option(options.props.as_slice(), "loader")?;
+                let mut declared_params = path
+                    .split('/')
+                    .filter_map(|segment| segment.strip_prefix('$').map(str::to_owned))
+                    .collect::<std::collections::HashSet<_>>();
+                if let Some(parent_id) = parent.as_deref() {
+                    collect_ancestor_route_params(
+                        modules,
+                        graph,
+                        parent_id,
+                        &mut declared_params,
+                        &mut std::collections::HashSet::new(),
+                    )?;
+                }
+                let dependencies = resource_dependencies_option(
+                    options.props.as_slice(),
+                    &declared_params,
+                    loader.is_some(),
+                )
+                .map_err(|error| {
+                    if !error.0.starts_with("PLEC-RESOURCE-") {
+                        return error;
+                    }
+                    let offset = prop(&options.props, "dependsOn")
+                        .map(|expression| expression.span().lo.0.saturating_sub(1) as usize)
+                        .unwrap_or(0)
+                        .min(module.source.len());
+                    let before = &module.source[..module.source.floor_char_boundary(offset)];
+                    let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
+                    let column = before
+                        .rsplit('\n')
+                        .next()
+                        .unwrap_or_default()
+                        .chars()
+                        .count()
+                        + 1;
+                    RouteError(format!("{}:{line}:{column}: {}", module.id, error.0))
+                })?;
                 let outlet_id = string_option(options.props.as_slice(), "outletId")?
                     .unwrap_or_else(|| "main".into());
                 let metadata = route_metadata_option(options.props.as_slice())?;
@@ -121,6 +165,7 @@ pub fn lower_routes(
                     error_component,
                     not_found_component,
                     loader,
+                    dependencies,
                     outlet_id,
                     metadata,
                 });
@@ -190,6 +235,24 @@ pub fn lower_route_manifest(routes: &HirRouteApplication) -> RouteManifest {
                 // Loader action zero is reserved by route-graph lowering; callers
                 // cannot supply this runtime handle.
                 loader_action: route.loader.as_ref().map(|_| 0),
+                dependencies: route
+                    .dependencies
+                    .iter()
+                    .map(|template| plec_ir::ResourceIdentityTemplate {
+                        parts: template
+                            .parts
+                            .iter()
+                            .map(|part| match part {
+                                HirResourceIdentityPart::Static(value) => {
+                                    plec_ir::ResourceIdentityPart::Static(value.clone())
+                                }
+                                HirResourceIdentityPart::Param(value) => {
+                                    plec_ir::ResourceIdentityPart::Param(value.clone())
+                                }
+                            })
+                            .collect(),
+                    })
+                    .collect(),
                 outlet_id: route.outlet_id.clone(),
                 meta: (!route.metadata.title.is_none() || !route.metadata.description.is_none())
                     .then(|| RouteMetadata {
@@ -534,6 +597,206 @@ fn pending_mode_option(props: &[PropOrSpread]) -> Result<String, RouteError> {
         )),
     }
 }
+
+fn resource_dependencies_option(
+    props: &[PropOrSpread],
+    params: &std::collections::HashSet<String>,
+    has_loader: bool,
+) -> Result<Vec<HirResourceIdentityTemplate>, RouteError> {
+    let Some(value) = prop(props, "dependsOn") else {
+        if props.iter().any(|entry| matches!(entry, PropOrSpread::Prop(value) if matches!(value.as_ref(), Prop::Shorthand(name) if name.sym == "dependsOn"))) {
+            return Err(RouteError("PLEC-RESOURCE-001: dependsOn must be an explicit array literal or callback".into()));
+        }
+        return Ok(Vec::new());
+    };
+    let error = |message: &str| RouteError(format!("PLEC-RESOURCE-001: {message}"));
+    if !has_loader {
+        return Err(RouteError(
+            "PLEC-RESOURCE-004: dependsOn requires a route loader".into(),
+        ));
+    }
+    let (array, parameterized) = match value {
+        Expr::Array(array) => (array, false),
+        Expr::Arrow(arrow) => {
+            let Some(Pat::Object(argument)) = arrow.params.first() else {
+                return Err(error("dependsOn callback must destructure { params }"));
+            };
+            if arrow.params.len() != 1
+                || argument.props.len() != 1
+                || !matches!(argument.props.first(), Some(swc_ecma_ast::ObjectPatProp::Assign(assign)) if assign.key.sym == "params")
+            {
+                return Err(error("dependsOn callback must accept only { params }"));
+            }
+            let ArrowFunctionBody::Expr(body) = arrow.body.as_ref() else {
+                return Err(error(
+                    "dependsOn arrow must directly return an array literal",
+                ));
+            };
+            let Expr::Array(array) = body.as_ref() else {
+                return Err(error(
+                    "dependsOn arrow must directly return an array literal",
+                ));
+            };
+            (array, true)
+        }
+        _ => {
+            return Err(error(
+                "dependsOn must be an array literal or a direct arrow returning one",
+            ))
+        }
+    };
+    if array.elems.len() > plec_ir::limits::MAX_LOADER_DEPENDENCIES {
+        return Err(RouteError(
+            "PLEC-RESOURCE-003: route loader exceeds 16 dependencies".into(),
+        ));
+    }
+    let mut result = Vec::with_capacity(array.elems.len());
+    for entry in &array.elems {
+        let Some(entry) = entry else {
+            return Err(error("array holes are unsupported"));
+        };
+        let expr = &entry.expr;
+        let parts = match expr.as_ref() {
+            Expr::Lit(swc_ecma_ast::Lit::Str(value)) => vec![HirResourceIdentityPart::Static(
+                value.value.to_string_lossy().into_owned(),
+            )],
+            Expr::Tpl(template) if parameterized => {
+                if template.quasis.len() != template.exprs.len() + 1 {
+                    return Err(error("malformed resource identity template"));
+                }
+                let mut parts = Vec::new();
+                for (index, quasi) in template.quasis.iter().enumerate() {
+                    let text = quasi
+                        .cooked
+                        .as_ref()
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| quasi.raw.to_string());
+                    if !text.is_empty() {
+                        parts.push(HirResourceIdentityPart::Static(text));
+                    }
+                    if let Some(interpolation) = template.exprs.get(index) {
+                        let Expr::Member(member) = interpolation.as_ref() else {
+                            return Err(error("interpolation must be params.<declaredParam>"));
+                        };
+                        let Expr::Ident(object) = member.obj.as_ref() else {
+                            return Err(error("interpolation must be params.<declaredParam>"));
+                        };
+                        let swc_ecma_ast::MemberProp::Ident(property) = &member.prop else {
+                            return Err(error("computed parameter access is unsupported"));
+                        };
+                        if object.sym != "params" {
+                            return Err(error("interpolation must read params.<declaredParam>"));
+                        }
+                        let name = property.sym.to_string();
+                        if !params.contains(&name) {
+                            return Err(RouteError(format!(
+                                "PLEC-RESOURCE-002: unknown route parameter {name:?}"
+                            )));
+                        }
+                        parts.push(HirResourceIdentityPart::Param(name));
+                    }
+                }
+                parts
+            }
+            Expr::Tpl(_) => {
+                return Err(error(
+                    "template identities require a dependsOn params callback",
+                ))
+            }
+            _ => {
+                return Err(error(
+                    "entries must be string literals or parameter templates",
+                ))
+            }
+        };
+        let static_bytes = parts
+            .iter()
+            .map(|part| match part {
+                HirResourceIdentityPart::Static(value) => value.len(),
+                HirResourceIdentityPart::Param(_) => 0,
+            })
+            .sum::<usize>();
+        if static_bytes > plec_ir::limits::MAX_RESOURCE_IDENTITY_BYTES {
+            return Err(RouteError(
+                "PLEC-RESOURCE-003: static resource identity content exceeds 256 UTF-8 bytes"
+                    .into(),
+            ));
+        }
+        result.push(HirResourceIdentityTemplate { parts });
+    }
+    Ok(result)
+}
+
+fn collect_ancestor_route_params(
+    modules: &[ParsedModule],
+    graph: &SemanticGraph,
+    route_id: &str,
+    params: &mut std::collections::HashSet<String>,
+    visited: &mut std::collections::HashSet<String>,
+) -> Result<(), RouteError> {
+    if !visited.insert(route_id.to_owned()) {
+        return Ok(());
+    }
+    let Some((module_id, local_name)) = route_id.split_once('#') else {
+        return Ok(());
+    };
+    let module = modules
+        .iter()
+        .find(|module| module.id == module_id)
+        .ok_or_else(|| RouteError("route parent module is missing".into()))?;
+    let options = module
+        .ast
+        .body
+        .iter()
+        .find_map(|item| {
+            exported_var(item).and_then(|var| {
+                var.decls.iter().find_map(|declaration| {
+                    let Pat::Ident(name) = &declaration.name else {
+                        return None;
+                    };
+                    if name.id.sym != local_name {
+                        return None;
+                    }
+                    let Some(Expr::Call(call)) = declaration.init.as_deref() else {
+                        return None;
+                    };
+                    matches!(
+                        callee_name(&call.callee),
+                        Some("createRootRoute" | "createRoute")
+                    )
+                    .then(|| {
+                        call.args
+                            .first()
+                            .and_then(|argument| match argument.expr.as_ref() {
+                                Expr::Object(options) => Some(options),
+                                _ => None,
+                            })
+                    })
+                    .flatten()
+                })
+            })
+        })
+        .ok_or_else(|| RouteError("route parent is not a discovered route".into()))?;
+    let path = string_option(&options.props, "path")?.unwrap_or_default();
+    params.extend(
+        path.split('/')
+            .filter_map(|segment| segment.strip_prefix('$').map(str::to_owned)),
+    );
+    if callee_is_route_factory(module, local_name, "createRoute") {
+        if let Some(parent) = parent_option(&options.props, module, graph)? {
+            collect_ancestor_route_params(modules, graph, &parent, params, visited)?;
+        }
+    }
+    Ok(())
+}
+
+fn callee_is_route_factory(module: &ParsedModule, local_name: &str, expected: &str) -> bool {
+    module.ast.body.iter().any(|item| exported_var(item).is_some_and(|var| var.decls.iter().any(|declaration| {
+        matches!(&declaration.name, Pat::Ident(name) if name.id.sym == local_name)
+            && matches!(declaration.init.as_deref(), Some(Expr::Call(call)) if callee_name(&call.callee) == Some(expected))
+    })))
+}
+
 fn optional_ident_option(props: &[PropOrSpread], name: &str) -> Result<Option<String>, RouteError> {
     match prop(props, name) {
         None => Ok(None),
@@ -612,7 +875,9 @@ mod tests {
     use plec_model::build_semantic_graph;
     use plec_parser::parse_module;
 
-    fn compile_loader_program(source: &str) -> Result<(plec_ir::ActionProgram, Vec<String>), String> {
+    fn compile_loader_program(
+        source: &str,
+    ) -> Result<(plec_ir::ActionProgram, Vec<String>), String> {
         let modules = vec![parse_module("routes.tsx", source).unwrap()];
         let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
         let routes = lower_routes(&modules, &graph).unwrap();
@@ -637,10 +902,7 @@ mod tests {
             .actions
             .last()
             .ok_or("loader action is missing".to_owned())?;
-        Ok((
-            action.clone(),
-            component.strings.clone(),
-        ))
+        Ok((action.clone(), component.strings.clone()))
     }
 
     #[test]
@@ -753,9 +1015,7 @@ mod tests {
         let error = lower_route_artifacts(&modules, &graph, &routes)
             .unwrap_err()
             .to_string();
-        assert!(error.contains(
-            "must await fetch(url) or produce a redirect/not-found outcome"
-        ));
+        assert!(error.contains("must await fetch(url) or produce a redirect/not-found outcome"));
     }
 
     #[test]
@@ -910,6 +1170,119 @@ mod tests {
     }
 
     #[test]
+    fn lowers_only_static_and_declared_parameter_resource_templates() {
+        let modules = vec![parse_module(
+            "routes.tsx",
+            r#"
+            function Layout() { return <main />; }
+            function Page() { return <p />; }
+            export const Root = createRootRoute({ component: Layout });
+            export const Project = createRoute({
+                getParentRoute: () => Root,
+                path: 'projects/$projectId',
+                component: Page,
+                dependsOn: ({ params }) => ['projects', `project:${params.projectId}`],
+                loader: async () => await fetch('/api/projects'),
+            });
+            export const router = createRouter({ routeTree: Root.addChildren([Project]) });
+        "#,
+        )
+        .unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let routes = lower_routes(&modules, &graph).unwrap();
+        let manifest = lower_route_manifest(&routes);
+        let dependencies = &manifest.routes[0].dependencies;
+        assert_eq!(dependencies.len(), 2);
+        assert_eq!(
+            dependencies[0].parts,
+            vec![plec_ir::ResourceIdentityPart::Static("projects".into())]
+        );
+        assert_eq!(
+            dependencies[1].parts,
+            vec![
+                plec_ir::ResourceIdentityPart::Static("project:".into()),
+                plec_ir::ResourceIdentityPart::Param("projectId".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parameter_templates_can_reference_inherited_route_params() {
+        let modules = vec![parse_module("routes.tsx", r#"
+            function Layout() { return <main />; } function ParentPage() { return <section />; }
+            function ChildPage() { return <p />; }
+            export const Root = createRootRoute({ component: Layout });
+            export const Parent = createRoute({ getParentRoute: () => Root, path: 'projects/$id', component: ParentPage, loader: async () => await fetch('/project') });
+            export const Child = createRoute({ getParentRoute: () => Parent, path: 'details', component: ChildPage, dependsOn: ({ params }) => [`project:${params.id}`], loader: async () => await fetch('/project') });
+            export const router = createRouter({ routeTree: Root.addChildren([Parent.addChildren([Child])]) });
+        "#).unwrap()];
+        let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+        let routes = lower_routes(&modules, &graph).unwrap();
+        let child = routes
+            .routes
+            .iter()
+            .find(|route| route.id.ends_with("#Child"))
+            .unwrap();
+        assert_eq!(
+            child.dependencies[0].parts,
+            vec![
+                HirResourceIdentityPart::Static("project:".into()),
+                HirResourceIdentityPart::Param("id".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_resource_params_and_non_declarative_callbacks() {
+        for declaration in [
+            "dependsOn: ({ params }) => [`project:${params.missing}`]",
+            "dependsOn: ({ params }) => params.projectId.map(value => value)",
+            "dependsOn: ['projects'].concat(['other'])",
+        ] {
+            let source = format!(
+                r#"
+                function Layout() {{ return <main />; }} function Page() {{ return <p />; }}
+                export const Root = createRootRoute({{ component: Layout }});
+                export const Project = createRoute({{ getParentRoute: () => Root, path: 'projects/$projectId', component: Page, {declaration}, loader: async () => await fetch('/api/projects') }});
+                export const router = createRouter({{ routeTree: Root.addChildren([Project]) }});
+            "#
+            );
+            let modules = vec![parse_module("routes.tsx", &source).unwrap()];
+            let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+            assert!(lower_routes(&modules, &graph)
+                .unwrap_err()
+                .to_string()
+                .contains("PLEC-RESOURCE-"));
+        }
+    }
+
+    #[test]
+    fn rejects_resource_declarations_without_a_loader_and_static_budget_overflow() {
+        for fields in [
+            "dependsOn: ['todos']".to_owned(),
+            format!(
+                "loader: async () => await fetch('/data'), dependsOn: ['{}']",
+                "x".repeat(257)
+            ),
+        ] {
+            let source = format!(
+                r#"
+                function Layout() {{ return <main />; }} function Page() {{ return <p />; }}
+                export const Root = createRootRoute({{ component: Layout }});
+                export const Route = createRoute({{ getParentRoute: () => Root, path: 'route', component: Page, {fields} }});
+                export const router = createRouter({{ routeTree: Root.addChildren([Route]) }});
+            "#
+            );
+            let modules = vec![parse_module("routes.tsx", &source).unwrap()];
+            let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+            assert!(lower_routes(&modules, &graph)
+                .unwrap_err()
+                .to_string()
+                .contains("PLEC-RESOURCE-"));
+        }
+    }
+
+    #[test]
     fn rejects_dynamic_route_paths() {
         let modules = vec![parse_module("routes.tsx", r#"
             function Layout() { return <main />; }
@@ -995,11 +1368,12 @@ mod tests {
         let routes = lower_routes(&modules, &graph).unwrap();
         let artifacts = lower_route_artifacts(&modules, &graph, &routes).unwrap();
         assert!(artifacts.graphs.iter().any(|graph| {
-            graph
-                .graph
-                .components
-                .iter()
-                .any(|component| component.host_slots.iter().any(|slot| slot.kind == "routeSearch"))
+            graph.graph.components.iter().any(|component| {
+                component
+                    .host_slots
+                    .iter()
+                    .any(|slot| slot.kind == "routeSearch")
+            })
         }));
     }
 

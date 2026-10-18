@@ -38,6 +38,7 @@ describe('@plec/node action path', () => {
       expect(response.headers.get('cache-control')).toBe('no-store');
       expect(await response.json()).toEqual({
         kind: 'success',
+        invalidations: ['project:42'],
         value: {
           value: 'multi-chunk',
           pathname: '/_plec/actions/echo',
@@ -81,6 +82,7 @@ describe('@plec/node action path', () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
         kind: 'success',
+        invalidations: ['project:42'],
         value: {
           value: 'node-stream',
           pathname: '/_plec/actions/echo',
@@ -120,10 +122,12 @@ describe('@plec/node action path', () => {
       ]);
       expect(await first.json()).toMatchObject({
         kind: 'success',
+        invalidations: ['project:42'],
         value: { value: 'first', requestCase: 'first' },
       });
       expect(await second.json()).toMatchObject({
         kind: 'success',
+        invalidations: ['project:42'],
         value: { value: 'second', requestCase: 'second' },
       });
     } finally {
@@ -207,6 +211,7 @@ describe('@plec/node action path', () => {
       expect(ordinary.status).toBe(200);
       expect(await ordinary.json()).toEqual({
         kind: 'success',
+        invalidations: [],
         value: {
           kind: 'failure',
           failure: { code: 'FAKE', message: 'not an action failure' },
@@ -468,13 +473,13 @@ async function fixture(pendingKey?: string): Promise<string> {
     export async function invokeAction(id, args, context) {
       if (id === 'fail') throw new Error('private action diagnostic');
       if (id === 'expected') { const error = new Error('That email address is already registered.'); Object.defineProperty(error, 'message', { value: error.message, enumerable: true }); error.code = 'EMAIL_TAKEN'; Object.defineProperty(error, Symbol.for('plec.action-failure'), { value: true }); throw error; }
-      if (id === 'ordinary') return { kind: 'failure', failure: { code: 'FAKE', message: 'not an action failure' } };
+       if (id === 'ordinary') return { value: { kind: 'failure', failure: { code: 'FAKE', message: 'not an action failure' } }, invalidations: [] };
       if (id === 'malformed') { const error = new Error('private malformed failure'); Object.defineProperty(error, 'message', { value: error.message, enumerable: true }); error.code = 'EMAIL_TAKEN'; error.details = { private: true }; Object.defineProperty(error, Symbol.for('plec.action-failure'), { value: true }); throw error; }
       if (id === 'pending') { globalThis[${JSON.stringify(pendingKey)}] = (globalThis[${JSON.stringify(pendingKey)}] ?? 0) + 1; return new Promise(() => {}); }
       return actionContext.run(context, async () => {
         await new Promise(resolve => setTimeout(resolve, args[1] ?? 0));
         const current = actionContext.getStore();
-        return { value: args[0], pathname: current.pathname, requestCase: current.headers['x-case'] ?? null };
+         return { value: { value: args[0], pathname: current.pathname, requestCase: current.headers['x-case'] ?? null }, invalidations: ['project:42'] };
       });
     }
   `,

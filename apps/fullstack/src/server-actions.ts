@@ -1,6 +1,7 @@
 import { action } from '@plec/core';
-import { actionFailure } from '@plec/core/server';
+import { actionFailure, invalidate } from '@plec/core/server';
 import { requestContext } from '@plec/core/server-context';
+import { setProjectName } from './project-data';
 
 export const echoAction = action(async (value: string) => {
   const hasExpectedSession =
@@ -17,4 +18,14 @@ export const echoAction = action(async (value: string) => {
     markerLength: privateMarker.length,
     hasExpectedSession,
   };
+});
+
+export const renameProject = action(async (id: string, name: string) => {
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  if (!setProjectName(id, name)) {
+    actionFailure({ code: 'PROJECT_NOT_FOUND', message: 'Project not found.' });
+  }
+  invalidate(`project:${id}`);
+  invalidate(`project:${id}`);
+  return { id, name };
 });

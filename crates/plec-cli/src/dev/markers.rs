@@ -1236,6 +1236,7 @@ mod tests {
             pending_mode: "replace".into(),
             error_graph_id: None,
             loader_action: None,
+            dependencies: vec![],
             not_found_graph_id: None,
             outlet_id: "main".into(),
             meta: None,

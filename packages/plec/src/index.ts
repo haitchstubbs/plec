@@ -58,6 +58,7 @@ export type {
   RouteOptions,
   RouteDefinition,
   RouteParams,
+  RouteResourceDependencies,
   RouteSearch,
 } from './routes/router';
 export {

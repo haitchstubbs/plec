@@ -1,8 +1,15 @@
-import { useLocation, useState } from '@plec/core';
+import { Outlet, useLocation, useMutation, useState } from '@plec/core';
 import { PageFrame, PageKicker } from './page-primitives';
+import { Route } from '../routes/project.route';
+import { renameProject } from '../server-actions';
 
 export function ProjectPage() {
   const location = useLocation();
+  const project = Route.useLoaderData() as { missing: boolean; name: string | null };
+  const params = Route.useParams();
+  const rename = useMutation(async (name: string) => {
+    return await renameProject(params.id, name);
+  });
   const [detailed, setDetailed] = useState(false);
   return (
     <PageFrame>
@@ -16,6 +23,11 @@ export function ProjectPage() {
       >
         Project route matched with path {location.pathname}.
       </p>
+      <p id="project-name">{project.name}</p>
+      <button type="button" id="rename-project" onClick={() => rename.run('Project renamed by action')}>
+        Rename project
+      </button>
+      <Outlet />
       {detailed ? (
         <p
           id="ssr-branch-open"
