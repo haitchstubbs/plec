@@ -42,7 +42,8 @@ fn install_test_packages(project: &Path) {
     .unwrap();
     fs::write(
         core.join("dist/server-context.js"),
-        "export function withRequestContext(_context, run) { return run(); }\n",
+        "export function withRequestContext(_context, run) { return run(); }\n\
+         export async function withActionInvalidationCollection(run) { return { value: await run(), invalidations: [] }; }\n",
     )
     .unwrap();
     fs::write(core.join("dist/browser.js"), "export function createRouter() { return {}; }\nexport function createRootRoute() { return {}; }\n").unwrap();
