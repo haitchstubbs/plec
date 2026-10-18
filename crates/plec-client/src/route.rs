@@ -167,7 +167,7 @@ impl RuntimeState {
         }
         #[cfg(feature = "fetch")]
         {
-            let (run, pending_graph) =
+            let (run, pending_graph, request_version) =
                 {
                     let mut typed = self.typed.borrow_mut();
                     let instance = typed
@@ -225,6 +225,10 @@ impl RuntimeState {
                         .route_state
                         .as_mut()
                         .ok_or_else(|| JsValue::from_str("typed loader route state missing"))?;
+                    state.loader_request_version = state
+                        .loader_request_version
+                        .checked_add(1)
+                        .ok_or_else(|| JsValue::from_str("route loader request version exhausted"))?;
                     state.params = match &values.first().map(|(_, value)| value) {
                         Some(RuntimeValue::Record(values)) => values
                             .iter()
@@ -246,6 +250,7 @@ impl RuntimeState {
                         (state.pending_mode != "retain")
                             .then(|| state.pending_graph_id.clone())
                             .flatten(),
+                        state.loader_request_version,
                     )
                 };
             if let Some(graph_id) = pending_graph {
@@ -272,6 +277,7 @@ impl RuntimeState {
                             suspension,
                             graph_generation,
                             request_id: 0,
+                            request_version,
                         })
                         .is_err()
                     {
@@ -301,7 +307,12 @@ impl RuntimeState {
                                 .map(|instance| instance.runtime.graph_generation)
                         })
                         .ok_or_else(|| JsValue::from_str("typed route instance missing"))?;
-                    self.complete_shared_route_loader(id, graph_generation, outcome)?;
+                    self.complete_shared_route_loader(
+                        id,
+                        graph_generation,
+                        Some(request_version),
+                        outcome,
+                    )?;
                 }
             }
             Ok(())

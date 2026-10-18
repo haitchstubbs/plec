@@ -505,6 +505,9 @@ pub struct TypedRouteState {
     pub params: HashMap<String, String>,
     pub location: (String, String, String),
     pub phase: TypedRoutePhase,
+    /// Monotonic identity for the latest loader invocation on this mounted
+    /// route instance. Graph generations alone do not distinguish reloads.
+    pub loader_request_version: u64,
 }
 
 #[derive(PartialEq, Eq)]

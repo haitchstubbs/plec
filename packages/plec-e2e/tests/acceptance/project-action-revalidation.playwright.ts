@@ -66,13 +66,16 @@ test('parameterized identities do not refresh a different project instance', asy
     new URL(response.url()).pathname === '/api/projects/p42',
   );
   await page.evaluate(() => {
-    history.pushState({}, '', '/projects/p42');
+    history.pushState({}, '', '/projects/p42/details');
     window.dispatchEvent(new PopStateEvent('popstate'));
   });
   await initialLoader;
+  await expect.poll(() => projectLoaderResponses).toBeGreaterThanOrEqual(2);
   await actionResponse;
   await expect(page.locator('#project-name')).toHaveText('Project 42');
-  expect(projectLoaderResponses).toBe(1);
+  await expect(page.locator('#project-details-name')).toHaveText('Project 42');
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  expect(projectLoaderResponses).toBe(2);
 });
 
 test('overlapping successful mutations each deliver their invalidation batch', async ({ page }) => {
@@ -125,4 +128,104 @@ test('all active loaders sharing an identity reload once in one invalidation bat
   await expect(page.locator('#project-name')).toHaveText('Project renamed by action');
   await expect(page.locator('#project-details-name')).toHaveText('Project renamed by action');
   await expect.poll(() => projectLoaderResponses).toBe(2);
+});
+
+test('a slower older loader response cannot overwrite a newer invalidation result', async ({ page }) => {
+  await page.goto('/projects/plec', { waitUntil: 'domcontentloaded' });
+  await waitForMount(page);
+  let loaderRequests = 0;
+  let resolveFirstRequest!: () => void;
+  const firstRequestStarted = new Promise<void>((resolve) => {
+    resolveFirstRequest = resolve;
+  });
+  await page.route('**/api/projects/plec', async (route) => {
+    loaderRequests += 1;
+    const requestNumber = loaderRequests;
+    if (requestNumber === 1) {
+      resolveFirstRequest();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        missing: false,
+        name: `loader-response-${requestNumber}`,
+      }),
+    });
+  });
+  const actionResponses: import('@playwright/test').Response[] = [];
+  page.on('response', (response) => {
+    if (new URL(response.url()).pathname.startsWith('/_plec/actions/')) {
+      actionResponses.push(response);
+    }
+  });
+
+  await page.locator('#rename-project').click();
+  await firstRequestStarted;
+  await page.locator('#rename-project').click();
+  await expect.poll(() => loaderRequests).toBe(2);
+  await expect.poll(() => actionResponses.length).toBe(2);
+  await expect(page.locator('#project-name')).toHaveText('loader-response-2');
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  await expect(page.locator('#project-name')).toHaveText('loader-response-2');
+});
+
+test('invalidation during an interrupted navigation does not reload the departing route', async ({ page }) => {
+  await page.goto('/projects/plec', { waitUntil: 'domcontentloaded' });
+  await waitForMount(page);
+  let departingRouteReloads = 0;
+  let releaseSlowLoader!: () => void;
+  let resolveSlowLoaderStarted!: () => void;
+  const slowLoaderGate = new Promise<void>((resolve) => {
+    releaseSlowLoader = resolve;
+  });
+  const slowLoaderStarted = new Promise<void>((resolve) => {
+    resolveSlowLoaderStarted = resolve;
+  });
+  await page.route('**/api/projects/p42', async (route) => {
+    resolveSlowLoaderStarted();
+    await slowLoaderGate;
+    try {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ missing: false, name: 'Slow project' }),
+      });
+    } catch {
+      // A newer navigation may abort the pending loader request.
+    }
+  });
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/projects/plec') {
+      departingRouteReloads += 1;
+    }
+  });
+  const actionResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.startsWith('/_plec/actions/'),
+  );
+  await page.locator('#rename-project').click();
+  await page.evaluate(() => {
+    history.pushState({}, '', '/projects/p42');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await slowLoaderStarted;
+  await page.evaluate(() => {
+    history.pushState({}, '', '/about');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  const aboutHeading = page.getByRole('heading', {
+    name: 'Plec is a renderer, not a React compatibility layer.',
+  });
+  await expect(aboutHeading).toBeVisible();
+  const response = await actionResponse;
+  expect(await response.json()).toMatchObject({
+    kind: 'success',
+    invalidations: ['project:plec'],
+  });
+  releaseSlowLoader();
+  await expect.poll(() => departingRouteReloads).toBe(0);
+  await expect(aboutHeading).toBeVisible();
 });

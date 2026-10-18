@@ -151,6 +151,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                     location.hash.clone(),
                 ),
                 phase: TypedRoutePhase::NotFound,
+                loader_request_version: 0,
             });
             parent_id = id;
             path = child_path;
@@ -224,6 +225,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                     location.hash.clone(),
                 ),
                 phase: TypedRoutePhase::Error,
+                loader_request_version: 0,
             });
             instance
                 .runtime
@@ -279,6 +281,7 @@ pub fn adopt_typed_route(state: &RuntimeState, href: &str, root: Element) -> Res
                     location.hash.clone(),
                 ),
                 phase: TypedRoutePhase::Normal,
+                loader_request_version: 0,
             });
         }
         parent_id = id;
@@ -760,6 +763,7 @@ fn mount_typed_child(
             location.hash.clone(),
         ),
         phase: TypedRoutePhase::Normal,
+        loader_request_version: 0,
     });
     Ok(id)
 }

@@ -25,6 +25,7 @@ pub struct TypedPendingLoaderFetch {
     pub suspension: Suspension<TypedLoaderFetchRequest>,
     pub graph_generation: u64,
     pub request_id: u64,
+    pub request_version: u64,
 }
 
 fn fetch_origin(url: &str) -> Option<String> {
@@ -264,6 +265,10 @@ impl RuntimeState {
             let Some(instance) = typed.get_mut(&pending.instance_id) else {
                 return Ok(());
             };
+            let is_latest = instance
+                .route_state
+                .as_ref()
+                .is_some_and(|route| route.loader_request_version == pending.request_version);
             let Some(runtime) = instance.runtime_for_generation_mut(pending.graph_generation)
             else {
                 return Ok(());
@@ -275,6 +280,9 @@ impl RuntimeState {
             {
                 self.region_tracker.release_fetch();
             }
+            if !is_latest {
+                return Ok(());
+            }
             runtime.resume_shared_route_loader(pending.suspension, result)?
         };
         match run {
@@ -283,10 +291,12 @@ impl RuntimeState {
                 suspension,
                 graph_generation: pending.graph_generation,
                 request_id: 0,
+                request_version: pending.request_version,
             }),
             Run::Complete(outcome) => self.complete_shared_route_loader(
                 &pending.instance_id,
                 pending.graph_generation,
+                Some(pending.request_version),
                 outcome,
             ),
         }
@@ -903,6 +913,7 @@ impl RuntimeState {
                     return self.complete_shared_route_loader(
                         &instance_id,
                         graph_generation,
+                        None,
                         outcome,
                     );
                 }
@@ -1026,8 +1037,21 @@ impl RuntimeState {
         &self,
         instance_id: &str,
         graph_generation: u64,
+        request_version: Option<u64>,
         outcome: ActionOutcome,
     ) -> Result<(), JsValue> {
+        if let Some(request_version) = request_version {
+            let typed = self.typed.borrow();
+            let Some(route) = typed
+                .get(instance_id)
+                .and_then(|instance| instance.route_state.as_ref())
+            else {
+                return Ok(());
+            };
+            if route.loader_request_version != request_version {
+                return Ok(());
+            }
+        }
         // Terminal navigation outcomes never commit the loader value or the
         // route: the router resolves them before anything paints as final.
         match &outcome {

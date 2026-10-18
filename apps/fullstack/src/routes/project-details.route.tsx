@@ -11,7 +11,7 @@ export function ProjectDetailsPage() {
 export const Route = createRoute<Project>({
   getParentRoute: () => projectRoute,
   path: 'details',
-  dependsOn: ['project:plec'],
+  dependsOn: ({ params }) => [`project:${params.id}`],
   loader: async ({ params }) => {
     const project = (await fetch(`/api/projects/${params.id}`)) as Project;
     return project;
