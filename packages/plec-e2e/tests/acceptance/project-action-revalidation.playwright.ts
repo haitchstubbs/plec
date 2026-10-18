@@ -14,12 +14,13 @@ test('successful action invalidation refreshes the matching mounted route loader
   );
   await page.locator('#rename-project').click();
 
-  const [actionResponse] = await Promise.all([action, loaderRefresh]);
+  const actionResponse = await action;
   expect(actionResponse.status()).toBe(200);
   expect(await actionResponse.json()).toMatchObject({
     kind: 'success',
     invalidations: ['project:plec'],
   });
+  await loaderRefresh;
   await expect(page.locator('#project-name')).toHaveText('Project renamed by action');
 });
 
@@ -171,6 +172,78 @@ test('a slower older loader response cannot overwrite a newer invalidation resul
   await expect(page.locator('#project-name')).toHaveText('loader-response-2');
   await new Promise((resolve) => setTimeout(resolve, 450));
   await expect(page.locator('#project-name')).toHaveText('loader-response-2');
+});
+
+test('a pending route reload runs overlapping loaders on the preserved loader graph', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await waitForMount(page);
+  const firstProjectLoad = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === '/api/projects/plec',
+  );
+  await page.evaluate(() => {
+    history.pushState({}, '', '/projects/plec');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await firstProjectLoad;
+  await expect(page.locator('#project-name')).toHaveText(/.+/);
+  await page.evaluate(() => {
+    history.pushState({}, '', '/');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(page.locator('#rename-project-from-home')).toBeVisible();
+
+  let loaderRequests = 0;
+  let releaseFirstLoader!: () => void;
+  let firstLoaderStarted!: () => void;
+  const firstLoaderGate = new Promise<void>((resolve) => {
+    releaseFirstLoader = resolve;
+  });
+  const firstLoaderSignal = new Promise<void>((resolve) => {
+    firstLoaderStarted = resolve;
+  });
+  await page.route('**/api/projects/plec', async (route) => {
+    loaderRequests += 1;
+    const requestNumber = loaderRequests;
+    if (requestNumber === 1) {
+      firstLoaderStarted();
+      await firstLoaderGate;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ missing: false, name: 'older pending result' }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ missing: false, name: `loader result ${requestNumber}` }),
+    });
+  });
+  const actionResponses: import('@playwright/test').Response[] = [];
+  page.on('response', (response) => {
+    if (new URL(response.url()).pathname.startsWith('/_plec/actions/')) {
+      actionResponses.push(response);
+    }
+  });
+
+  try {
+    await page.locator('#rename-project-from-home').click();
+    await page.locator('#rename-project-from-home').click();
+    await page.evaluate(() => {
+      history.pushState({}, '', '/projects/plec');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await firstLoaderSignal;
+    await expect(page.locator('#project-pending')).toBeVisible();
+    await expect.poll(() => loaderRequests).toBe(3);
+    await expect.poll(() => actionResponses.length).toBe(2);
+    await expect(page.locator('#project-name')).toHaveText('loader result 3');
+  } finally {
+    releaseFirstLoader();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await expect(page.locator('#project-name')).toHaveText('loader result 3');
 });
 
 test('invalidation during an interrupted navigation does not reload the departing route', async ({ page }) => {

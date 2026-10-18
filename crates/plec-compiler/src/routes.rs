@@ -374,7 +374,7 @@ pub fn lower_route_artifacts_with_options(
     }
     // A revision must be stable across processes and derived from the Rust
     // compiler's canonical route/graph content rather than a JS build step.
-    manifest.revision = stable_revision(&artifacts);
+    manifest.revision = stable_revision(&artifacts, &manifest);
     Ok(RouteArtifactBundle {
         manifest,
         graphs: artifacts,
@@ -414,7 +414,7 @@ fn attach_route_loader(
     Ok((action, compiled.uses_not_found))
 }
 
-fn stable_revision(artifacts: &[RouteArtifact]) -> String {
+fn stable_revision(artifacts: &[RouteArtifact], manifest: &RouteManifest) -> String {
     // FNV-1a is intentionally small and deterministic; this is a cache-bust
     // revision, not a security digest.
     let mut hash = 0xcbf29ce484222325_u64;
@@ -428,6 +428,18 @@ fn stable_revision(artifacts: &[RouteArtifact]) -> String {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x100000001b3);
         }
+    }
+    // Manifest-only semantics (notably resource dependencies) affect route
+    // selection and freshness even when every executable graph is unchanged.
+    // Clear the revision itself so the digest is not self-referential.
+    hash ^= 0xff;
+    hash = hash.wrapping_mul(0x100000001b3);
+    let mut revisionless_manifest = manifest.clone();
+    revisionless_manifest.revision.clear();
+    let json = serde_json::to_vec(&revisionless_manifest).expect("route manifest serializes");
+    for byte in json {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("rust-route-{hash:016x}")
 }
@@ -1410,9 +1422,37 @@ mod tests {
         let reversed = artifacts.graphs.iter().rev().cloned().collect::<Vec<_>>();
         assert_eq!(
             artifacts.manifest.revision,
-            stable_revision(&reversed),
+            stable_revision(&reversed, &artifacts.manifest),
             "route revision must not depend on artifact ordering"
         );
+    }
+
+    #[test]
+    fn dependency_only_manifest_changes_change_the_route_revision() {
+        fn revision(identity: &str) -> String {
+            let source = format!(r#"
+                function Layout() {{ return <main />; }}
+                function Page() {{ return <p />; }}
+                export const Root = createRootRoute({{ component: Layout }});
+                export const PageRoute = createRoute({{
+                    getParentRoute: () => Root,
+                    path: 'page',
+                    component: Page,
+                    dependsOn: ['{identity}'],
+                    loader: async () => await fetch('/data'),
+                }});
+                export const router = createRouter({{ routeTree: Root.addChildren([PageRoute]) }});
+            "#);
+            let modules = vec![parse_module("routes.tsx", source).unwrap()];
+            let graph = build_semantic_graph(&modules, &HashMap::new()).unwrap();
+            let routes = lower_routes(&modules, &graph).unwrap();
+            lower_route_artifacts(&modules, &graph, &routes)
+                .unwrap()
+                .manifest
+                .revision
+        }
+
+        assert_ne!(revision("resource:before"), revision("resource:after"));
     }
 
     #[test]
