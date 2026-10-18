@@ -5,7 +5,10 @@ import { renameProject } from '../server-actions';
 
 export function ProjectPage() {
   const location = useLocation();
-  const project = Route.useLoaderData() as { missing: boolean; name: string | null };
+  const project = Route.useLoaderData() as {
+    missing: boolean;
+    name: string | null;
+  };
   const params = Route.useParams();
   const rename = useMutation(async (name: string) => {
     return await renameProject(params.id, name);
@@ -24,7 +27,11 @@ export function ProjectPage() {
         Project route matched with path {location.pathname}.
       </p>
       <p id="project-name">{project.name}</p>
-      <button type="button" id="rename-project" onClick={() => rename.run('Project renamed by action')}>
+      <button
+        type="button"
+        id="rename-project"
+        onClick={() => rename.run('Project renamed by action')}
+      >
         Rename project
       </button>
       <Outlet />

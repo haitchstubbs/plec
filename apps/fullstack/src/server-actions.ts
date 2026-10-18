@@ -20,12 +20,17 @@ export const echoAction = action(async (value: string) => {
   };
 });
 
-export const renameProject = action(async (id: string, name: string) => {
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  if (!setProjectName(id, name)) {
-    actionFailure({ code: 'PROJECT_NOT_FOUND', message: 'Project not found.' });
-  }
-  invalidate(`project:${id}`);
-  invalidate(`project:${id}`);
-  return { id, name };
-});
+export const renameProject = action(
+  async (id: string, name: string) => {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (!setProjectName(id, name)) {
+      actionFailure({
+        code: 'PROJECT_NOT_FOUND',
+        message: 'Project not found.',
+      });
+    }
+    invalidate(`project:${id}`);
+    invalidate(`project:${id}`);
+    return { id, name };
+  },
+);

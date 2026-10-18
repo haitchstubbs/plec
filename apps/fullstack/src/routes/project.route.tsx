@@ -6,7 +6,11 @@ import { ProjectMissing } from '../components/project-missing';
 type Project = { missing: boolean; name: string | null };
 
 export function ProjectPending() {
-  return <p id="project-pending" role="status">Loading project…</p>;
+  return (
+    <p id="project-pending" role="status">
+      Loading project…
+    </p>
+  );
 }
 
 export const Route = createRoute<Project>({

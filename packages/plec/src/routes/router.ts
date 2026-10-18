@@ -15,12 +15,13 @@ export type LoaderContext = {
 
 export type PendingMode = 'replace' | 'retain';
 type RouteDependencyCallback<TPath extends string> = {
-  bivarianceHack(context: { params: RouteParams<TPath> & Record<string, string> }): readonly string[];
+  bivarianceHack(context: {
+    params: RouteParams<TPath> & Record<string, string>;
+  }): readonly string[];
 }['bivarianceHack'];
 
 export type RouteResourceDependencies<TPath extends string = string> =
-  | readonly string[]
-  | RouteDependencyCallback<TPath>;
+  readonly string[] | RouteDependencyCallback<TPath>;
 
 // Keep aligned with crates/plec-ir/src/limits.rs::MAX_REDIRECT_HOPS.
 const MAX_REDIRECT_HOPS = 5;

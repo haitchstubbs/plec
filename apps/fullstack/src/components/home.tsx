@@ -105,7 +105,9 @@ export function HomePage() {
               <button
                 id="rename-project-from-home"
                 type="button"
-                onClick={() => rename.run('Project renamed from disposed page')}
+                onClick={() =>
+                  rename.run('Project renamed from disposed page')
+                }
               >
                 Rename project from this page
               </button>

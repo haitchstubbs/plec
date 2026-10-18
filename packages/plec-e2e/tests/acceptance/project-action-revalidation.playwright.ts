@@ -1,13 +1,18 @@
 import { expect, test } from '@playwright/test';
 import { waitForMount } from '../support/helpers';
 
-test('successful action invalidation refreshes the matching mounted route loader', async ({ page }) => {
+test('successful action invalidation refreshes the matching mounted route loader', async ({
+  page,
+}) => {
   await page.goto('/projects/plec', { waitUntil: 'domcontentloaded' });
   await waitForMount(page);
-  await expect(page.locator('#project-name')).toHaveText('Plec compiler and runtime');
+  await expect(page.locator('#project-name')).toHaveText(
+    'Plec compiler and runtime',
+  );
 
-  const loaderRefresh = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === '/api/projects/plec',
+  const loaderRefresh = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/projects/plec',
   );
   const action = page.waitForResponse((response) =>
     new URL(response.url()).pathname.startsWith('/_plec/actions/'),
@@ -21,10 +26,14 @@ test('successful action invalidation refreshes the matching mounted route loader
     invalidations: ['project:plec'],
   });
   await loaderRefresh;
-  await expect(page.locator('#project-name')).toHaveText('Project renamed by action');
+  await expect(page.locator('#project-name')).toHaveText(
+    'Project renamed by action',
+  );
 });
 
-test('invalidation is router-owned when the action initiator is disposed', async ({ page }) => {
+test('invalidation is router-owned when the action initiator is disposed', async ({
+  page,
+}) => {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await waitForMount(page);
   let projectLoaderResponses = 0;
@@ -46,11 +55,17 @@ test('invalidation is router-owned when the action initiator is disposed', async
     kind: 'success',
     invalidations: ['project:plec'],
   });
-  await expect(page.locator('#project-name')).toHaveText('Project renamed from disposed page');
-  await expect.poll(() => projectLoaderResponses).toBeGreaterThanOrEqual(2);
+  await expect(page.locator('#project-name')).toHaveText(
+    'Project renamed from disposed page',
+  );
+  await expect
+    .poll(() => projectLoaderResponses)
+    .toBeGreaterThanOrEqual(2);
 });
 
-test('parameterized identities do not refresh a different project instance', async ({ page }) => {
+test('parameterized identities do not refresh a different project instance', async ({
+  page,
+}) => {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await waitForMount(page);
   let projectLoaderResponses = 0;
@@ -63,23 +78,30 @@ test('parameterized identities do not refresh a different project instance', asy
     new URL(response.url()).pathname.startsWith('/_plec/actions/'),
   );
   await page.locator('#rename-project-from-home').click();
-  const initialLoader = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === '/api/projects/p42',
+  const initialLoader = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/projects/p42',
   );
   await page.evaluate(() => {
     history.pushState({}, '', '/projects/p42/details');
     window.dispatchEvent(new PopStateEvent('popstate'));
   });
   await initialLoader;
-  await expect.poll(() => projectLoaderResponses).toBeGreaterThanOrEqual(2);
+  await expect
+    .poll(() => projectLoaderResponses)
+    .toBeGreaterThanOrEqual(2);
   await actionResponse;
   await expect(page.locator('#project-name')).toHaveText('Project 42');
-  await expect(page.locator('#project-details-name')).toHaveText('Project 42');
+  await expect(page.locator('#project-details-name')).toHaveText(
+    'Project 42',
+  );
   await new Promise((resolve) => setTimeout(resolve, 250));
   expect(projectLoaderResponses).toBe(2);
 });
 
-test('overlapping successful mutations each deliver their invalidation batch', async ({ page }) => {
+test('overlapping successful mutations each deliver their invalidation batch', async ({
+  page,
+}) => {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await waitForMount(page);
   let projectLoaderResponses = 0;
@@ -88,14 +110,17 @@ test('overlapping successful mutations each deliver their invalidation batch', a
     if (new URL(response.url()).pathname === '/api/projects/plec') {
       projectLoaderResponses += 1;
     }
-    if (new URL(response.url()).pathname.startsWith('/_plec/actions/')) {
+    if (
+      new URL(response.url()).pathname.startsWith('/_plec/actions/')
+    ) {
       actionResponses.push(response);
     }
   });
   await page.locator('#rename-project-from-home').click();
   await page.locator('#rename-project-from-home').click();
-  const initialLoader = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === '/api/projects/plec',
+  const initialLoader = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/projects/plec',
   );
   await page.evaluate(() => {
     history.pushState({}, '', '/projects/plec');
@@ -103,21 +128,34 @@ test('overlapping successful mutations each deliver their invalidation batch', a
   });
   await initialLoader;
   await expect.poll(() => actionResponses.length).toBe(2);
-  for (const outcome of await Promise.all(actionResponses.map((response) => response.json()))) {
-    expect(outcome).toMatchObject({ kind: 'success', invalidations: ['project:plec'] });
+  for (const outcome of await Promise.all(
+    actionResponses.map((response) => response.json()),
+  )) {
+    expect(outcome).toMatchObject({
+      kind: 'success',
+      invalidations: ['project:plec'],
+    });
   }
-  await expect(page.locator('#project-name')).toHaveText('Project renamed from disposed page');
-  await expect.poll(() => projectLoaderResponses).toBeGreaterThanOrEqual(3);
+  await expect(page.locator('#project-name')).toHaveText(
+    'Project renamed from disposed page',
+  );
+  await expect
+    .poll(() => projectLoaderResponses)
+    .toBeGreaterThanOrEqual(3);
 });
 
-test('all active loaders sharing an identity reload once in one invalidation batch', async ({ page }) => {
+test('all active loaders sharing an identity reload once in one invalidation batch', async ({
+  page,
+}) => {
   let projectLoaderResponses = 0;
   page.on('response', (response) => {
     if (new URL(response.url()).pathname === '/api/projects/plec') {
       projectLoaderResponses += 1;
     }
   });
-  await page.goto('/projects/plec/details', { waitUntil: 'domcontentloaded' });
+  await page.goto('/projects/plec/details', {
+    waitUntil: 'domcontentloaded',
+  });
   await waitForMount(page);
   await expect(page.locator('#project-name')).toHaveText(/.+/);
   await expect(page.locator('#project-details-name')).toHaveText(/.+/);
@@ -126,12 +164,18 @@ test('all active loaders sharing an identity reload once in one invalidation bat
   );
   await page.locator('#rename-project').click();
   await action;
-  await expect(page.locator('#project-name')).toHaveText('Project renamed by action');
-  await expect(page.locator('#project-details-name')).toHaveText('Project renamed by action');
+  await expect(page.locator('#project-name')).toHaveText(
+    'Project renamed by action',
+  );
+  await expect(page.locator('#project-details-name')).toHaveText(
+    'Project renamed by action',
+  );
   await expect.poll(() => projectLoaderResponses).toBe(2);
 });
 
-test('a slower older loader response cannot overwrite a newer invalidation result', async ({ page }) => {
+test('a slower older loader response cannot overwrite a newer invalidation result', async ({
+  page,
+}) => {
   await page.goto('/projects/plec', { waitUntil: 'domcontentloaded' });
   await waitForMount(page);
   let loaderRequests = 0;
@@ -159,7 +203,9 @@ test('a slower older loader response cannot overwrite a newer invalidation resul
   });
   const actionResponses: import('@playwright/test').Response[] = [];
   page.on('response', (response) => {
-    if (new URL(response.url()).pathname.startsWith('/_plec/actions/')) {
+    if (
+      new URL(response.url()).pathname.startsWith('/_plec/actions/')
+    ) {
       actionResponses.push(response);
     }
   });
@@ -169,16 +215,23 @@ test('a slower older loader response cannot overwrite a newer invalidation resul
   await page.locator('#rename-project').click();
   await expect.poll(() => loaderRequests).toBe(2);
   await expect.poll(() => actionResponses.length).toBe(2);
-  await expect(page.locator('#project-name')).toHaveText('loader-response-2');
+  await expect(page.locator('#project-name')).toHaveText(
+    'loader-response-2',
+  );
   await new Promise((resolve) => setTimeout(resolve, 450));
-  await expect(page.locator('#project-name')).toHaveText('loader-response-2');
+  await expect(page.locator('#project-name')).toHaveText(
+    'loader-response-2',
+  );
 });
 
-test('a pending route reload runs overlapping loaders on the preserved loader graph', async ({ page }) => {
+test('a pending route reload runs overlapping loaders on the preserved loader graph', async ({
+  page,
+}) => {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await waitForMount(page);
-  const firstProjectLoad = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === '/api/projects/plec',
+  const firstProjectLoad = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/projects/plec',
   );
   await page.evaluate(() => {
     history.pushState({}, '', '/projects/plec');
@@ -210,19 +263,27 @@ test('a pending route reload runs overlapping loaders on the preserved loader gr
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ missing: false, name: 'older pending result' }),
+        body: JSON.stringify({
+          missing: false,
+          name: 'older pending result',
+        }),
       });
       return;
     }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ missing: false, name: `loader result ${requestNumber}` }),
+      body: JSON.stringify({
+        missing: false,
+        name: `loader result ${requestNumber}`,
+      }),
     });
   });
   const actionResponses: import('@playwright/test').Response[] = [];
   page.on('response', (response) => {
-    if (new URL(response.url()).pathname.startsWith('/_plec/actions/')) {
+    if (
+      new URL(response.url()).pathname.startsWith('/_plec/actions/')
+    ) {
       actionResponses.push(response);
     }
   });
@@ -238,15 +299,21 @@ test('a pending route reload runs overlapping loaders on the preserved loader gr
     await expect(page.locator('#project-pending')).toBeVisible();
     await expect.poll(() => loaderRequests).toBe(3);
     await expect.poll(() => actionResponses.length).toBe(2);
-    await expect(page.locator('#project-name')).toHaveText('loader result 3');
+    await expect(page.locator('#project-name')).toHaveText(
+      'loader result 3',
+    );
   } finally {
     releaseFirstLoader();
   }
   await new Promise((resolve) => setTimeout(resolve, 50));
-  await expect(page.locator('#project-name')).toHaveText('loader result 3');
+  await expect(page.locator('#project-name')).toHaveText(
+    'loader result 3',
+  );
 });
 
-test('invalidation during an interrupted navigation does not reload the departing route', async ({ page }) => {
+test('invalidation during an interrupted navigation does not reload the departing route', async ({
+  page,
+}) => {
   await page.goto('/projects/plec', { waitUntil: 'domcontentloaded' });
   await waitForMount(page);
   let departingRouteReloads = 0;

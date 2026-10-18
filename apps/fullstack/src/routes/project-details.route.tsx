@@ -13,7 +13,9 @@ export const Route = createRoute<Project>({
   path: 'details',
   dependsOn: ({ params }) => [`project:${params.id}`],
   loader: async ({ params }) => {
-    const project = (await fetch(`/api/projects/${params.id}`)) as Project;
+    const project = (await fetch(
+      `/api/projects/${params.id}`,
+    )) as Project;
     return project;
   },
   component: ProjectDetailsPage,
