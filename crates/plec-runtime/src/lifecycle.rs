@@ -28,17 +28,7 @@ pub(crate) fn decode_untrusted_js(
     max_bytes: usize,
     label: &str,
 ) -> Result<JsValue, JsValue> {
-    if value.is_undefined() || value.is_null() {
-        return Err(JsValue::from_str(&format!("{label} is not valid JSON")));
-    }
-    let normalized = plec_client::runtime::normalize_json_value(value, 0)?;
-    let text = js_sys::JSON::stringify(&normalized)
-        .map_err(|_| JsValue::from_str(&format!("{label} is not valid JSON")))?;
-    let text: String = text.into();
-    if text.len() > max_bytes {
-        return Err(JsValue::from_str(&format!("{label} exceeds byte limit")));
-    }
-    Ok(normalized)
+    plec_client::runtime::normalize_bounded_json(value, max_bytes, label)
 }
 
 fn js_string_field(value: &JsValue, field: &str) -> Option<String> {
@@ -71,22 +61,12 @@ pub fn benchmark_decode_application(value: JsValue) -> Result<JsValue, JsValue> 
 #[cfg(feature = "decode-bench")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn benchmark_serde_decode_application(value: JsValue) -> Result<JsValue, JsValue> {
-    use serde::de::DeserializeOwned;
-    fn decode<T: DeserializeOwned>(value: &JsValue, max_bytes: usize) -> Result<T, JsValue> {
-        let normalized = plec_client::runtime::normalize_json_value(value, 0)?;
-        let text = js_sys::JSON::stringify(&normalized)
-            .map_err(|_| JsValue::from_str("application artifact is not valid JSON"))?;
-        let text: String = text.into();
-        if text.len() > max_bytes {
-            return Err(JsValue::from_str("application artifact exceeds byte limit"));
-        }
-        let value: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
-            JsValue::from_str(&format!("application artifact is not valid JSON: {error}"))
-        })?;
-        serde_json::from_value(value).map_err(|error| JsValue::from_str(&error.to_string()))
-    }
     let application: TypedComponentApplication =
-        decode(&value, plec_schema::limits::MAX_ARTIFACT_JSON_BYTES)?;
+        plec_client::runtime::decode_bounded_json(
+            &value,
+            plec_schema::limits::MAX_ARTIFACT_JSON_BYTES,
+            "application artifact",
+        )?;
     application.validate()?;
     Ok(JsValue::from_f64(application.components.len() as f64))
 }

@@ -136,7 +136,7 @@ fn normalize_json_value_bounded(
 
 /// Normalize and enforce the existing byte ceiling while retaining the
 /// already-parsed browser value for schema-specific typed decoding.
-pub(crate) fn normalize_bounded_json(
+pub fn normalize_bounded_json(
     value: &JsValue,
     max_bytes: usize,
     label: &str,
@@ -152,6 +152,23 @@ pub(crate) fn normalize_bounded_json(
         return Err(JsValue::from_str(&format!("{label} exceeds byte limit")));
     }
     Ok(normalized)
+}
+
+/// Normalize a host value, enforce its serialized JSON byte ceiling, and
+/// deserialize it through the canonical bounded host-input boundary.
+pub fn decode_bounded_json<T: serde::de::DeserializeOwned>(
+    value: &JsValue,
+    max_bytes: usize,
+    label: &str,
+) -> Result<T, JsValue> {
+    let normalized = normalize_bounded_json(value, max_bytes, label)?;
+    let text = js_sys::JSON::stringify(&normalized)
+        .map_err(|_| JsValue::from_str(&format!("{label} is not valid JSON")))?;
+    let text: String = text.into();
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| JsValue::from_str(&format!("{label} is not valid JSON: {error}")))?;
+    serde_json::from_value(json)
+        .map_err(|error| JsValue::from_str(&format!("{label} is not valid JSON: {error}")))
 }
 
 /// Recorded execution state for one nested component instance
