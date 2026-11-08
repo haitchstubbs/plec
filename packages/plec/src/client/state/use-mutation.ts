@@ -1,6 +1,12 @@
 import { currentRendering } from '../root/render-context';
 
-export interface PlecMutation<TInput, TData, TError = unknown> {
+export type PlecMutationError = Error & { code?: string };
+
+export interface PlecMutation<
+  TInput,
+  TData,
+  TError = PlecMutationError,
+> {
   run(input: TInput): Promise<TData>;
   pending: boolean;
   error: TError | null;
@@ -8,7 +14,7 @@ export interface PlecMutation<TInput, TData, TError = unknown> {
 }
 
 /** Compiler-owned declaration. Runtime execution is supplied by compiled actions. */
-export function useMutation<TInput, TData, TError = unknown>(
+export function useMutation<TInput, TData, TError = PlecMutationError>(
   _callback: (input: TInput) => Promise<TData>,
 ): PlecMutation<TInput, TData, TError> {
   if (!currentRendering())

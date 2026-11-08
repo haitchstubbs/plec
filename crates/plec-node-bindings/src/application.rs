@@ -2,16 +2,16 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::stream;
 use napi::{
-    Env, Status, Task,
     bindgen_prelude::{AsyncTask, Buffer, BufferSlice, Function, Promise, ReadableStream, Reader},
     threadsafe_function::ThreadsafeFunction,
+    Env, Status, Task,
 };
 use napi_derive::napi;
 use plec_server_engine::runtime::{
     ActionCapabilities, ActionFuture, ApplicationCapabilities, HostRenderFuture, HostRenderRequest,
 };
 use plec_server_engine::{
-    DocumentMetadata, DocumentOptions, artifact::ArtifactBundle, request::RequestContext,
+    artifact::ArtifactBundle, request::RequestContext, DocumentMetadata, DocumentOptions,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -185,13 +185,55 @@ impl ActionCapabilities for CallbackManager {
             if value.get("found").and_then(serde_json::Value::as_bool) == Some(false) {
                 return Err(plec_server_engine::ServerError::UnknownServerAction);
             }
-            serde_json::from_value(
-                value
-                    .get("value")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null),
-            )
-            .map_err(|_| plec_server_engine::ServerError::message("invalid server action result"))
+            let outcome = value
+                .get("outcome")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| {
+                    plec_server_engine::ServerError::message(
+                        "invalid server action callback result",
+                    )
+                })?;
+            match outcome.get("kind").and_then(serde_json::Value::as_str) {
+                Some("success")
+                    if outcome.len() == 3
+                        && outcome.contains_key("value")
+                        && outcome.contains_key("invalidations") =>
+                {
+                    let value = serde_json::from_value(outcome["value"].clone()).map_err(|_| {
+                        plec_server_engine::ServerError::message("invalid server action result")
+                    })?;
+                    let invalidations =
+                        serde_json::from_value::<Vec<String>>(outcome["invalidations"].clone())
+                            .map_err(|_| {
+                                plec_server_engine::ServerError::message(
+                                    "invalid server action invalidations",
+                                )
+                            })?;
+                    plec_server_engine::action::validate_invalidations(&invalidations).map_err(
+                        |_| {
+                            plec_server_engine::ServerError::message(
+                                "invalid server action invalidations",
+                            )
+                        },
+                    )?;
+                    Ok(plec_server_engine::action::ActionCallbackResult::Success {
+                        value,
+                        invalidations,
+                    })
+                }
+                Some("failure") if outcome.len() == 2 && outcome.contains_key("failure") => {
+                    let failure = serde_json::from_value::<
+                        plec_server_engine::action::PublicActionFailure,
+                    >(outcome["failure"].clone())
+                    .map_err(|_| {
+                        plec_server_engine::ServerError::message("invalid server action failure")
+                    })?;
+                    Ok(plec_server_engine::action::ActionCallbackResult::ExpectedFailure(failure))
+                }
+                _ => Err(plec_server_engine::ServerError::message(
+                    "invalid server action callback result",
+                )),
+            }
         })
     }
 }

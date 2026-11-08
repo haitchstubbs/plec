@@ -127,6 +127,15 @@ fn check_value_budget(value: &RuntimeValue) -> Result<(), JsValue> {
                 }
                 stack.extend(map.values().map(|value| (value, depth + 1)));
             }
+            RuntimeValue::Error { code, message } => {
+                if message.len() > MAX_VALUE_STRING_BYTES
+                    || code
+                        .as_ref()
+                        .is_some_and(|code| code.len() > MAX_VALUE_STRING_BYTES)
+                {
+                    return Err(JsValue::from_str("runtime value string exceeds limit"));
+                }
+            }
             RuntimeValue::Null | RuntimeValue::Bool(_) | RuntimeValue::Number(_) => {}
         }
     }
@@ -148,14 +157,20 @@ pub(crate) struct SnapshotInput {
 }
 
 fn read_path(value: &RuntimeValue, path: &[String]) -> RuntimeValue {
-    let mut current = value;
+    let mut current = value.clone();
     for segment in path {
-        let Some(next) = current.record().and_then(|object| object.get(segment)) else {
-            return RuntimeValue::Null;
-        };
-        current = next;
+        current = match &current {
+            RuntimeValue::Error { code, message } => match segment.as_str() {
+                "message" => Some(RuntimeValue::String(message.clone())),
+                "code" => code.clone().map(RuntimeValue::String),
+                _ => None,
+            },
+            RuntimeValue::Record(object) => object.get(segment).cloned(),
+            _ => None,
+        }
+        .unwrap_or(RuntimeValue::Null);
     }
-    current.clone()
+    current
 }
 
 fn js_key(value: RuntimeValue) -> String {
@@ -166,6 +181,7 @@ fn js_key(value: RuntimeValue) -> String {
         RuntimeValue::Number(value) => value.to_string(),
         RuntimeValue::Array(values) => values.into_iter().map(js_key).collect::<Vec<_>>().join(","),
         RuntimeValue::Record(_) => "[object Object]".into(),
+        RuntimeValue::Error { message, .. } => format!("Error: {message}"),
     }
 }
 

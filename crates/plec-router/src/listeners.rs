@@ -14,7 +14,10 @@ use plec_dom::platform::{document, window};
 use wasm_bindgen::{prelude::Closure, JsCast};
 use web_sys::{CustomEvent, Event, EventTarget, MouseEvent};
 
-use crate::navigation::{handle_loader_not_found, handle_loader_redirect, navigate_typed_route};
+use crate::navigation::{
+    handle_action_invalidations, handle_loader_not_found, handle_loader_redirect,
+    navigate_typed_route,
+};
 
 pub fn install_router_listeners(state: &Rc<RuntimeState>) -> Result<(), JsValue> {
     let document = document()?;
@@ -103,20 +106,73 @@ pub fn install_router_listeners(state: &Rc<RuntimeState>) -> Result<(), JsValue>
         event_type: "popstate".into(),
         callback: popstate,
     });
-    install_loader_outcome_listener(state, &document_target, "plec:loader-redirect", |runtime, detail| {
-        let href = js_sys::Reflect::get(&detail, &JsValue::from_str("href"))?
-            .as_string()
-            .ok_or_else(|| JsValue::from_str("loader redirect outcome is missing href"))?;
-        let replace = js_sys::Reflect::get(&detail, &JsValue::from_str("replace"))?
-            .is_truthy();
-        handle_loader_redirect(runtime, &href, replace)
-    })?;
-    install_loader_outcome_listener(state, &document_target, "plec:loader-not-found", |runtime, detail| {
-        let instance_id = js_sys::Reflect::get(&detail, &JsValue::from_str("instanceId"))?
-            .as_string()
-            .ok_or_else(|| JsValue::from_str("loader not-found outcome is missing instanceId"))?;
-        handle_loader_not_found(runtime, &instance_id)
-    })?;
+    install_loader_outcome_listener(
+        state,
+        &document_target,
+        "plec:loader-redirect",
+        |runtime, detail| {
+            let href = js_sys::Reflect::get(&detail, &JsValue::from_str("href"))?
+                .as_string()
+                .ok_or_else(|| JsValue::from_str("loader redirect outcome is missing href"))?;
+            let replace = js_sys::Reflect::get(&detail, &JsValue::from_str("replace"))?.is_truthy();
+            handle_loader_redirect(runtime, &href, replace)
+        },
+    )?;
+    install_loader_outcome_listener(
+        state,
+        &document_target,
+        "plec:loader-not-found",
+        |runtime, detail| {
+            let instance_id = js_sys::Reflect::get(&detail, &JsValue::from_str("instanceId"))?
+                .as_string()
+                .ok_or_else(|| {
+                    JsValue::from_str("loader not-found outcome is missing instanceId")
+                })?;
+            handle_loader_not_found(runtime, &instance_id)
+        },
+    )?;
+    install_loader_outcome_listener(
+        state,
+        &document_target,
+        "plec:action-invalidations",
+        |runtime, detail| {
+            let value = js_sys::Reflect::get(detail, &JsValue::from_str("invalidations"))?;
+            let values = js_sys::Array::from(&value);
+            if values.length() as usize > plec_ir::limits::MAX_ACTION_INVALIDATIONS {
+                return Err(JsValue::from_str(
+                    "action invalidations exceed the count limit",
+                ));
+            }
+            let mut invalidations = Vec::with_capacity(values.length() as usize);
+            for index in 0..values.length() {
+                let identity = values
+                    .get(index)
+                    .as_string()
+                    .ok_or_else(|| JsValue::from_str("invalid action invalidation identity"))?;
+                if identity.len() > plec_ir::limits::MAX_RESOURCE_IDENTITY_BYTES {
+                    return Err(JsValue::from_str(
+                        "action invalidation identity exceeds the byte limit",
+                    ));
+                }
+                invalidations.push(identity);
+            }
+            let payload = plec_client::prelude::RuntimeValue::Array(
+                invalidations
+                    .iter()
+                    .cloned()
+                    .map(plec_client::prelude::RuntimeValue::String)
+                    .collect(),
+            )
+            .json_body()
+            .map_err(|_| JsValue::from_str("invalid action invalidation metadata"))?;
+            if payload.len() > plec_ir::limits::MAX_ACTION_INVALIDATIONS_JSON_BYTES {
+                return Err(JsValue::from_str(
+                    "action invalidation metadata exceeds the byte limit",
+                ));
+            }
+            handle_action_invalidations(runtime, &invalidations)
+        },
+    )?;
     Ok(())
 }
 

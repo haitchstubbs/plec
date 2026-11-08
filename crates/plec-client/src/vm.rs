@@ -966,15 +966,25 @@ mod tests {
         let Run::Complete(ActionOutcome::Failure(_)) = runtime
             .resume_browser_action(
                 second,
-                Err(RuntimeValue::String("new error".into())),
+                Err(RuntimeValue::Error {
+                    code: Some("SESSION_REQUIRED".into()),
+                    message: "Action was rejected.".into(),
+                }),
                 context.clone(),
             )
             .unwrap()
         else {
             panic!("expected second failure");
         };
-        assert_eq!(runtime.states[1], RuntimeValue::String("new error".into()));
+        assert_eq!(
+            runtime.states[1],
+            RuntimeValue::Error {
+                code: Some("SESSION_REQUIRED".into()),
+                message: "Action was rejected.".into(),
+            }
+        );
         assert_eq!(runtime.states[0], RuntimeValue::Bool(false));
+        assert_eq!(runtime.states[2], RuntimeValue::Null);
 
         let Run::Complete(ActionOutcome::Success(_)) = runtime
             .resume_browser_action(first, Ok(RuntimeValue::String("old".into())), context)
@@ -982,7 +992,39 @@ mod tests {
         else {
             panic!("expected stale completion");
         };
-        assert_eq!(runtime.states[1], RuntimeValue::String("new error".into()));
+        assert_eq!(
+            runtime.states[1],
+            RuntimeValue::Error {
+                code: Some("SESSION_REQUIRED".into()),
+                message: "Action was rejected.".into(),
+            }
+        );
+
+        let next = runtime
+            .start_browser_action(
+                0,
+                vec![RuntimeValue::String("third".into()); 4],
+                ActionRunContext::default(),
+                None,
+                &mut metrics,
+            )
+            .unwrap();
+        let Run::Suspended(next) = next else {
+            panic!("expected next suspension")
+        };
+        let Run::Complete(ActionOutcome::Success(_)) = runtime
+            .resume_browser_action(
+                next,
+                Ok(RuntimeValue::String("saved".into())),
+                ActionRunContext::default(),
+            )
+            .unwrap()
+        else {
+            panic!("expected next success")
+        };
+        assert_eq!(runtime.states[0], RuntimeValue::Bool(false));
+        assert_eq!(runtime.states[1], RuntimeValue::Null);
+        assert_eq!(runtime.states[2], RuntimeValue::String("saved".into()));
     }
 
     #[test]

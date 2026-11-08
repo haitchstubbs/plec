@@ -105,8 +105,9 @@ fn lowers_fullstack_route_tree_to_a_rust_manifest() {
             .expect("static fullstack route declarations should lower"),
     );
     assert_eq!(manifest.version, 3);
-    // home, about, projects/$id, todos, notes, admin, stress, catch-all.
-    assert_eq!(manifest.routes.len(), 8);
+    // home, about, projects/$id, its details child, todos, notes, admin,
+    // stress, and catch-all.
+    assert_eq!(manifest.routes.len(), 9);
     let route_ids = manifest
         .routes
         .iter()
@@ -127,6 +128,19 @@ fn lowers_fullstack_route_tree_to_a_rust_manifest() {
         .unwrap();
     assert_eq!(project.outlet_id, "main");
     assert!(project.not_found_graph_id.is_some());
+    let project_details = manifest
+        .routes
+        .iter()
+        .find(|route| route.path == "details")
+        .expect("nested project details route should be present");
+    assert_eq!(project_details.parent_id.as_deref(), Some(project.id.as_str()));
+    assert_eq!(
+        project_details.dependencies[0].parts,
+        vec![
+            plec_ir::ResourceIdentityPart::Static("project:".into()),
+            plec_ir::ResourceIdentityPart::Param("id".into()),
+        ]
+    );
     let todos = manifest
         .routes
         .iter()

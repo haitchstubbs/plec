@@ -9,6 +9,15 @@
 //! legitimate compiled output, only pathological inputs. See
 //! docs/security-limits.md for the boundary-by-boundary contract.
 
+/// Maximum UTF-8 bytes in a resolved resource identity.
+pub const MAX_RESOURCE_IDENTITY_BYTES: usize = 256;
+/// Maximum declared resource identities for one route loader.
+pub const MAX_LOADER_DEPENDENCIES: usize = 16;
+/// Maximum distinct invalidations collected by one action.
+pub const MAX_ACTION_INVALIDATIONS: usize = 32;
+/// Maximum canonical JSON UTF-8 bytes in the invalidations metadata array.
+pub const MAX_ACTION_INVALIDATIONS_JSON_BYTES: usize = 4 * 1024;
+
 /// Maximum JSON byte length of a component application artifact or lazy
 /// graph payload decoded at the WASM boundary.
 pub const MAX_ARTIFACT_JSON_BYTES: usize = 16 * 1024 * 1024;

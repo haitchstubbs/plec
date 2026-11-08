@@ -198,6 +198,12 @@ fn evaluate_bounded<P: ExpressionProgram>(
                 let key = program.string(i).unwrap_or("");
                 let value = match object {
                     RuntimeValue::Record(m) => m.get(key).cloned().unwrap_or_default(),
+                    RuntimeValue::Error { code, message } => match key {
+                        "message" => RuntimeValue::String(message),
+                        "code" => code.map(RuntimeValue::String).unwrap_or(RuntimeValue::Null),
+                        "name" => RuntimeValue::String("Error".into()),
+                        _ => RuntimeValue::Null,
+                    },
                     RuntimeValue::Array(a) if key == "length" => {
                         RuntimeValue::Number(a.len() as f64)
                     }
@@ -332,9 +338,9 @@ fn evaluate_bounded<P: ExpressionProgram>(
                 let out = match kind.as_str() {
                     "equal" => RuntimeValue::Bool(l == r),
                     "notEqual" => RuntimeValue::Bool(l != r),
-                    "instanceofError" => RuntimeValue::Bool(
-                        matches!(&l,RuntimeValue::Record(m) if m.contains_key("kind")||m.contains_key("message")),
-                    ),
+                    "instanceofError" => {
+                        RuntimeValue::Bool(matches!(l, RuntimeValue::Error { .. }))
+                    }
                     "and" => {
                         if truthy(&l) {
                             r
@@ -511,6 +517,74 @@ mod tests {
             state: RuntimeValue::Record(HashMap::from([("n".into(), RuntimeValue::Number(3.))])),
         };
         assert_eq!(evaluate(&p, &mut host, 0), Ok(RuntimeValue::Number(5.)));
+    }
+
+    #[test]
+    fn error_identity_is_typed_and_plain_records_are_not_errors() {
+        let code = vec![
+            EvalInstruction::Constant(0),
+            EvalInstruction::Constant(1),
+            EvalInstruction::Binary("instanceofError".into()),
+            EvalInstruction::Return,
+        ];
+        assert_eq!(
+            run(
+                code.clone(),
+                vec![
+                    RuntimeValue::Error {
+                        code: Some("EMAIL_TAKEN".into()),
+                        message: "Email already registered.".into(),
+                    },
+                    RuntimeValue::String("Error".into()),
+                ],
+                vec![],
+            ),
+            Ok(RuntimeValue::Bool(true))
+        );
+        assert_eq!(
+            run(
+                code,
+                vec![
+                    RuntimeValue::Record(HashMap::from([(
+                        "message".into(),
+                        RuntimeValue::String("just data".into()),
+                    )])),
+                    RuntimeValue::String("Error".into()),
+                ],
+                vec![],
+            ),
+            Ok(RuntimeValue::Bool(false))
+        );
+        assert_eq!(
+            run(
+                vec![
+                    EvalInstruction::Constant(0),
+                    EvalInstruction::Field(0),
+                    EvalInstruction::Return,
+                ],
+                vec![RuntimeValue::Error {
+                    code: Some("EMAIL_TAKEN".into()),
+                    message: "Email already registered.".into(),
+                }],
+                vec!["code".into()],
+            ),
+            Ok(RuntimeValue::String("EMAIL_TAKEN".into()))
+        );
+        assert_eq!(
+            run(
+                vec![
+                    EvalInstruction::Constant(0),
+                    EvalInstruction::Field(0),
+                    EvalInstruction::Return
+                ],
+                vec![RuntimeValue::Error {
+                    code: Some("EMAIL_TAKEN".into()),
+                    message: "Email already registered.".into(),
+                }],
+                vec!["message".into()],
+            ),
+            Ok(RuntimeValue::String("Email already registered.".into()))
+        );
     }
     #[test]
     fn fuel_and_stack_limits_are_reported() {

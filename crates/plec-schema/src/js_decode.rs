@@ -198,6 +198,12 @@ pub fn runtime_value(value: &JsValue) -> Result<crate::RuntimeValue, JsValue> {
                 .map(|value| visit(value, depth + 1, nodes))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(crate::RuntimeValue::Array(decoded))
+        } else if value.is_instance_of::<js_sys::Error>() {
+            let message = js_sys::Reflect::get(value, &JsValue::from_str("message"))?
+                .as_string()
+                .unwrap_or_default();
+            let code = js_sys::Reflect::get(value, &JsValue::from_str("code"))?.as_string();
+            Ok(crate::RuntimeValue::Error { code, message })
         } else if value.is_object() {
             let keys = js_sys::Object::keys(value.unchecked_ref::<js_sys::Object>());
             let mut record = std::collections::HashMap::with_capacity(keys.length() as usize);

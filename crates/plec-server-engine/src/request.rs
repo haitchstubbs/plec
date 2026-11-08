@@ -342,7 +342,10 @@ mod tests {
             let headers = HeaderMap::from_iter([
                 (header::HOST, fixture.host.parse().unwrap()),
                 (header::COOKIE, fixture.cookie.parse().unwrap()),
-                ("x-forwarded-proto".parse().unwrap(), forwarded.parse().unwrap()),
+                (
+                    "x-forwarded-proto".parse().unwrap(),
+                    forwarded.parse().unwrap(),
+                ),
             ]);
             let context = RequestContext::from_parts(Method::GET, &uri, &headers);
             if fixture.invalid.unwrap_or(false) {
@@ -391,6 +394,7 @@ mod tests {
                     not_found_graph_id: None,
                     outlet_id: format!("outlet-{index}"),
                     loader_action: None,
+                    dependencies: vec![],
                     pending_mode: "replace".into(),
                 })
                 .collect(),

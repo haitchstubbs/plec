@@ -56,6 +56,19 @@ fn write_runtime_value(output: &mut String, value: &RuntimeValue) {
             }
             output.push('}');
         }
+        RuntimeValue::Error { code, message } => {
+            output.push('{');
+            if let Some(code) = code {
+                write_string(output, "code");
+                output.push(':');
+                write_string(output, code);
+                output.push(',');
+            }
+            write_string(output, "message");
+            output.push(':');
+            write_string(output, message);
+            output.push('}');
+        }
     }
 }
 

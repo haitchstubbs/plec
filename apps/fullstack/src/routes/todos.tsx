@@ -140,12 +140,7 @@ export function TodosPage() {
 
   const mutationError =
     createTodo.error || updateTodo.error || removeTodo.error;
-  const createError =
-    mutationError instanceof Error
-      ? mutationError.message
-      : mutationError
-        ? 'Could not update todo.'
-        : null;
+  const createError = mutationError ? mutationError.message : null;
 
   return (
     <PageFrame>

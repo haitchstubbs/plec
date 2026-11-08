@@ -287,8 +287,20 @@ pub struct HirRoute {
     pub error_component: Option<ComponentId>,
     pub not_found_component: Option<ComponentId>,
     pub loader: Option<String>,
+    pub dependencies: Vec<HirResourceIdentityTemplate>,
     pub outlet_id: String,
     pub metadata: HirRouteMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirResourceIdentityTemplate {
+    pub parts: Vec<HirResourceIdentityPart>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirResourceIdentityPart {
+    Static(String),
+    Param(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

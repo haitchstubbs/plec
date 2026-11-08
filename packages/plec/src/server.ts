@@ -1,4 +1,6 @@
 /** Request facts passed from the native host's Node sidecar to application code. */
+export { invalidate } from './server-context';
+
 export type RequestContext = {
   url: string;
   pathname: string;
@@ -35,3 +37,38 @@ export function action<Args extends unknown[], Result>(
 ): (...args: Args) => Promise<Result> {
   return implementation;
 }
+
+const actionFailureBrand = Symbol.for('plec.action-failure');
+
+/** Internal signal consumed by the server-action host boundary. */
+class ActionFailureSignal extends Error {
+  readonly [actionFailureBrand] = true;
+  readonly code: string;
+
+  constructor(failure: ActionFailureInput) {
+    super(failure.message);
+    this.code = failure.code;
+    Object.defineProperty(this, 'message', {
+      value: failure.message,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+}
+
+/** Declare an expected, public failure from a server action. */
+export function actionFailure(failure: ActionFailureInput): never {
+  throw new ActionFailureSignal(failure);
+}
+
+export type ActionFailureInput = {
+  code: string;
+  message: string;
+};
+
+/** @internal Public action failure shape after boundary validation. */
+export type ActionFailure = {
+  code: string;
+  message: string;
+};

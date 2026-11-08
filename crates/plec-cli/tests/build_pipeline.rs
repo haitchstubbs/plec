@@ -733,7 +733,8 @@ fn install_plec_package(project: &Path, runtime_marker: &str) {
     .expect("plec browser stub should be writable");
     fs::write(
         plec.join("dist/server-context.js"),
-        "export const withRequestContext = (_context, run) => run();\n",
+        "export const withRequestContext = (_context, run) => run();\n\
+         export const withActionInvalidationCollection = async (run) => ({ value: await run(), invalidations: [] });\n",
     )
     .expect("plec server-context stub should be writable");
     let wasm = b"\0asm\x01\x00\x00\x00";
