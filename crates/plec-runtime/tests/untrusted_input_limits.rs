@@ -30,6 +30,69 @@ fn error_string(error: JsValue) -> String {
 }
 
 #[wasm_bindgen_test]
+fn shared_decoder_normalizes_maps_arrays_and_objects() {
+    let map = js_sys::Map::new();
+    map.set(
+        &JsValue::from_str("nested"),
+        &js_from_json(r#"[{"value":1}]"#),
+    );
+    let decoded: serde_json::Value =
+        plec_client::runtime::decode_bounded_json(&map.into(), 100, "test payload").unwrap();
+    assert_eq!(decoded, serde_json::json!({"nested": [{"value": 1}]}));
+}
+
+#[wasm_bindgen_test]
+fn shared_decoder_enforces_utf8_byte_limit_and_root_policy() {
+    let value = JsValue::from_str("é");
+    let decoded: String =
+        plec_client::runtime::decode_bounded_json(&value, 4, "test payload").unwrap();
+    assert_eq!(decoded, "é");
+    let error =
+        plec_client::runtime::decode_bounded_json::<String>(&value, 3, "test payload").unwrap_err();
+    assert_eq!(error_string(error), "test payload exceeds byte limit");
+    for value in [JsValue::NULL, JsValue::UNDEFINED] {
+        let error = plec_client::runtime::decode_bounded_json::<serde_json::Value>(
+            &value,
+            100,
+            "test payload",
+        )
+        .unwrap_err();
+        assert_eq!(error_string(error), "test payload is not valid JSON");
+        let (_, text) =
+            plec_client::runtime::normalize_bounded_json_with_text(&value, 100, "test payload")
+                .unwrap();
+        assert_eq!(text, "null");
+    }
+}
+
+#[wasm_bindgen_test]
+fn shared_decoder_labels_hostile_normalization_errors() {
+    let deep = js_from_json(&format!("{}0{}", "[".repeat(200), "]".repeat(200)));
+    let wide: JsValue =
+        js_sys::Array::new_with_length((plec_ir::limits::MAX_DECODE_JS_NODES + 1) as u32).into();
+    let cyclic = js_sys::Object::new();
+    js_sys::Reflect::set(&cyclic, &JsValue::from_str("self"), &cyclic).unwrap();
+    let invalid_map = js_sys::Map::new();
+    invalid_map.set(&JsValue::from_f64(1.0), &JsValue::NULL);
+    for (value, cause) in [
+        (deep, "decode depth limit"),
+        (wide, "decode width limit"),
+        (cyclic.into(), "decode depth limit"),
+        (invalid_map.into(), "map keys must be strings"),
+    ] {
+        let error = plec_client::runtime::decode_bounded_json::<serde_json::Value>(
+            &value,
+            100,
+            "test payload",
+        )
+        .unwrap_err();
+        let error = error_string(error);
+        assert!(error.contains("test payload"), "{error}");
+        assert!(error.contains(cause), "{error}");
+    }
+}
+
+#[wasm_bindgen_test]
 fn host_inputs_within_limit_are_accepted() {
     let runtime = PlecRuntime::new();
     let inputs = serde_json::json!({

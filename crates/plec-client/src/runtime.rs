@@ -144,27 +144,42 @@ pub fn normalize_bounded_json(
     if value.is_undefined() || value.is_null() {
         return Err(JsValue::from_str(&format!("{label} is not valid JSON")));
     }
-    let normalized = normalize_json_value(value, 0)?;
+    normalize_bounded_json_with_text(value, max_bytes, label).map(|(normalized, _)| normalized)
+}
+
+/// Normalize and check the serialized size, returning both representations.
+/// Unlike `normalize_bounded_json`, this permits null and undefined at the
+/// root, leaving their interpretation to the caller's decoder.
+pub fn normalize_bounded_json_with_text(
+    value: &JsValue,
+    max_bytes: usize,
+    label: &str,
+) -> Result<(JsValue, String), JsValue> {
+    let normalized = normalize_json_value(value, 0).map_err(|error| {
+        let cause = error.as_string().unwrap_or_else(|| format!("{error:?}"));
+        JsValue::from_str(&format!("{label}: {cause}"))
+    })?;
     let text = js_sys::JSON::stringify(&normalized)
         .map_err(|_| JsValue::from_str(&format!("{label} is not valid JSON")))?;
     let text: String = text.into();
     if text.len() > max_bytes {
         return Err(JsValue::from_str(&format!("{label} exceeds byte limit")));
     }
-    Ok(normalized)
+    Ok((normalized, text))
 }
 
 /// Normalize a host value, enforce its serialized JSON byte ceiling, and
 /// deserialize it through the canonical bounded host-input boundary.
+#[cfg(feature = "serde")]
 pub fn decode_bounded_json<T: serde::de::DeserializeOwned>(
     value: &JsValue,
     max_bytes: usize,
     label: &str,
 ) -> Result<T, JsValue> {
-    let normalized = normalize_bounded_json(value, max_bytes, label)?;
-    let text = js_sys::JSON::stringify(&normalized)
-        .map_err(|_| JsValue::from_str(&format!("{label} is not valid JSON")))?;
-    let text: String = text.into();
+    if value.is_undefined() || value.is_null() {
+        return Err(JsValue::from_str(&format!("{label} is not valid JSON")));
+    }
+    let (_, text) = normalize_bounded_json_with_text(value, max_bytes, label)?;
     let json: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| JsValue::from_str(&format!("{label} is not valid JSON: {error}")))?;
     serde_json::from_value(json)
