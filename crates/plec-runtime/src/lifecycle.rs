@@ -61,12 +61,11 @@ pub fn benchmark_decode_application(value: JsValue) -> Result<JsValue, JsValue> 
 #[cfg(feature = "decode-bench")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn benchmark_serde_decode_application(value: JsValue) -> Result<JsValue, JsValue> {
-    let application: TypedComponentApplication =
-        plec_client::runtime::decode_bounded_json(
-            &value,
-            plec_schema::limits::MAX_ARTIFACT_JSON_BYTES,
-            "application artifact",
-        )?;
+    let application: TypedComponentApplication = plec_client::runtime::decode_bounded_json(
+        &value,
+        plec_schema::limits::MAX_ARTIFACT_JSON_BYTES,
+        "application artifact",
+    )?;
     application.validate()?;
     Ok(JsValue::from_f64(application.components.len() as f64))
 }
