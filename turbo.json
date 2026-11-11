@@ -10,7 +10,7 @@
       "outputs": ["dist/**", "build/**"]
     },
     "@plec/core#build": {
-      "dependsOn": ["@plec/browser#build"],
+      "dependsOn": ["@plec/browser#build", "@plec/node#build"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "../../Cargo.lock",
