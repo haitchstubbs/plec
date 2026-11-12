@@ -28,17 +28,7 @@ pub(crate) fn decode_untrusted_js(
     max_bytes: usize,
     label: &str,
 ) -> Result<JsValue, JsValue> {
-    if value.is_undefined() || value.is_null() {
-        return Err(JsValue::from_str(&format!("{label} is not valid JSON")));
-    }
-    let normalized = plec_client::runtime::normalize_json_value(value, 0)?;
-    let text = js_sys::JSON::stringify(&normalized)
-        .map_err(|_| JsValue::from_str(&format!("{label} is not valid JSON")))?;
-    let text: String = text.into();
-    if text.len() > max_bytes {
-        return Err(JsValue::from_str(&format!("{label} exceeds byte limit")));
-    }
-    Ok(normalized)
+    plec_client::runtime::normalize_bounded_json(value, max_bytes, label)
 }
 
 fn js_string_field(value: &JsValue, field: &str) -> Option<String> {
@@ -71,22 +61,11 @@ pub fn benchmark_decode_application(value: JsValue) -> Result<JsValue, JsValue> 
 #[cfg(feature = "decode-bench")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn benchmark_serde_decode_application(value: JsValue) -> Result<JsValue, JsValue> {
-    use serde::de::DeserializeOwned;
-    fn decode<T: DeserializeOwned>(value: &JsValue, max_bytes: usize) -> Result<T, JsValue> {
-        let normalized = plec_client::runtime::normalize_json_value(value, 0)?;
-        let text = js_sys::JSON::stringify(&normalized)
-            .map_err(|_| JsValue::from_str("application artifact is not valid JSON"))?;
-        let text: String = text.into();
-        if text.len() > max_bytes {
-            return Err(JsValue::from_str("application artifact exceeds byte limit"));
-        }
-        let value: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
-            JsValue::from_str(&format!("application artifact is not valid JSON: {error}"))
-        })?;
-        serde_json::from_value(value).map_err(|error| JsValue::from_str(&error.to_string()))
-    }
-    let application: TypedComponentApplication =
-        decode(&value, plec_schema::limits::MAX_ARTIFACT_JSON_BYTES)?;
+    let application: TypedComponentApplication = plec_client::runtime::decode_bounded_json(
+        &value,
+        plec_schema::limits::MAX_ARTIFACT_JSON_BYTES,
+        "application artifact",
+    )?;
     application.validate()?;
     Ok(JsValue::from_f64(application.components.len() as f64))
 }
@@ -132,33 +111,17 @@ pub fn benchmark_serde_decode_ssr_snapshot(
     manifest: JsValue,
     application: JsValue,
 ) -> Result<JsValue, JsValue> {
-    fn decode<T: serde::de::DeserializeOwned>(
-        value: &JsValue,
-        max_bytes: usize,
-        label: &str,
-    ) -> Result<T, JsValue> {
-        let normalized = plec_client::runtime::normalize_json_value(value, 0)?;
-        let text = js_sys::JSON::stringify(&normalized)
-            .map_err(|_| JsValue::from_str(&format!("{label} is not valid JSON")))?;
-        let text: String = text.into();
-        if text.len() > max_bytes {
-            return Err(JsValue::from_str(&format!("{label} exceeds byte limit")));
-        }
-        let value: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|error| JsValue::from_str(&format!("{label} is not valid JSON: {error}")))?;
-        serde_json::from_value(value).map_err(|error| JsValue::from_str(&error.to_string()))
-    }
-    let manifest: plec_ir::RouteManifest = decode(
+    let manifest: plec_ir::RouteManifest = plec_client::runtime::decode_bounded_json(
         &manifest,
         plec_schema::limits::MAX_MANIFEST_JSON_BYTES,
         "route manifest",
     )?;
-    let application: TypedComponentApplication = decode(
+    let application: TypedComponentApplication = plec_client::runtime::decode_bounded_json(
         &application,
         plec_schema::limits::MAX_ARTIFACT_JSON_BYTES,
         "application artifact",
     )?;
-    let snapshot: plec_ir::PlecSsrSnapshot = decode(
+    let snapshot: plec_ir::PlecSsrSnapshot = plec_client::runtime::decode_bounded_json(
         &snapshot,
         plec_schema::limits::MAX_SNAPSHOT_JSON_BYTES,
         "ssr snapshot",
@@ -243,13 +206,11 @@ impl PlecRuntime {
 #[wasm_bindgen::prelude::wasm_bindgen]
 impl PlecRuntime {
     pub fn set_host_inputs(&self, values: JsValue) -> Result<(), JsValue> {
-        let normalized = plec_client::runtime::normalize_json_value(&values, 0)?;
-        let text = js_sys::JSON::stringify(&normalized)
-            .map_err(|_| JsValue::from_str("host inputs are not valid JSON"))?;
-        let text: String = text.into();
-        if text.len() > plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES {
-            return Err(JsValue::from_str("host inputs exceeds byte limit"));
-        }
+        let (normalized, _) = plec_client::runtime::normalize_bounded_json_with_text(
+            &values,
+            plec_schema::limits::MAX_HOST_INPUT_JSON_BYTES,
+            "host inputs",
+        )?;
         let values = plec_schema::js_decode::runtime_record(&normalized).map_err(|error| {
             JsValue::from_str(&format!(
                 "host inputs: {}",

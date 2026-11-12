@@ -11,7 +11,12 @@ crate-type = ["cdylib", "rlib"]
 default = ["router", "fetch"]
 router = []
 fetch = ["plec-client/fetch"]
-decode-bench = ["plec-schema/serde", "dep:serde", "dep:serde_json"]
+decode-bench = [
+  "plec-client/serde",
+  "plec-schema/serde",
+  "dep:serde",
+  "dep:serde_json",
+]
 
 [dependencies]
 plec-client = { path = "../plec-client", version = "0.1.0", default-features = false }
@@ -27,6 +32,9 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
+plec-client = { path = "../plec-client", version = "0.1.0", features = [
+  "serde",
+] }
 plec-schema = { path = "../plec-schema", version = "0.1.0", features = [
   "serde",
 ] }
